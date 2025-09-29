@@ -25,7 +25,7 @@ class Config(BaseModel):
     whisper_device: str = "auto"
 
     # LLM Configuration
-    llm_model: str = "gpt-4-turbo-preview"
+    llm_model: str = "gpt-4o"
 
     # Cleanup Configuration
     cleanup_days: int = 30
@@ -73,7 +73,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
-        "llm_model": os.getenv("LLM_MODEL", "gpt-4-turbo-preview"),
+        "llm_model": os.getenv("LLM_MODEL", "gpt-4o"),
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30"))
     }
 

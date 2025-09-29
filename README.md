@@ -111,7 +111,7 @@ CLEANUP_DAYS=30
 
 # Model settings
 WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
-LLM_MODEL=gpt-4-turbo-preview
+LLM_MODEL=gpt-4o
 ```
 
 ## System Requirements
