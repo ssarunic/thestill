@@ -6,7 +6,7 @@ from pydantic import BaseModel, HttpUrl
 class Episode(BaseModel):
     title: str
     description: str
-    pub_date: datetime
+    pub_date: Optional[datetime] = None
     audio_url: HttpUrl
     duration: Optional[str] = None
     guid: str

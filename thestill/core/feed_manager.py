@@ -9,6 +9,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 from ..models.podcast import Podcast, Episode
+from .youtube_downloader import YouTubeDownloader
 
 
 class PodcastFeedManager:
@@ -17,10 +18,15 @@ class PodcastFeedManager:
         self.feeds_file = self.storage_path / "feeds.json"
         self.storage_path.mkdir(exist_ok=True)
         self.podcasts: List[Podcast] = self._load_podcasts()
+        self.youtube_downloader = YouTubeDownloader(str(self.storage_path / "audio"))
 
     def add_podcast(self, url: str) -> bool:
-        """Add a new podcast feed - handles both RSS URLs and Apple Podcast URLs"""
+        """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
         try:
+            # Check if this is a YouTube URL
+            if self.youtube_downloader.is_youtube_url(url):
+                return self._add_youtube_podcast(url)
+
             # Check if this is an Apple Podcast URL and extract RSS if needed
             rss_url = self._extract_rss_from_apple_url(url)
             if not rss_url:
@@ -62,6 +68,14 @@ class PodcastFeedManager:
 
         for podcast in self.podcasts:
             try:
+                # Check if this is a YouTube podcast
+                if self.youtube_downloader.is_youtube_url(str(podcast.rss_url)):
+                    episodes = self._get_youtube_episodes(podcast)
+                    if episodes:
+                        new_episodes.append((podcast, episodes))
+                    continue
+
+                # Handle regular RSS feeds
                 parsed_feed = feedparser.parse(str(podcast.rss_url))
                 episodes = []
 
@@ -201,6 +215,55 @@ class PodcastFeedManager:
         except Exception as e:
             print(f"Error extracting RSS from Apple URL {url}: {e}")
             return None
+
+    def _get_youtube_episodes(self, podcast: Podcast) -> List[Episode]:
+        """Get new episodes from a YouTube playlist/channel"""
+        try:
+            # Get all episodes from YouTube
+            all_episodes = self.youtube_downloader.get_episodes_from_playlist(str(podcast.rss_url))
+
+            # Filter out already processed episodes
+            new_episodes = []
+            for episode in all_episodes:
+                already_processed = any(ep.guid == episode.guid and ep.processed for ep in podcast.episodes)
+                if not already_processed:
+                    # Check if episode already exists in podcast.episodes (but not processed)
+                    existing_episode = next((ep for ep in podcast.episodes if ep.guid == episode.guid), None)
+                    if not existing_episode:
+                        podcast.episodes.append(episode)
+                    new_episodes.append(episode)
+
+            return new_episodes
+
+        except Exception as e:
+            print(f"Error getting YouTube episodes for {podcast.rss_url}: {e}")
+            return []
+
+    def _add_youtube_podcast(self, url: str) -> bool:
+        """Add a YouTube playlist/channel as a podcast"""
+        try:
+            playlist_info = self.youtube_downloader.extract_playlist_info(url)
+            if not playlist_info:
+                print(f"Could not extract YouTube playlist info from: {url}")
+                return False
+
+            # Create podcast entry with YouTube URL
+            podcast = Podcast(
+                title=playlist_info.get('title', 'Unknown YouTube Podcast'),
+                description=playlist_info.get('description', ''),
+                rss_url=url  # Store the YouTube URL as the "RSS" URL
+            )
+
+            if not self._podcast_exists(url):
+                self.podcasts.append(podcast)
+                self._save_podcasts()
+                print(f"Added YouTube podcast: {podcast.title}")
+                return True
+            return False
+
+        except Exception as e:
+            print(f"Error adding YouTube podcast {url}: {e}")
+            return False
 
     def _resolve_apple_podcast_redirect(self, url: str) -> Optional[str]:
         """Resolve Apple Podcast redirects to get the actual podcast ID"""
