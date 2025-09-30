@@ -13,7 +13,7 @@ thestill.ai solves the time-consuming nature of audio content consumption by:
 
 ## Features
 
-- **RSS Feed Management**: Add and track multiple podcast feeds
+- **Multiple Source Support**: Add podcasts from RSS feeds, Apple Podcasts, and YouTube playlists/channels
 - **Automated Processing**: Automatically detect and process new episodes
 - **High-Quality Transcription**: Uses OpenAI Whisper for accurate speech-to-text
 - **AI-Powered Analysis**: GPT cleans transcripts, generates summaries, and extracts insights
@@ -49,8 +49,11 @@ OPENAI_API_KEY=your_openai_api_key_here
 ### Basic Usage
 
 ```bash
-# Add a podcast feed
-thestill add "https://example.com/podcast/rss"
+# Add a podcast from various sources
+thestill add "https://example.com/podcast/rss"                    # RSS feed
+thestill add "https://podcasts.apple.com/us/podcast/id123456"    # Apple Podcasts
+thestill add "https://www.youtube.com/@channelname"              # YouTube channel
+thestill add "https://www.youtube.com/playlist?list=..."         # YouTube playlist
 
 # List tracked podcasts
 thestill list
@@ -67,13 +70,19 @@ thestill cleanup
 
 ## Commands
 
-- `thestill add <rss_url>` - Add a podcast RSS feed
-- `thestill remove <rss_url>` - Remove a podcast feed
+- `thestill add <url>` - Add a podcast from RSS feed, Apple Podcasts, or YouTube
+- `thestill remove <url>` - Remove a podcast feed
 - `thestill list` - Show all tracked podcasts
 - `thestill process` - Check for and process new episodes
 - `thestill process --dry-run` - Show what would be processed
 - `thestill status` - Display system status and statistics
 - `thestill cleanup` - Remove old audio files
+
+### Supported URL Types
+
+- **RSS Feeds**: Direct podcast RSS feed URLs
+- **Apple Podcasts**: `https://podcasts.apple.com/...` or `https://itunes.apple.com/...`
+- **YouTube**: Channels (`@username`), playlists, or individual videos
 
 ## Output Structure
 
@@ -116,10 +125,11 @@ LLM_MODEL=gpt-4o
 
 ## System Requirements
 
-- Python 3.9 or higher
+- Python 3.9 or higher (3.10+ recommended)
 - OpenAI API key
 - 4GB+ RAM recommended for Whisper processing
 - Internet connection for downloads and API calls
+- FFmpeg (required for YouTube audio extraction)
 
 ## Cost Estimation
 
@@ -139,6 +149,7 @@ export OPENAI_API_KEY="your-key-here"
 - Check internet connection
 - Verify RSS feed URLs are accessible
 - Some feeds may require specific user agents
+- For YouTube: Ensure FFmpeg is installed (`brew install ffmpeg` on macOS)
 
 **Processing Errors:**
 - Ensure sufficient disk space for audio files

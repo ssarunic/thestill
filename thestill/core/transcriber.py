@@ -394,8 +394,11 @@ class WhisperTranscriber:
                 processed_audio = audio
 
             # Create temporary file for processed audio
-            temp_path = audio_path.replace('.', '_processed.')
-            processed_audio.export(temp_path, format="wav")
+            # Use MP3 to avoid format compatibility issues and huge WAV files
+            from pathlib import Path
+            input_ext = Path(audio_path).suffix
+            temp_path = audio_path.replace(input_ext, f'_processed.mp3')
+            processed_audio.export(temp_path, format="mp3", bitrate="128k")
 
             print(f"Audio preprocessed and saved to: {temp_path}")
             return temp_path

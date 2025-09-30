@@ -23,8 +23,11 @@ cp .env.example .env
 
 ### Main CLI Commands
 ```bash
-# Add podcast feed
+# Add podcast feed (supports RSS, Apple Podcasts, YouTube)
 thestill add "https://example.com/rss"
+thestill add "https://podcasts.apple.com/us/podcast/id123456"
+thestill add "https://www.youtube.com/@channelname"
+thestill add "https://www.youtube.com/playlist?list=..."
 
 # Process new episodes
 thestill process
@@ -58,26 +61,35 @@ mypy thestill/
 
 1. **Feed Manager** (`thestill/core/feed_manager.py`)
    - Handles RSS feed parsing and episode tracking
+   - Supports Apple Podcasts URL resolution via iTunes API
+   - Integrates YouTube playlist/channel support
    - Stores podcast metadata and processing status
    - Identifies new episodes since last run
 
 2. **Audio Downloader** (`thestill/core/audio_downloader.py`)
-   - Downloads podcast audio files from RSS feeds
+   - Downloads podcast audio files from RSS feeds and YouTube
    - Handles various audio formats (MP3, M4A, etc.)
    - Manages file cleanup and storage
+   - Routes YouTube URLs to YouTubeDownloader
 
-3. **Transcriber** (`thestill/core/transcriber.py`)
+3. **YouTube Downloader** (`thestill/core/youtube_downloader.py`)
+   - Uses yt-dlp for robust YouTube video/audio extraction
+   - Handles dynamic URLs and format selection
+   - Extracts playlist and channel metadata
+   - Downloads best quality audio and converts to M4A
+
+4. **Transcriber** (`thestill/core/transcriber.py`)
    - Uses OpenAI Whisper for speech-to-text
    - Supports speaker diarization and timestamps
    - Configurable model sizes (tiny, base, small, medium, large)
 
-4. **LLM Processor** (`thestill/core/llm_processor.py`)
+5. **LLM Processor** (`thestill/core/llm_processor.py`)
    - Three-step LLM pipeline:
      - Cleans transcripts and detects ads
      - Generates comprehensive summaries
      - Extracts notable quotes with analysis
 
-5. **Models** (`thestill/models/podcast.py`)
+6. **Models** (`thestill/models/podcast.py`)
    - Pydantic models for type safety
    - Episode, Podcast, Quote, and ProcessedContent schemas
 
@@ -89,8 +101,8 @@ mypy thestill/
 
 ### Data Flow
 
-1. RSS feeds are checked for new episodes
-2. Audio files are downloaded to `data/audio/`
+1. Feeds are checked for new episodes (RSS, Apple Podcasts resolved to RSS, or YouTube)
+2. Audio files are downloaded to `data/audio/` (via direct download or yt-dlp)
 3. Whisper transcribes audio to structured JSON in `data/transcripts/`
 4. LLM processes transcripts and saves summaries to `data/summaries/`
 5. Episode status is updated in `data/feeds.json`
@@ -102,6 +114,7 @@ thestill/
 ├── core/              # Core processing modules
 │   ├── feed_manager.py
 │   ├── audio_downloader.py
+│   ├── youtube_downloader.py
 │   ├── transcriber.py
 │   └── llm_processor.py
 ├── models/            # Pydantic data models
@@ -122,6 +135,7 @@ data/                 # Generated data directory
 
 - **OpenAI Whisper**: Local speech-to-text transcription
 - **OpenAI GPT-4**: Text processing, summarization, and analysis
+- **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
 - **Pydantic**: Data validation and settings management
 - **Click**: Command-line interface framework
 - **feedparser**: RSS/Atom feed parsing

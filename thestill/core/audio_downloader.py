@@ -6,16 +6,23 @@ import requests
 from urllib.parse import urlparse
 
 from ..models.podcast import Episode
+from .youtube_downloader import YouTubeDownloader
 
 
 class AudioDownloader:
     def __init__(self, storage_path: str = "./data/audio"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
+        self.youtube_downloader = YouTubeDownloader(storage_path)
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
         """Download episode audio file and return local path"""
         try:
+            # Check if this is a YouTube URL
+            if self.youtube_downloader.is_youtube_url(str(episode.audio_url)):
+                return self.youtube_downloader.download_episode(episode, podcast_title)
+
+            # Handle regular audio URLs
             safe_podcast_title = self._sanitize_filename(podcast_title)
             safe_episode_title = self._sanitize_filename(episode.title)
 
