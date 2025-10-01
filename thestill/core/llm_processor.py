@@ -7,21 +7,58 @@ from typing import Dict, List, Optional
 from openai import OpenAI
 
 from ..models.podcast import Quote, ProcessedContent
+from .transcript_compactor import TranscriptCompactor
 
 
 class LLMProcessor:
     def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview"):
         self.client = OpenAI(api_key=api_key)
         self.model = model
+        self.compactor = TranscriptCompactor()
+
+        # Models that don't support custom temperature (only support temperature=1)
+        self.temperature_restricted_models = [
+            "o1", "o1-preview", "o1-mini",
+            "gpt-5", "gpt-5-mini", "gpt-5-turbo"  # Add gpt-5 variants
+        ]
+
+    def _supports_temperature(self) -> bool:
+        """Check if the current model supports custom temperature parameters"""
+        for restricted_model in self.temperature_restricted_models:
+            if self.model.startswith(restricted_model):
+                return False
+        return True
 
     def process_transcript(self, transcript_text: str, episode_guid: str,
-                          output_path: str = None) -> Optional[ProcessedContent]:
-        """Process raw transcript through LLM pipeline"""
+                          output_path: str = None, transcript_json_path: str = None) -> Optional[ProcessedContent]:
+        """Process raw transcript through LLM pipeline using compacted Markdown"""
         try:
             start_time = time.time()
 
+            # If we have the JSON path, compact it first for token savings
+            markdown_text = transcript_text
+            if transcript_json_path and Path(transcript_json_path).exists():
+                print("Compacting transcript to Markdown for token efficiency...")
+
+                # Generate output paths for pruned JSON and markdown
+                base_path = Path(transcript_json_path).parent.parent
+                transcript_name = Path(transcript_json_path).stem
+
+                pruned_json_path = base_path / "transcripts" / f"{transcript_name}_pruned.json"
+                markdown_path = base_path / "transcripts" / f"{transcript_name}.md"
+
+                compact_result = self.compactor.compact_transcript(
+                    transcript_json_path,
+                    output_md_path=str(markdown_path),
+                    output_json_path=str(pruned_json_path)
+                )
+
+                markdown_text = compact_result["markdown"]
+                print(f"Token savings: ~{compact_result['token_savings_estimate']}% "
+                      f"({compact_result['original_chars']} → {compact_result['markdown_chars']} chars)")
+
             print("Step 1: Cleaning transcript and detecting ads...")
-            cleaned_result = self._clean_and_detect_ads(transcript_text)
+            cleaned_result = self._clean_and_detect_ads(markdown_text)
 
             print("Step 2: Generating summary...")
             summary = self._generate_summary(cleaned_result["cleaned_transcript"])
@@ -109,15 +146,21 @@ Here's the transcript to process:
 """
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": transcript}
                 ],
-                temperature=0.1,
-                max_tokens=4000
-            )
+                "max_completion_tokens": 4000
+            }
+
+            # Only add temperature if the model supports it
+            if self._supports_temperature():
+                api_params["temperature"] = 0.1
+
+            response = self.client.chat.completions.create(**api_params)
 
             content = response.choices[0].message.content.strip()
 
@@ -170,15 +213,21 @@ Here's the transcript:
 """
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": cleaned_transcript}
                 ],
-                temperature=0.4,
-                max_tokens=600
-            )
+                "max_completion_tokens": 600
+            }
+
+            # Only add temperature if the model supports it
+            if self._supports_temperature():
+                api_params["temperature"] = 0.4
+
+            response = self.client.chat.completions.create(**api_params)
 
             return response.choices[0].message.content.strip()
 
@@ -245,15 +294,21 @@ Here's the transcript:
 """
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            # Build API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": cleaned_transcript}
                 ],
-                temperature=0.3,
-                max_tokens=1000
-            )
+                "max_completion_tokens": 1000
+            }
+
+            # Only add temperature if the model supports it
+            if self._supports_temperature():
+                api_params["temperature"] = 0.3
+
+            response = self.client.chat.completions.create(**api_params)
 
             content = response.choices[0].message.content.strip()
 

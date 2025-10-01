@@ -8,12 +8,16 @@ try:
     from .core.audio_downloader import AudioDownloader
     from .core.transcriber import WhisperTranscriber
     from .core.llm_processor import LLMProcessor
+    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
 except ImportError:
     from utils.config import load_config
     from core.feed_manager import PodcastFeedManager
     from core.audio_downloader import AudioDownloader
     from core.transcriber import WhisperTranscriber
     from core.llm_processor import LLMProcessor
+    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
 
 
 @click.group()
@@ -174,7 +178,8 @@ def process(ctx, dry_run, max_episodes, transcription_model):
                 processed_content = processor.process_transcript(
                     transcript_text,
                     episode.guid,
-                    str(summary_path)
+                    str(summary_path),
+                    transcript_json_path=str(transcript_path)
                 )
 
                 if processed_content:
@@ -255,6 +260,139 @@ def cleanup(ctx):
     click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
     downloader.cleanup_old_files(config.cleanup_days)
     click.echo("✓ Cleanup complete")
+
+
+@main.command()
+@click.argument('transcript_path', type=click.Path(exists=True))
+@click.option('--add-timestamps/--no-timestamps', default=True, help='Add timestamps to sections')
+@click.option('--audio-url', default='', help='Base URL for audio deep links')
+@click.option('--speaker-map', default='{}', help='JSON dict of speaker name corrections')
+@click.option('--table-layout/--no-table-layout', default=True, help='Use table layout for ads')
+@click.option('--output', '-o', help='Output path (defaults to transcript_path with _processed suffix)')
+@click.pass_context
+def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, table_layout, output):
+    """Post-process a transcript with enhanced LLM processing"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    # Load transcript
+    import json
+    with open(transcript_path, 'r', encoding='utf-8') as f:
+        transcript_data = json.load(f)
+
+    # Parse speaker map
+    import json as json_module
+    try:
+        speaker_map_dict = json_module.loads(speaker_map)
+    except:
+        speaker_map_dict = {}
+
+    # Create config
+    post_config = PostProcessorConfig(
+        add_timestamps=add_timestamps,
+        make_audio_links=bool(audio_url),
+        audio_base_url=audio_url,
+        speaker_map=speaker_map_dict,
+        table_layout_for_snappy_sections=table_layout
+    )
+
+    # Determine output path
+    if not output:
+        transcript_path_obj = Path(transcript_path)
+        output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_processed")
+
+    # Process
+    post_processor = EnhancedPostProcessor(config.openai_api_key, config.llm_model)
+    click.echo(f"🔄 Post-processing transcript with {config.llm_model}...")
+
+    try:
+        result = post_processor.process_transcript(transcript_data, post_config, output)
+        click.echo(f"✅ Post-processing complete!")
+        click.echo(f"📄 Output saved to: {output}.md and {output}.json")
+    except Exception as e:
+        click.echo(f"❌ Error during post-processing: {e}", err=True)
+        ctx.exit(1)
+
+
+@main.command()
+@click.argument('transcript_path', type=click.Path(exists=True))
+@click.option('--output', '-o', help='Output path for evaluation report')
+@click.pass_context
+def evaluate_transcript(ctx, transcript_path, output):
+    """Evaluate the quality of a raw transcript"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    # Load transcript
+    import json
+    with open(transcript_path, 'r', encoding='utf-8') as f:
+        transcript_data = json.load(f)
+
+    # Determine output path
+    if not output:
+        transcript_path_obj = Path(transcript_path)
+        output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_evaluation.json")
+
+    # Evaluate
+    evaluator = TranscriptEvaluator(config.openai_api_key, config.llm_model)
+    click.echo(f"📊 Evaluating transcript quality with {config.llm_model}...")
+
+    try:
+        evaluation = evaluator.evaluate(transcript_data, output)
+        print_evaluation_summary(evaluation, "transcript")
+        click.echo(f"📄 Detailed report saved to: {output}")
+    except Exception as e:
+        click.echo(f"❌ Error during evaluation: {e}", err=True)
+        ctx.exit(1)
+
+
+@main.command()
+@click.argument('processed_path', type=click.Path(exists=True))
+@click.option('--original', help='Path to original transcript for comparison')
+@click.option('--output', '-o', help='Output path for evaluation report')
+@click.pass_context
+def evaluate_postprocess(ctx, processed_path, original, output):
+    """Evaluate the quality of a post-processed transcript"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    # Load processed content
+    import json
+    with open(processed_path, 'r', encoding='utf-8') as f:
+        if processed_path.endswith('.json'):
+            processed_data = json.load(f)
+        else:
+            # If it's markdown, wrap it as content
+            processed_data = {"full_output": f.read()}
+
+    # Load original if provided
+    original_data = None
+    if original:
+        with open(original, 'r', encoding='utf-8') as f:
+            original_data = json.load(f)
+
+    # Determine output path
+    if not output:
+        processed_path_obj = Path(processed_path)
+        output = str(processed_path_obj.parent / f"{processed_path_obj.stem}_evaluation.json")
+
+    # Evaluate
+    evaluator = PostProcessorEvaluator(config.openai_api_key, config.llm_model)
+    click.echo(f"📊 Evaluating post-processing quality with {config.llm_model}...")
+
+    try:
+        evaluation = evaluator.evaluate(processed_data, original_data, output)
+        print_evaluation_summary(evaluation, "post-processor")
+        click.echo(f"📄 Detailed report saved to: {output}")
+    except Exception as e:
+        click.echo(f"❌ Error during evaluation: {e}", err=True)
+        ctx.exit(1)
 
 
 if __name__ == '__main__':

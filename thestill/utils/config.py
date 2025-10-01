@@ -15,6 +15,8 @@ class Config(BaseModel):
     audio_path: Path = Path("./data/audio")
     transcripts_path: Path = Path("./data/transcripts")
     summaries_path: Path = Path("./data/summaries")
+    processed_path: Path = Path("./data/processed")
+    evaluations_path: Path = Path("./data/evaluations")
 
     # Processing Configuration
     max_workers: int = 3
@@ -41,7 +43,9 @@ class Config(BaseModel):
             self.storage_path,
             self.audio_path,
             self.transcripts_path,
-            self.summaries_path
+            self.summaries_path,
+            self.processed_path,
+            self.evaluations_path
         ]
 
         for directory in directories:
@@ -70,6 +74,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "audio_path": Path(os.getenv("AUDIO_PATH", "./data/audio")),
         "transcripts_path": Path(os.getenv("TRANSCRIPTS_PATH", "./data/transcripts")),
         "summaries_path": Path(os.getenv("SUMMARIES_PATH", "./data/summaries")),
+        "processed_path": Path(os.getenv("PROCESSED_PATH", "./data/processed")),
+        "evaluations_path": Path(os.getenv("EVALUATIONS_PATH", "./data/evaluations")),
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
