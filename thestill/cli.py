@@ -96,8 +96,9 @@ def list(ctx):
 @main.command()
 @click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
 @click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
+@click.option('--transcription-model', '-t', default='whisper', type=click.Choice(['whisper', 'parakeet'], case_sensitive=False), help='Transcription model to use')
 @click.pass_context
-def process(ctx, dry_run, max_episodes):
+def process(ctx, dry_run, max_episodes, transcription_model):
     """Check for new episodes and process them"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -106,7 +107,14 @@ def process(ctx, dry_run, max_episodes):
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
     downloader = AudioDownloader(str(config.audio_path))
-    transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
+
+    # Initialize the appropriate transcriber based on the model choice
+    if transcription_model.lower() == 'parakeet':
+        from .core.parakeet_transcriber import ParakeetTranscriber
+        transcriber = ParakeetTranscriber(config.whisper_device)
+    else:
+        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
+
     processor = LLMProcessor(config.openai_api_key, config.llm_model)
 
     click.echo("🔍 Checking for new episodes...")

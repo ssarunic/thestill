@@ -20,7 +20,8 @@ class Config(BaseModel):
     max_workers: int = 3
     chunk_duration_minutes: int = 30
 
-    # Whisper Configuration
+    # Transcription Configuration
+    transcription_model: str = "whisper"  # whisper or parakeet
     whisper_model: str = "base"
     whisper_device: str = "auto"
 
@@ -71,6 +72,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "summaries_path": Path(os.getenv("SUMMARIES_PATH", "./data/summaries")),
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
+        "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
         "llm_model": os.getenv("LLM_MODEL", "gpt-4o"),
