@@ -6,6 +6,7 @@ try:
     from .utils.config import load_config
     from .core.feed_manager import PodcastFeedManager
     from .core.audio_downloader import AudioDownloader
+    from .core.audio_preprocessor import AudioPreprocessor
     from .core.transcriber import WhisperTranscriber
     from .core.llm_processor import LLMProcessor
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
@@ -14,6 +15,7 @@ except ImportError:
     from utils.config import load_config
     from core.feed_manager import PodcastFeedManager
     from core.audio_downloader import AudioDownloader
+    from core.audio_preprocessor import AudioPreprocessor
     from core.transcriber import WhisperTranscriber
     from core.llm_processor import LLMProcessor
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
@@ -101,8 +103,9 @@ def list(ctx):
 @click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
 @click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
 @click.option('--transcription-model', '-t', default='whisper', type=click.Choice(['whisper', 'parakeet'], case_sensitive=False), help='Transcription model to use')
+@click.option('--skip-preprocessing', is_flag=True, help='Skip audio preprocessing/downsampling')
 @click.pass_context
-def process(ctx, dry_run, max_episodes, transcription_model):
+def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing):
     """Check for new episodes and process them"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -111,6 +114,7 @@ def process(ctx, dry_run, max_episodes, transcription_model):
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
     downloader = AudioDownloader(str(config.audio_path))
+    preprocessor = AudioPreprocessor()
 
     # Initialize the appropriate transcriber based on the model choice
     if transcription_model.lower() == 'parakeet':
@@ -156,18 +160,35 @@ def process(ctx, dry_run, max_episodes, transcription_model):
                     click.echo("❌ Download failed, skipping episode")
                     continue
 
+                # Step 1.5: Preprocess audio (downsample for transcription optimization)
+                preprocessed_audio_path = None
+                transcription_audio_path = audio_path
+
+                if not skip_preprocessing:
+                    click.echo("🔧 Preprocessing audio for optimal transcription...")
+                    preprocessed_audio_path = preprocessor.preprocess_audio(audio_path)
+                    if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+                        transcription_audio_path = preprocessed_audio_path
+
                 # Step 2: Transcribe
                 transcript_filename = f"{Path(audio_path).stem}_transcript.json"
                 transcript_path = config.transcripts_path / transcript_filename
 
                 transcript_data = transcriber.transcribe_audio(
-                    audio_path,
+                    transcription_audio_path,
                     str(transcript_path)
                 )
 
                 if not transcript_data:
                     click.echo("❌ Transcription failed, skipping episode")
+                    # Cleanup preprocessed file if it was created
+                    if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+                        preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
                     continue
+
+                # Cleanup preprocessed file after successful transcription
+                if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+                    preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
 
                 # Step 3: Process with LLM
                 transcript_text = transcriber.get_transcript_text(transcript_data)
