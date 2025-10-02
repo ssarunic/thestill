@@ -135,9 +135,13 @@ class OllamaProvider(LLMProvider):
         response_format: Optional[Dict[str, str]] = None
     ) -> str:
         """Generate a chat completion using Ollama API"""
+        # Convert chat messages to a single prompt
+        # Using /api/generate for better compatibility across Ollama versions
+        prompt = self._messages_to_prompt(messages)
+
         payload: Dict[str, Any] = {
             "model": self.model,
-            "messages": messages,
+            "prompt": prompt,
             "stream": False
         }
 
@@ -157,15 +161,31 @@ class OllamaProvider(LLMProvider):
 
         try:
             response = requests.post(
-                self.api_chat,
+                self.api_generate,
                 json=payload,
                 timeout=300  # 5 minute timeout for local inference
             )
             response.raise_for_status()
             result = response.json()
-            return result.get("message", {}).get("content", "")
+            return result.get("response", "")
         except requests.exceptions.RequestException as e:
             raise RuntimeError(f"Ollama API request failed: {e}")
+
+    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
+        """Convert OpenAI-style messages to a single prompt string"""
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                prompt_parts.append(f"System: {content}\n")
+            elif role == "user":
+                prompt_parts.append(f"User: {content}\n")
+            elif role == "assistant":
+                prompt_parts.append(f"Assistant: {content}\n")
+
+        return "\n".join(prompt_parts)
 
     def supports_temperature(self) -> bool:
         """Ollama always supports temperature"""
