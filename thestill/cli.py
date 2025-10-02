@@ -190,9 +190,24 @@ def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing)
                 transcript_filename = f"{Path(audio_path).stem}_transcript.json"
                 transcript_path = config.transcripts_path / transcript_filename
 
+                # Prepare cleaning config if enabled
+                cleaning_config = None
+                if config.enable_transcript_cleaning:
+                    cleaning_config = {
+                        "provider": config.cleaning_provider,
+                        "model": config.cleaning_model,
+                        "chunk_size": config.cleaning_chunk_size,
+                        "overlap_pct": config.cleaning_overlap_pct,
+                        "extract_entities": config.cleaning_extract_entities,
+                        "base_url": config.ollama_base_url,
+                        "api_key": config.openai_api_key
+                    }
+
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
-                    str(transcript_path)
+                    str(transcript_path),
+                    clean_transcript=config.enable_transcript_cleaning,
+                    cleaning_config=cleaning_config
                 )
 
                 if not transcript_data:

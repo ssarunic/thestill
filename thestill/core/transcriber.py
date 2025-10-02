@@ -72,8 +72,19 @@ class WhisperTranscriber:
             print(f"Cleared Whisper cache: {cache_dir}")
 
     def transcribe_audio(self, audio_path: str, output_path: str = None,
-                         custom_prompt: str = None, preprocess_audio: bool = True) -> Optional[Dict]:
-        """Transcribe audio file with optional custom prompt for better accuracy"""
+                         custom_prompt: str = None, preprocess_audio: bool = True,
+                         clean_transcript: bool = False, cleaning_config: Dict = None) -> Optional[Dict]:
+        """
+        Transcribe audio file with optional custom prompt for better accuracy.
+
+        Args:
+            audio_path: Path to audio file
+            output_path: Path to save transcript JSON
+            custom_prompt: Custom prompt to improve transcription accuracy
+            preprocess_audio: Whether to preprocess audio before transcription
+            clean_transcript: Whether to clean transcript with LLM (for fixing errors, removing fillers)
+            cleaning_config: Configuration dict for transcript cleaning (provider, model, etc.)
+        """
         try:
             self.load_model()
 
@@ -119,6 +130,10 @@ class WhisperTranscriber:
             print(f"Transcription completed in {processing_time:.1f} seconds")
 
             transcript_data = self._format_transcript(result, processing_time, audio_path)
+
+            # Optional: Clean transcript with LLM
+            if clean_transcript and cleaning_config:
+                transcript_data = self._clean_transcript_with_llm(transcript_data, cleaning_config)
 
             if output_path:
                 self._save_transcript(transcript_data, output_path)
@@ -432,3 +447,72 @@ class WhisperTranscriber:
             chunks.append(current_chunk)
 
         return chunks
+
+    def _clean_transcript_with_llm(self, transcript_data: Dict, cleaning_config: Dict) -> Dict:
+        """
+        Clean transcript text using LLM with overlapping chunking strategy.
+
+        Args:
+            transcript_data: Transcript dictionary with segments and text
+            cleaning_config: Configuration dict with provider, model, etc.
+        """
+        print("\n" + "=" * 60)
+        print("CLEANING TRANSCRIPT WITH LLM")
+        print("=" * 60)
+
+        try:
+            from .transcript_cleaner import TranscriptCleaner, TranscriptCleanerConfig
+            from .llm_provider import OpenAIProvider, OllamaProvider
+
+            # Extract config
+            provider_type = cleaning_config.get("provider", "ollama")
+            model = cleaning_config.get("model", "gemma3:4b")
+            chunk_size = cleaning_config.get("chunk_size", 20000)
+            overlap_pct = cleaning_config.get("overlap_pct", 0.15)
+            extract_entities = cleaning_config.get("extract_entities", True)
+
+            # Create provider
+            if provider_type == "openai":
+                api_key = cleaning_config.get("api_key")
+                if not api_key:
+                    raise ValueError("OpenAI API key required for cleaning")
+                provider = OpenAIProvider(api_key=api_key, model=model)
+            else:  # ollama
+                base_url = cleaning_config.get("base_url", "http://localhost:11434")
+                provider = OllamaProvider(base_url=base_url, model=model)
+
+            # Create cleaner config
+            cleaner_config = TranscriptCleanerConfig(
+                chunk_size=chunk_size,
+                overlap_pct=overlap_pct,
+                extract_entities=extract_entities
+            )
+
+            # Create cleaner
+            cleaner = TranscriptCleaner(provider=provider, config=cleaner_config)
+
+            # Get plain text from transcript
+            original_text = self.get_transcript_text(transcript_data)
+
+            # Clean the text
+            cleaned_result = cleaner.clean_transcript(original_text)
+
+            # Update transcript data with cleaned text
+            # For now, we'll add the cleaned text as a new field
+            # and keep the original segments intact
+            transcript_data["cleaned_text"] = cleaned_result["cleaned_text"]
+            transcript_data["cleaning_metadata"] = {
+                "entities": cleaned_result["entities"],
+                "processing_time": cleaned_result["processing_time"],
+                "chunks_processed": cleaned_result["chunks_processed"],
+                "original_tokens": cleaned_result["original_tokens"],
+                "final_tokens": cleaned_result["final_tokens"]
+            }
+
+            print("=" * 60)
+            return transcript_data
+
+        except Exception as e:
+            print(f"Error cleaning transcript: {e}")
+            print("Returning original transcript without cleaning")
+            return transcript_data
