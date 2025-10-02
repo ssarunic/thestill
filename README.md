@@ -16,7 +16,8 @@ thestill.ai solves the time-consuming nature of audio content consumption by:
 - **Multiple Source Support**: Add podcasts from RSS feeds, Apple Podcasts, and YouTube playlists/channels
 - **Automated Processing**: Automatically detect and process new episodes
 - **High-Quality Transcription**: Uses OpenAI Whisper for accurate speech-to-text
-- **AI-Powered Analysis**: GPT cleans transcripts, generates summaries, and extracts insights
+- **Flexible LLM Backend**: Choose between OpenAI (cloud) or Ollama (local) for post-processing
+- **AI-Powered Analysis**: Cleans transcripts, generates summaries, and extracts insights
 - **CLI Interface**: Simple command-line tool for easy automation
 - **Speaker Identification**: Distinguishes between different speakers in conversations
 - **Ad Detection**: Identifies and tags advertisement segments
@@ -40,11 +41,25 @@ cp .env.example .env
 
 ### Configuration
 
-Create a `.env` file with your OpenAI API key:
+Create a `.env` file with your configuration. You can choose between OpenAI (cloud) or Ollama (local) for LLM processing.
+
+#### Option 1: Using OpenAI (Cloud)
 
 ```env
+LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
+LLM_MODEL=gpt-4o
 ```
+
+#### Option 2: Using Ollama (Local)
+
+```env
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2
+```
+
+See the [Ollama Setup](#ollama-setup) section below for installation instructions.
 
 ### Basic Usage
 
@@ -107,6 +122,17 @@ Each processed episode generates:
 Environment variables you can customize:
 
 ```env
+# LLM Provider (openai or ollama)
+LLM_PROVIDER=openai
+
+# OpenAI Configuration (when using LLM_PROVIDER=openai)
+OPENAI_API_KEY=your_api_key_here
+LLM_MODEL=gpt-4o
+
+# Ollama Configuration (when using LLM_PROVIDER=ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2  # or gemma2, mistral, etc.
+
 # Storage paths
 STORAGE_PATH=./data
 AUDIO_PATH=./data/audio
@@ -119,31 +145,139 @@ CHUNK_DURATION_MINUTES=30
 CLEANUP_DAYS=30
 
 # Model settings
+TRANSCRIPTION_MODEL=whisper  # Options: whisper, parakeet
 WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
-LLM_MODEL=gpt-4o
 ```
+
+## Ollama Setup
+
+Ollama allows you to run LLM models locally, providing privacy and eliminating API costs for post-processing.
+
+### Installation
+
+**macOS:**
+```bash
+brew install ollama
+```
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Windows:**
+Download from [ollama.com](https://ollama.com/download)
+
+### Running Ollama
+
+1. Start the Ollama server:
+```bash
+ollama serve
+```
+
+2. Pull a model (first time only):
+```bash
+# Recommended models for podcast processing:
+ollama pull llama3.2        # Fast, good quality (3B parameters)
+ollama pull gemma2:9b       # Better quality, slower (9B parameters)
+ollama pull mistral         # Balanced option (7B parameters)
+```
+
+3. Update your `.env` file:
+```env
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.2
+```
+
+### Model Recommendations
+
+- **llama3.2 (3B)**: Fast, good for most podcasts, ~2GB RAM
+- **gemma2:9b**: Higher quality, better analysis, ~6GB RAM
+- **mistral (7B)**: Balanced speed/quality, ~4GB RAM
+
+### Performance Notes
+
+Local inference is slower than OpenAI API but provides:
+- Complete privacy (no data leaves your machine)
+- No API costs
+- No rate limits
+- Works offline (after model download)
+
+Expect processing times of 3-10 minutes per podcast depending on model and hardware.
 
 ## System Requirements
 
+### For OpenAI Provider
 - Python 3.9 or higher (3.10+ recommended)
 - OpenAI API key
-- 4GB+ RAM recommended for Whisper processing
-- Internet connection for downloads and API calls
+- 2GB+ RAM
+- Internet connection
+
+### For Ollama Provider
+- Python 3.9 or higher (3.10+ recommended)
+- 4GB+ RAM (8GB+ recommended for larger models)
+- Ollama installed and running
+- Internet connection for downloads
+
+### Common Requirements
 - FFmpeg (required for YouTube audio extraction)
+- 2GB+ disk space for audio files
 
 ## Cost Estimation
 
+### OpenAI Provider
 Processing costs depend on episode length and model choices:
 - Whisper: Free (runs locally)
-- GPT-4: ~$0.01-0.05 per episode (varies by length)
+- GPT-4o: ~$0.01-0.05 per episode (varies by length)
 - 60-minute episode: approximately $0.02-0.08
 
+### Ollama Provider
+- Whisper: Free (runs locally)
+- Ollama: Free (runs locally)
+- 60-minute episode: $0.00 (only electricity costs)
+
 ## Troubleshooting
+
+### OpenAI Provider Issues
 
 **API Key Issues:**
 ```bash
 export OPENAI_API_KEY="your-key-here"
 ```
+
+**API Quota Errors:**
+- Check OpenAI API quotas and billing
+- Consider switching to Ollama for unlimited processing
+
+### Ollama Provider Issues
+
+**Connection Refused:**
+- Ensure Ollama is running: `ollama serve`
+- Check Ollama is accessible at `http://localhost:11434`
+- Verify firewall settings
+
+**Model Not Found:**
+```bash
+# List available models
+ollama list
+
+# Pull the required model
+ollama pull llama3.2
+```
+
+**Slow Processing:**
+- Use smaller models (llama3.2 instead of gemma2:9b)
+- Ensure sufficient RAM is available
+- Close other applications to free up resources
+- Consider using OpenAI API for faster processing
+
+**Out of Memory:**
+- Use a smaller model (llama3.2 uses ~2GB)
+- Increase system swap space
+- Close other applications
+- Process fewer episodes concurrently (reduce MAX_WORKERS)
+
+### Common Issues
 
 **Download Failures:**
 - Check internet connection
@@ -153,7 +287,6 @@ export OPENAI_API_KEY="your-key-here"
 
 **Processing Errors:**
 - Ensure sufficient disk space for audio files
-- Check OpenAI API quotas and billing
 - Monitor system resources during Whisper processing
 
 ## Development

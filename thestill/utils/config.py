@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 class Config(BaseModel):
     # API Configuration
-    openai_api_key: str
+    openai_api_key: str = ""
 
     # Storage Paths
     storage_path: Path = Path("./data")
@@ -28,7 +28,12 @@ class Config(BaseModel):
     whisper_device: str = "auto"
 
     # LLM Configuration
+    llm_provider: str = "openai"  # openai or ollama
     llm_model: str = "gpt-4o"
+
+    # Ollama Configuration
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
 
     # Cleanup Configuration
     cleanup_days: int = 30
@@ -59,12 +64,15 @@ def load_config(env_file: Optional[str] = None) -> Config:
     else:
         load_dotenv()
 
-    # Required environment variable
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    # Get LLM provider
+    llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+    # Validate required API keys based on provider
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if llm_provider == "openai" and not api_key:
         raise ValueError(
-            "OPENAI_API_KEY environment variable is required. "
-            "Please set it in your .env file or environment."
+            "OPENAI_API_KEY environment variable is required when using OpenAI provider. "
+            "Please set it in your .env file or environment, or switch to 'ollama' provider."
         )
 
     # Optional configurations with defaults
@@ -81,7 +89,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
-        "llm_model": os.getenv("LLM_MODEL", "gpt-4o"),
+        "llm_provider": llm_provider,
+        "llm_model": os.getenv("LLM_MODEL", "gpt-4o" if llm_provider == "openai" else "llama3.2"),
+        "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.2"),
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30"))
     }
 

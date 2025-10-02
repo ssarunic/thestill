@@ -11,6 +11,7 @@ try:
     from .core.llm_processor import LLMProcessor
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
+    from .core.llm_provider import create_llm_provider
 except ImportError:
     from utils.config import load_config
     from core.feed_manager import PodcastFeedManager
@@ -20,6 +21,7 @@ except ImportError:
     from core.llm_processor import LLMProcessor
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
+    from core.llm_provider import create_llm_provider
 
 
 @click.group()
@@ -123,7 +125,21 @@ def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing)
     else:
         transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
 
-    processor = LLMProcessor(config.openai_api_key, config.llm_model)
+    # Create LLM provider based on configuration
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.llm_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model
+        )
+        click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
+    processor = LLMProcessor(llm_provider)
 
     click.echo("🔍 Checking for new episodes...")
     new_episodes = feed_manager.get_new_episodes()
@@ -324,9 +340,22 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
         transcript_path_obj = Path(transcript_path)
         output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_processed")
 
+    # Create LLM provider
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.llm_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model
+        )
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
     # Process
-    post_processor = EnhancedPostProcessor(config.openai_api_key, config.llm_model)
-    click.echo(f"🔄 Post-processing transcript with {config.llm_model}...")
+    post_processor = EnhancedPostProcessor(llm_provider)
+    click.echo(f"🔄 Post-processing transcript with {llm_provider.get_model_name()}...")
 
     try:
         result = post_processor.process_transcript(transcript_data, post_config, output)
@@ -358,9 +387,22 @@ def evaluate_transcript(ctx, transcript_path, output):
         transcript_path_obj = Path(transcript_path)
         output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_evaluation.json")
 
+    # Create LLM provider
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.llm_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model
+        )
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
     # Evaluate
-    evaluator = TranscriptEvaluator(config.openai_api_key, config.llm_model)
-    click.echo(f"📊 Evaluating transcript quality with {config.llm_model}...")
+    evaluator = TranscriptEvaluator(llm_provider)
+    click.echo(f"📊 Evaluating transcript quality with {llm_provider.get_model_name()}...")
 
     try:
         evaluation = evaluator.evaluate(transcript_data, output)
@@ -403,9 +445,22 @@ def evaluate_postprocess(ctx, processed_path, original, output):
         processed_path_obj = Path(processed_path)
         output = str(processed_path_obj.parent / f"{processed_path_obj.stem}_evaluation.json")
 
+    # Create LLM provider
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.llm_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model
+        )
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
     # Evaluate
-    evaluator = PostProcessorEvaluator(config.openai_api_key, config.llm_model)
-    click.echo(f"📊 Evaluating post-processing quality with {config.llm_model}...")
+    evaluator = PostProcessorEvaluator(llm_provider)
+    click.echo(f"📊 Evaluating post-processing quality with {llm_provider.get_model_name()}...")
 
     try:
         evaluation = evaluator.evaluate(processed_data, original_data, output)

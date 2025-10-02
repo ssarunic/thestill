@@ -6,7 +6,7 @@ Uses LLM to generate structured evaluation reports.
 import json
 from pathlib import Path
 from typing import Dict
-from openai import OpenAI
+from .llm_provider import LLMProvider
 
 
 class TranscriptEvaluator:
@@ -48,9 +48,14 @@ Schema:
 
 Return ONLY valid JSON following this exact schema. Do not include any explanatory text before or after the JSON."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
-        self.client = OpenAI(api_key=api_key)
-        self.model = model
+    def __init__(self, provider: LLMProvider):
+        """
+        Initialize transcript evaluator with an LLM provider.
+
+        Args:
+            provider: LLMProvider instance (OpenAI or Ollama)
+        """
+        self.provider = provider
 
     def evaluate(
         self,
@@ -67,22 +72,22 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         Returns:
             Dict containing the structured evaluation report
         """
-        print(f"Evaluating transcript quality with {self.model}...")
+        print(f"Evaluating transcript quality with {self.provider.get_model_name()}...")
 
         transcript_json = json.dumps(transcript_data, indent=2)
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Evaluate this transcript:\n\n{transcript_json}"}
-                ],
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": f"Evaluate this transcript:\n\n{transcript_json}"}
+            ]
+
+            evaluation_json = self.provider.chat_completion(
+                messages=messages,
                 temperature=0.2,
                 response_format={"type": "json_object"}
             )
 
-            evaluation_json = response.choices[0].message.content
             evaluation = json.loads(evaluation_json)
 
             # Save if output path provided
@@ -148,9 +153,14 @@ Schema:
 
 Return ONLY valid JSON following this exact schema. Do not include any explanatory text before or after the JSON."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
-        self.client = OpenAI(api_key=api_key)
-        self.model = model
+    def __init__(self, provider: LLMProvider):
+        """
+        Initialize post-processor evaluator with an LLM provider.
+
+        Args:
+            provider: LLMProvider instance (OpenAI or Ollama)
+        """
+        self.provider = provider
 
     def evaluate(
         self,
@@ -169,7 +179,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         Returns:
             Dict containing the structured evaluation report
         """
-        print(f"Evaluating post-processing quality with {self.model}...")
+        print(f"Evaluating post-processing quality with {self.provider.get_model_name()}...")
 
         # Build the user message
         user_message = f"Evaluate this processed transcript:\n\n{json.dumps(processed_content, indent=2)}"
@@ -178,17 +188,17 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
             user_message += f"\n\nOriginal transcript for comparison:\n\n{json.dumps(original_transcript, indent=2)}"
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message}
-                ],
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ]
+
+            evaluation_json = self.provider.chat_completion(
+                messages=messages,
                 temperature=0.2,
                 response_format={"type": "json_object"}
             )
 
-            evaluation_json = response.choices[0].message.content
             evaluation = json.loads(evaluation_json)
 
             # Save if output path provided

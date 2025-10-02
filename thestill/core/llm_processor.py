@@ -4,30 +4,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from openai import OpenAI
-
 from ..models.podcast import Quote, ProcessedContent
 from .transcript_compactor import TranscriptCompactor
+from .llm_provider import LLMProvider
 
 
 class LLMProcessor:
-    def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview"):
-        self.client = OpenAI(api_key=api_key)
-        self.model = model
+    def __init__(self, provider: LLMProvider):
+        """
+        Initialize LLM processor with a provider.
+
+        Args:
+            provider: LLMProvider instance (OpenAI or Ollama)
+        """
+        self.provider = provider
         self.compactor = TranscriptCompactor()
-
-        # Models that don't support custom temperature (only support temperature=1)
-        self.temperature_restricted_models = [
-            "o1", "o1-preview", "o1-mini",
-            "gpt-5", "gpt-5-mini", "gpt-5-turbo"  # Add gpt-5 variants
-        ]
-
-    def _supports_temperature(self) -> bool:
-        """Check if the current model supports custom temperature parameters"""
-        for restricted_model in self.temperature_restricted_models:
-            if self.model.startswith(restricted_model):
-                return False
-        return True
 
     def process_transcript(self, transcript_text: str, episode_guid: str,
                           output_path: str = None, transcript_json_path: str = None) -> Optional[ProcessedContent]:
@@ -146,50 +137,26 @@ Here's the transcript to process:
 """
 
         try:
-            # Build API call parameters
-            api_params = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": transcript}
-                ],
-                "max_completion_tokens": 4000
-            }
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": transcript}
+            ]
 
-            # Only add temperature if the model supports it
-            if self._supports_temperature():
-                api_params["temperature"] = 0.1
+            content = self.provider.chat_completion(
+                messages=messages,
+                temperature=0.1,
+                max_tokens=4000
+            )
 
-            response = self.client.chat.completions.create(**api_params)
-
-            # Check if we got a valid response
-            if not response.choices or len(response.choices) == 0:
-                print("Warning: API returned no choices in response")
-                return {
-                    "cleaned_transcript": transcript,
-                    "ad_segments": []
-                }
-
-            content = response.choices[0].message.content
-
-            # Check for None or empty content
-            if content is None:
-                print("Warning: API returned None for message content")
-                print(f"Response finish_reason: {response.choices[0].finish_reason}")
+            # Check for empty content
+            if not content:
+                print("Warning: Provider returned empty content")
                 return {
                     "cleaned_transcript": transcript,
                     "ad_segments": []
                 }
 
             content = content.strip()
-
-            if not content:
-                print("Warning: API returned empty content")
-                print(f"Response finish_reason: {response.choices[0].finish_reason}")
-                return {
-                    "cleaned_transcript": transcript,
-                    "ad_segments": []
-                }
 
             # Try to extract JSON from the response if it's wrapped in code blocks
             if "```json" in content:
@@ -208,10 +175,7 @@ Here's the transcript to process:
 
         except json.JSONDecodeError as e:
             print(f"Warning: Failed to parse LLM response as JSON: {e}")
-            try:
-                print(f"Raw response: {response.choices[0].message.content[:500] if response.choices[0].message.content else '(empty)'}...")
-            except:
-                print("Raw response: (unavailable)")
+            print(f"Raw response: {content[:500] if content else '(empty)'}...")
             return {
                 "cleaned_transcript": transcript,
                 "ad_segments": []
@@ -243,23 +207,18 @@ Here's the transcript:
 """
 
         try:
-            # Build API call parameters
-            api_params = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": cleaned_transcript}
-                ],
-                "max_completion_tokens": 600
-            }
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": cleaned_transcript}
+            ]
 
-            # Only add temperature if the model supports it
-            if self._supports_temperature():
-                api_params["temperature"] = 0.4
+            response = self.provider.chat_completion(
+                messages=messages,
+                temperature=0.4,
+                max_tokens=600
+            )
 
-            response = self.client.chat.completions.create(**api_params)
-
-            return response.choices[0].message.content.strip()
+            return response.strip()
 
         except Exception as e:
             print(f"Error generating summary: {e}")
@@ -324,23 +283,16 @@ Here's the transcript:
 """
 
         try:
-            # Build API call parameters
-            api_params = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": cleaned_transcript}
-                ],
-                "max_completion_tokens": 1000
-            }
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": cleaned_transcript}
+            ]
 
-            # Only add temperature if the model supports it
-            if self._supports_temperature():
-                api_params["temperature"] = 0.3
-
-            response = self.client.chat.completions.create(**api_params)
-
-            content = response.choices[0].message.content.strip()
+            content = self.provider.chat_completion(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=1000
+            ).strip()
 
             # Try to extract JSON from the response if it's wrapped in code blocks
             if "```json" in content:
@@ -369,7 +321,7 @@ Here's the transcript:
 
         except json.JSONDecodeError as e:
             print(f"Warning: Failed to parse quotes response as JSON: {e}")
-            print(f"Raw response: {response.choices[0].message.content[:500]}...")
+            print(f"Raw response: {content[:500]}...")
             return []
         except Exception as e:
             print(f"Error extracting quotes: {e}")

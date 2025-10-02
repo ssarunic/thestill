@@ -7,7 +7,7 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, NamedTuple
-from openai import OpenAI
+from .llm_provider import LLMProvider
 
 
 class ModelLimits(NamedTuple):
@@ -98,9 +98,16 @@ Return three blocks:
    • Use relevant hashtags
    • Add audio link if AUDIO_BASE_URL is provided"""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o", max_tokens: Optional[int] = None):
-        self.client = OpenAI(api_key=api_key)
-        self.model = model
+    def __init__(self, provider: LLMProvider, max_tokens: Optional[int] = None):
+        """
+        Initialize enhanced post-processor with an LLM provider.
+
+        Args:
+            provider: LLMProvider instance (OpenAI or Ollama)
+            max_tokens: Maximum tokens per chunk (optional, auto-calculated if not provided)
+        """
+        self.provider = provider
+        model = provider.get_model_name()
 
         # Get model limits and calculate optimal chunk size
         self.model_limits = MODEL_CONFIGS.get(model)
@@ -244,21 +251,19 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
         user_message += f"\n{transcript_json}"
 
         try:
-            # Build API call parameters
-            api_params = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message}
-                ],
-            }
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ]
 
-            # Only add temperature if model supports it
-            if self.model_limits.supports_temperature:
-                api_params["temperature"] = 0.3
+            # Use temperature if model supports it
+            temperature = 0.3 if self.model_limits.supports_temperature else None
 
-            response = self.client.chat.completions.create(**api_params)
-            return response.choices[0].message.content
+            response = self.provider.chat_completion(
+                messages=messages,
+                temperature=temperature
+            )
+            return response
 
         except Exception as e:
             print(f"Error processing chunk {chunk_num}/{total_chunks}: {e}")
@@ -318,7 +323,7 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
         transcript_json = json.dumps(transcript_data)
         estimated_tokens = self._estimate_tokens(transcript_json)
 
-        print(f"Processing transcript with {self.model}...")
+        print(f"Processing transcript with {self.provider.get_model_name()}...")
         print(f"Estimated tokens: ~{estimated_tokens:,}")
 
         chunks = self._chunk_transcript(transcript_data, config)
