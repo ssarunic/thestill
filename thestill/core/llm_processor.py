@@ -162,7 +162,34 @@ Here's the transcript to process:
 
             response = self.client.chat.completions.create(**api_params)
 
-            content = response.choices[0].message.content.strip()
+            # Check if we got a valid response
+            if not response.choices or len(response.choices) == 0:
+                print("Warning: API returned no choices in response")
+                return {
+                    "cleaned_transcript": transcript,
+                    "ad_segments": []
+                }
+
+            content = response.choices[0].message.content
+
+            # Check for None or empty content
+            if content is None:
+                print("Warning: API returned None for message content")
+                print(f"Response finish_reason: {response.choices[0].finish_reason}")
+                return {
+                    "cleaned_transcript": transcript,
+                    "ad_segments": []
+                }
+
+            content = content.strip()
+
+            if not content:
+                print("Warning: API returned empty content")
+                print(f"Response finish_reason: {response.choices[0].finish_reason}")
+                return {
+                    "cleaned_transcript": transcript,
+                    "ad_segments": []
+                }
 
             # Try to extract JSON from the response if it's wrapped in code blocks
             if "```json" in content:
@@ -181,7 +208,10 @@ Here's the transcript to process:
 
         except json.JSONDecodeError as e:
             print(f"Warning: Failed to parse LLM response as JSON: {e}")
-            print(f"Raw response: {response.choices[0].message.content[:500]}...")
+            try:
+                print(f"Raw response: {response.choices[0].message.content[:500] if response.choices[0].message.content else '(empty)'}...")
+            except:
+                print("Raw response: (unavailable)")
             return {
                 "cleaned_transcript": transcript,
                 "ad_segments": []

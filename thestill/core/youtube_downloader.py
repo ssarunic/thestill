@@ -206,11 +206,29 @@ class YouTubeDownloader:
 
     def _sanitize_filename(self, filename: str) -> str:
         """Remove/replace invalid filename characters"""
+        # Replace special characters that are invalid in filenames
         invalid_chars = '<>:"/\\|?*'
         for char in invalid_chars:
             filename = filename.replace(char, '_')
 
+        # Replace spaces with underscores
         filename = filename.replace(' ', '_')
+
+        # Replace dots with underscores to prevent yt-dlp from treating them as extensions
+        # This ensures "World No.1" becomes "World_No_1" instead of being truncated
+        filename = filename.replace('.', '_')
+
+        # Replace other potentially problematic characters
+        filename = filename.replace('&', 'and')
+        filename = filename.replace('!', '')
+        filename = filename.replace('?', '')
+
+        # Remove non-printable characters
         filename = ''.join(c for c in filename if c.isprintable())
 
-        return filename[:100]
+        # Remove multiple consecutive underscores
+        while '__' in filename:
+            filename = filename.replace('__', '_')
+
+        # Trim to reasonable length (leaving room for video ID and extension)
+        return filename[:100].strip('_')
