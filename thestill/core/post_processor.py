@@ -19,8 +19,9 @@ class ModelLimits(NamedTuple):
     supports_temperature: bool = True  # Whether model supports custom temperature
 
 
-# OpenAI model rate limits and context windows
+# Model rate limits and context windows
 MODEL_CONFIGS = {
+    # OpenAI models
     "gpt-5": ModelLimits(tpm=500000, rpm=500, tpd=1500000, context_window=128000, supports_temperature=False),
     "gpt-5-mini": ModelLimits(tpm=500000, rpm=500, tpd=5000000, context_window=128000, supports_temperature=False),
     "gpt-5-nano": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=False),
@@ -33,6 +34,14 @@ MODEL_CONFIGS = {
     "gpt-4o-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo-preview": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
+
+    # Ollama/Gemma 3 models (no rate limits for local inference)
+    # Using very high tpm/rpm/tpd since there are no actual limits
+    "gemma3:270m": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
+    "gemma3:1b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
+    "gemma3:4b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
+    "gemma3:12b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
+    "gemma3:27b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
 }
 
 
@@ -126,12 +135,21 @@ Return three blocks:
         else:
             self.max_tokens = max_tokens
 
-        # Calculate delay between chunks based on TPM limit
-        self.chunk_delay = 60 if self.model_limits.tpm < 100000 else 10
+        # Calculate delay between chunks based on provider type
+        # Ollama has no rate limits, so no delay needed
+        from .llm_provider import OllamaProvider
+        if isinstance(provider, OllamaProvider):
+            self.chunk_delay = 0
+        else:
+            # For cloud providers, respect TPM limits
+            self.chunk_delay = 60 if self.model_limits.tpm < 100000 else 10
 
         print(f"📊 Model: {model}")
         print(f"   TPM Limit: {self.model_limits.tpm:,} | Max chunk size: {self.max_tokens:,} tokens")
-        print(f"   Delay between chunks: {self.chunk_delay}s")
+        if self.chunk_delay > 0:
+            print(f"   Delay between chunks: {self.chunk_delay}s")
+        else:
+            print(f"   No delay between chunks (local inference)")
 
     def _build_options_string(self, config: PostProcessorConfig) -> str:
         """Build the OPTIONS section for the prompt"""
@@ -341,8 +359,8 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
                 output_text = self._process_single_chunk(chunk, config, i, len(chunks))
                 chunk_outputs.append(output_text)
 
-                # Add delay between chunks to respect rate limits
-                if i < len(chunks):
+                # Add delay between chunks to respect rate limits (only for cloud providers)
+                if i < len(chunks) and self.chunk_delay > 0:
                     print(f"Waiting {self.chunk_delay}s before next chunk...")
                     time.sleep(self.chunk_delay)
 

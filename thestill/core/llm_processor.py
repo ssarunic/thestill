@@ -48,7 +48,7 @@ class LLMProcessor:
                 print(f"Token savings: ~{compact_result['token_savings_estimate']}% "
                       f"({compact_result['original_chars']} → {compact_result['markdown_chars']} chars)")
 
-            print("Step 1: Cleaning transcript and detecting ads...")
+            print("Step 1: Detecting advertisement segments...")
             cleaned_result = self._clean_and_detect_ads(markdown_text)
 
             print("Step 2: Generating summary...")
@@ -80,15 +80,9 @@ class LLMProcessor:
             return None
 
     def _clean_and_detect_ads(self, transcript: str) -> Dict:
-        """Clean transcript and detect advertisement segments"""
+        """Detect advertisement segments in transcript"""
         prompt = """
-You are a transcript cleaning specialist. Your task is to:
-
-1. Remove filler words like "um", "uh", "you know", "like" (when used as filler)
-2. Fix obvious transcription errors based on context
-3. Identify advertisement segments and mark them clearly
-4. Preserve the natural flow and meaning of the conversation
-5. Keep timestamps intact
+You are an advertisement detection specialist. Your task is to identify advertisement segments in this podcast transcript.
 
 Advertisement segments typically include:
 - Product endorsements or sponsorship mentions
@@ -96,44 +90,24 @@ Advertisement segments typically include:
 - "This episode is brought to you by..."
 - Clear promotional language
 
-IMPORTANT: You MUST respond with ONLY valid JSON. Do not include any explanatory text before or after the JSON.
+IMPORTANT: Respond with valid JSON only. Return an object with:
+- "ad_segments": array of ad segments found, each with start_marker, end_marker, content, and type (one of: "sponsorship", "product_placement", "promotion")
 
-JSON Schema:
-{
-  "type": "object",
-  "properties": {
-    "cleaned_transcript": {"type": "string"},
-    "ad_segments": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "start_marker": {"type": "string"},
-          "end_marker": {"type": "string"},
-          "content": {"type": "string"},
-          "type": {"type": "string", "enum": ["sponsorship", "product_placement", "promotion"]}
-        },
-        "required": ["start_marker", "end_marker", "content", "type"]
-      }
-    }
-  },
-  "required": ["cleaned_transcript", "ad_segments"]
-}
+If no ads are found, return an empty array.
 
-Example response:
+Example:
 {
-  "cleaned_transcript": "[00:00] Welcome to the podcast. Today we discuss AI and its impact on society. The technology is rapidly evolving and changing how we work.",
   "ad_segments": [
     {
       "start_marker": "[00:15]",
       "end_marker": "[00:45]",
-      "content": "This episode is brought to you by TechCorp. Use code PODCAST20 for 20% off your first order.",
+      "content": "This episode is brought to you by TechCorp. Use code PODCAST20 for 20% off.",
       "type": "sponsorship"
     }
   ]
 }
 
-Here's the transcript to process:
+Here's the transcript to analyze:
 """
 
         try:
@@ -145,7 +119,8 @@ Here's the transcript to process:
             content = self.provider.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=4000
+                max_tokens=4000,
+                response_format={"type": "json_object"}
             )
 
             # Check for empty content
@@ -171,6 +146,8 @@ Here's the transcript to process:
                     content = content[start:end].strip()
 
             result = json.loads(content)
+            # Add the original transcript as the "cleaned" version since we're not cleaning anymore
+            result["cleaned_transcript"] = transcript
             return result
 
         except json.JSONDecodeError as e:
@@ -231,7 +208,7 @@ You are a quote extraction specialist. From this podcast transcript, identify 3-
 
 For each quote, provide:
 1. The exact quote text
-2. The speaker (if identifiable from context)
+2. The speaker (if identifiable from context, or null if unknown)
 3. Why this quote is significant or impactful
 
 Focus on quotes that:
@@ -241,40 +218,23 @@ Focus on quotes that:
 - Could stand alone as valuable takeaways
 - Avoid advertisement content
 
-IMPORTANT: You MUST respond with ONLY valid JSON. Do not include any explanatory text before or after the JSON.
+IMPORTANT: Respond with valid JSON only. Return an object with a "quotes" array, where each quote has:
+- "text": the quote text
+- "speaker": speaker name or null
+- "significance": why it matters
 
-JSON Schema:
-{
-  "type": "object",
-  "properties": {
-    "quotes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "text": {"type": "string"},
-          "speaker": {"type": ["string", "null"]},
-          "significance": {"type": "string"}
-        },
-        "required": ["text", "speaker", "significance"]
-      }
-    }
-  },
-  "required": ["quotes"]
-}
-
-Example response:
+Example:
 {
   "quotes": [
     {
       "text": "The future belongs to those who believe in the beauty of their dreams.",
       "speaker": "Eleanor Roosevelt",
-      "significance": "This quote emphasizes the power of having vision and believing in oneself to achieve meaningful goals."
+      "significance": "Emphasizes the power of vision and self-belief."
     },
     {
       "text": "Innovation distinguishes between a leader and a follower.",
       "speaker": null,
-      "significance": "Highlights how creative thinking and willingness to try new approaches separates successful leaders from those who merely react."
+      "significance": "Shows how creative thinking separates leaders from followers."
     }
   ]
 }
@@ -291,7 +251,8 @@ Here's the transcript:
             content = self.provider.chat_completion(
                 messages=messages,
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=2000,
+                response_format={"type": "json_object"}
             ).strip()
 
             # Try to extract JSON from the response if it's wrapped in code blocks

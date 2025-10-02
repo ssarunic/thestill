@@ -56,7 +56,7 @@ LLM_MODEL=gpt-4o
 ```env
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2
+OLLAMA_MODEL=gemma3:4b
 ```
 
 See the [Ollama Setup](#ollama-setup) section below for installation instructions.
@@ -131,7 +131,7 @@ LLM_MODEL=gpt-4o
 
 # Ollama Configuration (when using LLM_PROVIDER=ollama)
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2  # or gemma2, mistral, etc.
+OLLAMA_MODEL=gemma3:4b  # or gemma3:27b, llama3.2, mistral, etc.
 
 # Storage paths
 STORAGE_PATH=./data
@@ -178,22 +178,24 @@ ollama serve
 2. Pull a model (first time only):
 ```bash
 # Recommended models for podcast processing:
+ollama pull gemma3:4b       # Best balance of speed/quality (4B parameters) - recommended
+ollama pull gemma3:27b      # Highest quality (27B parameters)
 ollama pull llama3.2        # Fast, good quality (3B parameters)
-ollama pull gemma2:9b       # Better quality, slower (9B parameters)
-ollama pull mistral         # Balanced option (7B parameters)
+ollama pull mistral         # Alternative balanced option (7B parameters)
 ```
 
 3. Update your `.env` file:
 ```env
 LLM_PROVIDER=ollama
-OLLAMA_MODEL=llama3.2
+OLLAMA_MODEL=gemma3:4b
 ```
 
 ### Model Recommendations
 
-- **llama3.2 (3B)**: Fast, good for most podcasts, ~2GB RAM
-- **gemma2:9b**: Higher quality, better analysis, ~6GB RAM
-- **mistral (7B)**: Balanced speed/quality, ~4GB RAM
+- **gemma3:4b (4B)**: Best balance of speed/quality, ~3GB RAM (recommended)
+- **gemma3:27b (27B)**: Highest quality for complex analysis, ~17GB RAM
+- **mistral (7B)**: Alternative balanced option, ~4GB RAM
+- **llama3.2 (3B)**: Fastest, good for most podcasts, ~2GB RAM
 
 ### Performance Notes
 
@@ -266,13 +268,13 @@ ollama pull llama3.2
 ```
 
 **Slow Processing:**
-- Use smaller models (llama3.2 instead of gemma2:9b)
+- Use smaller models (llama3.2 or gemma3:4b instead of gemma3:27b)
 - Ensure sufficient RAM is available
 - Close other applications to free up resources
 - Consider using OpenAI API for faster processing
 
 **Out of Memory:**
-- Use a smaller model (llama3.2 uses ~2GB)
+- Use a smaller model (llama3.2 ~2GB, gemma3:4b ~3GB, mistral ~4GB, gemma3:27b ~17GB)
 - Increase system swap space
 - Close other applications
 - Process fewer episodes concurrently (reduce MAX_WORKERS)

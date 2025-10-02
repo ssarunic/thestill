@@ -5,8 +5,8 @@ Abstract LLM provider interface and implementations for OpenAI and Ollama.
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 import json
-import requests
 from openai import OpenAI
+import ollama
 
 
 class LLMProvider(ABC):
@@ -118,14 +118,12 @@ class OpenAIProvider(LLMProvider):
 
 
 class OllamaProvider(LLMProvider):
-    """Ollama local LLM provider"""
+    """Ollama local LLM provider using official SDK"""
 
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.2"):
-        self.base_url = base_url.rstrip('/')
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "gemma3:4b"):
         self.model = model
-        self.api_generate = f"{self.base_url}/api/generate"
-        self.api_chat = f"{self.base_url}/api/chat"
-        self.api_tags = f"{self.base_url}/api/tags"
+        # Create Ollama client with custom host if provided
+        self.client = ollama.Client(host=base_url)
 
     def chat_completion(
         self,
@@ -134,41 +132,34 @@ class OllamaProvider(LLMProvider):
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None
     ) -> str:
-        """Generate a chat completion using Ollama API"""
-        # Convert chat messages to a single prompt
-        # Using /api/generate for better compatibility across Ollama versions
+        """Generate a chat completion using Ollama SDK"""
+        # Convert chat messages to a single prompt for generate API
+        # (Ollama's chat API might not be available in all versions)
         prompt = self._messages_to_prompt(messages)
 
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": False
-        }
-
-        # Add options if specified
+        # Build options dict
         options = {}
         if temperature is not None:
             options["temperature"] = temperature
         if max_tokens is not None:
             options["num_predict"] = max_tokens
 
-        if options:
-            payload["options"] = options
-
-        # Handle JSON response format
-        if response_format and response_format.get("type") == "json_object":
-            payload["format"] = "json"
+        # Increase context window to prevent truncation
+        # num_ctx controls the context window size
+        if "num_ctx" not in options:
+            options["num_ctx"] = 32768  # Increase context window for longer responses
 
         try:
-            response = requests.post(
-                self.api_generate,
-                json=payload,
-                timeout=300  # 5 minute timeout for local inference
+            # Use generate API for better compatibility
+            response = self.client.generate(
+                model=self.model,
+                prompt=prompt,
+                stream=False,
+                format="json" if response_format and response_format.get("type") == "json_object" else None,
+                options=options if options else None
             )
-            response.raise_for_status()
-            result = response.json()
-            return result.get("response", "")
-        except requests.exceptions.RequestException as e:
+            return response.get("response", "")
+        except Exception as e:
             raise RuntimeError(f"Ollama API request failed: {e}")
 
     def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
@@ -194,13 +185,10 @@ class OllamaProvider(LLMProvider):
     def health_check(self) -> bool:
         """Check if Ollama is running and the model is available"""
         try:
-            # Check if Ollama is running
-            response = requests.get(self.api_tags, timeout=5)
-            response.raise_for_status()
-
-            # Check if the specified model is available
-            models = response.json().get("models", [])
-            model_names = [m.get("name", "") for m in models]
+            # List available models using SDK
+            models_response = self.client.list()
+            # SDK returns a Pydantic model with .models attribute
+            model_names = [m.model for m in models_response.models]
 
             # Check for exact match or model with tag
             model_available = any(
@@ -215,12 +203,9 @@ class OllamaProvider(LLMProvider):
                 return False
 
             return True
-        except requests.exceptions.ConnectionError:
-            print(f"❌ Cannot connect to Ollama at {self.base_url}")
-            print("   Make sure Ollama is running: ollama serve")
-            return False
         except Exception as e:
-            print(f"Ollama health check failed: {e}")
+            print(f"❌ Cannot connect to Ollama: {e}")
+            print("   Make sure Ollama is running: ollama serve")
             return False
 
     def get_model_name(self) -> str:
@@ -233,7 +218,7 @@ def create_llm_provider(
     openai_api_key: str = "",
     openai_model: str = "gpt-4o",
     ollama_base_url: str = "http://localhost:11434",
-    ollama_model: str = "llama3.2"
+    ollama_model: str = "gemma3:4b"
 ) -> LLMProvider:
     """
     Factory function to create the appropriate LLM provider.

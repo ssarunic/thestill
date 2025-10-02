@@ -177,3 +177,5 @@ data/
 *.wav
 *.flac
 feeds.json
+.env.bak
+.env.bak2
