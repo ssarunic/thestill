@@ -4,10 +4,99 @@ import time
 import os
 import torch
 import re
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from pydub import AudioSegment
 from pydub.effects import normalize
+
+try:
+    import whisperx
+    WHISPERX_AVAILABLE = True
+except ImportError:
+    WHISPERX_AVAILABLE = False
+    print("WhisperX not available. Install with: pip install whisperx")
+
+
+class DiarizationProgressMonitor:
+    """
+    Monitor and display progress for speaker diarization process.
+    Uses audio duration and empirical ratios to estimate completion time.
+    """
+
+    def __init__(self, audio_duration_seconds: float, device: str = "cpu"):
+        self.audio_duration = audio_duration_seconds
+        self.device = device
+        self.start_time = None
+        self.stop_event = threading.Event()
+        self.monitor_thread = None
+
+        # Empirical ratios: diarization_time = audio_duration * ratio
+        # Based on typical pyannote.audio performance
+        self.processing_ratios = {
+            "cuda": 0.75,  # GPU: ~0.75x audio duration
+            "cpu": 2.5,    # CPU: ~2.5x audio duration
+            "mps": 1.5     # Apple Silicon: ~1.5x audio duration
+        }
+
+    def _get_estimated_duration(self) -> float:
+        """Calculate estimated processing time in seconds"""
+        ratio = self.processing_ratios.get(self.device, 2.0)
+        return self.audio_duration * ratio
+
+    def _format_time(self, seconds: float) -> str:
+        """Format seconds into readable time string"""
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            return f"{hours}h {mins}m"
+
+    def _update_progress(self):
+        """Background thread that updates progress display"""
+        estimated_duration = self._get_estimated_duration()
+
+        while not self.stop_event.is_set():
+            elapsed = time.time() - self.start_time
+            progress_pct = min(99, int((elapsed / estimated_duration) * 100))
+
+            elapsed_str = self._format_time(elapsed)
+            estimated_str = self._format_time(estimated_duration)
+
+            # Create progress bar
+            bar_width = 30
+            filled = int(bar_width * progress_pct / 100)
+            bar = "█" * filled + "░" * (bar_width - filled)
+
+            # Print progress (carriage return to overwrite line)
+            print(f"\r  Progress: [{bar}] {progress_pct}% | {elapsed_str} / ~{estimated_str}",
+                  end="", flush=True)
+
+            # Update every second
+            self.stop_event.wait(1.0)
+
+        # Final newline after completion
+        print()
+
+    def start(self):
+        """Start the progress monitor"""
+        self.start_time = time.time()
+        self.stop_event.clear()
+        self.monitor_thread = threading.Thread(target=self._update_progress, daemon=True)
+        self.monitor_thread.start()
+
+    def stop(self):
+        """Stop the progress monitor"""
+        if self.monitor_thread:
+            self.stop_event.set()
+            self.monitor_thread.join(timeout=2.0)
+            elapsed = time.time() - self.start_time
+            print(f"  ✓ Completed in {self._format_time(elapsed)}")
 
 
 class WhisperTranscriber:
@@ -516,3 +605,338 @@ class WhisperTranscriber:
             print(f"Error cleaning transcript: {e}")
             print("Returning original transcript without cleaning")
             return transcript_data
+
+
+class WhisperXTranscriber:
+    """
+    WhisperX-based transcriber with speaker diarization support.
+    Fallback to standard Whisper if WhisperX or diarization fails.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "base",
+        device: str = "auto",
+        enable_diarization: bool = False,
+        hf_token: str = "",
+        min_speakers: Optional[int] = None,
+        max_speakers: Optional[int] = None,
+        diarization_model: str = "pyannote/speaker-diarization-3.1"
+    ):
+        self.model_name = model_name
+        self.device = self._resolve_device(device)
+        self.enable_diarization = enable_diarization and WHISPERX_AVAILABLE
+        self.hf_token = hf_token
+        self.min_speakers = min_speakers
+        self.max_speakers = max_speakers
+        self.diarization_model = diarization_model
+        self._model = None
+        self._whisper_fallback = None
+
+        if enable_diarization and not WHISPERX_AVAILABLE:
+            print("WARNING: Diarization requested but WhisperX not available. Falling back to standard Whisper.")
+            self.enable_diarization = False
+
+        if enable_diarization and not hf_token:
+            print("WARNING: Diarization enabled but no HuggingFace token provided. Diarization will be disabled.")
+            self.enable_diarization = False
+
+    def _resolve_device(self, device: str) -> str:
+        """Resolve 'auto' device to actual device"""
+        if device == "auto":
+            if torch.cuda.is_available():
+                return "cuda"
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return "cpu"  # MPS has issues, use CPU
+            else:
+                return "cpu"
+        return device
+
+    def load_model(self):
+        """Load WhisperX model"""
+        if self._model is None and WHISPERX_AVAILABLE:
+            print(f"Loading WhisperX model: {self.model_name}")
+            try:
+                self._model = whisperx.load_model(
+                    self.model_name,
+                    device=self.device,
+                    compute_type="float16" if self.device == "cuda" else "int8"
+                )
+                print("WhisperX model loaded successfully")
+            except Exception as e:
+                print(f"Error loading WhisperX model: {e}")
+                print("Falling back to standard Whisper")
+                self._load_whisper_fallback()
+
+    def _load_whisper_fallback(self):
+        """Load standard Whisper as fallback"""
+        if self._whisper_fallback is None:
+            self._whisper_fallback = WhisperTranscriber(
+                model_name=self.model_name,
+                device=self.device
+            )
+
+    def transcribe_audio(
+        self,
+        audio_path: str,
+        output_path: str = None,
+        custom_prompt: str = None,
+        preprocess_audio: bool = True,
+        clean_transcript: bool = False,
+        cleaning_config: Dict = None
+    ) -> Optional[Dict]:
+        """
+        Transcribe audio with optional speaker diarization.
+
+        Args:
+            audio_path: Path to audio file
+            output_path: Path to save transcript JSON
+            custom_prompt: Custom prompt for better accuracy (not used in WhisperX)
+            preprocess_audio: Whether to preprocess audio
+            clean_transcript: Whether to clean transcript with LLM
+            cleaning_config: Configuration for transcript cleaning
+        """
+        try:
+            # If WhisperX not available, use fallback
+            if not WHISPERX_AVAILABLE:
+                self._load_whisper_fallback()
+                return self._whisper_fallback.transcribe_audio(
+                    audio_path, output_path, custom_prompt,
+                    preprocess_audio, clean_transcript, cleaning_config
+                )
+
+            self.load_model()
+
+            print(f"Starting transcription of: {Path(audio_path).name}")
+            start_time = time.time()
+
+            # Preprocess audio if requested
+            processed_audio_path = audio_path
+            if preprocess_audio:
+                processed_audio_path = self._preprocess_audio(audio_path)
+
+            # Step 1: Transcribe with WhisperX
+            print("Step 1: Transcribing audio with WhisperX...")
+            result = self._model.transcribe(
+                processed_audio_path,
+                batch_size=16,
+                language="en",
+                print_progress=True  # Enable progress bar
+            )
+
+            # Step 2: Align whisper output for accurate word-level timestamps
+            print("Step 2: Aligning timestamps for word-level accuracy...")
+            print(f"  - Loading alignment model for {result['language']}...")
+            model_a, metadata = whisperx.load_align_model(
+                language_code=result["language"],
+                device=self.device
+            )
+            print(f"  - Running alignment on {len(result.get('segments', []))} segments...")
+            result = whisperx.align(
+                result["segments"],
+                model_a,
+                metadata,
+                processed_audio_path,
+                self.device,
+                return_char_alignments=False
+            )
+            print("  ✓ Alignment complete")
+
+            # Step 3: Speaker diarization (if enabled)
+            speakers_detected = None
+            if self.enable_diarization:
+                try:
+                    print("Step 3: Performing speaker diarization...")
+                    print(f"  - Loading diarization model ({self.diarization_model})...")
+                    diarize_model = whisperx.DiarizationPipeline(
+                        model_name=self.diarization_model,
+                        use_auth_token=self.hf_token,
+                        device=self.device
+                    )
+
+                    print("  - Analyzing audio for speaker patterns...")
+                    if self.min_speakers or self.max_speakers:
+                        constraint_msg = f"min={self.min_speakers or 'auto'}, max={self.max_speakers or 'auto'}"
+                        print(f"  - Speaker constraints: {constraint_msg}")
+
+                    # Get audio duration for progress estimation
+                    audio_duration_seconds = self._get_audio_duration_seconds(processed_audio_path)
+
+                    # Start progress monitor
+                    progress_monitor = DiarizationProgressMonitor(
+                        audio_duration_seconds=audio_duration_seconds,
+                        device=self.device
+                    )
+                    progress_monitor.start()
+
+                    try:
+                        diarize_segments = diarize_model(
+                            processed_audio_path,
+                            min_speakers=self.min_speakers,
+                            max_speakers=self.max_speakers
+                        )
+                    finally:
+                        # Stop progress monitor whether diarization succeeds or fails
+                        progress_monitor.stop()
+
+                    print("  - Assigning speakers to transcript segments...")
+                    result = whisperx.assign_word_speakers(diarize_segments, result)
+
+                    # Count unique speakers
+                    speakers = set()
+                    for segment in result.get("segments", []):
+                        if "speaker" in segment and segment["speaker"]:
+                            speakers.add(segment["speaker"])
+                    speakers_detected = len(speakers)
+                    print(f"  ✓ Detected {speakers_detected} unique speaker(s): {', '.join(sorted(speakers))}")
+
+                except Exception as e:
+                    print(f"  ✗ Diarization failed: {e}")
+                    print("  → Continuing without speaker identification")
+
+            # Clean up temporary processed audio
+            if preprocess_audio and processed_audio_path != audio_path:
+                try:
+                    os.remove(processed_audio_path)
+                except:
+                    pass
+
+            processing_time = time.time() - start_time
+            print(f"\n✓ Transcription completed in {processing_time:.1f} seconds")
+            if speakers_detected:
+                print(f"✓ Speaker diarization: {speakers_detected} speakers identified")
+            print(f"✓ Generated {len(result.get('segments', []))} transcript segments")
+
+            # Format transcript
+            transcript_data = self._format_transcript(
+                result,
+                processing_time,
+                audio_path,
+                speakers_detected
+            )
+
+            # Optional: Clean transcript with LLM
+            if clean_transcript and cleaning_config:
+                transcript_data = self._clean_transcript_with_llm(
+                    transcript_data,
+                    cleaning_config
+                )
+
+            if output_path:
+                self._save_transcript(transcript_data, output_path)
+
+            return transcript_data
+
+        except Exception as e:
+            print(f"WhisperX transcription failed: {e}")
+            print("Falling back to standard Whisper")
+            self._load_whisper_fallback()
+            return self._whisper_fallback.transcribe_audio(
+                audio_path, output_path, custom_prompt,
+                preprocess_audio, clean_transcript, cleaning_config
+            )
+
+    def _format_transcript(
+        self,
+        whisperx_result: Dict,
+        processing_time: float,
+        audio_path: str,
+        speakers_detected: Optional[int]
+    ) -> Dict:
+        """Format WhisperX output into structured transcript"""
+        segments = []
+
+        for segment in whisperx_result.get("segments", []):
+            segment_data = {
+                "id": segment.get("id", len(segments)),
+                "start": segment.get("start"),
+                "end": segment.get("end"),
+                "text": segment.get("text", "").strip(),
+                "speaker": segment.get("speaker"),
+                "words": []
+            }
+
+            for word in segment.get("words", []):
+                word_data = {
+                    "word": word.get("word", "").strip(),
+                    "start": word.get("start"),
+                    "end": word.get("end"),
+                    "probability": word.get("score", 0.0),
+                    "speaker": word.get("speaker")
+                }
+                segment_data["words"].append(word_data)
+
+            segments.append(segment_data)
+
+        # Build full text
+        full_text = " ".join(seg.get("text", "") for seg in segments)
+
+        return {
+            "audio_file": audio_path,
+            "language": whisperx_result.get("language", "en"),
+            "text": full_text,
+            "segments": segments,
+            "processing_time": processing_time,
+            "model_used": f"whisperx-{self.model_name}",
+            "timestamp": time.time(),
+            "diarization_enabled": self.enable_diarization,
+            "speakers_detected": speakers_detected
+        }
+
+    def _save_transcript(self, transcript_data: Dict, output_path: str):
+        """Save transcript to JSON file"""
+        try:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+            print(f"Transcript saved to: {output_path}")
+        except Exception as e:
+            print(f"Error saving transcript: {e}")
+
+    def _get_audio_duration_seconds(self, audio_path: str) -> float:
+        """Get audio duration in seconds"""
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            return len(audio) / 1000.0  # Convert milliseconds to seconds
+        except Exception as e:
+            print(f"Warning: Could not determine audio duration: {e}")
+            return 0.0
+
+    def _preprocess_audio(self, audio_path: str) -> str:
+        """Preprocess audio using WhisperTranscriber method"""
+        # Reuse preprocessing from WhisperTranscriber
+        if self._whisper_fallback is None:
+            self._load_whisper_fallback()
+        return self._whisper_fallback._preprocess_audio(audio_path)
+
+    def _clean_transcript_with_llm(self, transcript_data: Dict, cleaning_config: Dict) -> Dict:
+        """Clean transcript using WhisperTranscriber method"""
+        if self._whisper_fallback is None:
+            self._load_whisper_fallback()
+        return self._whisper_fallback._clean_transcript_with_llm(
+            transcript_data,
+            cleaning_config
+        )
+
+    def get_transcript_text(self, transcript_data: Dict) -> str:
+        """Extract plain text from transcript data with speaker labels"""
+        if not transcript_data or "segments" not in transcript_data:
+            return ""
+
+        text_parts = []
+        for segment in transcript_data["segments"]:
+            text = segment.get("text", "").strip()
+            if text:
+                start_time = segment.get("start", 0)
+                minutes = int(start_time // 60)
+                seconds = int(start_time % 60)
+                timestamp = f"[{minutes:02d}:{seconds:02d}]"
+
+                # Add speaker label if available
+                speaker = segment.get("speaker")
+                if speaker:
+                    text_parts.append(f"{timestamp} [{speaker}] {text}")
+                else:
+                    text_parts.append(f"{timestamp} {text}")
+
+        return "\n".join(text_parts)
