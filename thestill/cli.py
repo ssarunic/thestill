@@ -104,38 +104,21 @@ def list(ctx):
 @main.command()
 @click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
 @click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
-@click.option('--skip-preprocessing', is_flag=True, help='Skip audio preprocessing/downsampling')
+@click.option('--save-corrections', is_flag=True, help='Save corrections list for debugging')
 @click.pass_context
-def process(ctx, dry_run, max_episodes, skip_preprocessing):
-    """Check for new episodes and process them"""
+def process(ctx, dry_run, max_episodes, save_corrections):
+    """Clean existing transcripts with LLM post-processing"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
 
-    feed_manager = PodcastFeedManager(str(config.storage_path))
-    downloader = AudioDownloader(str(config.audio_path))
-    preprocessor = AudioPreprocessor()
+    from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
+    from .models.podcast import CleanedTranscript
+    from datetime import datetime
+    import json
 
-    # Initialize the appropriate transcriber based on config settings
-    if config.transcription_model.lower() == 'parakeet':
-        from .core.parakeet_transcriber import ParakeetTranscriber
-        transcriber = ParakeetTranscriber(config.whisper_device)
-    elif config.enable_diarization:
-        # Use WhisperX with diarization
-        click.echo(f"🎤 Using WhisperX with speaker diarization enabled")
-        transcriber = WhisperXTranscriber(
-            model_name=config.whisper_model,
-            device=config.whisper_device,
-            enable_diarization=True,
-            hf_token=config.huggingface_token,
-            min_speakers=config.min_speakers,
-            max_speakers=config.max_speakers,
-            diarization_model=config.diarization_model
-        )
-    else:
-        # Use standard Whisper
-        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
+    feed_manager = PodcastFeedManager(str(config.storage_path))
 
     # Create LLM provider based on configuration
     try:
@@ -151,140 +134,97 @@ def process(ctx, dry_run, max_episodes, skip_preprocessing):
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    processor = LLMProcessor(llm_provider)
+    cleaning_processor = TranscriptCleaningProcessor(llm_provider)
 
-    click.echo("🔍 Checking for new episodes...")
-    new_episodes = feed_manager.get_new_episodes()
+    # Find all transcripts that haven't been cleaned yet
+    click.echo("🔍 Looking for transcripts to clean...")
 
-    if not new_episodes:
-        click.echo("✓ No new episodes found")
+    podcasts = feed_manager.list_podcasts()
+    transcripts_to_clean = []
+
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            # Check if episode has a transcript but no summary (meaning not cleaned yet)
+            if episode.transcript_path and not episode.summary_path:
+                transcript_path = Path(episode.transcript_path)
+                if transcript_path.exists():
+                    transcripts_to_clean.append((podcast, episode, transcript_path))
+
+    if not transcripts_to_clean:
+        click.echo("✓ No transcripts found to clean")
         return
 
-    total_episodes = sum(min(len(episodes), max_episodes) for _, episodes in new_episodes)
-    click.echo(f"📥 Found {total_episodes} new episodes to process")
+    total_transcripts = min(len(transcripts_to_clean), max_episodes) if max_episodes else len(transcripts_to_clean)
+    click.echo(f"📄 Found {len(transcripts_to_clean)} transcripts. Processing {total_transcripts} episodes")
 
     if dry_run:
-        for podcast, episodes in new_episodes:
-            click.echo(f"\n{podcast.title}:")
-            for episode in episodes[:max_episodes]:
-                click.echo(f"  • {episode.title}")
-        click.echo("\n(Use --dry-run=false to actually process)")
+        for podcast, episode, _ in transcripts_to_clean[:max_episodes]:
+            click.echo(f"  • {podcast.title}: {episode.title}")
+        click.echo("\n(Run without --dry-run to actually process)")
         return
 
     total_processed = 0
     start_time = time.time()
 
-    for podcast, episodes in new_episodes:
-        click.echo(f"\n📻 Processing {podcast.title}")
+    for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
+        click.echo(f"\n📻 {podcast.title}")
+        click.echo(f"🎧 {episode.title}")
         click.echo("─" * 50)
 
-        for episode in episodes[:max_episodes]:
-            click.echo(f"\n🎧 Episode: {episode.title}")
+        try:
+            # Load transcript
+            with open(transcript_path, 'r', encoding='utf-8') as f:
+                transcript_data = json.load(f)
 
-            try:
-                # Step 1: Download audio
-                audio_path = downloader.download_episode(episode, podcast.title)
-                if not audio_path:
-                    click.echo("❌ Download failed, skipping episode")
-                    continue
+            # Clean transcript with context
+            cleaned_filename = f"{transcript_path.stem}_cleaned"
+            cleaned_path = config.summaries_path / cleaned_filename
 
-                # Step 1.5a: Clip audio for debug/testing (if enabled)
-                clipped_audio_path = None
-                transcription_audio_path = audio_path
+            result = cleaning_processor.clean_transcript(
+                transcript_data=transcript_data,
+                podcast_title=podcast.title,
+                podcast_description=podcast.description,
+                episode_title=episode.title,
+                episode_description=episode.description,
+                output_path=str(cleaned_path),
+                save_corrections=save_corrections
+            )
 
-                if config.debug_clip_duration:
-                    click.echo(f"✂️  Clipping audio to {config.debug_clip_duration}s for testing...")
-                    clipped_audio_path = preprocessor.clip_audio(audio_path, config.debug_clip_duration)
-                    if clipped_audio_path:
-                        transcription_audio_path = clipped_audio_path
-
-                # Step 1.5b: Preprocess audio (downsample for transcription optimization)
-                preprocessed_audio_path = None
-
-                if not skip_preprocessing:
-                    click.echo("🔧 Preprocessing audio for optimal transcription...")
-                    preprocessed_audio_path = preprocessor.preprocess_audio(transcription_audio_path)
-                    if preprocessed_audio_path and preprocessed_audio_path != transcription_audio_path:
-                        transcription_audio_path = preprocessed_audio_path
-
-                # Step 2: Transcribe
-                transcript_filename = f"{Path(audio_path).stem}_transcript.json"
-                transcript_path = config.transcripts_path / transcript_filename
-
-                # Prepare cleaning config if enabled
-                cleaning_config = None
-                if config.enable_transcript_cleaning:
-                    cleaning_config = {
-                        "provider": config.cleaning_provider,
-                        "model": config.cleaning_model,
-                        "chunk_size": config.cleaning_chunk_size,
-                        "overlap_pct": config.cleaning_overlap_pct,
-                        "extract_entities": config.cleaning_extract_entities,
-                        "base_url": config.ollama_base_url,
-                        "api_key": config.openai_api_key
-                    }
-
-                transcript_data = transcriber.transcribe_audio(
-                    transcription_audio_path,
-                    str(transcript_path),
-                    clean_transcript=config.enable_transcript_cleaning,
-                    cleaning_config=cleaning_config
+            if result:
+                # Create CleanedTranscript model and save
+                cleaned_transcript = CleanedTranscript(
+                    episode_guid=episode.guid,
+                    episode_title=episode.title,
+                    podcast_title=podcast.title,
+                    corrections=result['corrections'],
+                    speaker_mapping=result['speaker_mapping'],
+                    cleaned_markdown=result['cleaned_markdown'],
+                    processing_time=result['processing_time'],
+                    created_at=datetime.now()
                 )
 
-                if not transcript_data:
-                    click.echo("❌ Transcription failed, skipping episode")
-                    # Cleanup temporary files if they were created
-                    if preprocessed_audio_path and preprocessed_audio_path != audio_path:
-                        preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
-                    if clipped_audio_path and clipped_audio_path != audio_path:
-                        preprocessor.cleanup_preprocessed_file(clipped_audio_path)
-                    continue
-
-                # Cleanup temporary files after successful transcription
-                if preprocessed_audio_path and preprocessed_audio_path != audio_path:
-                    preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
-                if clipped_audio_path and clipped_audio_path != audio_path:
-                    preprocessor.cleanup_preprocessed_file(clipped_audio_path)
-
-                # Step 3: Process with LLM
-                transcript_text = transcriber.get_transcript_text(transcript_data)
-
-                summary_filename = f"{Path(audio_path).stem}_summary.json"
-                summary_path = config.summaries_path / summary_filename
-
-                processed_content = processor.process_transcript(
-                    transcript_text,
+                # Update feed manager to mark as processed
+                feed_manager.mark_episode_processed(
+                    str(podcast.rss_url),
                     episode.guid,
-                    str(summary_path),
-                    transcript_json_path=str(transcript_path)
+                    str(transcript_path),
+                    str(cleaned_path.with_suffix('.json'))
                 )
 
-                if processed_content:
-                    feed_manager.mark_episode_processed(
-                        str(podcast.rss_url),
-                        episode.guid,
-                        str(transcript_path),
-                        str(summary_path)
-                    )
+                total_processed += 1
+                click.echo(f"✅ Transcript cleaned successfully!")
+                click.echo(f"🔧 Corrections applied: {len(result['corrections'])}")
+                click.echo(f"👥 Speakers identified: {len(result['speaker_mapping'])}")
 
-                    total_processed += 1
-                    click.echo(f"✅ Episode processed successfully!")
-
-                    # Show brief summary
-                    click.echo(f"📝 Summary: {processed_content.summary[:200]}...")
-                    click.echo(f"💬 Quotes found: {len(processed_content.quotes)}")
-
-            except Exception as e:
-                click.echo(f"❌ Error processing episode: {e}")
-                continue
+        except Exception as e:
+            click.echo(f"❌ Error cleaning transcript: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
     total_time = time.time() - start_time
     click.echo(f"\n🎉 Processing complete!")
-    click.echo(f"✓ {total_processed} episodes processed in {total_time:.1f} seconds")
-
-    if config.cleanup_days > 0:
-        click.echo("🧹 Cleaning up old files...")
-        downloader.cleanup_old_files(config.cleanup_days)
+    click.echo(f"✓ {total_processed} transcripts cleaned in {total_time:.1f} seconds")
 
 
 @main.command()
@@ -338,6 +278,97 @@ def cleanup(ctx):
     click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
     downloader.cleanup_old_files(config.cleanup_days)
     click.echo("✓ Cleanup complete")
+
+
+@main.command()
+@click.argument('audio_path', type=click.Path(exists=True))
+@click.option('--output', '-o', help='Output path for transcript JSON')
+@click.option('--skip-preprocessing', is_flag=True, help='Skip audio preprocessing/downsampling')
+@click.pass_context
+def transcribe(ctx, audio_path, output, skip_preprocessing):
+    """Transcribe an audio file to JSON transcript"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    preprocessor = AudioPreprocessor()
+
+    # Initialize the appropriate transcriber based on config settings
+    if config.transcription_model.lower() == 'parakeet':
+        from .core.parakeet_transcriber import ParakeetTranscriber
+        transcriber = ParakeetTranscriber(config.whisper_device)
+    elif config.enable_diarization:
+        click.echo(f"🎤 Using WhisperX with speaker diarization enabled")
+        transcriber = WhisperXTranscriber(
+            model_name=config.whisper_model,
+            device=config.whisper_device,
+            enable_diarization=True,
+            hf_token=config.huggingface_token,
+            min_speakers=config.min_speakers,
+            max_speakers=config.max_speakers,
+            diarization_model=config.diarization_model
+        )
+    else:
+        click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
+        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
+
+    # Determine output path
+    if not output:
+        audio_path_obj = Path(audio_path)
+        output = str(config.transcripts_path / f"{audio_path_obj.stem}_transcript.json")
+
+    try:
+        # Preprocess audio if needed
+        transcription_audio_path = audio_path
+        preprocessed_audio_path = None
+
+        if not skip_preprocessing:
+            click.echo("🔧 Preprocessing audio for optimal transcription...")
+            preprocessed_audio_path = preprocessor.preprocess_audio(audio_path)
+            if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+                transcription_audio_path = preprocessed_audio_path
+
+        # Transcribe
+        click.echo(f"📝 Transcribing audio file: {Path(audio_path).name}")
+
+        # Prepare cleaning config if enabled
+        cleaning_config = None
+        if config.enable_transcript_cleaning:
+            cleaning_config = {
+                "provider": config.cleaning_provider,
+                "model": config.cleaning_model,
+                "chunk_size": config.cleaning_chunk_size,
+                "overlap_pct": config.cleaning_overlap_pct,
+                "extract_entities": config.cleaning_extract_entities,
+                "base_url": config.ollama_base_url,
+                "api_key": config.openai_api_key
+            }
+
+        transcript_data = transcriber.transcribe_audio(
+            transcription_audio_path,
+            output,
+            clean_transcript=config.enable_transcript_cleaning,
+            cleaning_config=cleaning_config
+        )
+
+        # Cleanup temporary files
+        if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+            preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
+
+        if transcript_data:
+            click.echo(f"✅ Transcription complete!")
+            click.echo(f"📄 Transcript saved to: {output}")
+        else:
+            click.echo("❌ Transcription failed", err=True)
+            ctx.exit(1)
+
+    except Exception as e:
+        click.echo(f"❌ Error during transcription: {e}", err=True)
+        # Cleanup on error
+        if 'preprocessed_audio_path' in locals() and preprocessed_audio_path and preprocessed_audio_path != audio_path:
+            preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
+        ctx.exit(1)
 
 
 @main.command()

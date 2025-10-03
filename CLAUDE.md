@@ -29,8 +29,11 @@ thestill add "https://podcasts.apple.com/us/podcast/id123456"
 thestill add "https://www.youtube.com/@channelname"
 thestill add "https://www.youtube.com/playlist?list=..."
 
-# Process new episodes
-thestill process
+# Transcribe audio file to JSON (step 1)
+thestill transcribe path/to/audio.mp3 [--output path/to/transcript.json] [--skip-preprocessing]
+
+# Clean existing transcripts with LLM (step 2)
+thestill process [--dry-run] [--max-episodes 5] [--save-corrections]
 
 # List tracked podcasts
 thestill list
@@ -85,15 +88,18 @@ mypy thestill/
    - Configurable model sizes (tiny, base, small, medium, large)
    - Automatic fallback to standard Whisper if diarization fails
 
-5. **LLM Processor** (`thestill/core/llm_processor.py`)
-   - Three-step LLM pipeline:
-     - Cleans transcripts and detects ads
-     - Generates comprehensive summaries
-     - Extracts notable quotes with analysis
+5. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
+   - **NEW**: Three-phase LLM cleaning pipeline focused on accuracy:
+     - Phase 1: Analyze and identify corrections (spelling, grammar, filler words, ads)
+     - Phase 2: Identify speakers from context and self-introductions
+     - Phase 3: Generate final cleaned Markdown transcript
+   - Uses episode/podcast metadata for better context
+   - Saves corrections list for debugging
+   - British English output
 
 6. **Models** (`thestill/models/podcast.py`)
    - Pydantic models for type safety
-   - Episode, Podcast, Quote, and ProcessedContent schemas
+   - Episode, Podcast, Quote, ProcessedContent, and CleanedTranscript schemas
 
 ### Configuration System
 
@@ -103,11 +109,23 @@ mypy thestill/
 
 ### Data Flow
 
-1. Feeds are checked for new episodes (RSS, Apple Podcasts resolved to RSS, or YouTube)
-2. Audio files are downloaded to `data/audio/` (via direct download or yt-dlp)
-3. Whisper transcribes audio to structured JSON in `data/transcripts/`
-4. LLM processes transcripts and saves summaries to `data/summaries/`
-5. Episode status is updated in `data/feeds.json`
+**NEW Workflow (Separated Transcription & Cleaning):**
+
+1. **Transcription** (`thestill transcribe`):
+   - Takes audio file as input
+   - Optional preprocessing (downsampling for optimization)
+   - Whisper/WhisperX transcribes to structured JSON with speaker labels
+   - Saves to `data/transcripts/`
+
+2. **Cleaning** (`thestill process`):
+   - Loads existing transcript JSON files
+   - Phase 1: LLM analyzes for corrections (spelling, grammar, fillers, ads)
+   - Phase 2: LLM identifies speakers using episode/podcast context
+   - Phase 3: LLM generates clean Markdown transcript
+   - Saves cleaned Markdown to `data/summaries/`
+   - Optionally saves corrections and speaker mapping for debugging
+
+3. Episode status is updated in `data/feeds.json`
 
 ## File Structure
 
@@ -118,7 +136,8 @@ thestill/
 │   ├── audio_downloader.py
 │   ├── youtube_downloader.py
 │   ├── transcriber.py
-│   └── llm_processor.py
+│   ├── transcript_cleaning_processor.py  # NEW: Copywriting-focused cleaner
+│   └── llm_processor.py  # LEGACY: Old summarization pipeline
 ├── models/            # Pydantic data models
 │   └── podcast.py
 ├── utils/             # Utilities and configuration
@@ -128,8 +147,8 @@ thestill/
 
 data/                 # Generated data directory
 ├── audio/           # Downloaded audio files
-├── transcripts/     # Whisper transcription results
-├── summaries/       # LLM-processed content
+├── transcripts/     # Whisper transcription results (JSON with speaker labels)
+├── summaries/       # Cleaned transcripts (Markdown + corrections + speaker mapping)
 └── feeds.json      # Podcast feed tracking
 ```
 

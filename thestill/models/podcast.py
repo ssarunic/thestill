@@ -65,3 +65,14 @@ class ProcessedContent(BaseModel):
     ad_segments: List[dict] = []
     processing_time: float
     created_at: datetime
+
+
+class CleanedTranscript(BaseModel):
+    episode_guid: str
+    episode_title: str
+    podcast_title: str
+    corrections: List[dict] = []
+    speaker_mapping: dict = {}
+    cleaned_markdown: str
+    processing_time: float
+    created_at: datetime
