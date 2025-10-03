@@ -23,6 +23,33 @@ class Podcast(BaseModel):
     episodes: List[Episode] = []
 
 
+class Word(BaseModel):
+    word: str
+    start: float
+    end: float
+    probability: float
+    speaker: Optional[str] = None
+
+
+class Segment(BaseModel):
+    id: int
+    start: float
+    end: float
+    text: str
+    words: List[Word] = []
+    speaker: Optional[str] = None
+
+
+class TranscriptMetadata(BaseModel):
+    audio_file: str
+    language: str
+    processing_time: float
+    model_used: str
+    timestamp: float
+    diarization_enabled: bool = False
+    speakers_detected: Optional[int] = None
+
+
 class Quote(BaseModel):
     text: str
     speaker: Optional[str] = None

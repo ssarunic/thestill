@@ -27,6 +27,13 @@ class Config(BaseModel):
     whisper_model: str = "base"
     whisper_device: str = "auto"
 
+    # Speaker Diarization Configuration
+    enable_diarization: bool = False
+    diarization_model: str = "pyannote/speaker-diarization-3.1"
+    huggingface_token: str = ""
+    min_speakers: Optional[int] = None
+    max_speakers: Optional[int] = None
+
     # LLM Configuration
     llm_provider: str = "openai"  # openai or ollama
     llm_model: str = "gpt-4o"
@@ -45,6 +52,9 @@ class Config(BaseModel):
 
     # Cleanup Configuration
     cleanup_days: int = 30
+
+    # Debug/Testing Configuration
+    debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -97,6 +107,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
+        "enable_diarization": os.getenv("ENABLE_DIARIZATION", "false").lower() == "true",
+        "diarization_model": os.getenv("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1"),
+        "huggingface_token": os.getenv("HUGGINGFACE_TOKEN", ""),
+        "min_speakers": int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None,
+        "max_speakers": int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None,
         "llm_provider": llm_provider,
         "llm_model": os.getenv("LLM_MODEL", "gpt-4o" if llm_provider == "openai" else "gemma3:4b"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -107,7 +122,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleaning_chunk_size": int(os.getenv("CLEANING_CHUNK_SIZE", "20000")),
         "cleaning_overlap_pct": float(os.getenv("CLEANING_OVERLAP_PCT", "0.15")),
         "cleaning_extract_entities": os.getenv("CLEANING_EXTRACT_ENTITIES", "true").lower() == "true",
-        "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30"))
+        "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
+        "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None
     }
 
     return Config(**config_data)

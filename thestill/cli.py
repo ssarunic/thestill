@@ -7,7 +7,7 @@ try:
     from .core.feed_manager import PodcastFeedManager
     from .core.audio_downloader import AudioDownloader
     from .core.audio_preprocessor import AudioPreprocessor
-    from .core.transcriber import WhisperTranscriber
+    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from .core.llm_processor import LLMProcessor
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
@@ -17,7 +17,7 @@ except ImportError:
     from core.feed_manager import PodcastFeedManager
     from core.audio_downloader import AudioDownloader
     from core.audio_preprocessor import AudioPreprocessor
-    from core.transcriber import WhisperTranscriber
+    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from core.llm_processor import LLMProcessor
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
@@ -104,10 +104,9 @@ def list(ctx):
 @main.command()
 @click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
 @click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
-@click.option('--transcription-model', '-t', default='whisper', type=click.Choice(['whisper', 'parakeet'], case_sensitive=False), help='Transcription model to use')
 @click.option('--skip-preprocessing', is_flag=True, help='Skip audio preprocessing/downsampling')
 @click.pass_context
-def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing):
+def process(ctx, dry_run, max_episodes, skip_preprocessing):
     """Check for new episodes and process them"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -118,11 +117,24 @@ def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing)
     downloader = AudioDownloader(str(config.audio_path))
     preprocessor = AudioPreprocessor()
 
-    # Initialize the appropriate transcriber based on the model choice
-    if transcription_model.lower() == 'parakeet':
+    # Initialize the appropriate transcriber based on config settings
+    if config.transcription_model.lower() == 'parakeet':
         from .core.parakeet_transcriber import ParakeetTranscriber
         transcriber = ParakeetTranscriber(config.whisper_device)
+    elif config.enable_diarization:
+        # Use WhisperX with diarization
+        click.echo(f"🎤 Using WhisperX with speaker diarization enabled")
+        transcriber = WhisperXTranscriber(
+            model_name=config.whisper_model,
+            device=config.whisper_device,
+            enable_diarization=True,
+            hf_token=config.huggingface_token,
+            min_speakers=config.min_speakers,
+            max_speakers=config.max_speakers,
+            diarization_model=config.diarization_model
+        )
     else:
+        # Use standard Whisper
         transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
 
     # Create LLM provider based on configuration
@@ -176,14 +188,23 @@ def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing)
                     click.echo("❌ Download failed, skipping episode")
                     continue
 
-                # Step 1.5: Preprocess audio (downsample for transcription optimization)
-                preprocessed_audio_path = None
+                # Step 1.5a: Clip audio for debug/testing (if enabled)
+                clipped_audio_path = None
                 transcription_audio_path = audio_path
+
+                if config.debug_clip_duration:
+                    click.echo(f"✂️  Clipping audio to {config.debug_clip_duration}s for testing...")
+                    clipped_audio_path = preprocessor.clip_audio(audio_path, config.debug_clip_duration)
+                    if clipped_audio_path:
+                        transcription_audio_path = clipped_audio_path
+
+                # Step 1.5b: Preprocess audio (downsample for transcription optimization)
+                preprocessed_audio_path = None
 
                 if not skip_preprocessing:
                     click.echo("🔧 Preprocessing audio for optimal transcription...")
-                    preprocessed_audio_path = preprocessor.preprocess_audio(audio_path)
-                    if preprocessed_audio_path and preprocessed_audio_path != audio_path:
+                    preprocessed_audio_path = preprocessor.preprocess_audio(transcription_audio_path)
+                    if preprocessed_audio_path and preprocessed_audio_path != transcription_audio_path:
                         transcription_audio_path = preprocessed_audio_path
 
                 # Step 2: Transcribe
@@ -212,14 +233,18 @@ def process(ctx, dry_run, max_episodes, transcription_model, skip_preprocessing)
 
                 if not transcript_data:
                     click.echo("❌ Transcription failed, skipping episode")
-                    # Cleanup preprocessed file if it was created
+                    # Cleanup temporary files if they were created
                     if preprocessed_audio_path and preprocessed_audio_path != audio_path:
                         preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
+                    if clipped_audio_path and clipped_audio_path != audio_path:
+                        preprocessor.cleanup_preprocessed_file(clipped_audio_path)
                     continue
 
-                # Cleanup preprocessed file after successful transcription
+                # Cleanup temporary files after successful transcription
                 if preprocessed_audio_path and preprocessed_audio_path != audio_path:
                     preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
+                if clipped_audio_path and clipped_audio_path != audio_path:
+                    preprocessor.cleanup_preprocessed_file(clipped_audio_path)
 
                 # Step 3: Process with LLM
                 transcript_text = transcriber.get_transcript_text(transcript_data)
@@ -283,6 +308,7 @@ def status(ctx):
     # Configuration
     click.echo(f"\nConfiguration:")
     click.echo(f"  Whisper model: {config.whisper_model}")
+    click.echo(f"  Speaker diarization: {'✓ Enabled' if config.enable_diarization else '✗ Disabled'}")
     click.echo(f"  LLM model: {config.llm_model}")
     click.echo(f"  Max workers: {config.max_workers}")
 

@@ -69,6 +69,47 @@ class AudioPreprocessor:
             self._log(f"Error analyzing audio file: {e}")
             return False, {}
 
+    def clip_audio(self, audio_path: str, duration_seconds: int, output_suffix: str = "_clipped") -> Optional[str]:
+        """
+        Clip audio file to specified duration for testing/debugging.
+
+        Args:
+            audio_path: Path to the original audio file
+            duration_seconds: Number of seconds to keep from the start
+            output_suffix: Suffix to add to the clipped file
+
+        Returns:
+            Path to clipped file, or None if clipping failed
+        """
+        try:
+            self._log(f"Clipping audio to {duration_seconds} seconds for testing...")
+
+            # Load audio
+            audio = AudioSegment.from_file(audio_path)
+
+            # Get duration in milliseconds
+            duration_ms = duration_seconds * 1000
+            original_duration_s = len(audio) / 1000.0
+
+            # Clip to specified duration
+            clipped_audio = audio[:duration_ms]
+
+            # Generate output path
+            input_path = Path(audio_path)
+            output_path = input_path.parent / f"{input_path.stem}{output_suffix}{input_path.suffix}"
+
+            # Export in same format as input
+            self._log(f"Saving clipped audio to: {output_path.name}")
+            clipped_audio.export(str(output_path), format=input_path.suffix.lstrip('.'))
+
+            self._log(f"Clipping complete! Duration reduced from {original_duration_s:.1f}s to {duration_seconds}s")
+
+            return str(output_path)
+
+        except Exception as e:
+            self._log(f"Error clipping audio: {e}")
+            return None
+
     def preprocess_audio(self, audio_path: str, output_suffix: str = "_preprocessed") -> Optional[str]:
         """
         Preprocess audio file by downsampling to optimal settings.

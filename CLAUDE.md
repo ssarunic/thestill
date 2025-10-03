@@ -79,9 +79,11 @@ mypy thestill/
    - Downloads best quality audio and converts to M4A
 
 4. **Transcriber** (`thestill/core/transcriber.py`)
-   - Uses OpenAI Whisper for speech-to-text
-   - Supports speaker diarization and timestamps
+   - **WhisperTranscriber**: Standard OpenAI Whisper for speech-to-text
+   - **WhisperXTranscriber**: Enhanced transcription with speaker diarization
+   - Supports word-level timestamps and speaker identification
    - Configurable model sizes (tiny, base, small, medium, large)
+   - Automatic fallback to standard Whisper if diarization fails
 
 5. **LLM Processor** (`thestill/core/llm_processor.py`)
    - Three-step LLM pipeline:
@@ -134,6 +136,8 @@ data/                 # Generated data directory
 ## Key Technologies
 
 - **OpenAI Whisper**: Local speech-to-text transcription
+- **WhisperX**: Enhanced Whisper with speaker diarization and improved alignment
+- **pyannote.audio**: State-of-the-art speaker diarization
 - **OpenAI GPT-4**: Text processing, summarization, and analysis
 - **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
 - **Pydantic**: Data validation and settings management
@@ -157,3 +161,51 @@ data/                 # Generated data directory
 - Use environment variables for sensitive data (API keys)
 - Provide sensible defaults for all configuration options
 - Validate configuration at startup
+
+## Speaker Diarization (User Story 1.4)
+
+### Setup Requirements
+
+1. **Install Dependencies**
+   ```bash
+   pip install -e .
+   ```
+
+2. **Get HuggingFace Token** (for speaker diarization)
+   - Create account at https://huggingface.co
+   - Get token from https://huggingface.co/settings/tokens
+   - Accept model license at https://huggingface.co/pyannote/speaker-diarization-3.1
+
+3. **Configure Environment**
+   ```bash
+   # Add to .env
+   ENABLE_DIARIZATION=true
+   HUGGINGFACE_TOKEN=your_token_here
+   ```
+
+### Usage
+
+**WhisperXTranscriber** automatically:
+1. Transcribes audio with WhisperX (improved alignment)
+2. Aligns output for accurate word-level timestamps
+3. Runs speaker diarization if enabled
+4. Assigns speaker labels to segments
+5. Falls back to standard Whisper if diarization fails
+
+**Output Format:**
+```
+[00:15] [SPEAKER_00] Welcome to the podcast.
+[00:18] [SPEAKER_01] Thanks for having me.
+```
+
+**Configuration Options:**
+- `ENABLE_DIARIZATION`: Enable/disable speaker identification
+- `MIN_SPEAKERS`: Minimum speakers (empty = auto-detect)
+- `MAX_SPEAKERS`: Maximum speakers (empty = auto-detect)
+- `DIARIZATION_MODEL`: pyannote model name
+
+**Error Handling:**
+- Missing HuggingFace token → Diarization disabled, standard transcription
+- Poor audio quality → Diarization may fail, continues without speakers
+- Model download failure → Falls back to standard Whisper
+- Any error → Graceful degradation to WhisperTranscriber
