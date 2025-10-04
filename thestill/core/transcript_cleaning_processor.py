@@ -14,19 +14,44 @@ from .transcript_formatter import TranscriptFormatter
 class TranscriptCleaningProcessor:
     """LLM-based transcript cleaner with copywriting focus"""
 
-    def __init__(self, provider: LLMProvider, chunk_size: int = 200000):
+    def __init__(self, provider: LLMProvider, chunk_size: Optional[int] = None):
         """
         Initialize transcript cleaning processor with an LLM provider.
 
         Args:
-            provider: LLMProvider instance (OpenAI, Ollama, or Gemini)
-            chunk_size: Maximum characters per chunk for processing (default: 200000)
-                       Gemini Flash 2.5: 1M input tokens (~4M chars), so 200K is safe
-                       OpenAI/Ollama: May need lower values (15K-30K)
+            provider: LLMProvider instance (OpenAI, Ollama, Gemini, or Anthropic)
+            chunk_size: Maximum characters per chunk for processing (optional)
+                       If not specified, will be auto-set based on provider:
+                       - Gemini 2.0/2.5 Flash: 900K chars (~225K tokens from 1M context)
+                       - Claude 3.5 Sonnet: 180K chars (~45K tokens from 200K context)
+                       - GPT-4/GPT-4o: 100K chars (~25K tokens from 128K context)
+                       - Ollama/Other: 30K chars (conservative default)
         """
         self.provider = provider
         self.formatter = TranscriptFormatter()
-        self.chunk_size = chunk_size  # Characters, not tokens (rough estimate: 4 chars = 1 token)
+
+        # Auto-set chunk_size based on provider if not specified
+        if chunk_size is None:
+            model_name = provider.get_model_name().lower()
+            if "gemini" in model_name:
+                # Gemini 2.0 Flash: 1M input tokens context
+                self.chunk_size = 900000
+                print(f"  Auto-set chunk size: 900K chars for Gemini (1M token context)")
+            elif "claude" in model_name:
+                # Claude 3.5 Sonnet: 200K token context
+                self.chunk_size = 180000
+                print(f"  Auto-set chunk size: 180K chars for Claude (200K token context)")
+            elif "gpt-4" in model_name or "gpt-5" in model_name:
+                # GPT-4/GPT-4o: 128K token context
+                self.chunk_size = 100000
+                print(f"  Auto-set chunk size: 100K chars for GPT-4 (128K token context)")
+            else:
+                # Conservative default for Ollama and other models
+                self.chunk_size = 30000
+                print(f"  Auto-set chunk size: 30K chars (conservative default)")
+        else:
+            self.chunk_size = chunk_size
+            print(f"  Using custom chunk size: {chunk_size} chars")
 
     def clean_transcript(
         self,
@@ -60,12 +85,9 @@ class TranscriptCleaningProcessor:
             print("Phase 0: Formatting transcript to clean Markdown...")
             formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
 
-            # Save formatted markdown for inspection
-            if output_path:
-                formatted_path = Path(output_path).parent / f"{Path(output_path).stem}_formatted.md"
-                with open(formatted_path, 'w', encoding='utf-8') as f:
-                    f.write(formatted_markdown)
-                print(f"  Formatted markdown saved to: {formatted_path}")
+            # Save formatted markdown to debug folder if requested
+            if output_path and save_corrections:
+                self._save_phase_output(output_path, "original", formatted_markdown)
 
             # Phase 1: Analyze and create corrections list
             print("Phase 1: Analyzing transcript and identifying corrections...")
@@ -77,7 +99,7 @@ class TranscriptCleaningProcessor:
                 episode_description
             )
 
-            # Save corrections immediately
+            # Save corrections to debug folder if requested
             if output_path and save_corrections:
                 self._save_phase_output(output_path, "corrections", corrections)
 
@@ -85,8 +107,8 @@ class TranscriptCleaningProcessor:
             print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
             corrected_markdown = self._apply_corrections(formatted_markdown, corrections)
 
-            # Save corrected markdown immediately
-            if output_path:
+            # Save corrected markdown to debug folder if requested
+            if output_path and save_corrections:
                 self._save_phase_output(output_path, "corrected", corrected_markdown)
 
             # Phase 2: Identify speakers (using corrected transcript)
@@ -99,8 +121,8 @@ class TranscriptCleaningProcessor:
                 episode_description
             )
 
-            # Save speaker mapping immediately
-            if output_path:
+            # Save speaker mapping to debug folder if requested
+            if output_path and save_corrections:
                 self._save_phase_output(output_path, "speakers", speaker_mapping)
 
             # Phase 3: Generate final cleaned transcript
@@ -111,10 +133,6 @@ class TranscriptCleaningProcessor:
                 speaker_mapping,
                 episode_title
             )
-
-            # Save final cleaned transcript immediately
-            if output_path:
-                self._save_phase_output(output_path, "cleaned", cleaned_markdown)
 
             processing_time = time.time() - start_time
 
@@ -280,10 +298,13 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                     {"role": "user", "content": context_info}
                 ]
 
+                # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
+                provider_max_tokens = 64000 if "claude" in self.provider.get_model_name().lower() else 65000
+
                 response = self.provider.chat_completion(
                     messages=messages,
                     temperature=0.1,
-                    max_tokens=65000,  # Gemini Flash 2.5 supports up to 65K output tokens
+                    max_tokens=provider_max_tokens,
                     response_format={"type": "json_object"}
                 )
 
@@ -470,7 +491,7 @@ Apply these transformations:
 1. Apply all spelling, grammar, and punctuation corrections provided
 2. Remove filler words as indicated
 3. Replace speaker labels (SPEAKER_00, SPEAKER_01, etc.) with real names from the mapping
-4. Mark advertisement segments clearly with [AD] tag
+4. Mark advertisement segments inline with [AD] tag
 5. Format as readable Markdown with proper paragraphs
 6. Use British English spelling
 7. Add section breaks for topic changes
@@ -483,13 +504,17 @@ STRICT FORMATTING RULES:
 4. Separate different speaker turns with a single blank line
 5. Group consecutive statements by the same speaker into a single paragraph
 6. Use ## Heading for major topic changes (use sparingly, only for clear topic shifts)
-7. Advertisement sections use format: **[ADVERTISEMENT]** followed by the ad content or summary
+7. Advertisement segments MUST be inline: **[AD]** followed by the ad content or summary (on the same paragraph, NOT as a separate heading)
 8. Do NOT add metadata, timestamps, or editorial comments - only the spoken content
 9. Do NOT add a title or episode name at the top - start directly with the dialogue
 
 EXAMPLE OUTPUT FORMAT:
 
 ## Introduction
+
+**[AD]** I'm Preet Bharara and this week Biden's top diplomat joins me on my podcast Stay Tuned with Preet. We discuss the US proposal that's been widely heralded as a possible end to the war in Gaza and why peace in the region has proven so elusive. The episode is out now. Search and follow Stay Tuned with Preet wherever you get your podcasts.
+
+**Scott Galloway:** Welcome to Office Hours of Prof G. This is the part of the show where we answer your questions about business, big tech, entrepreneurship, and whatever else is on your mind. If you'd like to submit a question for next time, you can send a voice recording to officehours@profgmedia.com. Again, that's officehours@profgmedia.com. Or post a question on the Scott Galloway subreddit, and we just might feature you on our next episode.
 
 **Rory Stewart:** Welcome back to The Rest Is Politics. I'm Rory Stewart, and I'm here with Alastair Campbell.
 
@@ -503,9 +528,7 @@ EXAMPLE OUTPUT FORMAT:
 
 **Rory Stewart:** I agree. When I was in Parliament, even a 10-point lead would have been considered massive.
 
-**[ADVERTISEMENT]**
-
-This episode is brought to you by ExpressVPN. Protect your online privacy with military-grade encryption.
+**[AD]** This episode is brought to you by ExpressVPN. Protect your online privacy with military-grade encryption.
 
 **Rory Stewart:** Right, let's get back to the election. What do you think about the regional variations we're seeing?
 
@@ -538,11 +561,29 @@ Please produce the final cleaned Markdown transcript."""
                     {"role": "user", "content": user_message}
                 ]
 
-                response = self.provider.chat_completion(
-                    messages=messages,
-                    temperature=0.3,
-                    max_tokens=32000  # Gemini Flash 2.5 can output up to 65K tokens
-                )
+                # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
+                model_name = self.provider.get_model_name().lower()
+                if "claude" in model_name:
+                    provider_max_tokens = 32000
+                elif "gpt" in model_name:
+                    provider_max_tokens = 16000  # GPT-4o max output is 16K tokens
+                else:
+                    provider_max_tokens = 32000
+
+                # Use continuation for providers that support it (Claude and OpenAI)
+                if hasattr(self.provider, 'chat_completion_with_continuation') and ("claude" in model_name or "gpt" in model_name):
+                    response = self.provider.chat_completion_with_continuation(
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=provider_max_tokens,
+                        max_attempts=3
+                    )
+                else:
+                    response = self.provider.chat_completion(
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=provider_max_tokens
+                    )
 
                 cleaned_chunks.append(response.strip())
 
@@ -560,65 +601,119 @@ Please produce the final cleaned Markdown transcript."""
         Save output from a specific phase immediately after completion.
 
         Args:
-            output_path: Base output path
+            output_path: Base output path (e.g., data/processed/{episode_id}.md)
             phase: Phase name (corrections, corrected, speakers, cleaned)
             data: Data to save (list, dict, or string)
         """
         output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if phase == "corrections":
-            # Save corrections list as JSON
-            path = output_path.parent / f"{output_path.stem}_corrections.json"
+        # Create debug directory for intermediate files
+        debug_dir = output_path.parent / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get clean episode ID (remove any existing suffixes)
+        episode_id = output_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+
+        if phase == "original":
+            # Save to debug directory: {episode_id}.original.md
+            path = debug_dir / f"{episode_id}.original.md"
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(data)
+            print(f"  → Original transcript saved to: {path}")
+
+        elif phase == "corrections":
+            # Save to debug directory: {episode_id}.corrections.json
+            path = debug_dir / f"{episode_id}.corrections.json"
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Corrections saved to: {path}")
 
         elif phase == "corrected":
-            # Save corrected markdown
-            path = output_path.parent / f"{output_path.stem}_corrected.md"
+            # Save to debug directory: {episode_id}.corrected.md
+            path = debug_dir / f"{episode_id}.corrected.md"
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(data)
             print(f"  → Corrected transcript saved to: {path}")
 
         elif phase == "speakers":
-            # Save speaker mapping as JSON
-            path = output_path.parent / f"{output_path.stem}_speakers.json"
+            # Save to debug directory: {episode_id}.speakers.json
+            path = debug_dir / f"{episode_id}.speakers.json"
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Speaker mapping saved to: {path}")
 
-        elif phase == "cleaned":
-            # Save final cleaned markdown (without metadata header at this stage)
-            path = output_path.parent / f"{output_path.stem}_cleaned.md"
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(data)
-            print(f"  → Cleaned transcript saved to: {path}")
+    def _remove_ads_from_markdown(self, markdown_text: str) -> str:
+        """
+        Remove advertisement paragraphs from markdown text using simple text filtering.
+
+        Args:
+            markdown_text: Cleaned markdown transcript
+
+        Returns:
+            Markdown text with ad paragraphs removed
+        """
+        lines = markdown_text.split('\n')
+        filtered_lines = []
+        skip_next_blank = False
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Check if line starts with **[AD]** or **[ADVERTISEMENT]**
+            if line.strip().startswith('**[AD]**') or line.strip().startswith('**[ADVERTISEMENT]**'):
+                # Skip this line
+                skip_next_blank = True
+                i += 1
+                continue
+
+            # Skip blank lines immediately after an ad
+            if skip_next_blank and line.strip() == '':
+                skip_next_blank = False
+                i += 1
+                continue
+
+            # Keep all other lines
+            filtered_lines.append(line)
+            skip_next_blank = False
+            i += 1
+
+        return '\n'.join(filtered_lines)
 
     def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
-        """Save final outputs with metadata to standard locations"""
+        """
+        Save final outputs to standard locations.
+
+        File structure:
+        - data/processed/{episode_id}.md - Final cleaned transcript (main output)
+        - data/processed/{episode_id}.no-ads.md - Transcript with ads removed
+        - data/processed/debug/{episode_id}.corrections.json - Debug: corrections list
+        - data/processed/debug/{episode_id}.speakers.json - Debug: speaker mapping
+        - data/processed/debug/{episode_id}.corrected.md - Debug: pre-speaker-formatting text
+        """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save final cleaned markdown with metadata header
-        md_path = output_path.with_suffix('.md')
-        with open(md_path, 'w', encoding='utf-8') as f:
+        # Get clean episode ID (remove legacy suffixes)
+        episode_id = output_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+
+        # Save final cleaned markdown: {episode_id}.md
+        final_path = output_path.parent / f"{episode_id}.md"
+        with open(final_path, 'w', encoding='utf-8') as f:
             # Add metadata header
             f.write(f"# {result['episode_title']}\n\n")
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")
             f.write("---\n\n")
             f.write(result['cleaned_markdown'])
-        print(f"Final transcript saved to: {md_path}")
+        print(f"Final transcript saved to: {final_path}")
 
-        # Save summary JSON
-        summary = {
-            "episode_title": result['episode_title'],
-            "podcast_title": result['podcast_title'],
-            "processing_time": result['processing_time'],
-            "corrections_count": len(result['corrections']),
-            "speakers_identified": len(result['speaker_mapping'])
-        }
-        summary_path = output_path.with_suffix('.json')
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-        print(f"Summary saved to: {summary_path}")
+        # Save ad-free version: {episode_id}.no-ads.md
+        no_ads_markdown = self._remove_ads_from_markdown(result['cleaned_markdown'])
+        no_ads_path = output_path.parent / f"{episode_id}.no-ads.md"
+        with open(no_ads_path, 'w', encoding='utf-8') as f:
+            # Add metadata header
+            f.write(f"# {result['episode_title']}\n\n")
+            f.write(f"**Podcast:** {result['podcast_title']}\n\n")
+            f.write("---\n\n")
+            f.write(no_ads_markdown)
+        print(f"Ad-free transcript saved to: {no_ads_path}")

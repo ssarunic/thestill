@@ -153,6 +153,17 @@ class TranscriptFormatter:
         secs = int(seconds % 60)
         return f"{minutes:02d}:{secs:02d}"
 
+    def _format_timecode_inline(self, seconds: float) -> str:
+        """Format timecode as [HH:MM:SS] or [MM:SS] for inline use"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+
+        if hours > 0:
+            return f"[{hours:02d}:{minutes:02d}:{secs:02d}]"
+        else:
+            return f"[{minutes:02d}:{secs:02d}]"
+
     def _build_markdown(self, title: str, metadata: Dict, speaker_blocks: List[Tuple[float, str, str]]) -> str:
         """Build final Markdown document"""
         lines = []
@@ -166,12 +177,12 @@ class TranscriptFormatter:
         lines.append("---")
         lines.append("")
 
-        # Content blocks
+        # Content blocks with inline timestamps
         for timestamp, speaker, text in speaker_blocks:
-            lines.append(f"## {self._format_timecode(timestamp)}")
-            lines.append(f"**{speaker}:**")
-            lines.append(text)
-            lines.append("")
+            # Format: `[HH:MM:SS]` **SPEAKER:** text
+            timecode = self._format_timecode_inline(timestamp)
+            lines.append(f"`{timecode}` **{speaker}:** {text}")
+            lines.append("")  # Blank line between speakers
 
         return "\n".join(lines)
 

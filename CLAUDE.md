@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-thestill.ai is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using OpenAI Whisper for transcription and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini) for analysis.
+thestill.ai is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using OpenAI Whisper for transcription and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini, Anthropic Claude) for analysis.
 
 ## Development Commands
 
@@ -161,6 +161,7 @@ data/                 # Generated data directory
   - **OpenAI GPT-4**: Text processing, summarization, and analysis
   - **Ollama**: Local LLM models for cost-effective processing
   - **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
+  - **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
 - **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
 - **Pydantic**: Data validation and settings management
 - **Click**: Command-line interface framework

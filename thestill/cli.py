@@ -13,15 +13,15 @@ try:
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from .core.llm_provider import create_llm_provider
 except ImportError:
-    from utils.config import load_config
-    from core.feed_manager import PodcastFeedManager
-    from core.audio_downloader import AudioDownloader
-    from core.audio_preprocessor import AudioPreprocessor
-    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from core.llm_processor import LLMProcessor
-    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
-    from core.llm_provider import create_llm_provider
+    from .utils.config import load_config
+    from .core.feed_manager import PodcastFeedManager
+    from .core.audio_downloader import AudioDownloader
+    from .core.audio_preprocessor import AudioPreprocessor
+    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from .core.llm_processor import LLMProcessor
+    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
+    from .core.llm_provider import create_llm_provider
 
 
 @click.group()
@@ -128,7 +128,9 @@ def process(ctx, dry_run, max_episodes):
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model
         )
         click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
     except Exception as e:
@@ -189,7 +191,7 @@ def process(ctx, dry_run, max_episodes):
 
             # Clean transcript with context
             cleaned_filename = f"{transcript_path.stem}_cleaned"
-            cleaned_path = config.summaries_path / cleaned_filename
+            cleaned_path = config.processed_path / cleaned_filename
 
             result = cleaning_processor.clean_transcript(
                 transcript_data=transcript_data,
@@ -254,7 +256,7 @@ def status(ctx):
     click.echo(f"Storage path: {config.storage_path}")
     click.echo(f"Audio files: {len([f for f in config.audio_path.glob('*')])} files")
     click.echo(f"Transcripts: {len([f for f in config.transcripts_path.glob('*.json')])} files")
-    click.echo(f"Summaries: {len([f for f in config.summaries_path.glob('*.json')])} files")
+    click.echo(f"Processed: {len([f for f in config.processed_path.glob('*.md')])} files")
 
     # Configuration
     click.echo(f"\nConfiguration:")
@@ -432,7 +434,9 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -481,7 +485,9 @@ def evaluate_transcript(ctx, transcript_path, output):
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -541,7 +547,9 @@ def evaluate_postprocess(ctx, processed_path, original, output):
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)

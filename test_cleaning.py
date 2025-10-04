@@ -19,7 +19,11 @@ def main():
         openai_api_key=config.openai_api_key,
         openai_model=config.llm_model,
         ollama_base_url=config.ollama_base_url,
-        ollama_model=config.ollama_model
+        ollama_model=config.ollama_model,
+        gemini_api_key=config.gemini_api_key,
+        gemini_model=config.gemini_model,
+        anthropic_api_key=config.anthropic_api_key,
+        anthropic_model=config.anthropic_model
     )
 
     print(f"Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
