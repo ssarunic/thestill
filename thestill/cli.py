@@ -144,10 +144,20 @@ def process(ctx, dry_run, max_episodes, save_corrections):
 
     for podcast in podcasts:
         for episode in podcast.episodes:
-            # Check if episode has a transcript but no summary (meaning not cleaned yet)
-            if episode.transcript_path and not episode.summary_path:
+            # Safety: Check if transcript file actually exists (not just path is set)
+            if episode.transcript_path:
                 transcript_path = Path(episode.transcript_path)
-                if transcript_path.exists():
+                if not transcript_path.exists():
+                    continue  # Skip if transcript file doesn't exist
+
+                # Check if summary file exists (not just if path is set)
+                summary_exists = False
+                if episode.summary_path:
+                    summary_path = Path(episode.summary_path)
+                    summary_exists = summary_path.exists()
+
+                # Only process if transcript exists but summary doesn't
+                if not summary_exists:
                     transcripts_to_clean.append((podcast, episode, transcript_path))
 
     if not transcripts_to_clean:
