@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from .llm_provider import LLMProvider
+from .transcript_formatter import TranscriptFormatter
 
 
 class TranscriptCleaningProcessor:
@@ -21,6 +22,7 @@ class TranscriptCleaningProcessor:
             provider: LLMProvider instance (OpenAI or Ollama)
         """
         self.provider = provider
+        self.formatter = TranscriptFormatter()
 
     def clean_transcript(
         self,
@@ -50,10 +52,21 @@ class TranscriptCleaningProcessor:
         start_time = time.time()
 
         try:
+            # Phase 0: Format JSON to clean Markdown (efficient for LLM)
+            print("Phase 0: Formatting transcript to clean Markdown...")
+            formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
+
+            # Save formatted markdown for inspection
+            if output_path:
+                formatted_path = Path(output_path).parent / f"{Path(output_path).stem}_formatted.md"
+                with open(formatted_path, 'w', encoding='utf-8') as f:
+                    f.write(formatted_markdown)
+                print(f"  Formatted markdown saved to: {formatted_path}")
+
             # Phase 1: Analyze and create corrections list
             print("Phase 1: Analyzing transcript and identifying corrections...")
             corrections = self._analyze_and_correct(
-                transcript_data,
+                formatted_markdown,
                 podcast_title,
                 podcast_description,
                 episode_title,
@@ -63,7 +76,7 @@ class TranscriptCleaningProcessor:
             # Phase 2: Identify speakers
             print("Phase 2: Identifying speakers...")
             speaker_mapping = self._identify_speakers(
-                transcript_data,
+                formatted_markdown,
                 podcast_title,
                 podcast_description,
                 episode_title,
@@ -73,7 +86,7 @@ class TranscriptCleaningProcessor:
             # Phase 3: Generate final cleaned transcript
             print("Phase 3: Generating final cleaned transcript...")
             cleaned_markdown = self._generate_cleaned_transcript(
-                transcript_data,
+                formatted_markdown,
                 corrections,
                 speaker_mapping,
                 episode_title
@@ -103,7 +116,7 @@ class TranscriptCleaningProcessor:
 
     def _analyze_and_correct(
         self,
-        transcript_data: Dict,
+        formatted_markdown: str,
         podcast_title: str,
         podcast_description: str,
         episode_title: str,
@@ -111,8 +124,8 @@ class TranscriptCleaningProcessor:
     ) -> List[Dict]:
         """Phase 1: Analyze transcript and identify all corrections needed"""
 
-        # Extract text from transcript
-        transcript_text = self._extract_transcript_text(transcript_data)
+        # Markdown is already clean and ready for LLM
+        transcript_text = formatted_markdown
 
         system_prompt = """You are an expert copywriter and editor specialising in podcast transcripts.
 
@@ -209,7 +222,7 @@ TRANSCRIPT TO ANALYZE:
 
     def _identify_speakers(
         self,
-        transcript_data: Dict,
+        formatted_markdown: str,
         podcast_title: str,
         podcast_description: str,
         episode_title: str,
@@ -217,7 +230,7 @@ TRANSCRIPT TO ANALYZE:
     ) -> Dict[str, str]:
         """Phase 2: Identify who the speakers are"""
 
-        transcript_text = self._extract_transcript_text(transcript_data)
+        transcript_text = formatted_markdown
 
         system_prompt = """You are an expert at identifying speakers in podcast transcripts.
 
@@ -292,14 +305,14 @@ TRANSCRIPT:
 
     def _generate_cleaned_transcript(
         self,
-        transcript_data: Dict,
+        formatted_markdown: str,
         corrections: List[Dict],
         speaker_mapping: Dict[str, str],
         episode_title: str
     ) -> str:
         """Phase 3: Generate final cleaned markdown transcript"""
 
-        transcript_text = self._extract_transcript_text(transcript_data)
+        transcript_text = formatted_markdown
 
         # Build corrections summary for the LLM
         corrections_summary = "\n".join([
@@ -362,20 +375,6 @@ Please produce the final cleaned Markdown transcript."""
         except Exception as e:
             print(f"Error generating cleaned transcript: {e}")
             return transcript_text
-
-    def _extract_transcript_text(self, transcript_data: Dict) -> str:
-        """Extract plain text from transcript data"""
-        if "segments" in transcript_data:
-            segments = transcript_data["segments"]
-            lines = []
-            for seg in segments:
-                speaker = seg.get("speaker", "Unknown")
-                text = seg.get("text", "").strip()
-                timestamp = f"[{int(seg.get('start', 0))}s]"
-                lines.append(f"{timestamp} {speaker}: {text}")
-            return "\n".join(lines)
-        else:
-            return transcript_data.get("text", "")
 
     def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
         """Save cleaning outputs to files"""
