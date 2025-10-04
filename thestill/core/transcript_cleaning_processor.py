@@ -73,10 +73,14 @@ class TranscriptCleaningProcessor:
                 episode_description
             )
 
-            # Phase 2: Identify speakers
+            # Phase 1.5: Apply corrections before speaker identification
+            print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
+            corrected_markdown = self._apply_corrections(formatted_markdown, corrections)
+
+            # Phase 2: Identify speakers (using corrected transcript)
             print("Phase 2: Identifying speakers...")
             speaker_mapping = self._identify_speakers(
-                formatted_markdown,
+                corrected_markdown,
                 podcast_title,
                 podcast_description,
                 episode_title,
@@ -141,16 +145,31 @@ Context will help you make better corrections:
 - Technical podcasts may have jargon that looks wrong but is correct
 - Names of people, companies, products should be spelled correctly based on context
 
-IMPORTANT: Respond with valid JSON only. Return an array of correction objects.
+CRITICAL: You MUST respond with ONLY valid JSON in the exact format shown below. Do not include any explanatory text before or after the JSON.
 
-Each correction object should have:
-- "type": one of "spelling", "grammar", "filler", "punctuation", "ad_segment"
-- "original": the incorrect text or filler word
-- "corrected": the corrected version (empty string for removals)
-- "segment_index": which segment this appears in (if known, otherwise null)
-- "reason": brief explanation of the correction
+JSON Schema:
+{
+  "type": "object",
+  "properties": {
+    "corrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation", "ad_segment"]},
+          "original": {"type": "string"},
+          "corrected": {"type": "string"},
+          "segment_index": {"type": ["integer", "null"]},
+          "reason": {"type": "string"}
+        },
+        "required": ["type", "original", "corrected", "reason"]
+      }
+    }
+  },
+  "required": ["corrections"]
+}
 
-Example:
+Example output (respond in exactly this format):
 {
   "corrections": [
     {
@@ -161,21 +180,37 @@ Example:
       "reason": "Company name capitalisation"
     },
     {
+      "type": "spelling",
+      "original": "Alister Campbell",
+      "corrected": "Alastair Campbell",
+      "segment_index": 12,
+      "reason": "Correct spelling of name"
+    },
+    {
       "type": "filler",
-      "original": "um",
-      "corrected": "",
+      "original": " um ",
+      "corrected": " ",
       "segment_index": 3,
       "reason": "Meaningless filler word"
     },
     {
+      "type": "grammar",
+      "original": "they was going",
+      "corrected": "they were going",
+      "segment_index": 8,
+      "reason": "Subject-verb agreement"
+    },
+    {
       "type": "ad_segment",
-      "original": "This episode is brought to you by...",
+      "original": "This episode is brought to you by ExpressVPN",
       "corrected": "[AD]",
       "segment_index": 2,
       "reason": "Advertisement segment"
     }
   ]
-}"""
+}
+
+If no corrections are needed, return: {"corrections": []}"""
 
         context_info = f"""PODCAST CONTEXT:
 Podcast: {podcast_title}
@@ -200,6 +235,15 @@ TRANSCRIPT TO ANALYZE:
                 response_format={"type": "json_object"}
             )
 
+            # Debug: Print raw response
+            print(f"\n{'='*60}")
+            print("DEBUG: Raw LLM Response from Phase 1:")
+            print(f"{'='*60}")
+            print(f"Type: {type(response)}")
+            print(f"Length: {len(response) if response else 0}")
+            print(f"First 500 chars:\n{response[:500] if response else 'EMPTY'}")
+            print(f"{'='*60}\n")
+
             # Parse JSON response
             response = response.strip()
             if "```json" in response:
@@ -219,6 +263,44 @@ TRANSCRIPT TO ANALYZE:
         except Exception as e:
             print(f"Error analyzing transcript: {e}")
             return []
+
+    def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> str:
+        """
+        Apply corrections from Phase 1 to the transcript text.
+        This ensures speaker names are properly spelled before speaker identification.
+
+        Args:
+            transcript_text: Original transcript markdown
+            corrections: List of correction objects from Phase 1
+
+        Returns:
+            Corrected transcript text
+        """
+        corrected_text = transcript_text
+
+        # Sort corrections by type priority (spelling first, then grammar, then fillers)
+        priority_order = {"spelling": 1, "grammar": 2, "punctuation": 3, "filler": 4, "ad_segment": 5}
+        sorted_corrections = sorted(
+            corrections,
+            key=lambda c: priority_order.get(c.get("type", ""), 99)
+        )
+
+        applied_count = 0
+        for correction in sorted_corrections:
+            original = correction.get("original", "")
+            corrected = correction.get("corrected", "")
+
+            if not original:
+                continue
+
+            # Apply the correction (simple string replacement)
+            # For more sophisticated replacement, we could use regex with word boundaries
+            if original in corrected_text:
+                corrected_text = corrected_text.replace(original, corrected)
+                applied_count += 1
+
+        print(f"  Applied {applied_count} corrections to transcript")
+        return corrected_text
 
     def _identify_speakers(
         self,
@@ -329,21 +411,47 @@ Your task is to produce a final, clean, readable Markdown transcript.
 Apply these transformations:
 1. Apply all spelling, grammar, and punctuation corrections provided
 2. Remove filler words as indicated
-3. Replace speaker labels with real names from the mapping
+3. Replace speaker labels (SPEAKER_00, SPEAKER_01, etc.) with real names from the mapping
 4. Mark advertisement segments clearly with [AD] tag
 5. Format as readable Markdown with proper paragraphs
 6. Use British English spelling
 7. Add section breaks for topic changes
 8. Maintain conversational tone
 
-Format:
-- Use **Speaker Name:** for speaker attribution
-- Group related dialogue into paragraphs
-- Add blank lines between speakers for readability
-- Mark ads: **[ADVERTISEMENT]** section
-- Add markdown headings for major topic shifts
+STRICT FORMATTING RULES:
+1. Each speaker turn MUST start on a new line with format: **Speaker Name:** followed by their dialogue
+2. Do NOT use additional formatting like > blockquotes or bullet points for dialogue
+3. Speaker name MUST be in bold using **Name:** format (not _Name:_ or other variations)
+4. Separate different speaker turns with a single blank line
+5. Group consecutive statements by the same speaker into a single paragraph
+6. Use ## Heading for major topic changes (use sparingly, only for clear topic shifts)
+7. Advertisement sections use format: **[ADVERTISEMENT]** followed by the ad content or summary
+8. Do NOT add metadata, timestamps, or editorial comments - only the spoken content
+9. Do NOT add a title or episode name at the top - start directly with the dialogue
 
-Focus on making it read smoothly while staying accurate to what was said."""
+EXAMPLE OUTPUT FORMAT:
+
+## Introduction
+
+**Rory Stewart:** Welcome back to The Rest Is Politics. I'm Rory Stewart, and I'm here with Alastair Campbell.
+
+**Alastair Campbell:** Thanks, Rory. Today we're going to discuss the latest developments in British politics, particularly the upcoming general election and what it means for the Conservative Party.
+
+**Rory Stewart:** Absolutely. Before we dive in, I think it's worth noting that the polls have been showing some really interesting trends over the past few weeks.
+
+## General Election Discussion
+
+**Alastair Campbell:** The key thing to understand is that Labour's lead has been remarkably stable. We're seeing about a 20-point gap, which is extraordinary by historical standards.
+
+**Rory Stewart:** I agree. When I was in Parliament, even a 10-point lead would have been considered massive.
+
+**[ADVERTISEMENT]**
+
+This episode is brought to you by ExpressVPN. Protect your online privacy with military-grade encryption.
+
+**Rory Stewart:** Right, let's get back to the election. What do you think about the regional variations we're seeing?
+
+Focus on making it read smoothly while staying accurate to what was said. Output ONLY the formatted transcript with no preamble or postamble."""
 
         user_message = f"""EPISODE: {episode_title}
 

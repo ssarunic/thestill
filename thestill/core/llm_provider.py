@@ -53,8 +53,8 @@ class LLMProvider(ABC):
 class OpenAIProvider(LLMProvider):
     """OpenAI API provider"""
 
-    # Models that don't support custom temperature
-    TEMPERATURE_RESTRICTED_MODELS = [
+    # Models that don't support custom temperature and response_format
+    REASONING_MODELS = [
         "o1", "o1-preview", "o1-mini",
         "gpt-5", "gpt-5-mini", "gpt-5-turbo", "gpt-5-nano"
     ]
@@ -76,27 +76,34 @@ class OpenAIProvider(LLMProvider):
             "messages": messages,
         }
 
-        # Only add temperature if supported
-        if temperature is not None and self.supports_temperature():
+        is_reasoning_model = self._is_reasoning_model()
+
+        # Only add temperature if supported (reasoning models don't support it)
+        if temperature is not None and not is_reasoning_model:
             params["temperature"] = temperature
 
         # Add max_tokens if specified
         if max_tokens is not None:
             params["max_completion_tokens"] = max_tokens
 
-        # Add response format if specified
-        if response_format is not None:
+        # Only add response_format for non-reasoning models
+        # Reasoning models (o1, gpt-5) don't support structured output via response_format
+        if response_format is not None and not is_reasoning_model:
             params["response_format"] = response_format
 
         response = self.client.chat.completions.create(**params)
         return response.choices[0].message.content or ""
 
+    def _is_reasoning_model(self) -> bool:
+        """Check if the current model is a reasoning model (o1, gpt-5 series)"""
+        for reasoning_model in self.REASONING_MODELS:
+            if self.model.startswith(reasoning_model):
+                return True
+        return False
+
     def supports_temperature(self) -> bool:
         """Check if the current model supports custom temperature"""
-        for restricted_model in self.TEMPERATURE_RESTRICTED_MODELS:
-            if self.model.startswith(restricted_model):
-                return False
-        return True
+        return not self._is_reasoning_model()
 
     def health_check(self) -> bool:
         """Check if OpenAI API is accessible"""

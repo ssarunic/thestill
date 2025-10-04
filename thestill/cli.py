@@ -104,9 +104,8 @@ def list(ctx):
 @main.command()
 @click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
 @click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
-@click.option('--save-corrections', is_flag=True, help='Save corrections list for debugging')
 @click.pass_context
-def process(ctx, dry_run, max_episodes, save_corrections):
+def process(ctx, dry_run, max_episodes):
     """Clean existing transcripts with LLM post-processing"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -197,7 +196,7 @@ def process(ctx, dry_run, max_episodes, save_corrections):
                 episode_title=episode.title,
                 episode_description=episode.description,
                 output_path=str(cleaned_path),
-                save_corrections=save_corrections
+                save_corrections=True
             )
 
             if result:
