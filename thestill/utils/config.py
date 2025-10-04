@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 class Config(BaseModel):
     # API Configuration
     openai_api_key: str = ""
+    gemini_api_key: str = ""
 
     # Storage Paths
     storage_path: Path = Path("./data")
@@ -35,16 +36,19 @@ class Config(BaseModel):
     max_speakers: Optional[int] = None
 
     # LLM Configuration
-    llm_provider: str = "openai"  # openai or ollama
+    llm_provider: str = "openai"  # openai, ollama, or gemini
     llm_model: str = "gpt-4o"
 
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
 
+    # Gemini Configuration
+    gemini_model: str = "gemini-2.0-flash-exp"
+
     # Transcript Cleaning Configuration
     enable_transcript_cleaning: bool = False  # Enable LLM-based transcript cleaning
-    cleaning_provider: str = "ollama"  # Provider for cleaning (openai or ollama)
+    cleaning_provider: str = "ollama"  # Provider for cleaning (openai, ollama, or gemini)
     cleaning_model: str = "gemma3:4b"  # Model for cleaning (small models recommended)
     cleaning_chunk_size: int = 20000  # Max tokens per chunk
     cleaning_overlap_pct: float = 0.15  # Overlap percentage (0.10 = 10%)
@@ -86,16 +90,24 @@ def load_config(env_file: Optional[str] = None) -> Config:
     llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
     # Validate required API keys based on provider
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if llm_provider == "openai" and not api_key:
+    openai_api_key = os.getenv("OPENAI_API_KEY", "")
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+
+    if llm_provider == "openai" and not openai_api_key:
         raise ValueError(
             "OPENAI_API_KEY environment variable is required when using OpenAI provider. "
-            "Please set it in your .env file or environment, or switch to 'ollama' provider."
+            "Please set it in your .env file or environment, or switch to another provider."
+        )
+    if llm_provider == "gemini" and not gemini_api_key:
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is required when using Gemini provider. "
+            "Please set it in your .env file or environment, or switch to another provider."
         )
 
     # Optional configurations with defaults
     config_data = {
-        "openai_api_key": api_key,
+        "openai_api_key": openai_api_key,
+        "gemini_api_key": gemini_api_key,
         "storage_path": Path(os.getenv("STORAGE_PATH", "./data")),
         "audio_path": Path(os.getenv("AUDIO_PATH", "./data/audio")),
         "transcripts_path": Path(os.getenv("TRANSCRIPTS_PATH", "./data/transcripts")),
@@ -113,9 +125,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "min_speakers": int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None,
         "max_speakers": int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None,
         "llm_provider": llm_provider,
-        "llm_model": os.getenv("LLM_MODEL", "gpt-4o" if llm_provider == "openai" else "gemma3:4b"),
+        "llm_model": os.getenv("LLM_MODEL", "gpt-4o" if llm_provider == "openai" else ("gemini-2.0-flash-exp" if llm_provider == "gemini" else "gemma3:4b")),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
         "enable_transcript_cleaning": os.getenv("ENABLE_TRANSCRIPT_CLEANING", "false").lower() == "true",
         "cleaning_provider": os.getenv("CLEANING_PROVIDER", "ollama"),
         "cleaning_model": os.getenv("CLEANING_MODEL", "gemma3:4b"),

@@ -14,15 +14,19 @@ from .transcript_formatter import TranscriptFormatter
 class TranscriptCleaningProcessor:
     """LLM-based transcript cleaner with copywriting focus"""
 
-    def __init__(self, provider: LLMProvider):
+    def __init__(self, provider: LLMProvider, chunk_size: int = 200000):
         """
         Initialize transcript cleaning processor with an LLM provider.
 
         Args:
-            provider: LLMProvider instance (OpenAI or Ollama)
+            provider: LLMProvider instance (OpenAI, Ollama, or Gemini)
+            chunk_size: Maximum characters per chunk for processing (default: 200000)
+                       Gemini Flash 2.5: 1M input tokens (~4M chars), so 200K is safe
+                       OpenAI/Ollama: May need lower values (15K-30K)
         """
         self.provider = provider
         self.formatter = TranscriptFormatter()
+        self.chunk_size = chunk_size  # Characters, not tokens (rough estimate: 4 chars = 1 token)
 
     def clean_transcript(
         self,
@@ -73,9 +77,17 @@ class TranscriptCleaningProcessor:
                 episode_description
             )
 
+            # Save corrections immediately
+            if output_path and save_corrections:
+                self._save_phase_output(output_path, "corrections", corrections)
+
             # Phase 1.5: Apply corrections before speaker identification
             print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
             corrected_markdown = self._apply_corrections(formatted_markdown, corrections)
+
+            # Save corrected markdown immediately
+            if output_path:
+                self._save_phase_output(output_path, "corrected", corrected_markdown)
 
             # Phase 2: Identify speakers (using corrected transcript)
             print("Phase 2: Identifying speakers...")
@@ -87,6 +99,10 @@ class TranscriptCleaningProcessor:
                 episode_description
             )
 
+            # Save speaker mapping immediately
+            if output_path:
+                self._save_phase_output(output_path, "speakers", speaker_mapping)
+
             # Phase 3: Generate final cleaned transcript
             print("Phase 3: Generating final cleaned transcript...")
             cleaned_markdown = self._generate_cleaned_transcript(
@@ -95,6 +111,10 @@ class TranscriptCleaningProcessor:
                 speaker_mapping,
                 episode_title
             )
+
+            # Save final cleaned transcript immediately
+            if output_path:
+                self._save_phase_output(output_path, "cleaned", cleaned_markdown)
 
             processing_time = time.time() - start_time
 
@@ -117,6 +137,42 @@ class TranscriptCleaningProcessor:
         except Exception as e:
             print(f"Error cleaning transcript: {e}")
             raise
+
+    def _chunk_transcript(self, text: str) -> List[str]:
+        """
+        Split transcript into chunks that fit within LLM context limits.
+
+        Args:
+            text: Full transcript text
+
+        Returns:
+            List of text chunks
+        """
+        if len(text) <= self.chunk_size:
+            return [text]
+
+        chunks = []
+        lines = text.split('\n')
+        current_chunk = []
+        current_size = 0
+
+        for line in lines:
+            line_size = len(line) + 1  # +1 for newline
+
+            if current_size + line_size > self.chunk_size and current_chunk:
+                # Save current chunk and start new one
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = [line]
+                current_size = line_size
+            else:
+                current_chunk.append(line)
+                current_size += line_size
+
+        # Add remaining chunk
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+
+        return chunks
 
     def _analyze_and_correct(
         self,
@@ -158,11 +214,9 @@ JSON Schema:
         "properties": {
           "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation", "ad_segment"]},
           "original": {"type": "string"},
-          "corrected": {"type": "string"},
-          "segment_index": {"type": ["integer", "null"]},
-          "reason": {"type": "string"}
+          "corrected": {"type": "string"}
         },
-        "required": ["type", "original", "corrected", "reason"]
+        "required": ["type", "original", "corrected"]
       }
     }
   },
@@ -175,94 +229,87 @@ Example output (respond in exactly this format):
     {
       "type": "spelling",
       "original": "OpenAi",
-      "corrected": "OpenAI",
-      "segment_index": 5,
-      "reason": "Company name capitalisation"
+      "corrected": "OpenAI"
     },
     {
       "type": "spelling",
       "original": "Alister Campbell",
-      "corrected": "Alastair Campbell",
-      "segment_index": 12,
-      "reason": "Correct spelling of name"
+      "corrected": "Alastair Campbell"
     },
     {
       "type": "filler",
       "original": " um ",
-      "corrected": " ",
-      "segment_index": 3,
-      "reason": "Meaningless filler word"
+      "corrected": " "
     },
     {
       "type": "grammar",
       "original": "they was going",
-      "corrected": "they were going",
-      "segment_index": 8,
-      "reason": "Subject-verb agreement"
+      "corrected": "they were going"
     },
     {
       "type": "ad_segment",
       "original": "This episode is brought to you by ExpressVPN",
-      "corrected": "[AD]",
-      "segment_index": 2,
-      "reason": "Advertisement segment"
+      "corrected": "[AD]"
     }
   ]
 }
 
 If no corrections are needed, return: {"corrections": []}"""
 
-        context_info = f"""PODCAST CONTEXT:
+        # Split transcript into chunks if needed
+        chunks = self._chunk_transcript(transcript_text)
+        all_corrections = []
+
+        for i, chunk in enumerate(chunks):
+            chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
+            print(f"  Processing{chunk_info}...")
+
+            context_info = f"""PODCAST CONTEXT:
 Podcast: {podcast_title}
 About: {podcast_description}
 
 Episode: {episode_title}
 Description: {episode_description}
 
-TRANSCRIPT TO ANALYZE:
-{transcript_text}"""
+TRANSCRIPT TO ANALYZE{chunk_info}:
+{chunk}"""
 
-        try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": context_info}
-            ]
+            try:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": context_info}
+                ]
 
-            response = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                max_tokens=4000,
-                response_format={"type": "json_object"}
-            )
+                response = self.provider.chat_completion(
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=65000,  # Gemini Flash 2.5 supports up to 65K output tokens
+                    response_format={"type": "json_object"}
+                )
 
-            # Debug: Print raw response
-            print(f"\n{'='*60}")
-            print("DEBUG: Raw LLM Response from Phase 1:")
-            print(f"{'='*60}")
-            print(f"Type: {type(response)}")
-            print(f"Length: {len(response) if response else 0}")
-            print(f"First 500 chars:\n{response[:500] if response else 'EMPTY'}")
-            print(f"{'='*60}\n")
+                # Parse JSON response
+                response = response.strip()
+                if "```json" in response:
+                    start = response.find("```json") + 7
+                    end = response.find("```", start)
+                    if end != -1:
+                        response = response[start:end].strip()
+                elif "```" in response:
+                    start = response.find("```") + 3
+                    end = response.find("```", start)
+                    if end != -1:
+                        response = response[start:end].strip()
 
-            # Parse JSON response
-            response = response.strip()
-            if "```json" in response:
-                start = response.find("```json") + 7
-                end = response.find("```", start)
-                if end != -1:
-                    response = response[start:end].strip()
-            elif "```" in response:
-                start = response.find("```") + 3
-                end = response.find("```", start)
-                if end != -1:
-                    response = response[start:end].strip()
+                result = json.loads(response)
+                chunk_corrections = result.get("corrections", [])
+                all_corrections.extend(chunk_corrections)
 
-            result = json.loads(response)
-            return result.get("corrections", [])
+            except Exception as e:
+                print(f"  Error analyzing chunk {i+1}: {e}")
+                continue
 
-        except Exception as e:
-            print(f"Error analyzing transcript: {e}")
-            return []
+        print(f"  Found {len(all_corrections)} corrections across {len(chunks)} chunk(s)")
+        return all_corrections
 
     def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> str:
         """
@@ -342,6 +389,17 @@ Example:
   }
 }"""
 
+        # For speaker identification, use first and last chunk only (where introductions typically happen)
+        chunks = self._chunk_transcript(transcript_text)
+        if len(chunks) > 2:
+            # Use first and last chunk
+            sample_text = chunks[0] + "\n\n[... middle content omitted ...]\n\n" + chunks[-1]
+            print(f"  Using first and last chunk of {len(chunks)} chunks for speaker identification")
+        elif len(chunks) == 2:
+            sample_text = chunks[0] + "\n\n" + chunks[1]
+        else:
+            sample_text = transcript_text
+
         context_info = f"""PODCAST CONTEXT:
 Podcast: {podcast_title}
 About: {podcast_description}
@@ -350,7 +408,7 @@ Episode: {episode_title}
 Description: {episode_description}
 
 TRANSCRIPT:
-{transcript_text}"""
+{sample_text}"""
 
         try:
             messages = [
@@ -361,7 +419,7 @@ TRANSCRIPT:
             response = self.provider.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=1000,
+                max_tokens=2000,  # Increased for Gemini's larger output capacity
                 response_format={"type": "json_object"}
             )
 
@@ -398,8 +456,8 @@ TRANSCRIPT:
 
         # Build corrections summary for the LLM
         corrections_summary = "\n".join([
-            f"- {c['type']}: '{c['original']}' → '{c['corrected']}' ({c['reason']})"
-            for c in corrections[:50]  # Limit to avoid token overflow
+            f"- {c['type']}: '{c['original']}' → '{c['corrected']}'"
+            for c in corrections[:100]  # Increased limit since we removed 'reason' field
         ])
 
         speaker_mapping_str = json.dumps(speaker_mapping, indent=2)
@@ -453,7 +511,15 @@ This episode is brought to you by ExpressVPN. Protect your online privacy with m
 
 Focus on making it read smoothly while staying accurate to what was said. Output ONLY the formatted transcript with no preamble or postamble."""
 
-        user_message = f"""EPISODE: {episode_title}
+        # Process in chunks if needed
+        chunks = self._chunk_transcript(transcript_text)
+        cleaned_chunks = []
+
+        for i, chunk in enumerate(chunks):
+            chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
+            print(f"  Generating cleaned transcript{chunk_info}...")
+
+            user_message = f"""EPISODE: {episode_title}
 
 SPEAKER MAPPING:
 {speaker_mapping_str}
@@ -461,35 +527,80 @@ SPEAKER MAPPING:
 CORRECTIONS TO APPLY:
 {corrections_summary}
 
-ORIGINAL TRANSCRIPT:
-{transcript_text}
+ORIGINAL TRANSCRIPT{chunk_info}:
+{chunk}
 
 Please produce the final cleaned Markdown transcript."""
 
-        try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+            try:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ]
 
-            response = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.3,
-                max_tokens=8000
-            )
+                response = self.provider.chat_completion(
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=32000  # Gemini Flash 2.5 can output up to 65K tokens
+                )
 
-            return response.strip()
+                cleaned_chunks.append(response.strip())
 
-        except Exception as e:
-            print(f"Error generating cleaned transcript: {e}")
-            return transcript_text
+            except Exception as e:
+                print(f"  Error generating chunk {i+1}: {e}")
+                # Fallback to original chunk
+                cleaned_chunks.append(chunk)
 
-    def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
-        """Save cleaning outputs to files"""
+        # Combine chunks with proper spacing
+        final_transcript = "\n\n".join(cleaned_chunks)
+        return final_transcript
+
+    def _save_phase_output(self, output_path: str, phase: str, data):
+        """
+        Save output from a specific phase immediately after completion.
+
+        Args:
+            output_path: Base output path
+            phase: Phase name (corrections, corrected, speakers, cleaned)
+            data: Data to save (list, dict, or string)
+        """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save cleaned markdown
+        if phase == "corrections":
+            # Save corrections list as JSON
+            path = output_path.parent / f"{output_path.stem}_corrections.json"
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"  → Corrections saved to: {path}")
+
+        elif phase == "corrected":
+            # Save corrected markdown
+            path = output_path.parent / f"{output_path.stem}_corrected.md"
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(data)
+            print(f"  → Corrected transcript saved to: {path}")
+
+        elif phase == "speakers":
+            # Save speaker mapping as JSON
+            path = output_path.parent / f"{output_path.stem}_speakers.json"
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"  → Speaker mapping saved to: {path}")
+
+        elif phase == "cleaned":
+            # Save final cleaned markdown (without metadata header at this stage)
+            path = output_path.parent / f"{output_path.stem}_cleaned.md"
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(data)
+            print(f"  → Cleaned transcript saved to: {path}")
+
+    def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
+        """Save final outputs with metadata to standard locations"""
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save final cleaned markdown with metadata header
         md_path = output_path.with_suffix('.md')
         with open(md_path, 'w', encoding='utf-8') as f:
             # Add metadata header
@@ -497,20 +608,7 @@ Please produce the final cleaned Markdown transcript."""
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")
             f.write("---\n\n")
             f.write(result['cleaned_markdown'])
-        print(f"Cleaned transcript saved to: {md_path}")
-
-        # Save corrections if requested
-        if save_corrections:
-            corrections_path = output_path.parent / f"{output_path.stem}_corrections.json"
-            with open(corrections_path, 'w', encoding='utf-8') as f:
-                json.dump(result['corrections'], f, indent=2, ensure_ascii=False)
-            print(f"Corrections saved to: {corrections_path}")
-
-        # Save speaker mapping
-        speakers_path = output_path.parent / f"{output_path.stem}_speakers.json"
-        with open(speakers_path, 'w', encoding='utf-8') as f:
-            json.dump(result['speaker_mapping'], f, indent=2, ensure_ascii=False)
-        print(f"Speaker mapping saved to: {speakers_path}")
+        print(f"Final transcript saved to: {md_path}")
 
         # Save summary JSON
         summary = {

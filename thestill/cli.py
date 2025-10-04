@@ -126,7 +126,9 @@ def process(ctx, dry_run, max_episodes):
             openai_api_key=config.openai_api_key,
             openai_model=config.llm_model,
             ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model
         )
         click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
     except Exception as e:
@@ -428,7 +430,9 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
             openai_api_key=config.openai_api_key,
             openai_model=config.llm_model,
             ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -475,7 +479,9 @@ def evaluate_transcript(ctx, transcript_path, output):
             openai_api_key=config.openai_api_key,
             openai_model=config.llm_model,
             ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -533,7 +539,9 @@ def evaluate_postprocess(ctx, processed_path, original, output):
             openai_api_key=config.openai_api_key,
             openai_model=config.llm_model,
             ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
