@@ -16,9 +16,10 @@ thestill.ai solves the time-consuming nature of audio content consumption by:
 - **Multiple Source Support**: Add podcasts from RSS feeds, Apple Podcasts, and YouTube playlists/channels
 - **Automated Processing**: Automatically detect and process new episodes
 - **High-Quality Transcription**: Uses OpenAI Whisper for accurate speech-to-text
-- **Flexible LLM Backend**: Choose between OpenAI (cloud) or Ollama (local) for post-processing
+- **Flexible LLM Backend**: Choose between OpenAI, Ollama (local), Google Gemini, or Anthropic Claude
 - **AI-Powered Analysis**: Cleans transcripts, generates summaries, and extracts insights
 - **CLI Interface**: Simple command-line tool for easy automation
+- **MCP Server**: Expose functionality to Claude Desktop and other MCP-compatible clients
 - **Speaker Identification**: Distinguishes between different speakers in conversations
 - **Ad Detection**: Identifies and tags advertisement segments
 
@@ -79,19 +80,55 @@ thestill process
 # Check status
 thestill status
 
+# Start MCP server (for Claude Desktop integration)
+thestill-mcp
+
 # Clean up old files
 thestill cleanup
 ```
 
+## MCP Server (Claude Desktop Integration)
+
+thestill.ai includes an MCP (Model Context Protocol) server that lets you interact with your podcast library through Claude Desktop or other MCP-compatible clients.
+
+### Quick Setup
+
+1. **Configure Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "thestill": {
+      "command": "thestill-mcp",
+      "args": [],
+      "env": {
+        "STORAGE_PATH": "/path/to/your/data"
+      }
+    }
+  }
+}
+```
+
+2. **Restart Claude Desktop**
+
+3. **Start using natural language:**
+   - "What podcasts am I tracking?"
+   - "Show me the latest episode from The Rest is Politics"
+   - "Summarize episodes from the last 24 hours"
+   - "Add the Lex Fridman podcast"
+
+For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
+
 ## Commands
 
 - `thestill add <url>` - Add a podcast from RSS feed, Apple Podcasts, or YouTube
-- `thestill remove <url>` - Remove a podcast feed
-- `thestill list` - Show all tracked podcasts
+- `thestill remove <podcast_id>` - Remove a podcast by index or URL
+- `thestill list` - Show all tracked podcasts with indices
 - `thestill process` - Check for and process new episodes
 - `thestill process --dry-run` - Show what would be processed
 - `thestill status` - Display system status and statistics
 - `thestill cleanup` - Remove old audio files
+- `thestill-mcp` - Start MCP server for Claude Desktop integration
 
 ### Supported URL Types
 

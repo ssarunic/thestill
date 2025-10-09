@@ -11,8 +11,8 @@ class Episode(BaseModel):
     duration: Optional[str] = None
     guid: str
     processed: bool = False
-    transcript_path: Optional[str] = None
-    summary_path: Optional[str] = None
+    transcript_path: Optional[str] = None  # Filename of the raw transcript JSON
+    summary_path: Optional[str] = None     # Filename of the cleaned transcript MD (historical name, actually contains cleaned transcript)
 
 
 class Podcast(BaseModel):

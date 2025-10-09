@@ -1,0 +1,98 @@
+"""
+Stats service - System statistics and status information
+"""
+
+import logging
+from datetime import datetime
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from ..core.feed_manager import PodcastFeedManager
+
+logger = logging.getLogger(__name__)
+
+
+class SystemStats(BaseModel):
+    """System-wide statistics"""
+    podcasts_tracked: int
+    episodes_total: int
+    episodes_processed: int
+    episodes_unprocessed: int
+    transcripts_available: int
+    audio_files_count: int
+    storage_path: str
+    last_updated: datetime
+
+
+class StatsService:
+    """
+    Service for retrieving system statistics and status information.
+    """
+
+    def __init__(self, storage_path: str):
+        """
+        Initialize stats service.
+
+        Args:
+            storage_path: Path to data storage directory
+        """
+        self.storage_path = Path(storage_path)
+        self.feed_manager = PodcastFeedManager(str(storage_path))
+        logger.info(f"StatsService initialized with storage: {storage_path}")
+
+    def get_stats(self) -> SystemStats:
+        """
+        Get comprehensive system statistics.
+
+        Returns:
+            SystemStats object with current system status
+        """
+        logger.debug("Gathering system statistics")
+
+        # Get podcast data
+        podcasts = self.feed_manager.list_podcasts()
+        podcasts_tracked = len(podcasts)
+
+        # Count episodes
+        episodes_total = 0
+        episodes_processed = 0
+        transcripts_available = 0
+
+        for podcast in podcasts:
+            episodes_total += len(podcast.episodes)
+            for episode in podcast.episodes:
+                if episode.processed:
+                    episodes_processed += 1
+
+                # Check if cleaned transcript file actually exists in processed/
+                if episode.summary_path:
+                    md_path = self.storage_path / "processed" / episode.summary_path
+                    if md_path.with_suffix('.md').exists():
+                        transcripts_available += 1
+
+        episodes_unprocessed = episodes_total - episodes_processed
+
+        # Count audio files
+        audio_path = self.storage_path / "audio"
+        audio_files_count = 0
+        if audio_path.exists():
+            audio_files_count = len(list(audio_path.glob("*.*")))
+
+        stats = SystemStats(
+            podcasts_tracked=podcasts_tracked,
+            episodes_total=episodes_total,
+            episodes_processed=episodes_processed,
+            episodes_unprocessed=episodes_unprocessed,
+            transcripts_available=transcripts_available,
+            audio_files_count=audio_files_count,
+            storage_path=str(self.storage_path),
+            last_updated=datetime.now()
+        )
+
+        logger.info(
+            f"Stats: {stats.podcasts_tracked} podcasts, "
+            f"{stats.episodes_processed}/{stats.episodes_total} episodes processed"
+        )
+
+        return stats

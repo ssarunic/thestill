@@ -23,7 +23,8 @@ def setup_logger(
     )
 
     if console_output:
-        console_handler = logging.StreamHandler(sys.stdout)
+        # Use stderr for all logging to keep stdout clean for MCP protocol
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 

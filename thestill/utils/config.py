@@ -115,16 +115,19 @@ def load_config(env_file: Optional[str] = None) -> Config:
         )
 
     # Optional configurations with defaults
+    # All paths derived from storage_path for cross-platform compatibility
+    storage_path = Path(os.getenv("STORAGE_PATH", "./data"))
+
     config_data = {
         "openai_api_key": openai_api_key,
         "gemini_api_key": gemini_api_key,
         "anthropic_api_key": anthropic_api_key,
-        "storage_path": Path(os.getenv("STORAGE_PATH", "./data")),
-        "audio_path": Path(os.getenv("AUDIO_PATH", "./data/audio")),
-        "transcripts_path": Path(os.getenv("TRANSCRIPTS_PATH", "./data/transcripts")),
-        "summaries_path": Path(os.getenv("SUMMARIES_PATH", "./data/summaries")),
-        "processed_path": Path(os.getenv("PROCESSED_PATH", "./data/processed")),
-        "evaluations_path": Path(os.getenv("EVALUATIONS_PATH", "./data/evaluations")),
+        "storage_path": storage_path,
+        "audio_path": storage_path / "audio",
+        "transcripts_path": storage_path / "transcripts",
+        "summaries_path": storage_path / "summaries",
+        "processed_path": storage_path / "processed",
+        "evaluations_path": storage_path / "evaluations",
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),

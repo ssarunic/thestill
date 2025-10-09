@@ -33,7 +33,7 @@ thestill add "https://www.youtube.com/playlist?list=..."
 thestill transcribe path/to/audio.mp3 [--output path/to/transcript.json] [--skip-preprocessing]
 
 # Clean existing transcripts with LLM (step 2)
-thestill process [--dry-run] [--max-episodes 5] [--save-corrections]
+thestill process [--dry-run] [--max-episodes 5]
 
 # List tracked podcasts
 thestill list

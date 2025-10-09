@@ -1,9 +1,12 @@
 import click
+import logging
 import time
 from pathlib import Path
 
 try:
     from .utils.config import load_config
+    from .utils.logger import setup_logger
+    from .services import PodcastService, StatsService
     from .core.feed_manager import PodcastFeedManager
     from .core.audio_downloader import AudioDownloader
     from .core.audio_preprocessor import AudioPreprocessor
@@ -13,15 +16,17 @@ try:
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from .core.llm_provider import create_llm_provider
 except ImportError:
-    from .utils.config import load_config
-    from .core.feed_manager import PodcastFeedManager
-    from .core.audio_downloader import AudioDownloader
-    from .core.audio_preprocessor import AudioPreprocessor
-    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from .core.llm_processor import LLMProcessor
-    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
-    from .core.llm_provider import create_llm_provider
+    from utils.config import load_config
+    from utils.logger import setup_logger
+    from services import PodcastService, StatsService
+    from core.feed_manager import PodcastFeedManager
+    from core.audio_downloader import AudioDownloader
+    from core.audio_preprocessor import AudioPreprocessor
+    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from core.llm_processor import LLMProcessor
+    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
+    from core.llm_provider import create_llm_provider
 
 
 @click.group()
@@ -30,9 +35,13 @@ except ImportError:
 def main(ctx, config):
     """thestill.ai - Automated podcast transcription and summarization"""
     ctx.ensure_object(dict)
+
+    # Initialize logging to stderr (important for MCP server compatibility)
+    setup_logger("thestill", log_level="INFO", console_output=True)
+
     try:
         ctx.obj['config'] = load_config(config)
-        print("✓ Configuration loaded successfully")
+        click.echo("✓ Configuration loaded successfully")
     except Exception as e:
         click.echo(f"❌ Configuration error: {e}", err=True)
         ctx.exit(1)
@@ -47,27 +56,28 @@ def add(ctx, rss_url):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
-    feed_manager = PodcastFeedManager(str(config.storage_path))
+    podcast_service = PodcastService(str(config.storage_path))
 
-    if feed_manager.add_podcast(rss_url):
-        click.echo(f"✓ Podcast added: {rss_url}")
+    podcast = podcast_service.add_podcast(rss_url)
+    if podcast:
+        click.echo(f"✓ Podcast added: {podcast.title}")
     else:
         click.echo(f"❌ Failed to add podcast or podcast already exists", err=True)
 
 
 @main.command()
-@click.argument('rss_url')
+@click.argument('podcast_id')
 @click.pass_context
-def remove(ctx, rss_url):
-    """Remove a podcast RSS feed"""
+def remove(ctx, podcast_id):
+    """Remove a podcast by RSS URL or index number"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
-    feed_manager = PodcastFeedManager(str(config.storage_path))
+    podcast_service = PodcastService(str(config.storage_path))
 
-    if feed_manager.remove_podcast(rss_url):
-        click.echo(f"✓ Podcast removed: {rss_url}")
+    if podcast_service.remove_podcast(podcast_id):
+        click.echo(f"✓ Podcast removed")
     else:
         click.echo(f"❌ Podcast not found", err=True)
 
@@ -80,9 +90,9 @@ def list(ctx):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
-    feed_manager = PodcastFeedManager(str(config.storage_path))
+    podcast_service = PodcastService(str(config.storage_path))
 
-    podcasts = feed_manager.list_podcasts()
+    podcasts = podcast_service.list_podcasts()
 
     if not podcasts:
         click.echo("No podcasts tracked yet. Use 'thestill add <rss_url>' to add some!")
@@ -91,13 +101,12 @@ def list(ctx):
     click.echo(f"\n📻 Tracked Podcasts ({len(podcasts)}):")
     click.echo("─" * 50)
 
-    for i, podcast in enumerate(podcasts, 1):
-        click.echo(f"{i}. {podcast.title}")
+    for podcast in podcasts:
+        click.echo(f"{podcast.index}. {podcast.title}")
         click.echo(f"   RSS: {podcast.rss_url}")
         if podcast.last_processed:
             click.echo(f"   Last processed: {podcast.last_processed.strftime('%Y-%m-%d %H:%M')}")
-        processed_count = sum(1 for ep in podcast.episodes if ep.processed)
-        click.echo(f"   Episodes processed: {processed_count}")
+        click.echo(f"   Episodes: {podcast.episodes_processed}/{podcast.episodes_count} processed")
         click.echo()
 
 
@@ -217,11 +226,13 @@ def process(ctx, dry_run, max_episodes):
                 )
 
                 # Update feed manager to mark as processed
+                # Store just the filename (with .md extension) for the cleaned transcript
+                cleaned_md_filename = f"{cleaned_path.stem}.md"
                 feed_manager.mark_episode_processed(
                     str(podcast.rss_url),
                     episode.guid,
-                    str(transcript_path),
-                    str(cleaned_path.with_suffix('.json'))
+                    transcript_path.name,  # Just the transcript filename
+                    cleaned_md_filename    # Just the cleaned MD filename
                 )
 
                 total_processed += 1
@@ -248,15 +259,18 @@ def status(ctx):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
+    stats_service = StatsService(str(config.storage_path))
 
     click.echo("📊 thestill.ai Status")
     click.echo("═" * 30)
 
+    # Get statistics from service
+    stats = stats_service.get_stats()
+
     # Storage info
-    click.echo(f"Storage path: {config.storage_path}")
-    click.echo(f"Audio files: {len([f for f in config.audio_path.glob('*')])} files")
-    click.echo(f"Transcripts: {len([f for f in config.transcripts_path.glob('*.json')])} files")
-    click.echo(f"Processed: {len([f for f in config.processed_path.glob('*.md')])} files")
+    click.echo(f"Storage path: {stats.storage_path}")
+    click.echo(f"Audio files: {stats.audio_files_count} files")
+    click.echo(f"Transcripts available: {stats.transcripts_available} files")
 
     # Configuration
     click.echo(f"\nConfiguration:")
@@ -266,16 +280,11 @@ def status(ctx):
     click.echo(f"  Max workers: {config.max_workers}")
 
     # Podcast stats
-    feed_manager = PodcastFeedManager(str(config.storage_path))
-    podcasts = feed_manager.list_podcasts()
-
-    total_episodes = sum(len(p.episodes) for p in podcasts)
-    processed_episodes = sum(sum(1 for ep in p.episodes if ep.processed) for p in podcasts)
-
     click.echo(f"\nPodcast Statistics:")
-    click.echo(f"  Tracked podcasts: {len(podcasts)}")
-    click.echo(f"  Total episodes: {total_episodes}")
-    click.echo(f"  Processed episodes: {processed_episodes}")
+    click.echo(f"  Tracked podcasts: {stats.podcasts_tracked}")
+    click.echo(f"  Total episodes: {stats.episodes_total}")
+    click.echo(f"  Processed episodes: {stats.episodes_processed}")
+    click.echo(f"  Unprocessed episodes: {stats.episodes_unprocessed}")
 
 
 @main.command()
@@ -295,10 +304,9 @@ def cleanup(ctx):
 
 @main.command()
 @click.argument('audio_path', type=click.Path(exists=True))
-@click.option('--output', '-o', help='Output path for transcript JSON')
 @click.option('--skip-preprocessing', is_flag=True, help='Skip audio preprocessing/downsampling')
 @click.pass_context
-def transcribe(ctx, audio_path, output, skip_preprocessing):
+def transcribe(ctx, audio_path, skip_preprocessing):
     """Transcribe an audio file to JSON transcript"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -327,9 +335,8 @@ def transcribe(ctx, audio_path, output, skip_preprocessing):
         transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
 
     # Determine output path
-    if not output:
-        audio_path_obj = Path(audio_path)
-        output = str(config.transcripts_path / f"{audio_path_obj.stem}_transcript.json")
+    audio_path_obj = Path(audio_path)
+    output = str(config.transcripts_path / f"{audio_path_obj.stem}_transcript.json")
 
     try:
         # Preprocess audio if needed

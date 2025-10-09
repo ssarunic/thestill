@@ -1,5 +1,6 @@
 import feedparser
 import json
+import logging
 import os
 import re
 import urllib.request
@@ -10,6 +11,8 @@ from urllib.parse import urlparse
 
 from ..models.podcast import Podcast, Episode
 from .youtube_downloader import YouTubeDownloader
+
+logger = logging.getLogger(__name__)
 
 
 class PodcastFeedManager:
@@ -50,7 +53,7 @@ class PodcastFeedManager:
             return False
 
         except Exception as e:
-            print(f"Error adding podcast {url}: {e}")
+            logger.error(f"Error adding podcast {url}: {e}")
             return False
 
     def remove_podcast(self, rss_url: str) -> bool:
@@ -120,7 +123,7 @@ class PodcastFeedManager:
                     new_episodes.append((podcast, episodes))
 
             except Exception as e:
-                print(f"Error checking feed {podcast.rss_url}: {e}")
+                logger.error(f"Error checking feed {podcast.rss_url}: {e}")
                 continue
 
         return new_episodes
@@ -164,14 +167,15 @@ class PodcastFeedManager:
                                     podcast.episodes.append(episode)
                                     break
                     except Exception as e:
-                        print(f"Error fetching episode info for {episode_guid}: {e}")
+                        logger.error(f"Error fetching episode info for {episode_guid}: {e}")
 
                 podcast.last_processed = datetime.now()
                 break
         self._save_podcasts()
 
     def list_podcasts(self) -> List[Podcast]:
-        """Return list of all podcasts"""
+        """Return list of all podcasts (reloads from disk to get latest data)"""
+        self.podcasts = self._load_podcasts()
         return self.podcasts
 
     def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
@@ -187,7 +191,7 @@ class PodcastFeedManager:
             # https://itunes.apple.com/us/podcast/podcast-name/id1234567890
             id_match = re.search(r'id(\d+)', url)
             if not id_match:
-                print(f"Could not extract podcast ID from Apple URL: {url}")
+                logger.warning(f"Could not extract podcast ID from Apple URL: {url}")
                 return None
 
             podcast_id = id_match.group(1)
@@ -202,18 +206,18 @@ class PodcastFeedManager:
                 result = data['results'][0]
                 feed_url = result.get('feedUrl')
                 if feed_url:
-                    print(f"Extracted RSS feed from Apple Podcast: {feed_url}")
+                    logger.info(f"Extracted RSS feed from Apple Podcast: {feed_url}")
                     return feed_url
                 else:
-                    print(f"No RSS feed URL found for podcast ID {podcast_id}")
+                    logger.warning(f"No RSS feed URL found for podcast ID {podcast_id}")
                     return None
             else:
                 # If the ID doesn't work, try to get the page and extract the real ID
-                print(f"No podcast found for ID {podcast_id}, attempting to resolve redirect...")
+                logger.info(f"No podcast found for ID {podcast_id}, attempting to resolve redirect...")
                 return self._resolve_apple_podcast_redirect(url)
 
         except Exception as e:
-            print(f"Error extracting RSS from Apple URL {url}: {e}")
+            logger.error(f"Error extracting RSS from Apple URL {url}: {e}")
             return None
 
     def _get_youtube_episodes(self, podcast: Podcast) -> List[Episode]:
@@ -236,7 +240,7 @@ class PodcastFeedManager:
             return new_episodes
 
         except Exception as e:
-            print(f"Error getting YouTube episodes for {podcast.rss_url}: {e}")
+            logger.error(f"Error getting YouTube episodes for {podcast.rss_url}: {e}")
             return []
 
     def _add_youtube_podcast(self, url: str) -> bool:
@@ -244,7 +248,7 @@ class PodcastFeedManager:
         try:
             playlist_info = self.youtube_downloader.extract_playlist_info(url)
             if not playlist_info:
-                print(f"Could not extract YouTube playlist info from: {url}")
+                logger.warning(f"Could not extract YouTube playlist info from: {url}")
                 return False
 
             # Create podcast entry with YouTube URL
@@ -257,12 +261,12 @@ class PodcastFeedManager:
             if not self._podcast_exists(url):
                 self.podcasts.append(podcast)
                 self._save_podcasts()
-                print(f"Added YouTube podcast: {podcast.title}")
+                logger.info(f"Added YouTube podcast: {podcast.title}")
                 return True
             return False
 
         except Exception as e:
-            print(f"Error adding YouTube podcast {url}: {e}")
+            logger.error(f"Error adding YouTube podcast {url}: {e}")
             return False
 
     def _resolve_apple_podcast_redirect(self, url: str) -> Optional[str]:
@@ -282,7 +286,7 @@ class PodcastFeedManager:
 
                 # Try each ID found on the page
                 for potential_id in set(id_matches):  # Use set to avoid duplicates
-                    print(f"Trying podcast ID: {potential_id}")
+                    logger.debug(f"Trying podcast ID: {potential_id}")
 
                     lookup_url = f"https://itunes.apple.com/lookup?id={potential_id}"
                     try:
@@ -293,16 +297,16 @@ class PodcastFeedManager:
                             result = data['results'][0]
                             feed_url = result.get('feedUrl')
                             if feed_url:
-                                print(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
+                                logger.info(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
                                 return feed_url
                     except Exception as id_error:
-                        print(f"Failed to lookup ID {potential_id}: {id_error}")
+                        logger.debug(f"Failed to lookup ID {potential_id}: {id_error}")
                         continue
 
                 return None
 
         except Exception as e:
-            print(f"Error resolving Apple Podcast redirect {url}: {e}")
+            logger.error(f"Error resolving Apple Podcast redirect {url}: {e}")
             return None
 
     def _podcast_exists(self, rss_url: str) -> bool:
@@ -338,7 +342,7 @@ class PodcastFeedManager:
                     data = json.load(f)
                     return [Podcast(**podcast_data) for podcast_data in data]
             except Exception as e:
-                print(f"Error loading podcasts: {e}")
+                logger.error(f"Error loading podcasts: {e}")
         return []
 
     def _save_podcasts(self):
@@ -347,4 +351,4 @@ class PodcastFeedManager:
             with open(self.feeds_file, 'w') as f:
                 json.dump([p.model_dump(mode='json') for p in self.podcasts], f, indent=2)
         except Exception as e:
-            print(f"Error saving podcasts: {e}")
+            logger.error(f"Error saving podcasts: {e}")
