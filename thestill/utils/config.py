@@ -15,9 +15,9 @@ class Config(BaseModel):
     # Storage Paths
     storage_path: Path = Path("./data")
     audio_path: Path = Path("./data/audio")
-    transcripts_path: Path = Path("./data/transcripts")
+    raw_transcripts_path: Path = Path("./data/raw_transcripts")  # Raw Whisper JSON transcripts
+    clean_transcripts_path: Path = Path("./data/clean_transcripts")  # Cleaned/formatted transcripts
     summaries_path: Path = Path("./data/summaries")
-    processed_path: Path = Path("./data/processed")
     evaluations_path: Path = Path("./data/evaluations")
 
     # Processing Configuration
@@ -73,9 +73,9 @@ class Config(BaseModel):
         directories = [
             self.storage_path,
             self.audio_path,
-            self.transcripts_path,
+            self.raw_transcripts_path,
+            self.clean_transcripts_path,
             self.summaries_path,
-            self.processed_path,
             self.evaluations_path
         ]
 
@@ -124,9 +124,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "anthropic_api_key": anthropic_api_key,
         "storage_path": storage_path,
         "audio_path": storage_path / "audio",
-        "transcripts_path": storage_path / "transcripts",
+        "raw_transcripts_path": storage_path / "raw_transcripts",
+        "clean_transcripts_path": storage_path / "clean_transcripts",
         "summaries_path": storage_path / "summaries",
-        "processed_path": storage_path / "processed",
         "evaluations_path": storage_path / "evaluations",
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),

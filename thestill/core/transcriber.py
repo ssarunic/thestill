@@ -15,13 +15,19 @@ try:
     WHISPERX_AVAILABLE = True
 except ImportError:
     WHISPERX_AVAILABLE = False
-    print("WhisperX not available. Install with: pip install whisperx")
+
+try:
+    from pyannote.audio import Pipeline
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    PYANNOTE_AVAILABLE = False
 
 
 class DiarizationProgressMonitor:
     """
     Monitor and display progress for speaker diarization process.
     Uses audio duration and empirical ratios to estimate completion time.
+    Adapts estimate based on actual performance.
     """
 
     def __init__(self, audio_duration_seconds: float, device: str = "cpu"):
@@ -30,18 +36,25 @@ class DiarizationProgressMonitor:
         self.start_time = None
         self.stop_event = threading.Event()
         self.monitor_thread = None
+        self.estimated_duration = None
+        self.last_update_time = None
 
-        # Empirical ratios: diarization_time = audio_duration * ratio
-        # Based on typical pyannote.audio performance
+        # Initial empirical ratios: diarization_time = audio_duration * ratio
+        # Based on typical pyannote.audio performance with modern hardware
         self.processing_ratios = {
-            "cuda": 0.75,  # GPU: ~0.75x audio duration
-            "cpu": 2.5,    # CPU: ~2.5x audio duration
-            "mps": 1.5     # Apple Silicon: ~1.5x audio duration
+            "cuda": 0.5,   # GPU: ~0.5x audio duration (very fast)
+            "cpu": 1.0,    # CPU: ~1.0x audio duration (real-time)
+            "mps": 0.7     # Apple Silicon: ~0.7x audio duration
         }
 
     def _get_estimated_duration(self) -> float:
-        """Calculate estimated processing time in seconds"""
-        ratio = self.processing_ratios.get(self.device, 2.0)
+        """Calculate estimated processing time in seconds, adapting based on actual progress"""
+        if self.estimated_duration is not None:
+            # Use adapted estimate
+            return self.estimated_duration
+
+        # Initial estimate
+        ratio = self.processing_ratios.get(self.device, 1.0)
         return self.audio_duration * ratio
 
     def _format_time(self, seconds: float) -> str:
@@ -58,11 +71,21 @@ class DiarizationProgressMonitor:
             return f"{hours}h {mins}m"
 
     def _update_progress(self):
-        """Background thread that updates progress display"""
-        estimated_duration = self._get_estimated_duration()
-
+        """Background thread that updates progress display with adaptive estimation"""
         while not self.stop_event.is_set():
             elapsed = time.time() - self.start_time
+            estimated_duration = self._get_estimated_duration()
+
+            # Adaptive estimation: after 20% elapsed time, recalculate based on actual progress
+            # This helps correct overly optimistic or pessimistic initial estimates
+            if elapsed > 10 and self.estimated_duration is None:
+                # Assume we're making steady progress
+                # Use current rate to predict total time
+                current_ratio = elapsed / self.audio_duration
+                if current_ratio > 0.1:  # Only adapt after we have some data
+                    # Add 20% buffer to be conservative
+                    self.estimated_duration = (elapsed / 0.2) * 1.2
+
             progress_pct = min(99, int((elapsed / estimated_duration) * 100))
 
             elapsed_str = self._format_time(elapsed)
@@ -161,7 +184,7 @@ class WhisperTranscriber:
             print(f"Cleared Whisper cache: {cache_dir}")
 
     def transcribe_audio(self, audio_path: str, output_path: str = None,
-                         custom_prompt: str = None, preprocess_audio: bool = True,
+                         custom_prompt: str = None, preprocess_audio: bool = False,
                          clean_transcript: bool = False, cleaning_config: Dict = None) -> Optional[Dict]:
         """
         Transcribe audio file with optional custom prompt for better accuracy.
@@ -171,6 +194,8 @@ class WhisperTranscriber:
             output_path: Path to save transcript JSON
             custom_prompt: Custom prompt to improve transcription accuracy
             preprocess_audio: Whether to preprocess audio before transcription
+                WARNING: Enabling preprocessing will modify the audio (remove silence, normalize)
+                and cause timestamp drift - transcripts won't align with original audio file
             clean_transcript: Whether to clean transcript with LLM (for fixing errors, removing fillers)
             cleaning_config: Configuration dict for transcript cleaning (provider, model, etc.)
         """
@@ -681,7 +706,7 @@ class WhisperXTranscriber:
         audio_path: str,
         output_path: str = None,
         custom_prompt: str = None,
-        preprocess_audio: bool = True,
+        preprocess_audio: bool = False,
         clean_transcript: bool = False,
         cleaning_config: Dict = None
     ) -> Optional[Dict]:
@@ -693,6 +718,8 @@ class WhisperXTranscriber:
             output_path: Path to save transcript JSON
             custom_prompt: Custom prompt for better accuracy (not used in WhisperX)
             preprocess_audio: Whether to preprocess audio
+                WARNING: Enabling preprocessing will modify the audio (remove silence, normalize)
+                and cause timestamp drift - transcripts won't align with original audio file
             clean_transcript: Whether to clean transcript with LLM
             cleaning_config: Configuration for transcript cleaning
         """
@@ -706,6 +733,14 @@ class WhisperXTranscriber:
                 )
 
             self.load_model()
+
+            # If model failed to load, use fallback
+            if self._model is None:
+                self._load_whisper_fallback()
+                return self._whisper_fallback.transcribe_audio(
+                    audio_path, output_path, custom_prompt,
+                    preprocess_audio, clean_transcript, cleaning_config
+                )
 
             print(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
@@ -748,11 +783,18 @@ class WhisperXTranscriber:
                 try:
                     print("Step 3: Performing speaker diarization...")
                     print(f"  - Loading diarization model ({self.diarization_model})...")
-                    diarize_model = whisperx.DiarizationPipeline(
-                        model_name=self.diarization_model,
-                        use_auth_token=self.hf_token,
-                        device=self.device
+
+                    if not PYANNOTE_AVAILABLE:
+                        raise ImportError("pyannote.audio is required for speaker diarization")
+
+                    diarize_model = Pipeline.from_pretrained(
+                        self.diarization_model,
+                        use_auth_token=self.hf_token
                     )
+
+                    # Move model to appropriate device
+                    if self.device != "cpu":
+                        diarize_model.to(torch.device(self.device))
 
                     print("  - Analyzing audio for speaker patterns...")
                     if self.min_speakers or self.max_speakers:
@@ -780,7 +822,22 @@ class WhisperXTranscriber:
                         progress_monitor.stop()
 
                     print("  - Assigning speakers to transcript segments...")
-                    result = whisperx.assign_word_speakers(diarize_segments, result)
+
+                    # Convert pyannote Annotation to the format whisperx expects
+                    # whisperx expects a pandas DataFrame with 'start', 'end', 'speaker' columns
+                    import pandas as pd
+
+                    diarize_df = pd.DataFrame([
+                        {
+                            'start': segment.start,
+                            'end': segment.end,
+                            'speaker': speaker
+                        }
+                        for segment, _, speaker in diarize_segments.itertracks(yield_label=True)
+                    ])
+
+                    print(f"  - Converted {len(diarize_df)} diarization segments")
+                    result = whisperx.assign_word_speakers(diarize_df, result)
 
                     # Count unique speakers
                     speakers = set()
@@ -791,7 +848,9 @@ class WhisperXTranscriber:
                     print(f"  ✓ Detected {speakers_detected} unique speaker(s): {', '.join(sorted(speakers))}")
 
                 except Exception as e:
-                    print(f"  ✗ Diarization failed: {e}")
+                    print(f"  ✗ Diarization failed: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
                     print("  → Continuing without speaker identification")
 
             # Clean up temporary processed audio

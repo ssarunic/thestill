@@ -302,8 +302,9 @@ class PodcastService:
                 duration=episode.duration,
                 guid=episode.guid,
                 processed=episode.processed,
-                transcript_available=bool(episode.transcript_path and (self.storage_path / "transcripts" / episode.transcript_path).exists()),
-                summary_available=bool(episode.summary_path and (self.storage_path / "processed" / episode.summary_path).exists())
+                transcript_available=bool(episode.raw_transcript_path and (self.storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()),
+                clean_transcript_available=bool(episode.clean_transcript_path and (self.storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()),
+                summary_available=bool(episode.summary_path and (self.storage_path / "summaries" / episode.summary_path).exists())
             ))
 
         logger.debug(f"Listed {len(result)} episodes from: {podcast.title}")
@@ -336,7 +337,7 @@ class PodcastService:
 
         # Build full path to the cleaned Markdown file
         # summary_path is just the filename (e.g., "episode_cleaned.md")
-        md_path = self.storage_path / "processed" / episode.summary_path
+        md_path = self.storage_path / "clean_transcripts" / episode.summary_path
 
         if not md_path.exists():
             logger.warning(f"Cleaned transcript file not found: {md_path}")

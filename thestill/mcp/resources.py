@@ -158,8 +158,9 @@ def setup_resources(server: Server, storage_path: str):
                 "guid": episode.guid,
                 "processed": episode.processed,
                 "audio_url": str(episode.audio_url),
-                "transcript_available": bool(episode.transcript_path and (storage_path / "transcripts" / episode.transcript_path).exists()),
-                "summary_available": bool(episode.summary_path and (storage_path / "processed" / episode.summary_path).exists())
+                "transcript_available": bool(episode.raw_transcript_path and (storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()),
+                "clean_transcript_available": bool(episode.clean_transcript_path and (storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()),
+                "summary_available": bool(episode.summary_path and (storage_path / "summaries" / episode.summary_path).exists())
             }
 
             return json.dumps(result, indent=2)
@@ -186,7 +187,7 @@ def setup_resources(server: Server, storage_path: str):
                 "audio_url": str(episode.audio_url),
                 "duration": episode.duration,
                 "title": episode.title,
-                "local_file": episode.transcript_path is not None,  # Indicates if downloaded
+                "local_file": episode.audio_path is not None,  # Indicates if downloaded
                 "format": "audio/mpeg"  # Default, could be enhanced with actual format detection
             }
 

@@ -29,11 +29,23 @@ thestill add "https://podcasts.apple.com/us/podcast/id123456"
 thestill add "https://www.youtube.com/@channelname"
 thestill add "https://www.youtube.com/playlist?list=..."
 
-# Transcribe audio file to JSON (step 1)
-thestill transcribe path/to/audio.mp3 [--output path/to/transcript.json] [--skip-preprocessing]
+# Download audio files for new episodes (step 1)
+thestill download                          # Download from all podcasts
+thestill download --podcast-id 1           # Download from specific podcast (by index)
+thestill download --podcast-id "https://..." # Download from specific podcast (by URL)
+thestill download --max-episodes 3         # Limit downloads per podcast
+thestill download --dry-run                # Preview what would be downloaded
 
-# Clean existing transcripts with LLM (step 2)
-thestill process [--dry-run] [--max-episodes 5]
+# Transcribe downloaded audio to JSON (step 2)
+thestill transcribe                        # Transcribe all downloaded audio
+thestill transcribe path/to/audio.mp3      # Transcribe specific file (standalone)
+thestill transcribe --podcast-id 1         # Transcribe from specific podcast
+thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
+thestill transcribe --max-episodes 3       # Limit transcriptions
+thestill transcribe --skip-preprocessing   # Skip audio preprocessing
+
+# Clean existing transcripts with LLM (step 3)
+thestill clean-transcript [--dry-run] [--max-episodes 5]
 
 # List tracked podcasts
 thestill list
@@ -109,23 +121,36 @@ mypy thestill/
 
 ### Data Flow
 
-**NEW Workflow (Separated Transcription & Cleaning):**
+**Three-Step Workflow (Download → Transcribe → Clean):**
 
-1. **Transcription** (`thestill transcribe`):
-   - Takes audio file as input
+1. **Download** (`thestill download`):
+   - Checks all tracked podcast feeds for new episodes
+   - Downloads audio files for new episodes to `data/audio/`
+   - Updates episode `audio_path` in `data/feeds.json`
+   - Skips already-downloaded episodes
+
+2. **Transcription** (`thestill transcribe`):
+   - **Auto mode (no args)**: Finds all downloaded episodes without transcripts
+   - **Standalone mode**: Can transcribe any audio file directly
    - Optional preprocessing (downsampling for optimization)
    - Whisper/WhisperX transcribes to structured JSON with speaker labels
    - Saves to `data/transcripts/`
+   - Updates episode `transcript_path` in `data/feeds.json`
 
-2. **Cleaning** (`thestill process`):
+3. **Cleaning** (`thestill clean-transcript`):
    - Loads existing transcript JSON files
    - Phase 1: LLM analyzes for corrections (spelling, grammar, fillers, ads)
    - Phase 2: LLM identifies speakers using episode/podcast context
    - Phase 3: LLM generates clean Markdown transcript
    - Saves cleaned Markdown to `data/summaries/`
    - Optionally saves corrections and speaker mapping for debugging
+   - Updates episode `summary_path` in `data/feeds.json`
 
-3. Episode status is updated in `data/feeds.json`
+**Episode State Progression:**
+- `discovered` → new episode found in feed
+- `downloaded` → audio_path set, transcript_path = None
+- `transcribed` → transcript_path set, summary_path = None
+- `transcript_cleaned` → summary_path set (final state)
 
 ## File Structure
 
@@ -146,10 +171,10 @@ thestill/
 └── cli.py            # Command-line interface
 
 data/                 # Generated data directory
-├── audio/           # Downloaded audio files
-├── transcripts/     # Whisper transcription results (JSON with speaker labels)
-├── summaries/       # Cleaned transcripts (Markdown + corrections + speaker mapping)
-└── feeds.json      # Podcast feed tracking
+├── audio/           # Downloaded audio files (from thestill download)
+├── transcripts/     # Whisper transcription results (JSON with speaker labels from thestill transcribe)
+├── processed/       # Cleaned transcripts (Markdown + corrections from thestill clean-transcript)
+└── feeds.json      # Podcast feed tracking with episode state
 ```
 
 ## Key Technologies

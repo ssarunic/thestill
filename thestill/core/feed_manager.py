@@ -128,8 +128,20 @@ class PodcastFeedManager:
 
         return new_episodes
 
+    def mark_episode_downloaded(self, podcast_rss_url: str, episode_guid: str, audio_path: str):
+        """Mark an episode as downloaded with audio file path"""
+        for podcast in self.podcasts:
+            if str(podcast.rss_url) == podcast_rss_url:
+                for episode in podcast.episodes:
+                    if episode.guid == episode_guid:
+                        episode.audio_path = audio_path
+                        logger.info(f"Marked episode as downloaded: {episode.title}")
+                        break
+                break
+        self._save_podcasts()
+
     def mark_episode_processed(self, podcast_rss_url: str, episode_guid: str,
-                              transcript_path: str = None, summary_path: str = None):
+                              raw_transcript_path: str = None, clean_transcript_path: str = None, summary_path: str = None):
         """Mark an episode as processed"""
         for podcast in self.podcasts:
             if str(podcast.rss_url) == podcast_rss_url:
@@ -138,7 +150,8 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.guid == episode_guid:
                         episode.processed = True
-                        episode.transcript_path = transcript_path
+                        episode.raw_transcript_path = raw_transcript_path
+                        episode.clean_transcript_path = clean_transcript_path
                         episode.summary_path = summary_path
                         episode_found = True
                         break
@@ -161,7 +174,8 @@ class PodcastFeedManager:
                                         duration=entry.get('itunes_duration'),
                                         guid=entry_guid,
                                         processed=True,
-                                        transcript_path=transcript_path,
+                                        raw_transcript_path=raw_transcript_path,
+                                        clean_transcript_path=clean_transcript_path,
                                         summary_path=summary_path
                                     )
                                     podcast.episodes.append(episode)
@@ -172,6 +186,44 @@ class PodcastFeedManager:
                 podcast.last_processed = datetime.now()
                 break
         self._save_podcasts()
+
+    def get_downloaded_episodes(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
+        """Get all episodes that have downloaded audio but need transcription"""
+        from pathlib import Path
+
+        episodes_to_transcribe = []
+        storage = Path(storage_path)
+        audio_dir = storage / "audio"
+        transcripts_dir = storage / "raw_transcripts"
+
+        for podcast in self.podcasts:
+            episodes = []
+            for episode in podcast.episodes:
+                # Check if audio is downloaded
+                if not episode.audio_path:
+                    continue
+
+                # Check if audio file actually exists
+                audio_file = audio_dir / episode.audio_path
+                if not audio_file.exists():
+                    continue
+
+                # Check if transcript doesn't exist or file is missing
+                needs_transcription = False
+                if not episode.raw_transcript_path:
+                    needs_transcription = True
+                else:
+                    transcript_file = transcripts_dir / episode.raw_transcript_path
+                    if not transcript_file.exists():
+                        needs_transcription = True
+
+                if needs_transcription:
+                    episodes.append(episode)
+
+            if episodes:
+                episodes_to_transcribe.append((podcast, episodes))
+
+        return episodes_to_transcribe
 
     def list_podcasts(self) -> List[Podcast]:
         """Return list of all podcasts (reloads from disk to get latest data)"""
