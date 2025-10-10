@@ -51,15 +51,14 @@ class YouTubeDownloader:
                         'entries': info.get('entries', []),
                         'url': url
                     }
-                else:
-                    # Single video - treat as a playlist with one entry
-                    return {
-                        'title': info.get('uploader', 'Unknown YouTube Channel'),
-                        'description': f"Single video: {info.get('title', '')}",
-                        'uploader': info.get('uploader', info.get('channel', '')),
-                        'entries': [info],
-                        'url': url
-                    }
+                # Single video - treat as a playlist with one entry
+                return {
+                    'title': info.get('uploader', 'Unknown YouTube Channel'),
+                    'description': f"Single video: {info.get('title', '')}",
+                    'uploader': info.get('uploader', info.get('channel', '')),
+                    'entries': [info],
+                    'url': url
+                }
 
         except Exception as e:
             print(f"Error extracting YouTube info from {url}: {e}")
@@ -121,7 +120,7 @@ class YouTubeDownloader:
                                 pub_date = datetime.strptime(upload_date, '%Y%m%d')
                             elif isinstance(upload_date, (int, float)):
                                 pub_date = datetime.fromtimestamp(upload_date)
-                        except:
+                        except (ValueError, OSError):
                             pass
 
                     # Create episode object
@@ -185,7 +184,7 @@ class YouTubeDownloader:
                 if possible_path.exists():
                     local_path = possible_path
                 else:
-                    print(f"Warning: Download completed but file not found at expected location")
+                    print("Warning: Download completed but file not found at expected location")
                     return None
 
             print(f"\nDownload completed: {filename}")

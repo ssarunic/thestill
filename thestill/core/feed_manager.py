@@ -1,13 +1,11 @@
 import feedparser
 import json
 import logging
-import os
 import re
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import urlparse
 
 from ..models.podcast import Podcast, Episode
 from ..utils.path_manager import PathManager
@@ -298,13 +296,11 @@ class PodcastFeedManager:
                 if feed_url:
                     logger.info(f"Extracted RSS feed from Apple Podcast: {feed_url}")
                     return feed_url
-                else:
-                    logger.warning(f"No RSS feed URL found for podcast ID {podcast_id}")
-                    return None
-            else:
-                # If the ID doesn't work, try to get the page and extract the real ID
-                logger.info(f"No podcast found for ID {podcast_id}, attempting to resolve redirect...")
-                return self._resolve_apple_podcast_redirect(url)
+                logger.warning(f"No RSS feed URL found for podcast ID {podcast_id}")
+                return None
+            # If the ID doesn't work, try to get the page and extract the real ID
+            logger.info(f"No podcast found for ID {podcast_id}, attempting to resolve redirect...")
+            return self._resolve_apple_podcast_redirect(url)
 
         except Exception as e:
             logger.error(f"Error extracting RSS from Apple URL {url}: {e}")
@@ -368,7 +364,7 @@ class PodcastFeedManager:
             request.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
 
             with urllib.request.urlopen(request) as response:
-                final_url = response.geturl()
+                _ = response.geturl()
                 page_content = response.read().decode('utf-8', errors='ignore')
 
                 # Extract all potential IDs from the page content
@@ -408,7 +404,7 @@ class PodcastFeedManager:
         if date_tuple:
             try:
                 return datetime(*date_tuple[:6])
-            except:
+            except (TypeError, ValueError):
                 pass
         return datetime.now()
 
@@ -428,7 +424,7 @@ class PodcastFeedManager:
         """Load podcasts from storage"""
         if self.feeds_file.exists():
             try:
-                with open(self.feeds_file, 'r') as f:
+                with open(self.feeds_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     return [Podcast(**podcast_data) for podcast_data in data]
             except Exception as e:
@@ -438,7 +434,7 @@ class PodcastFeedManager:
     def _save_podcasts(self):
         """Save podcasts to storage"""
         try:
-            with open(self.feeds_file, 'w') as f:
+            with open(self.feeds_file, 'w', encoding='utf-8') as f:
                 json.dump([p.model_dump(mode='json') for p in self.podcasts], f, indent=2)
         except Exception as e:
             logger.error(f"Error saving podcasts: {e}")

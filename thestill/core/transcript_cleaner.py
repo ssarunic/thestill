@@ -137,15 +137,14 @@ Text to clean:
                 print(f"Using cl100k_base encoding (model {self.model_name} not found)")
         else:
             self.tokenizer = None
-            print(f"Using character-based token estimation (~4 chars per token)")
+            print("Using character-based token estimation (~4 chars per token)")
 
     def _count_tokens(self, text: str) -> int:
         """Count tokens in text"""
         if self.tokenizer:
             return len(self.tokenizer.encode(text))
-        else:
-            # Rough estimation: 1 token ≈ 4 characters
-            return len(text) // 4
+        # Rough estimation: 1 token ≈ 4 characters
+        return len(text) // 4
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
@@ -229,7 +228,7 @@ Text to clean:
         # Track overlap sentences for next chunk
         overlap_sentences = []
 
-        for i, sentence in enumerate(sentences):
+        for sentence in sentences:
             sentence_tokens = self._count_tokens(sentence)
 
             # Check if adding this sentence exceeds chunk size
@@ -328,7 +327,7 @@ Text to clean:
 
         # For subsequent chunks, remove the overlapping start portion
         for i in range(1, len(cleaned_chunks)):
-            cleaned_text, overlap_start, overlap_end = cleaned_chunks[i]
+            cleaned_text, overlap_start, _ = cleaned_chunks[i]
 
             # Skip the overlapping portion at the beginning
             if overlap_start > 0 and overlap_start < len(cleaned_text):

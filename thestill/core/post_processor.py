@@ -149,7 +149,7 @@ Return three blocks:
         if self.chunk_delay > 0:
             print(f"   Delay between chunks: {self.chunk_delay}s")
         else:
-            print(f"   No delay between chunks (local inference)")
+            print("   No delay between chunks (local inference)")
 
     def _build_options_string(self, config: PostProcessorConfig) -> str:
         """Build the OPTIONS section for the prompt"""
@@ -179,8 +179,7 @@ FILLER_WORDS = {filler_words_str}"""
         # Check if we have segments (timestamped) or plain text
         if "segments" in transcript_data:
             return self._chunk_by_segments(transcript_data, config)
-        else:
-            return self._chunk_by_text(transcript_data, config)
+        return self._chunk_by_text(transcript_data, config)
 
     def _chunk_by_segments(self, transcript_data: Dict, config: PostProcessorConfig) -> List[Dict]:
         """Chunk transcript by segments for timestamped data"""
@@ -214,7 +213,9 @@ FILLER_WORDS = {filler_words_str}"""
         if current_chunk["segments"]:
             chunks.append(current_chunk)
 
-        return chunks if len(chunks) > 1 else [transcript_data]
+        if len(chunks) > 1:
+            return chunks
+        return [transcript_data]
 
     def _chunk_by_text(self, transcript_data: Dict, config: PostProcessorConfig) -> List[Dict]:
         """Chunk transcript by text for non-timestamped data"""

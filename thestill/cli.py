@@ -1,5 +1,4 @@
 import click
-import logging
 import time
 from pathlib import Path
 
@@ -11,7 +10,6 @@ try:
     from .core.audio_downloader import AudioDownloader
     from .core.audio_preprocessor import AudioPreprocessor
     from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from .core.llm_processor import LLMProcessor
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from .core.llm_provider import create_llm_provider
@@ -23,7 +21,6 @@ except ImportError:
     from core.audio_downloader import AudioDownloader
     from core.audio_preprocessor import AudioPreprocessor
     from core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from core.llm_processor import LLMProcessor
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from core.llm_provider import create_llm_provider
@@ -62,7 +59,7 @@ def add(ctx, rss_url):
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
     else:
-        click.echo(f"❌ Failed to add podcast or podcast already exists", err=True)
+        click.echo("❌ Failed to add podcast or podcast already exists", err=True)
 
 
 @main.command()
@@ -77,9 +74,9 @@ def remove(ctx, podcast_id):
     podcast_service = PodcastService(str(config.storage_path))
 
     if podcast_service.remove_podcast(podcast_id):
-        click.echo(f"✓ Podcast removed")
+        click.echo("✓ Podcast removed")
     else:
-        click.echo(f"❌ Podcast not found", err=True)
+        click.echo("❌ Podcast not found", err=True)
 
 
 @main.command()
@@ -182,7 +179,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
             if episode.audio_path:
                 audio_file = config.path_manager.original_audio_file(episode.audio_path)
                 if audio_file.exists():
-                    click.echo(f"⏭️  Already downloaded, skipping")
+                    click.echo("⏭️  Already downloaded, skipping")
                     continue
 
             try:
@@ -198,16 +195,16 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                         audio_filename
                     )
                     downloaded_count += 1
-                    click.echo(f"✅ Downloaded successfully")
+                    click.echo("✅ Downloaded successfully")
                 else:
-                    click.echo(f"❌ Download failed")
+                    click.echo("❌ Download failed")
 
             except Exception as e:
                 click.echo(f"❌ Error downloading: {e}")
                 continue
 
     total_time = time.time() - start_time
-    click.echo(f"\n🎉 Download complete!")
+    click.echo("\n🎉 Download complete!")
     click.echo(f"✓ {downloaded_count} episode(s) downloaded in {total_time:.1f} seconds")
 
 
@@ -294,7 +291,7 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                     continue
 
                 # Downsample
-                click.echo(f"🔧 Downsampling to 16kHz, 16-bit, mono WAV...")
+                click.echo("🔧 Downsampling to 16kHz, 16-bit, mono WAV...")
                 downsampled_path = preprocessor.downsample_audio(
                     str(original_audio_file),
                     str(config.path_manager.downsampled_audio_dir())
@@ -310,9 +307,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                         downsampled_filename
                     )
                     downsampled_count += 1
-                    click.echo(f"✅ Downsampled successfully")
+                    click.echo("✅ Downsampled successfully")
                 else:
-                    click.echo(f"❌ Downsampling failed")
+                    click.echo("❌ Downsampling failed")
 
             except Exception as e:
                 click.echo(f"❌ Error downsampling: {e}")
@@ -321,7 +318,7 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                 continue
 
     total_time = time.time() - start_time
-    click.echo(f"\n🎉 Downsampling complete!")
+    click.echo("\n🎉 Downsampling complete!")
     click.echo(f"✓ {downsampled_count} episode(s) downsampled in {total_time:.1f} seconds")
 
 
@@ -429,7 +426,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
             if result:
                 # Create CleanedTranscript model and save
-                cleaned_transcript = CleanedTranscript(
+                _ = CleanedTranscript(
                     episode_guid=episode.guid,
                     episode_title=episode.title,
                     podcast_title=podcast.title,
@@ -453,7 +450,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                 )
 
                 total_processed += 1
-                click.echo(f"✅ Transcript cleaned successfully!")
+                click.echo("✅ Transcript cleaned successfully!")
                 click.echo(f"🔧 Corrections applied: {len(result['corrections'])}")
                 click.echo(f"👥 Speakers identified: {len(result['speaker_mapping'])}")
 
@@ -464,7 +461,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
             continue
 
     total_time = time.time() - start_time
-    click.echo(f"\n🎉 Processing complete!")
+    click.echo("\n🎉 Processing complete!")
     click.echo(f"✓ {total_processed} transcripts cleaned in {total_time:.1f} seconds")
 
 
@@ -490,14 +487,14 @@ def status(ctx):
     click.echo(f"Transcripts available: {stats.transcripts_available} files")
 
     # Configuration
-    click.echo(f"\nConfiguration:")
+    click.echo("\nConfiguration:")
     click.echo(f"  Whisper model: {config.whisper_model}")
     click.echo(f"  Speaker diarization: {'✓ Enabled' if config.enable_diarization else '✗ Disabled'}")
     click.echo(f"  LLM model: {config.llm_model}")
     click.echo(f"  Max workers: {config.max_workers}")
 
     # Podcast stats
-    click.echo(f"\nPodcast Statistics:")
+    click.echo("\nPodcast Statistics:")
     click.echo(f"  Tracked podcasts: {stats.podcasts_tracked}")
     click.echo(f"  Total episodes: {stats.episodes_total}")
     click.echo(f"  Processed episodes: {stats.episodes_processed}")
@@ -544,7 +541,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         from .core.parakeet_transcriber import ParakeetTranscriber
         transcriber = ParakeetTranscriber(config.whisper_device)
     elif config.enable_diarization:
-        click.echo(f"🎤 Using WhisperX with speaker diarization enabled")
+        click.echo("🎤 Using WhisperX with speaker diarization enabled")
         transcriber = WhisperXTranscriber(
             model_name=config.whisper_model,
             device=config.whisper_device,
@@ -606,7 +603,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
 
             if transcript_data:
-                click.echo(f"✅ Transcription complete!")
+                click.echo("✅ Transcription complete!")
                 click.echo(f"📄 Transcript saved to: {output}")
             else:
                 click.echo("❌ Transcription failed", err=True)
@@ -698,8 +695,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             try:
                 # Only use downsampled audio - fail if not available
                 if not episode.downsampled_audio_path:
-                    click.echo(f"❌ No downsampled audio available for this episode")
-                    click.echo(f"   Run 'thestill download' again to generate downsampled audio")
+                    click.echo("❌ No downsampled audio available for this episode")
+                    click.echo("   Run 'thestill download' again to generate downsampled audio")
                     continue
 
                 audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
@@ -716,7 +713,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 output = str(config.path_manager.raw_transcript_file(output_filename))
 
                 # Transcribe
-                click.echo(f"📝 Transcribing...")
+                click.echo("📝 Transcribing...")
 
                 # Prepare cleaning config if enabled
                 cleaning_config = None
@@ -746,9 +743,9 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         raw_transcript_path=output_filename
                     )
                     transcribed_count += 1
-                    click.echo(f"✅ Transcription complete!")
+                    click.echo("✅ Transcription complete!")
                 else:
-                    click.echo(f"❌ Transcription failed")
+                    click.echo("❌ Transcription failed")
 
             except Exception as e:
                 click.echo(f"❌ Error during transcription: {e}")
@@ -757,7 +754,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 continue
 
     total_time = time.time() - start_time
-    click.echo(f"\n🎉 Transcription complete!")
+    click.echo("\n🎉 Transcription complete!")
     click.echo(f"✓ {transcribed_count} episode(s) transcribed in {total_time:.1f} seconds")
 
 
@@ -776,16 +773,14 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
         ctx.exit(1)
     config = ctx.obj['config']
 
-    # Load transcript
+    # Load transcript and parse speaker map
     import json
     with open(transcript_path, 'r', encoding='utf-8') as f:
         transcript_data = json.load(f)
 
-    # Parse speaker map
-    import json as json_module
     try:
-        speaker_map_dict = json_module.loads(speaker_map)
-    except:
+        speaker_map_dict = json.loads(speaker_map)
+    except (json.JSONDecodeError, ValueError):
         speaker_map_dict = {}
 
     # Create config
@@ -824,8 +819,8 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
     click.echo(f"🔄 Post-processing transcript with {llm_provider.get_model_name()}...")
 
     try:
-        result = post_processor.process_transcript(transcript_data, post_config, output)
-        click.echo(f"✅ Post-processing complete!")
+        _ = post_processor.process_transcript(transcript_data, post_config, output)
+        click.echo("✅ Post-processing complete!")
         click.echo(f"📄 Output saved to: {output}.md and {output}.json")
     except Exception as e:
         click.echo(f"❌ Error during post-processing: {e}", err=True)
