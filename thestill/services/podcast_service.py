@@ -330,14 +330,14 @@ class PodcastService:
             logger.warning(f"Episode not found for transcript: {podcast_id}/{episode_id}")
             return None
 
-        # Check if processed and has summary (cleaned transcript)
-        if not episode.processed or not episode.summary_path:
+        # Check if processed and has clean transcript
+        if not episode.processed or not episode.clean_transcript_path:
             logger.info(f"Episode not yet processed: {episode.title}")
             return "N/A - Episode not yet processed"
 
         # Build full path to the cleaned Markdown file
-        # summary_path is just the filename (e.g., "episode_cleaned.md")
-        md_path = self.storage_path / "clean_transcripts" / episode.summary_path
+        # clean_transcript_path is just the filename (e.g., "episode_cleaned.md")
+        md_path = self.storage_path / "clean_transcripts" / episode.clean_transcript_path
 
         if not md_path.exists():
             logger.warning(f"Cleaned transcript file not found: {md_path}")

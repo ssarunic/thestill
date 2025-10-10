@@ -2,12 +2,15 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from pydantic.config import ConfigDict
 from dotenv import load_dotenv
 from .path_manager import PathManager
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # API Configuration
     openai_api_key: str = ""
     gemini_api_key: str = ""
@@ -21,6 +24,9 @@ class Config(BaseModel):
     clean_transcripts_path: Path = Path("./data/clean_transcripts")  # Cleaned/formatted transcripts
     summaries_path: Path = Path("./data/summaries")
     evaluations_path: Path = Path("./data/evaluations")
+
+    # Path Manager (initialized after model creation)
+    path_manager: Optional[PathManager] = Field(default=None, exclude=True)
 
     # Processing Configuration
     max_workers: int = 3

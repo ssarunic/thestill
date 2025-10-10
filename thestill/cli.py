@@ -441,8 +441,10 @@ def clean_transcript(ctx, dry_run, max_episodes):
                 )
 
                 # Update feed manager to mark as processed
-                # Store just the filename (with .md extension) for the cleaned transcript
-                cleaned_md_filename = f"{cleaned_path.stem}.md"
+                # The TranscriptCleaningProcessor removes '_transcript_cleaned' and '_transcript' suffixes
+                # So we need to match the actual filename it creates: {episode_id}.md
+                episode_id = cleaned_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+                cleaned_md_filename = f"{episode_id}.md"
                 feed_manager.mark_episode_processed(
                     str(podcast.rss_url),
                     episode.guid,
