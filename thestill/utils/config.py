@@ -4,6 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from .path_manager import PathManager
 
 
 class Config(BaseModel):
@@ -14,7 +15,8 @@ class Config(BaseModel):
 
     # Storage Paths
     storage_path: Path = Path("./data")
-    audio_path: Path = Path("./data/audio")
+    audio_path: Path = Path("./data/original_audio")  # Original downloaded audio files
+    downsampled_audio_path: Path = Path("./data/downsampled_audio")  # Downsampled WAV files for transcription
     raw_transcripts_path: Path = Path("./data/raw_transcripts")  # Raw Whisper JSON transcripts
     clean_transcripts_path: Path = Path("./data/clean_transcripts")  # Cleaned/formatted transcripts
     summaries_path: Path = Path("./data/summaries")
@@ -66,21 +68,14 @@ class Config(BaseModel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Initialize PathManager for centralized path management
+        self.path_manager = PathManager(str(self.storage_path))
         self._ensure_directories()
 
     def _ensure_directories(self):
         """Create necessary directories if they don't exist"""
-        directories = [
-            self.storage_path,
-            self.audio_path,
-            self.raw_transcripts_path,
-            self.clean_transcripts_path,
-            self.summaries_path,
-            self.evaluations_path
-        ]
-
-        for directory in directories:
-            directory.mkdir(parents=True, exist_ok=True)
+        # Use PathManager to ensure all directories exist
+        self.path_manager.ensure_directories_exist()
 
 
 def load_config(env_file: Optional[str] = None) -> Config:
@@ -123,7 +118,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "gemini_api_key": gemini_api_key,
         "anthropic_api_key": anthropic_api_key,
         "storage_path": storage_path,
-        "audio_path": storage_path / "audio",
+        "audio_path": storage_path / "original_audio",
+        "downsampled_audio_path": storage_path / "downsampled_audio",
         "raw_transcripts_path": storage_path / "raw_transcripts",
         "clean_transcripts_path": storage_path / "clean_transcripts",
         "summaries_path": storage_path / "summaries",

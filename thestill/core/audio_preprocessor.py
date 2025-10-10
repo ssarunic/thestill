@@ -199,3 +199,75 @@ class AudioPreprocessor:
                 self._log(f"Cleaned up preprocessed file: {Path(file_path).name}")
         except Exception as e:
             self._log(f"Error cleaning up preprocessed file: {e}")
+
+    def downsample_audio(self, audio_path: str, output_dir: str) -> Optional[str]:
+        """
+        Downsample audio to 16kHz, 16-bit, mono WAV for optimal transcription and diarization.
+        This method does NOT perform any audio enhancement (no silence removal, no normalization).
+
+        Args:
+            audio_path: Path to the original audio file (any format)
+            output_dir: Directory where the downsampled WAV file should be saved
+
+        Returns:
+            Path to the downsampled WAV file, or None if downsampling failed
+        """
+        try:
+            output_path_obj = Path(output_dir)
+            output_path_obj.mkdir(parents=True, exist_ok=True)
+
+            # Generate output filename (same name as input, but with .wav extension)
+            input_path = Path(audio_path)
+            output_filename = f"{input_path.stem}.wav"
+            output_path = output_path_obj / output_filename
+
+            # Check if already downsampled
+            if output_path.exists():
+                self._log(f"Downsampled audio already exists: {output_filename}")
+                return str(output_path)
+
+            self._log(f"Downsampling audio: {input_path.name}")
+
+            # Load audio (pydub handles all formats via ffmpeg)
+            audio = AudioSegment.from_file(audio_path)
+
+            # Get original properties for logging
+            original_rate = audio.frame_rate
+            original_channels = audio.channels
+            original_width = audio.sample_width
+
+            # Convert to target settings
+            # 1. Convert to mono if needed
+            if audio.channels > 1:
+                audio = audio.set_channels(self.TARGET_CHANNELS)
+
+            # 2. Downsample to 16kHz if needed
+            if audio.frame_rate != self.TARGET_SAMPLE_RATE:
+                audio = audio.set_frame_rate(self.TARGET_SAMPLE_RATE)
+
+            # 3. Set to 16-bit if needed
+            if audio.sample_width != self.TARGET_SAMPLE_WIDTH:
+                audio = audio.set_sample_width(self.TARGET_SAMPLE_WIDTH)
+
+            # Export as WAV
+            audio.export(
+                str(output_path),
+                format="wav",
+                parameters=[
+                    "-ar", str(self.TARGET_SAMPLE_RATE),
+                    "-ac", str(self.TARGET_CHANNELS),
+                    "-sample_fmt", "s16"  # 16-bit signed integer
+                ]
+            )
+
+            # Report results
+            self._log(f"Downsampling complete!")
+            self._log(f"  Original: {original_rate}Hz, {original_width * 8}-bit, {original_channels} channel(s)")
+            self._log(f"  Output: {self.TARGET_SAMPLE_RATE}Hz, {self.TARGET_SAMPLE_WIDTH * 8}-bit, mono")
+            self._log(f"  Saved to: {output_filename}")
+
+            return str(output_path)
+
+        except Exception as e:
+            self._log(f"Error downsampling audio: {e}")
+            return None

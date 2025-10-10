@@ -123,7 +123,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
     config = ctx.obj['config']
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
-    downloader = AudioDownloader(str(config.audio_path))
+    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
     podcast_service = PodcastService(str(config.storage_path))
 
     # Check for new episodes
@@ -180,7 +180,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 
             # Check if already downloaded
             if episode.audio_path:
-                audio_file = config.audio_path / episode.audio_path
+                audio_file = config.path_manager.original_audio_file(episode.audio_path)
                 if audio_file.exists():
                     click.echo(f"⏭️  Already downloaded, skipping")
                     continue
@@ -191,6 +191,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                 if audio_path:
                     # Store just the filename
                     audio_filename = Path(audio_path).name
+
                     feed_manager.mark_episode_downloaded(
                         str(podcast.rss_url),
                         episode.guid,
@@ -208,6 +209,120 @@ def download(ctx, podcast_id, max_episodes, dry_run):
     total_time = time.time() - start_time
     click.echo(f"\n🎉 Download complete!")
     click.echo(f"✓ {downloaded_count} episode(s) downloaded in {total_time:.1f} seconds")
+
+
+@main.command()
+@click.option('--podcast-id', help='Podcast ID (RSS URL or index) to downsample')
+@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to downsample')
+@click.option('--dry-run', '-d', is_flag=True, help='Preview what would be downsampled')
+@click.pass_context
+def downsample(ctx, podcast_id, max_episodes, dry_run):
+    """Downsample downloaded audio to 16kHz, 16-bit, mono WAV format"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    feed_manager = PodcastFeedManager(str(config.storage_path))
+    preprocessor = AudioPreprocessor()
+    podcast_service = PodcastService(str(config.storage_path))
+
+    click.echo("🔍 Looking for episodes to downsample...")
+
+    # Get episodes that need downsampling
+    episodes_to_downsample = feed_manager.get_episodes_to_downsample(str(config.storage_path))
+
+    if not episodes_to_downsample:
+        click.echo("✓ No episodes found that need downsampling")
+        return
+
+    # Filter by podcast_id if specified
+    if podcast_id:
+        podcast = podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+
+        episodes_to_downsample = [(p, eps) for p, eps in episodes_to_downsample
+                                  if str(p.rss_url) == str(podcast.rss_url)]
+
+        if not episodes_to_downsample:
+            click.echo(f"✓ No episodes need downsampling for podcast: {podcast.title}")
+            return
+
+    # Apply max_episodes limit
+    if max_episodes:
+        total = 0
+        filtered = []
+        for podcast, episodes in episodes_to_downsample:
+            remaining = max_episodes - total
+            if remaining <= 0:
+                break
+            filtered.append((podcast, episodes[:remaining]))
+            total += len(episodes[:remaining])
+        episodes_to_downsample = filtered
+
+    # Count total episodes
+    total_count = sum(len(eps) for _, eps in episodes_to_downsample)
+    click.echo(f"🔧 Found {total_count} episode(s) to downsample")
+
+    if dry_run:
+        for podcast, episodes in episodes_to_downsample:
+            click.echo(f"\n📻 {podcast.title}")
+            for episode in episodes:
+                click.echo(f"  • {episode.title}")
+        click.echo("\n(Run without --dry-run to actually downsample)")
+        return
+
+    # Downsample episodes
+    downsampled_count = 0
+    start_time = time.time()
+
+    for podcast, episodes in episodes_to_downsample:
+        click.echo(f"\n📻 {podcast.title}")
+        click.echo("─" * 50)
+
+        for episode in episodes:
+            click.echo(f"\n🎧 {episode.title}")
+
+            try:
+                # Build paths
+                original_audio_file = config.path_manager.original_audio_file(episode.audio_path)
+
+                if not original_audio_file.exists():
+                    click.echo(f"❌ Original audio file not found: {episode.audio_path}")
+                    continue
+
+                # Downsample
+                click.echo(f"🔧 Downsampling to 16kHz, 16-bit, mono WAV...")
+                downsampled_path = preprocessor.downsample_audio(
+                    str(original_audio_file),
+                    str(config.path_manager.downsampled_audio_dir())
+                )
+
+                if downsampled_path:
+                    # Store just the filename
+                    downsampled_filename = Path(downsampled_path).name
+
+                    feed_manager.mark_episode_downsampled(
+                        str(podcast.rss_url),
+                        episode.guid,
+                        downsampled_filename
+                    )
+                    downsampled_count += 1
+                    click.echo(f"✅ Downsampled successfully")
+                else:
+                    click.echo(f"❌ Downsampling failed")
+
+            except Exception as e:
+                click.echo(f"❌ Error downsampling: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+    total_time = time.time() - start_time
+    click.echo(f"\n🎉 Downsampling complete!")
+    click.echo(f"✓ {downsampled_count} episode(s) downsampled in {total_time:.1f} seconds")
 
 
 @main.command()
@@ -258,14 +373,14 @@ def clean_transcript(ctx, dry_run, max_episodes):
         for episode in podcast.episodes:
             # Safety: Check if transcript file actually exists (not just path is set)
             if episode.raw_transcript_path:
-                transcript_path = config.raw_transcripts_path / episode.raw_transcript_path
+                transcript_path = config.path_manager.raw_transcript_file(episode.raw_transcript_path)
                 if not transcript_path.exists():
                     continue  # Skip if transcript file doesn't exist
 
                 # Check if clean transcript file exists (not just if path is set)
                 clean_transcript_exists = False
                 if episode.clean_transcript_path:
-                    clean_transcript_path = config.clean_transcripts_path / episode.clean_transcript_path
+                    clean_transcript_path = config.path_manager.clean_transcript_file(episode.clean_transcript_path)
                     clean_transcript_exists = clean_transcript_path.exists()
 
                 # Only process if raw transcript exists but clean transcript doesn't
@@ -300,7 +415,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
             # Clean transcript with context
             cleaned_filename = f"{transcript_path.stem}_cleaned"
-            cleaned_path = config.clean_transcripts_path / cleaned_filename
+            cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
 
             result = cleaning_processor.clean_transcript(
                 transcript_data=transcript_data,
@@ -395,7 +510,7 @@ def cleanup(ctx):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
-    downloader = AudioDownloader(str(config.audio_path))
+    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
 
     click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
     downloader.cleanup_old_files(config.cleanup_days)
@@ -448,7 +563,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
         # Determine output path
         audio_path_obj = Path(audio_path)
-        output = str(config.raw_transcripts_path / f"{audio_path_obj.stem}_transcript.json")
+        output = str(config.path_manager.raw_transcript_file(f"{audio_path_obj.stem}_transcript.json"))
 
         try:
             # Preprocess audio if needed
@@ -579,26 +694,24 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             click.echo(f"\n🎧 {episode.title}")
 
             try:
-                # Build audio path
-                audio_file = config.audio_path / episode.audio_path
-
-                if not audio_file.exists():
-                    click.echo(f"❌ Audio file not found: {episode.audio_path}")
+                # Only use downsampled audio - fail if not available
+                if not episode.downsampled_audio_path:
+                    click.echo(f"❌ No downsampled audio available for this episode")
+                    click.echo(f"   Run 'thestill download' again to generate downsampled audio")
                     continue
 
-                # Preprocess audio if needed
-                transcription_audio_path = str(audio_file)
-                preprocessed_audio_path = None
+                audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
 
-                if downsample:
-                    click.echo("🔧 Downsampling audio...")
-                    preprocessed_audio_path = preprocessor.preprocess_audio(str(audio_file))
-                    if preprocessed_audio_path and preprocessed_audio_path != str(audio_file):
-                        transcription_audio_path = preprocessed_audio_path
+                if not audio_file.exists():
+                    click.echo(f"❌ Downsampled audio file not found: {episode.downsampled_audio_path}")
+                    continue
+
+                # Use downsampled audio directly (no further preprocessing needed)
+                transcription_audio_path = str(audio_file)
 
                 # Determine output path
                 output_filename = f"{audio_file.stem}_transcript.json"
-                output = str(config.raw_transcripts_path / output_filename)
+                output = str(config.path_manager.raw_transcript_file(output_filename))
 
                 # Transcribe
                 click.echo(f"📝 Transcribing...")
@@ -623,10 +736,6 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     cleaning_config=cleaning_config
                 )
 
-                # Cleanup temporary files
-                if preprocessed_audio_path and preprocessed_audio_path != str(audio_file):
-                    preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
-
                 if transcript_data:
                     # Mark episode as having transcript
                     feed_manager.mark_episode_processed(
@@ -643,9 +752,6 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 click.echo(f"❌ Error during transcription: {e}")
                 import traceback
                 traceback.print_exc()
-                # Cleanup on error
-                if 'preprocessed_audio_path' in locals() and preprocessed_audio_path and preprocessed_audio_path != str(audio_file):
-                    preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
                 continue
 
     total_time = time.time() - start_time

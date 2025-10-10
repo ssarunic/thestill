@@ -10,6 +10,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 from ..models.podcast import Podcast, Episode
+from ..utils.path_manager import PathManager
 from .youtube_downloader import YouTubeDownloader
 
 logger = logging.getLogger(__name__)
@@ -18,10 +19,11 @@ logger = logging.getLogger(__name__)
 class PodcastFeedManager:
     def __init__(self, storage_path: str = "./data"):
         self.storage_path = Path(storage_path)
-        self.feeds_file = self.storage_path / "feeds.json"
+        self.path_manager = PathManager(str(storage_path))
+        self.feeds_file = self.path_manager.feeds_file()
         self.storage_path.mkdir(exist_ok=True)
         self.podcasts: List[Podcast] = self._load_podcasts()
-        self.youtube_downloader = YouTubeDownloader(str(self.storage_path / "audio"))
+        self.youtube_downloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
 
     def add_podcast(self, url: str) -> bool:
         """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
@@ -140,6 +142,18 @@ class PodcastFeedManager:
                 break
         self._save_podcasts()
 
+    def mark_episode_downsampled(self, podcast_rss_url: str, episode_guid: str, downsampled_audio_path: str):
+        """Mark an episode as downsampled with downsampled audio file path"""
+        for podcast in self.podcasts:
+            if str(podcast.rss_url) == podcast_rss_url:
+                for episode in podcast.episodes:
+                    if episode.guid == episode_guid:
+                        episode.downsampled_audio_path = downsampled_audio_path
+                        logger.info(f"Marked episode as downsampled: {episode.title}")
+                        break
+                break
+        self._save_podcasts()
+
     def mark_episode_processed(self, podcast_rss_url: str, episode_guid: str,
                               raw_transcript_path: str = None, clean_transcript_path: str = None, summary_path: str = None):
         """Mark an episode as processed"""
@@ -188,24 +202,18 @@ class PodcastFeedManager:
         self._save_podcasts()
 
     def get_downloaded_episodes(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
-        """Get all episodes that have downloaded audio but need transcription"""
-        from pathlib import Path
-
+        """Get all episodes that have downsampled audio but need transcription"""
         episodes_to_transcribe = []
-        storage = Path(storage_path)
-        audio_dir = storage / "audio"
-        transcripts_dir = storage / "raw_transcripts"
 
         for podcast in self.podcasts:
             episodes = []
             for episode in podcast.episodes:
-                # Check if audio is downloaded
-                if not episode.audio_path:
+                # Check if downsampled audio exists (required for transcription)
+                if not episode.downsampled_audio_path:
                     continue
 
-                # Check if audio file actually exists
-                audio_file = audio_dir / episode.audio_path
-                if not audio_file.exists():
+                # Check if downsampled audio file actually exists
+                if not self.path_manager.downsampled_audio_file(episode.downsampled_audio_path).exists():
                     continue
 
                 # Check if transcript doesn't exist or file is missing
@@ -213,8 +221,7 @@ class PodcastFeedManager:
                 if not episode.raw_transcript_path:
                     needs_transcription = True
                 else:
-                    transcript_file = transcripts_dir / episode.raw_transcript_path
-                    if not transcript_file.exists():
+                    if not self.path_manager.raw_transcript_file(episode.raw_transcript_path).exists():
                         needs_transcription = True
 
                 if needs_transcription:
@@ -224,6 +231,37 @@ class PodcastFeedManager:
                 episodes_to_transcribe.append((podcast, episodes))
 
         return episodes_to_transcribe
+
+    def get_episodes_to_downsample(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
+        """Get all episodes that have downloaded audio but need downsampling"""
+        episodes_to_downsample = []
+
+        for podcast in self.podcasts:
+            episodes = []
+            for episode in podcast.episodes:
+                # Check if original audio is downloaded
+                if not episode.audio_path:
+                    continue
+
+                # Check if original audio file actually exists
+                if not self.path_manager.original_audio_file(episode.audio_path).exists():
+                    continue
+
+                # Check if downsampled version doesn't exist or file is missing
+                needs_downsampling = False
+                if not episode.downsampled_audio_path:
+                    needs_downsampling = True
+                else:
+                    if not self.path_manager.downsampled_audio_file(episode.downsampled_audio_path).exists():
+                        needs_downsampling = True
+
+                if needs_downsampling:
+                    episodes.append(episode)
+
+            if episodes:
+                episodes_to_downsample.append((podcast, episodes))
+
+        return episodes_to_downsample
 
     def list_podcasts(self) -> List[Podcast]:
         """Return list of all podcasts (reloads from disk to get latest data)"""

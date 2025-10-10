@@ -36,15 +36,19 @@ thestill download --podcast-id "https://..." # Download from specific podcast (b
 thestill download --max-episodes 3         # Limit downloads per podcast
 thestill download --dry-run                # Preview what would be downloaded
 
-# Transcribe downloaded audio to JSON (step 2)
-thestill transcribe                        # Transcribe all downloaded audio
-thestill transcribe path/to/audio.mp3      # Transcribe specific file (standalone)
+# Downsample audio to 16kHz WAV (step 2)
+thestill downsample                        # Downsample all downloaded audio
+thestill downsample --podcast-id 1         # Downsample specific podcast
+thestill downsample --max-episodes 3       # Limit downsampling
+thestill downsample --dry-run              # Preview what would be downsampled
+
+# Transcribe downsampled audio to JSON (step 3)
+thestill transcribe                        # Transcribe all downsampled audio
 thestill transcribe --podcast-id 1         # Transcribe from specific podcast
 thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
 thestill transcribe --max-episodes 3       # Limit transcriptions
-thestill transcribe --skip-preprocessing   # Skip audio preprocessing
 
-# Clean existing transcripts with LLM (step 3)
+# Clean existing transcripts with LLM (step 4)
 thestill clean-transcript [--dry-run] [--max-episodes 5]
 
 # List tracked podcasts
@@ -82,25 +86,33 @@ mypy thestill/
    - Identifies new episodes since last run
 
 2. **Audio Downloader** (`thestill/core/audio_downloader.py`)
-   - Downloads podcast audio files from RSS feeds and YouTube
+   - Downloads podcast audio files from RSS feeds and YouTube to `data/original_audio/`
    - Handles various audio formats (MP3, M4A, etc.)
    - Manages file cleanup and storage
    - Routes YouTube URLs to YouTubeDownloader
+   - **Atomic operation**: Only downloads, does not process audio
 
-3. **YouTube Downloader** (`thestill/core/youtube_downloader.py`)
+3. **Audio Preprocessor** (`thestill/core/audio_preprocessor.py`)
+   - Downsamples audio to 16kHz, 16-bit, mono WAV format
+   - Saves downsampled WAV files to `data/downsampled_audio/`
+   - **Important**: Solves pyannote.audio M4A/MP3 compatibility issues
+   - No audio enhancement (preserves original quality)
+   - **Atomic operation**: Only downsamples, does not download or transcribe
+
+4. **YouTube Downloader** (`thestill/core/youtube_downloader.py`)
    - Uses yt-dlp for robust YouTube video/audio extraction
    - Handles dynamic URLs and format selection
    - Extracts playlist and channel metadata
    - Downloads best quality audio and converts to M4A
 
-4. **Transcriber** (`thestill/core/transcriber.py`)
+5. **Transcriber** (`thestill/core/transcriber.py`)
    - **WhisperTranscriber**: Standard OpenAI Whisper for speech-to-text
    - **WhisperXTranscriber**: Enhanced transcription with speaker diarization
    - Supports word-level timestamps and speaker identification
    - Configurable model sizes (tiny, base, small, medium, large)
    - Automatic fallback to standard Whisper if diarization fails
 
-5. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
+6. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
    - **NEW**: Three-phase LLM cleaning pipeline focused on accuracy:
      - Phase 1: Analyze and identify corrections (spelling, grammar, filler words, ads)
      - Phase 2: Identify speakers from context and self-introductions
@@ -109,48 +121,81 @@ mypy thestill/
    - Saves corrections list for debugging
    - British English output
 
-6. **Models** (`thestill/models/podcast.py`)
+7. **Models** (`thestill/models/podcast.py`)
    - Pydantic models for type safety
    - Episode, Podcast, Quote, ProcessedContent, and CleanedTranscript schemas
+
+8. **Path Manager** (`thestill/utils/path_manager.py`)
+   - **Centralized path management** for all file artifacts
+   - Single source of truth for directory and file paths
+   - Prevents scattered path logic across codebase
+   - Methods for all artifact types (audio, transcripts, summaries, etc.)
+   - Integrated into Config and FeedManager
+   - **Reduces errors** when directory structures change
 
 ### Configuration System
 
 - Environment-based configuration with `.env` support
 - Configurable storage paths, model choices, and processing parameters
+- **PathManager integration**: `config.path_manager` provides centralized path access
 - See `thestill/utils/config.py` for all options
 
 ### Data Flow
 
-**Three-Step Workflow (Download → Transcribe → Clean):**
+**Four-Step Atomic Workflow (Download → Downsample → Transcribe → Clean):**
+
+Each step is an atomic operation that can be run independently and scaled horizontally:
 
 1. **Download** (`thestill download`):
+   - **Atomic operation**: Only downloads audio
    - Checks all tracked podcast feeds for new episodes
-   - Downloads audio files for new episodes to `data/audio/`
+   - Downloads original audio files to `data/original_audio/`
    - Updates episode `audio_path` in `data/feeds.json`
    - Skips already-downloaded episodes
+   - **No side effects**: Does not downsample or process audio
 
-2. **Transcription** (`thestill transcribe`):
-   - **Auto mode (no args)**: Finds all downloaded episodes without transcripts
-   - **Standalone mode**: Can transcribe any audio file directly
-   - Optional preprocessing (downsampling for optimization)
+2. **Downsample** (`thestill downsample`):
+   - **Atomic operation**: Only downsamples audio
+   - Finds all downloaded episodes without downsampled versions
+   - Converts to 16kHz, 16-bit, mono WAV format
+   - Saves to `data/downsampled_audio/`
+   - Updates episode `downsampled_audio_path` in `data/feeds.json`
+   - **Why?** pyannote.audio only supports WAV, not M4A/MP3
+   - **No side effects**: Does not download or transcribe
+
+3. **Transcription** (`thestill transcribe`):
+   - **Atomic operation**: Only transcribes audio
+   - Finds all downsampled episodes without transcripts
+   - **Requires downsampled audio**: Will fail if `downsampled_audio_path` is not set
+   - Uses downsampled WAV files for optimal Whisper and pyannote compatibility
    - Whisper/WhisperX transcribes to structured JSON with speaker labels
-   - Saves to `data/transcripts/`
-   - Updates episode `transcript_path` in `data/feeds.json`
+   - Saves to `data/raw_transcripts/`
+   - Updates episode `raw_transcript_path` in `data/feeds.json`
+   - **No side effects**: Does not download or clean
 
-3. **Cleaning** (`thestill clean-transcript`):
+4. **Cleaning** (`thestill clean-transcript`):
+   - **Atomic operation**: Only cleans transcripts
    - Loads existing transcript JSON files
    - Phase 1: LLM analyzes for corrections (spelling, grammar, fillers, ads)
    - Phase 2: LLM identifies speakers using episode/podcast context
    - Phase 3: LLM generates clean Markdown transcript
-   - Saves cleaned Markdown to `data/summaries/`
+   - Saves cleaned Markdown to `data/clean_transcripts/`
    - Optionally saves corrections and speaker mapping for debugging
-   - Updates episode `summary_path` in `data/feeds.json`
+   - Updates episode `clean_transcript_path` in `data/feeds.json`
+   - **No side effects**: Does not download or transcribe
 
 **Episode State Progression:**
 - `discovered` → new episode found in feed
-- `downloaded` → audio_path set, transcript_path = None
-- `transcribed` → transcript_path set, summary_path = None
-- `transcript_cleaned` → summary_path set (final state)
+- `downloaded` → audio_path set
+- `downsampled` → downsampled_audio_path set
+- `transcribed` → raw_transcript_path set
+- `cleaned` → clean_transcript_path set (final state)
+
+**Pipeline Design:**
+- Each command can be run independently
+- Commands only process what's needed (idempotent)
+- Future: Add message queues between steps for distributed processing
+- Future: Scale horizontally by running multiple workers per step
 
 ## File Structure
 
@@ -170,11 +215,13 @@ thestill/
 │   └── logger.py
 └── cli.py            # Command-line interface
 
-data/                 # Generated data directory
-├── audio/           # Downloaded audio files (from thestill download)
-├── transcripts/     # Whisper transcription results (JSON with speaker labels from thestill transcribe)
-├── processed/       # Cleaned transcripts (Markdown + corrections from thestill clean-transcript)
-└── feeds.json      # Podcast feed tracking with episode state
+data/                      # Generated data directory
+├── original_audio/        # Original downloaded audio files (MP3, M4A, etc.)
+├── downsampled_audio/     # Downsampled WAV files (16kHz, 16-bit, mono) for transcription
+├── raw_transcripts/       # Raw Whisper JSON transcripts with speaker labels
+├── clean_transcripts/     # Cleaned Markdown transcripts (corrected, formatted)
+├── summaries/             # Episode summaries (future use)
+└── feeds.json            # Podcast feed tracking with episode state
 ```
 
 ## Key Technologies

@@ -10,13 +10,18 @@ from .youtube_downloader import YouTubeDownloader
 
 
 class AudioDownloader:
-    def __init__(self, storage_path: str = "./data/audio"):
+    def __init__(self, storage_path: str = "./data/original_audio"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.youtube_downloader = YouTubeDownloader(storage_path)
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
-        """Download episode audio file and return local path"""
+        """
+        Download episode audio file to original_audio/ directory.
+
+        Returns:
+            Path to downloaded audio file, or None if download failed
+        """
         try:
             # Check if this is a YouTube URL
             if self.youtube_downloader.is_youtube_url(str(episode.audio_url)):
