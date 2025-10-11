@@ -244,6 +244,33 @@ class PodcastFeedManager:
 
         return episodes_to_transcribe
 
+    def get_episodes_to_download(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
+        """Get all episodes that need audio download (have audio_url but no audio_path)"""
+        episodes_to_download = []
+
+        for podcast in self.podcasts:
+            episodes = []
+            for episode in podcast.episodes:
+                # Check if episode has audio URL
+                if not episode.audio_url:
+                    continue
+
+                # Check if audio is not yet downloaded or file is missing
+                needs_download = False
+                if not episode.audio_path:
+                    needs_download = True
+                else:
+                    if not self.path_manager.original_audio_file(episode.audio_path).exists():
+                        needs_download = True
+
+                if needs_download:
+                    episodes.append(episode)
+
+            if episodes:
+                episodes_to_download.append((podcast, episodes))
+
+        return episodes_to_download
+
     def get_episodes_to_downsample(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
         """Get all episodes that have downloaded audio but need downsampling"""
         episodes_to_downsample = []

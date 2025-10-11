@@ -29,26 +29,33 @@ thestill add "https://podcasts.apple.com/us/podcast/id123456"
 thestill add "https://www.youtube.com/@channelname"
 thestill add "https://www.youtube.com/playlist?list=..."
 
-# Download audio files for new episodes (step 1)
+# Refresh feeds and discover new episodes (step 1)
+thestill refresh                           # Refresh all podcast feeds
+thestill refresh --podcast-id 1            # Refresh specific podcast (by index)
+thestill refresh --podcast-id "https://..." # Refresh specific podcast (by URL)
+thestill refresh --max-episodes 3          # Limit episodes to discover per podcast
+thestill refresh --dry-run                 # Preview what would be discovered
+
+# Download audio files for discovered episodes (step 2)
 thestill download                          # Download from all podcasts
 thestill download --podcast-id 1           # Download from specific podcast (by index)
 thestill download --podcast-id "https://..." # Download from specific podcast (by URL)
 thestill download --max-episodes 3         # Limit downloads per podcast
 thestill download --dry-run                # Preview what would be downloaded
 
-# Downsample audio to 16kHz WAV (step 2)
+# Downsample audio to 16kHz WAV (step 3)
 thestill downsample                        # Downsample all downloaded audio
 thestill downsample --podcast-id 1         # Downsample specific podcast
 thestill downsample --max-episodes 3       # Limit downsampling
 thestill downsample --dry-run              # Preview what would be downsampled
 
-# Transcribe downsampled audio to JSON (step 3)
+# Transcribe downsampled audio to JSON (step 4)
 thestill transcribe                        # Transcribe all downsampled audio
 thestill transcribe --podcast-id 1         # Transcribe from specific podcast
 thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
 thestill transcribe --max-episodes 3       # Limit transcriptions
 
-# Clean existing transcripts with LLM (step 4)
+# Clean existing transcripts with LLM (step 5)
 thestill clean-transcript [--dry-run] [--max-episodes 5]
 
 # List tracked podcasts
@@ -147,19 +154,27 @@ mypy thestill/
 
 ### Data Flow
 
-**Four-Step Atomic Workflow (Download → Downsample → Transcribe → Clean):**
+**Five-Step Atomic Workflow (Refresh → Download → Downsample → Transcribe → Clean):**
 
 Each step is an atomic operation that can be run independently and scaled horizontally:
 
-1. **Download** (`thestill download`):
-   - **Atomic operation**: Only downloads audio
+1. **Refresh** (`thestill refresh`):
+   - **Atomic operation**: Only fetches RSS feeds and discovers episodes
    - Checks all tracked podcast feeds for new episodes
+   - Parses RSS/YouTube feeds and discovers new episodes
+   - Adds new episodes to `data/feeds.json` with `audio_url` set
+   - Updates podcast metadata (title, description, etc.)
+   - **No side effects**: Does not download audio files
+
+2. **Download** (`thestill download`):
+   - **Atomic operation**: Only downloads audio
+   - Finds all discovered episodes without `audio_path` set
    - Downloads original audio files to `data/original_audio/`
    - Updates episode `audio_path` in `data/feeds.json`
    - Skips already-downloaded episodes
-   - **No side effects**: Does not downsample or process audio
+   - **No side effects**: Does not fetch feeds or process audio
 
-2. **Downsample** (`thestill downsample`):
+3. **Downsample** (`thestill downsample`):
    - **Atomic operation**: Only downsamples audio
    - Finds all downloaded episodes without downsampled versions
    - Converts to 16kHz, 16-bit, mono WAV format
@@ -168,7 +183,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - **Why?** pyannote.audio only supports WAV, not M4A/MP3
    - **No side effects**: Does not download or transcribe
 
-3. **Transcription** (`thestill transcribe`):
+4. **Transcription** (`thestill transcribe`):
    - **Atomic operation**: Only transcribes audio
    - Finds all downsampled episodes without transcripts
    - **Requires downsampled audio**: Will fail if `downsampled_audio_path` is not set
@@ -178,7 +193,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - Updates episode `raw_transcript_path` in `data/feeds.json`
    - **No side effects**: Does not download or clean
 
-4. **Cleaning** (`thestill clean-transcript`):
+5. **Cleaning** (`thestill clean-transcript`):
    - **Atomic operation**: Only cleans transcripts
    - Loads existing transcript JSON files
    - Phase 1: LLM analyzes for corrections (spelling, grammar, fillers, ads)
@@ -190,7 +205,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - **No side effects**: Does not download or transcribe
 
 **Episode State Progression:**
-- `discovered` → new episode found in feed
+- `discovered` → new episode found in feed (has `audio_url`)
 - `downloaded` → audio_path set
 - `downsampled` → downsampled_audio_path set
 - `transcribed` → raw_transcript_path set
@@ -199,6 +214,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
 **Pipeline Design:**
 - Each command can be run independently
 - Commands only process what's needed (idempotent)
+- **Separation of concerns**: Refresh (network I/O) vs Download (file I/O) vs Processing (CPU/GPU)
 - Future: Add message queues between steps for distributed processing
 - Future: Scale horizontally by running multiple workers per step
 

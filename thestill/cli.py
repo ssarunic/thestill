@@ -124,19 +124,18 @@ def list(ctx):
 
 
 @main.command()
-@click.option('--podcast-id', help='Download from specific podcast (index or RSS URL)')
-@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to download per podcast')
-@click.option('--dry-run', '-d', is_flag=True, help='Show what would be downloaded without downloading')
+@click.option('--podcast-id', help='Refresh specific podcast (index or RSS URL)')
+@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to discover per podcast')
+@click.option('--dry-run', '-d', is_flag=True, help='Show what would be discovered without updating feeds.json')
 @click.pass_context
-def download(ctx, podcast_id, max_episodes, dry_run):
-    """Download audio files for new episodes from tracked podcasts"""
+def refresh(ctx, podcast_id, max_episodes, dry_run):
+    """Refresh podcast feeds and discover new episodes (step 1)"""
     if ctx.obj is None or 'config' not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj['config']
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
-    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
     podcast_service = PodcastService(str(config.storage_path))
 
     # Check for new episodes
@@ -162,15 +161,86 @@ def download(ctx, podcast_id, max_episodes, dry_run):
             return
 
     # Apply max_episodes limit
-    episodes_to_download = []
+    episodes_to_add = []
     for podcast, episodes in new_episodes:
         if max_episodes:
             episodes = episodes[:max_episodes]
-        episodes_to_download.append((podcast, episodes))
+        episodes_to_add.append((podcast, episodes))
+
+    # Count total episodes
+    total_episodes = sum(len(eps) for _, eps in episodes_to_add)
+    click.echo(f"📡 Found {total_episodes} new episode(s)")
+
+    if dry_run:
+        for podcast, episodes in episodes_to_add:
+            click.echo(f"\n📻 {podcast.title}")
+            for episode in episodes:
+                click.echo(f"  • {episode.title}")
+        click.echo("\n(Run without --dry-run to update feeds.json)")
+        return
+
+    # Episodes are already added to feed_manager.podcasts by get_new_episodes()
+    # Just need to save to persist
+    feed_manager._save_podcasts()
+
+    click.echo(f"\n✅ Refresh complete! Discovered {total_episodes} new episode(s)")
+    click.echo("💡 Next step: Run 'thestill download' to download audio files")
+
+
+@main.command()
+@click.option('--podcast-id', help='Download from specific podcast (index or RSS URL)')
+@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to download per podcast')
+@click.option('--dry-run', '-d', is_flag=True, help='Show what would be downloaded without downloading')
+@click.pass_context
+def download(ctx, podcast_id, max_episodes, dry_run):
+    """Download audio files for episodes that need downloading (step 2)"""
+    if ctx.obj is None or 'config' not in ctx.obj:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+    config = ctx.obj['config']
+
+    feed_manager = PodcastFeedManager(str(config.storage_path))
+    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
+    podcast_service = PodcastService(str(config.storage_path))
+
+    # Get episodes that need downloading
+    click.echo("🔍 Looking for episodes to download...")
+    episodes_to_download = feed_manager.get_episodes_to_download(str(config.storage_path))
+
+    if not episodes_to_download:
+        click.echo("✓ No episodes found that need downloading")
+        click.echo("💡 Run 'thestill refresh' first to discover new episodes")
+        return
+
+    # Filter by podcast_id if specified
+    if podcast_id:
+        podcast = podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+
+        episodes_to_download = [(p, eps) for p, eps in episodes_to_download
+                                if str(p.rss_url) == str(podcast.rss_url)]
+
+        if not episodes_to_download:
+            click.echo(f"✓ No episodes need downloading for podcast: {podcast.title}")
+            return
+
+    # Apply max_episodes limit
+    if max_episodes:
+        total = 0
+        filtered = []
+        for podcast, episodes in episodes_to_download:
+            remaining = max_episodes - total
+            if remaining <= 0:
+                break
+            filtered.append((podcast, episodes[:remaining]))
+            total += len(episodes[:remaining])
+        episodes_to_download = filtered
 
     # Count total episodes
     total_episodes = sum(len(eps) for _, eps in episodes_to_download)
-    click.echo(f"📥 Found {total_episodes} new episode(s) to download")
+    click.echo(f"📥 Found {total_episodes} episode(s) to download")
 
     if dry_run:
         for podcast, episodes in episodes_to_download:
@@ -190,13 +260,6 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 
         for episode in episodes:
             click.echo(f"\n🎧 {episode.title}")
-
-            # Check if already downloaded
-            if episode.audio_path:
-                audio_file = config.path_manager.original_audio_file(episode.audio_path)
-                if audio_file.exists():
-                    click.echo("⏭️  Already downloaded, skipping")
-                    continue
 
             try:
                 audio_path = downloader.download_episode(episode, podcast.title)
@@ -222,6 +285,8 @@ def download(ctx, podcast_id, max_episodes, dry_run):
     total_time = time.time() - start_time
     click.echo("\n🎉 Download complete!")
     click.echo(f"✓ {downloaded_count} episode(s) downloaded in {total_time:.1f} seconds")
+    if downloaded_count > 0:
+        click.echo("💡 Next step: Run 'thestill downsample' to prepare audio for transcription")
 
 
 @main.command()

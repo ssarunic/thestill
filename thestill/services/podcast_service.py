@@ -95,12 +95,13 @@ class PodcastService:
         success = self.feed_manager.add_podcast(url)
 
         if success:
-            # Retrieve the added podcast
+            # Retrieve the added podcast (it will be the last one added)
             podcasts = self.feed_manager.list_podcasts()
-            for podcast in podcasts:
-                if str(podcast.rss_url) == url:
-                    logger.info(f"Successfully added podcast: {podcast.title}")
-                    return podcast
+            if podcasts:
+                # The newly added podcast is the last one in the list
+                added_podcast = podcasts[-1]
+                logger.info(f"Successfully added podcast: {added_podcast.title}")
+                return added_podcast
 
         logger.warning(f"Failed to add podcast or already exists: {url}")
         return None
