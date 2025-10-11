@@ -431,7 +431,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
         llm_provider = create_llm_provider(
             provider_type=config.llm_provider,
             openai_api_key=config.openai_api_key,
-            openai_model=config.llm_model,
+            openai_model=config.openai_model,
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
@@ -574,10 +574,45 @@ def status(ctx):
 
     # Configuration
     click.echo("\nConfiguration:")
-    click.echo(f"  Whisper model: {config.whisper_model}")
+
+    # Transcription settings
+    click.echo(f"  Transcription provider: {config.transcription_provider}")
+    if config.transcription_provider == "whisper":
+        click.echo(f"  Whisper model: {config.whisper_model}")
+        click.echo(f"  Whisper device: {config.whisper_device}")
+    elif config.transcription_provider == "google":
+        click.echo(f"  Google Cloud project: {config.google_cloud_project_id or 'Not set'}")
+        click.echo(f"  Google Cloud bucket: {config.google_storage_bucket or 'Auto'}")
+
+    # Diarization settings
     click.echo(f"  Speaker diarization: {'✓ Enabled' if config.enable_diarization else '✗ Disabled'}")
-    click.echo(f"  LLM model: {config.llm_model}")
+    if config.enable_diarization:
+        if config.min_speakers or config.max_speakers:
+            speakers_range = f"{config.min_speakers or 'auto'}-{config.max_speakers or 'auto'}"
+            click.echo(f"  Speaker range: {speakers_range}")
+        if config.transcription_provider == "whisper":
+            click.echo(f"  Diarization model: {config.diarization_model}")
+
+    # LLM settings
+    click.echo(f"  LLM provider: {config.llm_provider}")
+    if config.llm_provider == "openai":
+        click.echo(f"  LLM model: {config.openai_model}")
+    elif config.llm_provider == "ollama":
+        click.echo(f"  LLM model: {config.ollama_model}")
+        click.echo(f"  Ollama URL: {config.ollama_base_url}")
+    elif config.llm_provider == "gemini":
+        click.echo(f"  LLM model: {config.gemini_model}")
+    elif config.llm_provider == "anthropic":
+        click.echo(f"  LLM model: {config.anthropic_model}")
+
+    # Transcript cleaning settings
+    if config.enable_transcript_cleaning:
+        click.echo(f"  Transcript cleaning: ✓ Enabled ({config.cleaning_provider}/{config.cleaning_model})")
+
+    # Processing settings
     click.echo(f"  Max workers: {config.max_workers}")
+    if config.max_episodes_per_podcast:
+        click.echo(f"  Max episodes per podcast: {config.max_episodes_per_podcast}")
 
     # Podcast stats
     click.echo("\nPodcast Statistics:")
@@ -908,7 +943,7 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
         llm_provider = create_llm_provider(
             provider_type=config.llm_provider,
             openai_api_key=config.openai_api_key,
-            openai_model=config.llm_model,
+            openai_model=config.openai_model,
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
@@ -959,7 +994,7 @@ def evaluate_transcript(ctx, transcript_path, output):
         llm_provider = create_llm_provider(
             provider_type=config.llm_provider,
             openai_api_key=config.openai_api_key,
-            openai_model=config.llm_model,
+            openai_model=config.openai_model,
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
@@ -1021,7 +1056,7 @@ def evaluate_postprocess(ctx, processed_path, original, output):
         llm_provider = create_llm_provider(
             provider_type=config.llm_provider,
             openai_api_key=config.openai_api_key,
-            openai_model=config.llm_model,
+            openai_model=config.openai_model,
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,

@@ -67,7 +67,9 @@ class Config(BaseModel):
 
     # LLM Configuration
     llm_provider: str = "openai"  # openai, ollama, gemini, or anthropic
-    llm_model: str = "gpt-4o"
+
+    # OpenAI Configuration
+    openai_model: str = "gpt-4o"
 
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
@@ -167,7 +169,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "min_speakers": int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None,
         "max_speakers": int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None,
         "llm_provider": llm_provider,
-        "llm_model": os.getenv("LLM_MODEL", "gpt-4o" if llm_provider == "openai" else ("gemini-2.0-flash-exp" if llm_provider == "gemini" else ("claude-3-5-sonnet-20241022" if llm_provider == "anthropic" else "gemma3:4b"))),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),

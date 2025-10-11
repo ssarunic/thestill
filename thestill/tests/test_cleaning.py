@@ -31,7 +31,7 @@ def main():
     llm_provider = create_llm_provider(
         provider_type=config.llm_provider,
         openai_api_key=config.openai_api_key,
-        openai_model=config.llm_model,
+        openai_model=config.openai_model,
         ollama_base_url=config.ollama_base_url,
         ollama_model=config.ollama_model,
         gemini_api_key=config.gemini_api_key,

@@ -49,7 +49,7 @@ Create a `.env` file with your configuration. You can choose between OpenAI (clo
 ```env
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
-LLM_MODEL=gpt-4o
+OPENAI_MODEL=gpt-4o
 ```
 
 #### Option 2: Using Ollama (Local)
@@ -164,7 +164,7 @@ LLM_PROVIDER=openai
 
 # OpenAI Configuration (when using LLM_PROVIDER=openai)
 OPENAI_API_KEY=your_api_key_here
-LLM_MODEL=gpt-4o
+OPENAI_MODEL=gpt-4o
 
 # Ollama Configuration (when using LLM_PROVIDER=ollama)
 OLLAMA_BASE_URL=http://localhost:11434
