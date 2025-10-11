@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-thestill.ai is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using OpenAI Whisper for transcription and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini, Anthropic Claude) for analysis.
+thestill.ai is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using either local Whisper transcription or cloud-based Google Speech-to-Text, and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini, Anthropic Claude) for analysis.
 
 ## Development Commands
 
@@ -105,12 +105,17 @@ mypy thestill/
    - Extracts playlist and channel metadata
    - Downloads best quality audio and converts to M4A
 
-5. **Transcriber** (`thestill/core/transcriber.py`)
-   - **WhisperTranscriber**: Standard OpenAI Whisper for speech-to-text
-   - **WhisperXTranscriber**: Enhanced transcription with speaker diarization
+5. **Transcriber** (`thestill/core/transcriber.py` and `thestill/core/google_transcriber.py`)
+   - **WhisperTranscriber**: Standard OpenAI Whisper for local speech-to-text
+   - **WhisperXTranscriber**: Enhanced local transcription with speaker diarization
+   - **GoogleCloudTranscriber**: Cloud-based Google Speech-to-Text API (NEW)
+     - Built-in speaker diarization (no pyannote.audio setup needed)
+     - Automatic file size handling (sync <10MB, async GCS for larger files)
+     - Language detection from podcast RSS metadata
+     - Cloud-based: No GPU/CPU requirements, pay-per-use pricing
    - Supports word-level timestamps and speaker identification
-   - Configurable model sizes (tiny, base, small, medium, large)
-   - Automatic fallback to standard Whisper if diarization fails
+   - Configurable via `TRANSCRIPTION_PROVIDER` (whisper or google)
+   - Automatic fallback to standard Whisper if diarization fails (WhisperX only)
 
 6. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
    - **NEW**: Three-phase LLM cleaning pipeline focused on accuracy:
@@ -226,14 +231,19 @@ data/                      # Generated data directory
 
 ## Key Technologies
 
-- **OpenAI Whisper**: Local speech-to-text transcription
+### Transcription Providers
+- **OpenAI Whisper**: Local speech-to-text transcription (CPU/GPU)
 - **WhisperX**: Enhanced Whisper with speaker diarization and improved alignment
-- **pyannote.audio**: State-of-the-art speaker diarization
-- **LLM Providers**:
-  - **OpenAI GPT-4**: Text processing, summarization, and analysis
-  - **Ollama**: Local LLM models for cost-effective processing
-  - **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
-  - **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
+- **pyannote.audio**: State-of-the-art speaker diarization (for Whisper)
+- **Google Cloud Speech-to-Text**: Cloud-based transcription with built-in diarization
+
+### LLM Providers
+- **OpenAI GPT-4**: Text processing, summarization, and analysis
+- **Ollama**: Local LLM models for cost-effective processing
+- **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
+- **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
+
+### Other Dependencies
 - **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
 - **Pydantic**: Data validation and settings management
 - **Click**: Command-line interface framework
@@ -257,50 +267,91 @@ data/                      # Generated data directory
 - Provide sensible defaults for all configuration options
 - Validate configuration at startup
 
-## Speaker Diarization (User Story 1.4)
+## Transcription Provider Setup
 
-### Setup Requirements
+### Whisper (Local Transcription)
 
-1. **Install Dependencies**
-   ```bash
-   pip install -e .
-   ```
+**Basic Setup:**
+```bash
+# Install dependencies
+pip install -e .
 
-2. **Get HuggingFace Token** (for speaker diarization)
+# Configure .env
+TRANSCRIPTION_PROVIDER=whisper
+WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
+```
+
+**With Speaker Diarization:**
+1. Get HuggingFace Token:
    - Create account at https://huggingface.co
    - Get token from https://huggingface.co/settings/tokens
    - Accept model license at https://huggingface.co/pyannote/speaker-diarization-3.1
 
-3. **Configure Environment**
+2. Configure .env:
    ```bash
-   # Add to .env
    ENABLE_DIARIZATION=true
    HUGGINGFACE_TOKEN=your_token_here
+   MIN_SPEAKERS=  # Optional: minimum speakers (auto-detect if empty)
+   MAX_SPEAKERS=  # Optional: maximum speakers (auto-detect if empty)
    ```
 
-### Usage
+**How it works:**
+- WhisperXTranscriber with diarization enabled:
+  1. Transcribes audio with WhisperX (improved alignment)
+  2. Aligns output for accurate word-level timestamps
+  3. Runs pyannote.audio speaker diarization
+  4. Assigns speaker labels to segments
+  5. Falls back to standard Whisper if diarization fails
 
-**WhisperXTranscriber** automatically:
-1. Transcribes audio with WhisperX (improved alignment)
-2. Aligns output for accurate word-level timestamps
-3. Runs speaker diarization if enabled
-4. Assigns speaker labels to segments
-5. Falls back to standard Whisper if diarization fails
+### Google Cloud Speech-to-Text (Cloud Transcription)
 
-**Output Format:**
+**Setup:**
+1. Create Google Cloud project at https://console.cloud.google.com/
+2. Enable Speech-to-Text API
+3. Create service account and download JSON key:
+   - Go to https://console.cloud.google.com/apis/credentials
+   - Create service account → Download JSON key
+4. Configure .env:
+   ```bash
+   TRANSCRIPTION_PROVIDER=google
+   GOOGLE_APP_CREDENTIALS=/path/to/service-account-key.json
+   GOOGLE_CLOUD_PROJECT_ID=your-project-id
+   GOOGLE_STORAGE_BUCKET=  # Optional: for files >10MB (auto-created if empty)
+   ENABLE_DIARIZATION=true  # Built-in diarization (no HuggingFace token needed)
+   ```
+
+**How it works:**
+- Files <10MB: Synchronous transcription (fast)
+- Files >10MB: Async transcription via Google Cloud Storage
+- Language automatically detected from podcast RSS metadata
+- Built-in speaker diarization (no additional setup required)
+
+**Pricing:**
+- Standard recognition: ~$0.024/minute
+- With speaker diarization: ~$0.048/minute
+- See: https://cloud.google.com/speech-to-text/pricing
+
+### Comparison: Whisper vs Google
+
+| Feature | Whisper (Local) | Google Cloud |
+|---------|----------------|--------------|
+| **Cost** | Free (uses local CPU/GPU) | ~$0.024-0.048/min |
+| **Privacy** | Fully local | Audio sent to Google |
+| **Speed** | Depends on hardware | Fast (cloud processing) |
+| **Diarization Setup** | Requires HuggingFace token + pyannote.audio | Built-in, no setup |
+| **Accuracy** | Good | Excellent (especially accents) |
+| **Large Files** | Memory intensive | Handles via GCS |
+| **Network** | Not required | Required |
+
+**Transcript Output Format (both providers):**
 ```
-[00:15] [SPEAKER_00] Welcome to the podcast.
-[00:18] [SPEAKER_01] Thanks for having me.
+[00:15] [SPEAKER_01] Welcome to the podcast.
+[00:18] [SPEAKER_02] Thanks for having me.
 ```
 
-**Configuration Options:**
+**Configuration Options (both providers):**
 - `ENABLE_DIARIZATION`: Enable/disable speaker identification
-- `MIN_SPEAKERS`: Minimum speakers (empty = auto-detect)
-- `MAX_SPEAKERS`: Maximum speakers (empty = auto-detect)
-- `DIARIZATION_MODEL`: pyannote model name
+- `MIN_SPEAKERS`: Minimum speakers (leave empty to use provider's internal defaults for best results)
+- `MAX_SPEAKERS`: Maximum speakers (leave empty to use provider's internal defaults for best results)
 
-**Error Handling:**
-- Missing HuggingFace token → Diarization disabled, standard transcription
-- Poor audio quality → Diarization may fail, continues without speakers
-- Model download failure → Falls back to standard Whisper
-- Any error → Graceful degradation to WhisperTranscriber
+**Recommendation:** Leave `MIN_SPEAKERS` and `MAX_SPEAKERS` empty for most podcasts. Both Google and Whisper/pyannote have sensible internal defaults and auto-detection works well. Only set explicit values if you know the exact speaker count (e.g., solo show, fixed two-host format).
