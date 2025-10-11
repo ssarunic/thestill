@@ -171,6 +171,7 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
+credentials/
 data/
 *.mp3
 *.m4a

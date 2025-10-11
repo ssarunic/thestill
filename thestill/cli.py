@@ -24,6 +24,7 @@ try:
     from .core.audio_downloader import AudioDownloader
     from .core.audio_preprocessor import AudioPreprocessor
     from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from .core.google_transcriber import GoogleCloudTranscriber
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from .core.llm_provider import create_llm_provider
@@ -35,6 +36,7 @@ except ImportError:
     from core.audio_downloader import AudioDownloader
     from core.audio_preprocessor import AudioPreprocessor
     from core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from core.google_transcriber import GoogleCloudTranscriber
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from core.llm_provider import create_llm_provider
@@ -551,7 +553,27 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     preprocessor = AudioPreprocessor()
 
     # Initialize the appropriate transcriber based on config settings
-    if config.transcription_model.lower() == 'parakeet':
+    if config.transcription_provider.lower() == 'google':
+        click.echo("🎤 Using Google Cloud Speech-to-Text")
+        if not config.google_app_credentials and not config.google_cloud_project_id:
+            click.echo("❌ Google Cloud credentials not configured", err=True)
+            click.echo("   Set GOOGLE_APP_CREDENTIALS and GOOGLE_CLOUD_PROJECT_ID in .env", err=True)
+            ctx.exit(1)
+
+        try:
+            transcriber = GoogleCloudTranscriber(
+                credentials_path=config.google_app_credentials or None,
+                project_id=config.google_cloud_project_id or None,
+                storage_bucket=config.google_storage_bucket or None,
+                enable_diarization=config.enable_diarization,
+                min_speakers=config.min_speakers,
+                max_speakers=config.max_speakers
+            )
+        except ImportError as e:
+            click.echo(f"❌ {e}", err=True)
+            click.echo("   Install with: pip install google-cloud-speech google-cloud-storage", err=True)
+            ctx.exit(1)
+    elif config.transcription_model.lower() == 'parakeet':
         from .core.parakeet_transcriber import ParakeetTranscriber
         transcriber = ParakeetTranscriber(config.whisper_device)
     elif config.enable_diarization:

@@ -30,6 +30,11 @@ class Config(BaseModel):
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # Google Cloud Configuration (for Google Speech-to-Text)
+    google_app_credentials: str = ""
+    google_cloud_project_id: str = ""
+    google_storage_bucket: str = ""
+
     # Storage Paths
     storage_path: Path = Path("./data")
     audio_path: Path = Path("./data/original_audio")  # Original downloaded audio files
@@ -47,7 +52,8 @@ class Config(BaseModel):
     chunk_duration_minutes: int = 30
 
     # Transcription Configuration
-    transcription_model: str = "whisper"  # whisper or parakeet
+    transcription_provider: str = "whisper"  # whisper or google
+    transcription_model: str = "whisper"  # whisper or parakeet (legacy, for whisper provider only)
     whisper_model: str = "base"
     whisper_device: str = "auto"
 
@@ -137,6 +143,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "openai_api_key": openai_api_key,
         "gemini_api_key": gemini_api_key,
         "anthropic_api_key": anthropic_api_key,
+        "google_app_credentials": os.getenv("GOOGLE_APP_CREDENTIALS", ""),
+        "google_cloud_project_id": os.getenv("GOOGLE_CLOUD_PROJECT_ID", ""),
+        "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
         "storage_path": storage_path,
         "audio_path": storage_path / "original_audio",
         "downsampled_audio_path": storage_path / "downsampled_audio",
@@ -146,6 +155,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "evaluations_path": storage_path / "evaluations",
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
+        "transcription_provider": os.getenv("TRANSCRIPTION_PROVIDER", "whisper"),
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
