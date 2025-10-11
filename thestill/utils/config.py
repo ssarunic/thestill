@@ -50,6 +50,7 @@ class Config(BaseModel):
     # Processing Configuration
     max_workers: int = 3
     chunk_duration_minutes: int = 30
+    max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
     # Transcription Configuration
     transcription_provider: str = "whisper"  # whisper or google
@@ -155,6 +156,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "evaluations_path": storage_path / "evaluations",
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
+        "max_episodes_per_podcast": int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None,
         "transcription_provider": os.getenv("TRANSCRIPTION_PROVIDER", "whisper"),
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),

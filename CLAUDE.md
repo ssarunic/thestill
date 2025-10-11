@@ -33,7 +33,7 @@ thestill add "https://www.youtube.com/playlist?list=..."
 thestill refresh                           # Refresh all podcast feeds
 thestill refresh --podcast-id 1            # Refresh specific podcast (by index)
 thestill refresh --podcast-id "https://..." # Refresh specific podcast (by URL)
-thestill refresh --max-episodes 3          # Limit episodes to discover per podcast
+thestill refresh --max-episodes 3          # Limit episodes to discover per podcast (overrides MAX_EPISODES_PER_PODCAST)
 thestill refresh --dry-run                 # Preview what would be discovered
 
 # Download audio files for discovered episodes (step 2)
@@ -152,6 +152,24 @@ mypy thestill/
 - **PathManager integration**: `config.path_manager` provides centralized path access
 - See `thestill/utils/config.py` for all options
 
+#### Episode Management
+
+**MAX_EPISODES_PER_PODCAST**: Limit the number of episodes tracked per podcast
+- **Purpose**: Prevents `feeds.json` from becoming unmanageable for podcasts with hundreds of episodes
+- **Behavior**:
+  - Only the N most recent episodes (by `pub_date`) are kept per podcast
+  - Already-processed episodes are never removed, even if total exceeds limit
+  - New unprocessed episodes fill available slots up to the limit
+  - Applied during `thestill refresh` command
+- **Configuration**:
+  - Set in `.env`: `MAX_EPISODES_PER_PODCAST=50`
+  - Override per-run: `thestill refresh --max-episodes 10`
+  - Leave empty for no limit (default)
+- **Example**: With limit of 50 and podcast has 200 episodes
+  - First refresh: Discovers 50 most recent episodes
+  - After processing 10: Next refresh keeps those 10 processed + 40 most recent unprocessed
+  - Result: Always stays at ≤50 total episodes per podcast
+
 ### Data Flow
 
 **Five-Step Atomic Workflow (Refresh → Download → Downsample → Transcribe → Clean):**
@@ -164,6 +182,10 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - Parses RSS/YouTube feeds and discovers new episodes
    - Adds new episodes to `data/feeds.json` with `audio_url` set
    - Updates podcast metadata (title, description, etc.)
+   - **Episode limiting**: Respects `MAX_EPISODES_PER_PODCAST` env var to keep feeds.json manageable
+     - If set, only tracks the N most recent episodes per podcast
+     - Protects processed episodes from removal
+     - Can be overridden with `--max-episodes` CLI flag
    - **No side effects**: Does not download audio files
 
 2. **Download** (`thestill download`):

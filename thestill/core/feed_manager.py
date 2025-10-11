@@ -79,15 +79,20 @@ class PodcastFeedManager:
             return True
         return False
 
-    def get_new_episodes(self) -> List[tuple[Podcast, List[Episode]]]:
-        """Check all feeds for new episodes"""
+    def get_new_episodes(self, max_episodes_per_podcast: Optional[int] = None) -> List[tuple[Podcast, List[Episode]]]:
+        """Check all feeds for new episodes
+
+        Args:
+            max_episodes_per_podcast: Optional limit on episodes to discover per podcast.
+                                     If set, only the N most recent episodes will be tracked.
+        """
         new_episodes = []
 
         for podcast in self.podcasts:
             try:
                 # Check if this is a YouTube podcast
                 if self.youtube_downloader.is_youtube_url(str(podcast.rss_url)):
-                    episodes = self._get_youtube_episodes(podcast)
+                    episodes = self._get_youtube_episodes(podcast, max_episodes_per_podcast)
                     if episodes:
                         new_episodes.append((podcast, episodes))
                     continue
@@ -132,6 +137,23 @@ class PodcastFeedManager:
                                 podcast.episodes.append(episode)
 
                             episodes.append(episode)
+
+                # Apply max_episodes_per_podcast limit if set
+                if episodes and max_episodes_per_podcast:
+                    # Sort by pub_date (most recent first) and apply limit
+                    episodes.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
+                    episodes = episodes[:max_episodes_per_podcast]
+
+                    # Also trim podcast.episodes to respect the limit
+                    # Keep already processed episodes + most recent unprocessed episodes up to limit
+                    processed_eps = [ep for ep in podcast.episodes if ep.processed]
+                    unprocessed_eps = [ep for ep in podcast.episodes if not ep.processed]
+                    unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
+
+                    # Calculate available slots for unprocessed episodes
+                    total_limit = max_episodes_per_podcast
+                    available_slots = max(0, total_limit - len(processed_eps))
+                    podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
 
                 if episodes:
                     new_episodes.append((podcast, episodes))
@@ -347,11 +369,21 @@ class PodcastFeedManager:
             logger.error(f"Error extracting RSS from Apple URL {url}: {e}")
             return None
 
-    def _get_youtube_episodes(self, podcast: Podcast) -> List[Episode]:
-        """Get new episodes from a YouTube playlist/channel"""
+    def _get_youtube_episodes(self, podcast: Podcast, max_episodes_per_podcast: Optional[int] = None) -> List[Episode]:
+        """Get new episodes from a YouTube playlist/channel
+
+        Args:
+            podcast: The podcast to get episodes for
+            max_episodes_per_podcast: Optional limit on episodes to discover
+        """
         try:
             # Get all episodes from YouTube
             all_episodes = self.youtube_downloader.get_episodes_from_playlist(str(podcast.rss_url))
+
+            # Apply limit before filtering (most recent episodes first)
+            if max_episodes_per_podcast:
+                all_episodes.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
+                all_episodes = all_episodes[:max_episodes_per_podcast]
 
             # Filter out already processed episodes
             new_episodes = []
@@ -363,6 +395,16 @@ class PodcastFeedManager:
                     if not existing_episode:
                         podcast.episodes.append(episode)
                     new_episodes.append(episode)
+
+            # Apply limit to podcast.episodes as well (similar to RSS logic)
+            if max_episodes_per_podcast:
+                processed_eps = [ep for ep in podcast.episodes if ep.processed]
+                unprocessed_eps = [ep for ep in podcast.episodes if not ep.processed]
+                unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
+
+                total_limit = max_episodes_per_podcast
+                available_slots = max(0, total_limit - len(processed_eps))
+                podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
 
             return new_episodes
 

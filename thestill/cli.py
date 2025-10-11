@@ -138,9 +138,14 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
     feed_manager = PodcastFeedManager(str(config.storage_path))
     podcast_service = PodcastService(str(config.storage_path))
 
+    # Use CLI option if provided, otherwise fall back to config
+    max_episodes_limit = max_episodes if max_episodes else config.max_episodes_per_podcast
+
     # Check for new episodes
     click.echo("🔍 Checking for new episodes...")
-    new_episodes = feed_manager.get_new_episodes()
+    if max_episodes_limit:
+        click.echo(f"   (Limiting to {max_episodes_limit} episodes per podcast)")
+    new_episodes = feed_manager.get_new_episodes(max_episodes_per_podcast=max_episodes_limit)
 
     if not new_episodes:
         click.echo("✓ No new episodes found")
