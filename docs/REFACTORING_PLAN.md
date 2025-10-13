@@ -4,18 +4,18 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 11/35 tasks complete (31.4%)**
+> **Progress: 12/35 tasks complete (34.3%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 11 tasks (14.5 hours invested)**
+**✅ Completed: 12 tasks (15.5 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 24 tasks**
+**⏳ Remaining: 23 tasks**
 
 **Current Status:**
-- Test coverage: 28.89% (↑61% from baseline) → Target 70%+ by Week 3
+- Test coverage: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
 - Repository layer: ✅ 100% complete
 - Week 1 foundation: ✅ 100% complete (8/8 tasks)
 
@@ -382,23 +382,22 @@ with click.progressbar(
 
 **Goal**: Increase test coverage to 70%+, add type hints
 
-### Task R-017: Add Unit Tests for AudioDownloader
-**Priority**: High
-**Effort**: 1 hour
-**Scope**: `tests/test_audio_downloader.py`
+### Task R-017: Add Unit Tests for AudioDownloader ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `45017ec` - Add comprehensive unit tests for AudioDownloader (R-017)
 
-**Steps**:
-1. Create `tests/test_audio_downloader.py`
-2. Mock `requests.get()` for download tests
-3. Test successful download
-4. Test failed download (network error, timeout)
-5. Test YouTube URL delegation
-6. Test filename sanitization
-7. Aim for 80%+ coverage
+**Completed**:
+- ✅ Created `tests/test_audio_downloader.py` with 28 test cases
+- ✅ Mocked requests library for download tests
+- ✅ Tested successful downloads with progress tracking
+- ✅ Tested network errors (timeouts, connection errors, HTTP errors)
+- ✅ Tested YouTube URL delegation
+- ✅ Tested filename sanitization (invalid chars, spaces, unicode)
+- ✅ Tested file extension detection and cleanup
+- ✅ Tested edge cases (special characters, write errors)
+- ✅ 99.04% coverage for audio_downloader.py (exceeded 80% target)
 
-**Safety**: Tests only
-**Risk**: Low
-**Commit**: `test(core): add unit tests for AudioDownloader`
+**Impact**: Overall coverage increased from 28.89% to 32.58% (+3.69pp)
 
 ---
 
@@ -1061,7 +1060,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (11/35 = 31.4%)
+### Completed Tasks ✅ (12/35 = 34.3%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1075,27 +1074,29 @@ If a refactor causes issues:
 | R-008 | `d5a54c5` | 1.5h | ✅ PodcastService tests (38 tests, 92% coverage) |
 | R-009 | `9c69381` | 30m | ✅ PathManager integration complete |
 | R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
+| R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
 
-**Total time invested: 14.5 hours**
+**Total time invested: 15.5 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-017** - Unit tests for AudioDownloader (1h) - Increase coverage to ~35%
-2. **R-011** - Extract CLI Formatter Class (1h) - Reduce CLI complexity
-3. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
-4. **R-013** - Create RefreshService (1h) - Extract business logic
-5. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
+1. **R-011** - Extract CLI Formatter Class (1h) - Reduce CLI complexity
+2. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
+3. **R-013** - Create RefreshService (1h) - Extract business logic
+4. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
+5. **R-016** - Extract Magic Numbers to Constants (30m) - Improve readability
 
-**Estimated effort for next 5: 5.25 hours**
+**Estimated effort for next 5: 4.75 hours**
 
 ### Key Metrics
 
-- **Test coverage**: 28.89% (↑61% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 129/129 (100%)
+- **Test coverage**: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
+- **Tests passing**: 157/157 (100%)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
-- **Commits this week**: 10 atomic commits
-- **Files changed**: 12 files (5 new, 7 modified)
+- **PathManager**: ✅ 100% integrated
+- **Commits this week**: 12 atomic commits
+- **Files changed**: 13 files (6 new, 7 modified)
 
 ### Critical Path Forward
 
