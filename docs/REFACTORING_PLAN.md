@@ -4,20 +4,21 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 16/35 tasks complete (45.7%)**
+> **Progress: 17/35 tasks complete (48.6%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 16 tasks (18.75 hours invested)**
+**✅ Completed: 17 tasks (19.75 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 19 tasks**
+**⏳ Remaining: 18 tasks**
 
 **Current Status:**
-- Test coverage: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
+- Test coverage: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
 - Repository layer: ✅ 100% complete
 - Week 1 foundation: ✅ 100% complete (8/8 tasks)
+- Week 2 foundation: ✅ 100% complete (7/7 tasks)
 
 **Guiding Principles**:
 1. Keep tests passing after every commit
@@ -432,44 +433,19 @@ def download_episode(
 
 ---
 
-### Task R-022: Create EpisodeState Enum
-**Priority**: Low
-**Effort**: 1 hour
-**Scope**: `models/podcast.py`, `core/feed_manager.py`
+### Task R-022: Create EpisodeState Enum ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `72e4760` - Add EpisodeState enum and state property to Episode (R-022)
 
-**Steps**:
-1. Add `EpisodeState` enum to `models/podcast.py`:
-   ```python
-   class EpisodeState(str, Enum):
-       DISCOVERED = "discovered"
-       DOWNLOADED = "downloaded"
-       DOWNSAMPLED = "downsampled"
-       TRANSCRIBED = "transcribed"
-       CLEANED = "cleaned"
-   ```
-2. Add `state` property to Episode model
-3. Add validation for state transitions in FeedManager
-4. Update tests
+**Completed**:
+- ✅ Created EpisodeState enum with 5 states (DISCOVERED, DOWNLOADED, DOWNSAMPLED, TRANSCRIBED, CLEANED)
+- ✅ Added computed state property to Episode model
+- ✅ Updated JsonPodcastRepository to use EpisodeState enum
+- ✅ Added 18 comprehensive unit tests
+- ✅ **100% branch coverage** for models/podcast.py (exceeded target)
+- ✅ All 177 tests passing
 
-**Example**:
-```python
-@property
-def state(self) -> EpisodeState:
-    """Compute current episode state from file paths"""
-    if self.clean_transcript_path:
-        return EpisodeState.CLEANED
-    if self.raw_transcript_path:
-        return EpisodeState.TRANSCRIBED
-    if self.downsampled_audio_path:
-        return EpisodeState.DOWNSAMPLED
-    if self.audio_path:
-        return EpisodeState.DOWNLOADED
-    return EpisodeState.DISCOVERED
-```
-
-**Safety**: Add tests for state transitions
-**Risk**: Low
-**Commit**: `feat(models): add EpisodeState enum and state property to Episode`
+**Benefits**: Type-safe state management, clearer episode lifecycle tracking, single source of truth for state logic
 
 ---
 
@@ -1012,7 +988,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (15/35 = 42.9%)
+### Completed Tasks ✅ (17/35 = 48.6%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1028,30 +1004,33 @@ If a refactor causes issues:
 | R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
 | R-011 | `3f85c4d` | 1h | ✅ CLI Formatter extraction (centralized formatting) |
 | R-013 | `341f3a0` | 1h | ✅ RefreshService extraction (business logic separation) |
+| R-014 | `2205e63` | 45m | ✅ Retry logic with exponential backoff |
 | R-016 | `42ab754` | 30m | ✅ Magic numbers extraction (4 constants) |
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
+| R-022 | `72e4760` | 1h | ✅ EpisodeState enum (18 tests, 100% model coverage) |
 
-**Total time invested: 18 hours**
+**Total time invested: 19.75 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
-2. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
-3. **R-020** - Add Docstrings to Public APIs (1h) - Better documentation
-4. **R-021** - Add Integration Tests (2h) - End-to-end testing
-5. **R-022** - Add Unit Tests for YouTubeDownloader (1h) - Increase coverage
+1. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
+2. **R-020** - Add Integration Tests for Full Pipeline (2h) - End-to-end testing
+3. **R-021** - Add Type Hints to Service Layer (1h) - Complete type coverage
+4. **R-023** - Add Contract Tests for Service Boundaries (1h) - Prevent interface breakage
+5. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
 
-**Estimated effort for next 5: 6.25 hours**
+**Estimated effort for next 5: 6 hours**
 
 ### Key Metrics
 
-- **Test coverage**: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 157/157 (100%)
+- **Test coverage**: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
+- **Tests passing**: 177/177 (100%)
+- **Models coverage**: ✅ 100% (podcast.py with branch coverage)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
-- **Commits this week**: 12 atomic commits
-- **Files changed**: 13 files (6 new, 7 modified)
+- **Commits this week**: 15 atomic commits
+- **Files changed**: 16 files (7 new, 9 modified)
 
 ### Critical Path Forward
 
@@ -1059,13 +1038,21 @@ If a refactor causes issues:
 - All 8 foundational tasks completed
 - Repository layer fully integrated
 - PathManager fully integrated
-- 129 tests passing
+- Test infrastructure established
 
-**Week 2 Focus** (IN PROGRESS):
-- Config cleanup (R-010) - Remove redundant path attributes
-- Additional testing (R-017) - AudioDownloader unit tests
-- CLI refactoring (R-011, R-013) - Extract formatters and services
-- Type hints (R-019) - Improve IDE support
+**Week 2 Status**: ✅ **100% COMPLETE**
+- All 7 service layer tasks completed
+- CLI formatter extracted
+- RefreshService created
+- Retry logic implemented
+- Magic numbers extracted
+
+**Week 3 Focus** (CURRENT):
+- Type hints for core modules (R-019)
+- Integration tests (R-020)
+- Type hints for service layer (R-021)
+- EpisodeState enum (R-022) ✅ **DONE**
+- Contract tests (R-023)
 - **Target**: 45-50% test coverage by end of week
 
 ---
