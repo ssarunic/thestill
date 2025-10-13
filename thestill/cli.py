@@ -62,9 +62,9 @@ def main(ctx, config):
         click.echo("✓ Configuration loaded successfully")
 
         # Initialize shared services (dependency injection)
-        storage_path = str(ctx.obj["config"].storage_path)
-        path_manager = PathManager(storage_path)
-        repository = JsonPodcastRepository(storage_path)
+        storage_path = ctx.obj["config"].storage_path  # Path object
+        path_manager = PathManager(str(storage_path))
+        repository = JsonPodcastRepository(str(storage_path))
 
         ctx.obj["path_manager"] = path_manager
         ctx.obj["repository"] = repository

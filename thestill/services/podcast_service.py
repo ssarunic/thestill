@@ -75,23 +75,28 @@ class PodcastService:
     - GUID string - exact match
     """
 
-    def __init__(self, storage_path: str, podcast_repository: PodcastRepository, path_manager: PathManager):
+    def __init__(
+        self,
+        storage_path: Union[str, Path],
+        podcast_repository: PodcastRepository,
+        path_manager: PathManager,
+    ):
         """
         Initialize podcast service.
 
         Args:
-            storage_path: Path to data storage directory
+            storage_path: Path to data storage directory (str or Path)
             podcast_repository: Repository for podcast persistence
             path_manager: Path manager for file path operations
         """
-        self.storage_path = Path(storage_path)
+        self.storage_path = Path(storage_path) if isinstance(storage_path, str) else storage_path
         self.path_manager = path_manager
         self.repository = podcast_repository
 
         # Initialize FeedManager with repository and path manager
         self.feed_manager = PodcastFeedManager(podcast_repository=podcast_repository, path_manager=path_manager)
 
-        logger.info(f"PodcastService initialized with storage: {storage_path}")
+        logger.info(f"PodcastService initialized with storage: {self.storage_path}")
 
     def add_podcast(self, url: str) -> Optional[Podcast]:
         """
@@ -313,14 +318,14 @@ class PodcastService:
                     processed=episode.processed,
                     transcript_available=bool(
                         episode.raw_transcript_path
-                        and (self.storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()
+                        and self.path_manager.raw_transcript_file(episode.raw_transcript_path).exists()
                     ),
                     clean_transcript_available=bool(
                         episode.clean_transcript_path
-                        and (self.storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()
+                        and self.path_manager.clean_transcript_file(episode.clean_transcript_path).exists()
                     ),
                     summary_available=bool(
-                        episode.summary_path and (self.storage_path / "summaries" / episode.summary_path).exists()
+                        episode.summary_path and self.path_manager.summary_file(episode.summary_path).exists()
                     ),
                 )
             )
@@ -349,9 +354,9 @@ class PodcastService:
             logger.info(f"Episode not yet processed: {episode.title}")
             return "N/A - Episode not yet processed"
 
-        # Build full path to the cleaned Markdown file
+        # Build full path to the cleaned Markdown file using PathManager
         # clean_transcript_path is just the filename (e.g., "episode_cleaned.md")
-        md_path = self.storage_path / "clean_transcripts" / episode.clean_transcript_path
+        md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
 
         if not md_path.exists():
             logger.warning(f"Cleaned transcript file not found: {md_path}")
