@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 14/35 tasks complete (40%)**
+> **Progress: 15/35 tasks complete (42.9%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 14 tasks (17 hours invested)**
+**✅ Completed: 15 tasks (18 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 21 tasks**
+**⏳ Remaining: 20 tasks**
 
 **Current Status:**
 - Test coverage: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
@@ -238,34 +238,20 @@ def list(ctx):
 
 ---
 
-### Task R-013: Create RefreshService
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `services/refresh_service.py` (new), `cli.py`
+### Task R-013: Create RefreshService ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `341f3a0` - Extract RefreshService from CLI (R-013)
 
-**Steps**:
-1. Create `services/refresh_service.py`
-2. Extract refresh logic from `cli.py:131-192` into `RefreshService.refresh()`
-3. Move episode limiting and filtering logic into service
-4. CLI becomes thin wrapper: parse args → call service → format output
-5. Add tests for RefreshService
+**Completed**:
+- ✅ Created services/refresh_service.py with RefreshService class
+- ✅ Extracted all refresh business logic from CLI
+- ✅ Created RefreshResult model for structured returns
+- ✅ Handles podcast filtering, episode limits, dry-run mode
+- ✅ Updated CLI to use RefreshService
+- ✅ Net code reduction: -20 lines in cli.py
+- ✅ All 157 tests passing
 
-**Example**:
-```python
-class RefreshService:
-    def __init__(self, feed_manager: PodcastFeedManager, podcast_service: PodcastService):
-        self.feed_manager = feed_manager
-        self.podcast_service = podcast_service
-
-    def refresh(
-        self,
-        podcast_id: Optional[Union[str, int]] = None,
-        max_episodes: Optional[int] = None,
-        dry_run: bool = False
-    ) -> RefreshResult:
-        """Refresh feeds and discover new episodes"""
-        # Business logic here
-```
+**Benefits**: Separation of concerns, testable business logic, reusable service
 
 **Safety**: Test CLI still works
 **Risk**: Medium
@@ -1034,7 +1020,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (14/35 = 40%)
+### Completed Tasks ✅ (15/35 = 42.9%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1049,19 +1035,20 @@ If a refactor causes issues:
 | R-009 | `9c69381` | 30m | ✅ PathManager integration complete |
 | R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
 | R-011 | `3f85c4d` | 1h | ✅ CLI Formatter extraction (centralized formatting) |
+| R-013 | `341f3a0` | 1h | ✅ RefreshService extraction (business logic separation) |
 | R-016 | `42ab754` | 30m | ✅ Magic numbers extraction (4 constants) |
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
 
-**Total time invested: 17 hours**
+**Total time invested: 18 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
-2. **R-013** - Create RefreshService (1h) - Extract business logic
-3. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
-4. **R-020** - Add Docstrings to Public APIs (1h) - Better documentation
-5. **R-021** - Add Integration Tests (2h) - End-to-end testing
+1. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
+2. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
+3. **R-020** - Add Docstrings to Public APIs (1h) - Better documentation
+4. **R-021** - Add Integration Tests (2h) - End-to-end testing
+5. **R-022** - Add Unit Tests for YouTubeDownloader (1h) - Increase coverage
 
 **Estimated effort for next 5: 6.25 hours**
 
