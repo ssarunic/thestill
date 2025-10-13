@@ -16,7 +16,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import yt_dlp
 
@@ -26,15 +26,34 @@ logger = logging.getLogger(__name__)
 
 
 class YouTubeDownloader:
-    """Handle YouTube podcast/playlist downloads using yt-dlp"""
+    """
+    Handle YouTube podcast/playlist downloads using yt-dlp.
 
-    def __init__(self, storage_path: str = "./data/audio"):
-        self.storage_path = Path(storage_path)
+    Attributes:
+        storage_path: Directory where downloaded audio files are stored
+    """
+
+    def __init__(self, storage_path: str = "./data/audio") -> None:
+        """
+        Initialize YouTube downloader.
+
+        Args:
+            storage_path: Directory path for storing downloaded audio files
+        """
+        self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def is_youtube_url(url: str) -> bool:
-        """Check if URL is a YouTube video or playlist"""
+        """
+        Check if URL is a YouTube video or playlist.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is a YouTube URL, False otherwise
+        """
         youtube_patterns = [
             r"youtube\.com/watch",
             r"youtube\.com/playlist",
@@ -45,8 +64,16 @@ class YouTubeDownloader:
         ]
         return any(re.search(pattern, url) for pattern in youtube_patterns)
 
-    def extract_playlist_info(self, url: str) -> Optional[Dict]:
-        """Extract playlist/channel information from YouTube URL"""
+    def extract_playlist_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract playlist/channel information from YouTube URL.
+
+        Args:
+            url: YouTube playlist or channel URL
+
+        Returns:
+            Dictionary with playlist information or None if extraction fails
+        """
         try:
             ydl_opts = {
                 "quiet": True,
@@ -83,7 +110,15 @@ class YouTubeDownloader:
             return None
 
     def get_episodes_from_playlist(self, url: str) -> List[Episode]:
-        """Get list of episodes from a YouTube playlist/channel"""
+        """
+        Get list of episodes from a YouTube playlist/channel.
+
+        Args:
+            url: YouTube playlist or channel URL
+
+        Returns:
+            List of Episode objects parsed from YouTube videos
+        """
         try:
             from datetime import datetime
 
@@ -145,7 +180,7 @@ class YouTubeDownloader:
                     episode = Episode(
                         title=entry.get("title", "Unknown Title"),
                         description=entry.get("description", "")[:500] if entry.get("description") else "",
-                        audio_url=video_url,
+                        audio_url=video_url,  # type: ignore[arg-type]  # video_url is str, Pydantic validates to HttpUrl
                         duration=str(entry.get("duration")) if entry.get("duration") else None,
                         guid=video_id,
                         pub_date=pub_date,
@@ -160,7 +195,16 @@ class YouTubeDownloader:
             return []
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
-        """Download YouTube video as audio file and return local path"""
+        """
+        Download YouTube video as audio file and return local path.
+
+        Args:
+            episode: Episode object with audio_url pointing to YouTube video
+            podcast_title: Title of the podcast (used for filename)
+
+        Returns:
+            Path to downloaded audio file or None if download fails
+        """
         try:
             safe_podcast_title = self._sanitize_filename(podcast_title)
             safe_episode_title = self._sanitize_filename(episode.title)
@@ -212,8 +256,13 @@ class YouTubeDownloader:
             logger.error(f"Error downloading YouTube video {episode.title}: {e}")
             return None
 
-    def _progress_hook(self, d):
-        """Progress callback for yt-dlp"""
+    def _progress_hook(self, d: Dict[str, Any]) -> None:
+        """
+        Progress callback for yt-dlp.
+
+        Args:
+            d: Dictionary with download progress information
+        """
         if d["status"] == "downloading":
             if d.get("total_bytes"):
                 progress = (d.get("downloaded_bytes", 0) / d["total_bytes"]) * 100

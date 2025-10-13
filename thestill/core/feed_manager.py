@@ -18,7 +18,7 @@ import re
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import feedparser
 
@@ -45,7 +45,7 @@ class PodcastFeedManager:
     - Business logic (delegates to service layer)
     """
 
-    def __init__(self, podcast_repository: PodcastRepository, path_manager: PathManager):
+    def __init__(self, podcast_repository: PodcastRepository, path_manager: PathManager) -> None:
         """
         Initialize feed manager.
 
@@ -53,11 +53,11 @@ class PodcastFeedManager:
             podcast_repository: Repository for persistence
             path_manager: Path manager for file operations
         """
-        self.repository = podcast_repository
-        self.path_manager = path_manager
-        self.storage_path = Path(path_manager.storage_path)
+        self.repository: PodcastRepository = podcast_repository
+        self.path_manager: PathManager = path_manager
+        self.storage_path: Path = Path(path_manager.storage_path)
         self.storage_path.mkdir(exist_ok=True)
-        self.youtube_downloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
+        self.youtube_downloader: YouTubeDownloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
 
     def add_podcast(self, url: str) -> bool:
         """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
@@ -77,7 +77,9 @@ class PodcastFeedManager:
 
             feed = parsed_feed.feed
             podcast = Podcast(
-                title=feed.get("title", "Unknown Podcast"), description=feed.get("description", ""), rss_url=rss_url
+                title=feed.get("title", "Unknown Podcast"),
+                description=feed.get("description", ""),
+                rss_url=rss_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
             )
 
             if not self.repository.exists(rss_url):
@@ -93,12 +95,16 @@ class PodcastFeedManager:
         """Remove a podcast feed"""
         return self.repository.delete(rss_url)
 
-    def get_new_episodes(self, max_episodes_per_podcast: Optional[int] = None) -> List[tuple[Podcast, List[Episode]]]:
-        """Check all feeds for new episodes
+    def get_new_episodes(self, max_episodes_per_podcast: Optional[int] = None) -> List[Tuple[Podcast, List[Episode]]]:
+        """
+        Check all feeds for new episodes.
 
         Args:
             max_episodes_per_podcast: Optional limit on episodes to discover per podcast.
                                      If set, only the N most recent episodes will be tracked.
+
+        Returns:
+            List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
         """
         new_episodes = []
         podcasts = self.repository.find_all()
@@ -143,7 +149,7 @@ class PodcastFeedManager:
                                 title=entry.get("title", "Unknown Episode"),
                                 description=entry.get("description", ""),
                                 pub_date=episode_date,
-                                audio_url=audio_url,
+                                audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                                 duration=entry.get("itunes_duration"),
                                 guid=episode_guid,
                             )
@@ -184,16 +190,30 @@ class PodcastFeedManager:
 
         return new_episodes
 
-    def mark_episode_downloaded(self, podcast_rss_url: str, episode_guid: str, audio_path: str):
-        """Mark an episode as downloaded with audio file path"""
+    def mark_episode_downloaded(self, podcast_rss_url: str, episode_guid: str, audio_path: str) -> None:
+        """
+        Mark an episode as downloaded with audio file path.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+            episode_guid: GUID of the episode
+            audio_path: Path to the downloaded audio file
+        """
         success = self.repository.update_episode(podcast_rss_url, episode_guid, {"audio_path": audio_path})
         if success:
             logger.info(f"Marked episode as downloaded: {episode_guid}")
         else:
             logger.warning(f"Episode not found for download marking: {episode_guid}")
 
-    def mark_episode_downsampled(self, podcast_rss_url: str, episode_guid: str, downsampled_audio_path: str):
-        """Mark an episode as downsampled with downsampled audio file path"""
+    def mark_episode_downsampled(self, podcast_rss_url: str, episode_guid: str, downsampled_audio_path: str) -> None:
+        """
+        Mark an episode as downsampled with downsampled audio file path.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+            episode_guid: GUID of the episode
+            downsampled_audio_path: Path to the downsampled audio file
+        """
         success = self.repository.update_episode(
             podcast_rss_url, episode_guid, {"downsampled_audio_path": downsampled_audio_path}
         )
@@ -206,13 +226,22 @@ class PodcastFeedManager:
         self,
         podcast_rss_url: str,
         episode_guid: str,
-        raw_transcript_path: str = None,
-        clean_transcript_path: str = None,
-        summary_path: str = None,
-    ):
-        """Mark an episode as processed"""
+        raw_transcript_path: Optional[str] = None,
+        clean_transcript_path: Optional[str] = None,
+        summary_path: Optional[str] = None,
+    ) -> None:
+        """
+        Mark an episode as processed.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+            episode_guid: GUID of the episode
+            raw_transcript_path: Optional path to raw transcript file
+            clean_transcript_path: Optional path to cleaned transcript file
+            summary_path: Optional path to summary file
+        """
         # Build updates dictionary
-        updates = {"processed": True}
+        updates: Dict[str, Any] = {"processed": True}
         if raw_transcript_path:
             updates["raw_transcript_path"] = raw_transcript_path
         if clean_transcript_path:
@@ -242,7 +271,7 @@ class PodcastFeedManager:
                                 title=entry.get("title", "Unknown Episode"),
                                 description=entry.get("description", ""),
                                 pub_date=episode_date,
-                                audio_url=audio_url,
+                                audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                                 duration=entry.get("itunes_duration"),
                                 guid=entry_guid,
                                 processed=True,
@@ -266,8 +295,16 @@ class PodcastFeedManager:
             self.repository.save(podcast)
             logger.info(f"Marked episode as processed: {episode_guid}")
 
-    def get_downloaded_episodes(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
-        """Get all episodes that have downsampled audio but need transcription"""
+    def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, List[Episode]]]:
+        """
+        Get all episodes that have downsampled audio but need transcription.
+
+        Args:
+            storage_path: Base storage path (unused, kept for compatibility)
+
+        Returns:
+            List of tuples containing (Podcast, List[Episode]) for episodes needing transcription
+        """
         episodes_to_transcribe = []
         podcasts = self.repository.find_all()
 
@@ -298,8 +335,16 @@ class PodcastFeedManager:
 
         return episodes_to_transcribe
 
-    def get_episodes_to_download(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
-        """Get all episodes that need audio download (have audio_url but no audio_path)"""
+    def get_episodes_to_download(self, storage_path: str) -> List[Tuple[Podcast, List[Episode]]]:
+        """
+        Get all episodes that need audio download (have audio_url but no audio_path).
+
+        Args:
+            storage_path: Base storage path (unused, kept for compatibility)
+
+        Returns:
+            List of tuples containing (Podcast, List[Episode]) for episodes needing download
+        """
         episodes_to_download = []
         podcasts = self.repository.find_all()
 
@@ -326,8 +371,16 @@ class PodcastFeedManager:
 
         return episodes_to_download
 
-    def get_episodes_to_downsample(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
-        """Get all episodes that have downloaded audio but need downsampling"""
+    def get_episodes_to_downsample(self, storage_path: str) -> List[Tuple[Podcast, List[Episode]]]:
+        """
+        Get all episodes that have downloaded audio but need downsampling.
+
+        Args:
+            storage_path: Base storage path (unused, kept for compatibility)
+
+        Returns:
+            List of tuples containing (Podcast, List[Episode]) for episodes needing downsampling
+        """
         episodes_to_downsample = []
         podcasts = self.repository.find_all()
 
@@ -391,7 +444,7 @@ class PodcastFeedManager:
                 feed_url = result.get("feedUrl")
                 if feed_url:
                     logger.info(f"Extracted RSS feed from Apple Podcast: {feed_url}")
-                    return feed_url
+                    return str(feed_url)  # Ensure we return str
                 logger.warning(f"No RSS feed URL found for podcast ID {podcast_id}")
                 return None
             # If the ID doesn't work, try to get the page and extract the real ID
@@ -403,11 +456,15 @@ class PodcastFeedManager:
             return None
 
     def _get_youtube_episodes(self, podcast: Podcast, max_episodes_per_podcast: Optional[int] = None) -> List[Episode]:
-        """Get new episodes from a YouTube playlist/channel
+        """
+        Get new episodes from a YouTube playlist/channel.
 
         Args:
             podcast: The podcast to get episodes for
             max_episodes_per_podcast: Optional limit on episodes to discover
+
+        Returns:
+            List of new episodes from YouTube
         """
         try:
             # Get all episodes from YouTube
@@ -457,7 +514,7 @@ class PodcastFeedManager:
             podcast = Podcast(
                 title=playlist_info.get("title", "Unknown YouTube Podcast"),
                 description=playlist_info.get("description", ""),
-                rss_url=url,  # Store the YouTube URL as the "RSS" URL
+                rss_url=url,  # type: ignore[arg-type]  # YouTube URL treated as RSS URL, Pydantic validates
             )
 
             if not self.repository.exists(url):
@@ -471,7 +528,15 @@ class PodcastFeedManager:
             return False
 
     def _resolve_apple_podcast_redirect(self, url: str) -> Optional[str]:
-        """Resolve Apple Podcast redirects to get the actual podcast ID"""
+        """
+        Resolve Apple Podcast redirects to get the actual podcast ID.
+
+        Args:
+            url: Apple Podcast URL that may redirect
+
+        Returns:
+            RSS feed URL if found, None otherwise
+        """
         try:
             # Some Apple Podcast URLs redirect to different IDs
             # We'll make a request and follow redirects to get the real URL
@@ -499,7 +564,7 @@ class PodcastFeedManager:
                             feed_url = result.get("feedUrl")
                             if feed_url:
                                 logger.info(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
-                                return feed_url
+                                return str(feed_url)  # Ensure we return str
                     except Exception as id_error:
                         logger.debug(f"Failed to lookup ID {potential_id}: {id_error}")
                         continue
@@ -510,8 +575,16 @@ class PodcastFeedManager:
             logger.error(f"Error resolving Apple Podcast redirect {url}: {e}")
             return None
 
-    def _parse_date(self, date_tuple) -> datetime:
-        """Parse feedparser date tuple to datetime"""
+    def _parse_date(self, date_tuple: Any) -> datetime:
+        """
+        Parse feedparser date tuple to datetime.
+
+        Args:
+            date_tuple: Feedparser date tuple (time.struct_time or None)
+
+        Returns:
+            Parsed datetime or current datetime if parsing fails
+        """
         if date_tuple:
             try:
                 return datetime(*date_tuple[:6])
@@ -519,14 +592,24 @@ class PodcastFeedManager:
                 pass
         return datetime.now()
 
-    def _extract_audio_url(self, entry) -> Optional[str]:
-        """Extract audio URL from feed entry"""
+    def _extract_audio_url(self, entry: Any) -> Optional[str]:
+        """
+        Extract audio URL from feed entry.
+
+        Args:
+            entry: Feedparser entry object
+
+        Returns:
+            Audio URL if found, None otherwise
+        """
         for link in entry.get("links", []):
             if link.get("type", "").startswith("audio/"):
-                return link.get("href")
+                href = link.get("href")
+                return str(href) if href else None
 
         for enclosure in entry.get("enclosures", []):
             if enclosure.get("type", "").startswith("audio/"):
-                return enclosure.get("href")
+                href = enclosure.get("href")
+                return str(href) if href else None
 
         return None

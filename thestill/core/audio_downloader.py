@@ -43,10 +43,24 @@ URL_HASH_LENGTH = 8  # Number of characters from MD5 hash to include in filename
 
 
 class AudioDownloader:
-    def __init__(self, storage_path: str = "./data/original_audio"):
-        self.storage_path = Path(storage_path)
+    """
+    Downloads podcast audio files from RSS feeds and YouTube.
+
+    Attributes:
+        storage_path: Directory where downloaded audio files are stored
+        youtube_downloader: Handler for YouTube-specific downloads
+    """
+
+    def __init__(self, storage_path: str = "./data/original_audio") -> None:
+        """
+        Initialize audio downloader.
+
+        Args:
+            storage_path: Directory path for storing downloaded audio files
+        """
+        self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        self.youtube_downloader = YouTubeDownloader(storage_path)
+        self.youtube_downloader: YouTubeDownloader = YouTubeDownloader(storage_path)
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
         """
@@ -140,8 +154,13 @@ class AudioDownloader:
             logger.debug(f"Failed to get file size for {file_path}: {e}")
             return 0
 
-    def cleanup_old_files(self, days: int = 30):
-        """Remove audio files older than specified days"""
+    def cleanup_old_files(self, days: int = 30) -> None:
+        """
+        Remove audio files older than specified days.
+
+        Args:
+            days: Number of days after which files are considered old
+        """
         import time
 
         cutoff_time = time.time() - (days * 24 * 60 * 60)
