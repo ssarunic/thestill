@@ -18,7 +18,7 @@ import re
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import feedparser
 
