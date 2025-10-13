@@ -18,11 +18,12 @@ import re
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import feedparser
 
 from ..models.podcast import Episode, Podcast
+from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
 from .youtube_downloader import YouTubeDownloader
 
@@ -30,12 +31,32 @@ logger = logging.getLogger(__name__)
 
 
 class PodcastFeedManager:
-    def __init__(self, storage_path: str = "./data"):
-        self.storage_path = Path(storage_path)
-        self.path_manager = PathManager(str(storage_path))
-        self.feeds_file = self.path_manager.feeds_file()
+    """
+    Manages podcast feeds and episodes.
+
+    Responsibilities:
+    - Fetch RSS/YouTube feeds
+    - Parse feed data
+    - Coordinate episode discovery
+    - Manage episode state transitions
+
+    Does NOT handle:
+    - Data persistence (delegates to repository)
+    - Business logic (delegates to service layer)
+    """
+
+    def __init__(self, podcast_repository: PodcastRepository, path_manager: PathManager):
+        """
+        Initialize feed manager.
+
+        Args:
+            podcast_repository: Repository for persistence
+            path_manager: Path manager for file operations
+        """
+        self.repository = podcast_repository
+        self.path_manager = path_manager
+        self.storage_path = Path(path_manager.storage_path)
         self.storage_path.mkdir(exist_ok=True)
-        self.podcasts: List[Podcast] = self._load_podcasts()
         self.youtube_downloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
 
     def add_podcast(self, url: str) -> bool:
@@ -59,9 +80,8 @@ class PodcastFeedManager:
                 title=feed.get("title", "Unknown Podcast"), description=feed.get("description", ""), rss_url=rss_url
             )
 
-            if not self._podcast_exists(rss_url):
-                self.podcasts.append(podcast)
-                self._save_podcasts()
+            if not self.repository.exists(rss_url):
+                self.repository.save(podcast)
                 return True
             return False
 
@@ -71,12 +91,7 @@ class PodcastFeedManager:
 
     def remove_podcast(self, rss_url: str) -> bool:
         """Remove a podcast feed"""
-        initial_count = len(self.podcasts)
-        self.podcasts = [p for p in self.podcasts if str(p.rss_url) != rss_url]
-        if len(self.podcasts) < initial_count:
-            self._save_podcasts()
-            return True
-        return False
+        return self.repository.delete(rss_url)
 
     def get_new_episodes(self, max_episodes_per_podcast: Optional[int] = None) -> List[tuple[Podcast, List[Episode]]]:
         """Check all feeds for new episodes
@@ -86,8 +101,9 @@ class PodcastFeedManager:
                                      If set, only the N most recent episodes will be tracked.
         """
         new_episodes = []
+        podcasts = self.repository.find_all()
 
-        for podcast in self.podcasts:
+        for podcast in podcasts:
             try:
                 # Check if this is a YouTube podcast
                 if self.youtube_downloader.is_youtube_url(str(podcast.rss_url)):
@@ -159,6 +175,9 @@ class PodcastFeedManager:
                 if episodes:
                     new_episodes.append((podcast, episodes))
 
+                # Save podcast with new episodes
+                self.repository.save(podcast)
+
             except Exception as e:
                 logger.error(f"Error checking feed {podcast.rss_url}: {e}")
                 continue
@@ -167,27 +186,21 @@ class PodcastFeedManager:
 
     def mark_episode_downloaded(self, podcast_rss_url: str, episode_guid: str, audio_path: str):
         """Mark an episode as downloaded with audio file path"""
-        for podcast in self.podcasts:
-            if str(podcast.rss_url) == podcast_rss_url:
-                for episode in podcast.episodes:
-                    if episode.guid == episode_guid:
-                        episode.audio_path = audio_path
-                        logger.info(f"Marked episode as downloaded: {episode.title}")
-                        break
-                break
-        self._save_podcasts()
+        success = self.repository.update_episode(podcast_rss_url, episode_guid, {"audio_path": audio_path})
+        if success:
+            logger.info(f"Marked episode as downloaded: {episode_guid}")
+        else:
+            logger.warning(f"Episode not found for download marking: {episode_guid}")
 
     def mark_episode_downsampled(self, podcast_rss_url: str, episode_guid: str, downsampled_audio_path: str):
         """Mark an episode as downsampled with downsampled audio file path"""
-        for podcast in self.podcasts:
-            if str(podcast.rss_url) == podcast_rss_url:
-                for episode in podcast.episodes:
-                    if episode.guid == episode_guid:
-                        episode.downsampled_audio_path = downsampled_audio_path
-                        logger.info(f"Marked episode as downsampled: {episode.title}")
-                        break
-                break
-        self._save_podcasts()
+        success = self.repository.update_episode(
+            podcast_rss_url, episode_guid, {"downsampled_audio_path": downsampled_audio_path}
+        )
+        if success:
+            logger.info(f"Marked episode as downsampled: {episode_guid}")
+        else:
+            logger.warning(f"Episode not found for downsample marking: {episode_guid}")
 
     def mark_episode_processed(
         self,
@@ -198,55 +211,67 @@ class PodcastFeedManager:
         summary_path: str = None,
     ):
         """Mark an episode as processed"""
-        for podcast in self.podcasts:
-            if str(podcast.rss_url) == podcast_rss_url:
-                # Find existing episode or get episode info from RSS
-                episode_found = False
-                for episode in podcast.episodes:
-                    if episode.guid == episode_guid:
-                        episode.processed = True
-                        episode.raw_transcript_path = raw_transcript_path
-                        episode.clean_transcript_path = clean_transcript_path
-                        episode.summary_path = summary_path
-                        episode_found = True
-                        break
+        # Build updates dictionary
+        updates = {"processed": True}
+        if raw_transcript_path:
+            updates["raw_transcript_path"] = raw_transcript_path
+        if clean_transcript_path:
+            updates["clean_transcript_path"] = clean_transcript_path
+        if summary_path:
+            updates["summary_path"] = summary_path
 
-                # If episode not found in stored episodes, fetch it from RSS and add it
-                if not episode_found:
-                    try:
-                        parsed_feed = feedparser.parse(str(podcast.rss_url))
-                        for entry in parsed_feed.entries:
-                            entry_guid = entry.get("guid", entry.get("id", ""))
-                            if entry_guid == episode_guid:
-                                episode_date = self._parse_date(entry.get("published_parsed"))
-                                audio_url = self._extract_audio_url(entry)
-                                if audio_url:
-                                    episode = Episode(
-                                        title=entry.get("title", "Unknown Episode"),
-                                        description=entry.get("description", ""),
-                                        pub_date=episode_date,
-                                        audio_url=audio_url,
-                                        duration=entry.get("itunes_duration"),
-                                        guid=entry_guid,
-                                        processed=True,
-                                        raw_transcript_path=raw_transcript_path,
-                                        clean_transcript_path=clean_transcript_path,
-                                        summary_path=summary_path,
-                                    )
-                                    podcast.episodes.append(episode)
-                                    break
-                    except Exception as e:
-                        logger.error(f"Error fetching episode info for {episode_guid}: {e}")
+        # Try to update existing episode
+        success = self.repository.update_episode(podcast_rss_url, episode_guid, updates)
 
-                podcast.last_processed = datetime.now()
-                break
-        self._save_podcasts()
+        # If episode not found in stored episodes, fetch it from RSS and add it
+        if not success:
+            try:
+                podcast = self.repository.find_by_url(podcast_rss_url)
+                if not podcast:
+                    logger.error(f"Podcast not found: {podcast_rss_url}")
+                    return
+
+                parsed_feed = feedparser.parse(str(podcast.rss_url))
+                for entry in parsed_feed.entries:
+                    entry_guid = entry.get("guid", entry.get("id", ""))
+                    if entry_guid == episode_guid:
+                        episode_date = self._parse_date(entry.get("published_parsed"))
+                        audio_url = self._extract_audio_url(entry)
+                        if audio_url:
+                            episode = Episode(
+                                title=entry.get("title", "Unknown Episode"),
+                                description=entry.get("description", ""),
+                                pub_date=episode_date,
+                                audio_url=audio_url,
+                                duration=entry.get("itunes_duration"),
+                                guid=entry_guid,
+                                processed=True,
+                                raw_transcript_path=raw_transcript_path,
+                                clean_transcript_path=clean_transcript_path,
+                                summary_path=summary_path,
+                            )
+                            podcast.episodes.append(episode)
+                            podcast.last_processed = datetime.now()
+                            self.repository.save(podcast)
+                            logger.info(f"Added and marked new episode as processed: {episode.title}")
+                            return
+            except Exception as e:
+                logger.error(f"Error fetching episode info for {episode_guid}: {e}")
+                return
+
+        # Update podcast last_processed timestamp
+        podcast = self.repository.find_by_url(podcast_rss_url)
+        if podcast:
+            podcast.last_processed = datetime.now()
+            self.repository.save(podcast)
+            logger.info(f"Marked episode as processed: {episode_guid}")
 
     def get_downloaded_episodes(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
         """Get all episodes that have downsampled audio but need transcription"""
         episodes_to_transcribe = []
+        podcasts = self.repository.find_all()
 
-        for podcast in self.podcasts:
+        for podcast in podcasts:
             episodes = []
             for episode in podcast.episodes:
                 # Check if downsampled audio exists (required for transcription)
@@ -276,8 +301,9 @@ class PodcastFeedManager:
     def get_episodes_to_download(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
         """Get all episodes that need audio download (have audio_url but no audio_path)"""
         episodes_to_download = []
+        podcasts = self.repository.find_all()
 
-        for podcast in self.podcasts:
+        for podcast in podcasts:
             episodes = []
             for episode in podcast.episodes:
                 # Check if episode has audio URL
@@ -303,8 +329,9 @@ class PodcastFeedManager:
     def get_episodes_to_downsample(self, storage_path: str) -> List[tuple[Podcast, List[Episode]]]:
         """Get all episodes that have downloaded audio but need downsampling"""
         episodes_to_downsample = []
+        podcasts = self.repository.find_all()
 
-        for podcast in self.podcasts:
+        for podcast in podcasts:
             episodes = []
             for episode in podcast.episodes:
                 # Check if original audio is downloaded
@@ -332,9 +359,8 @@ class PodcastFeedManager:
         return episodes_to_downsample
 
     def list_podcasts(self) -> List[Podcast]:
-        """Return list of all podcasts (reloads from disk to get latest data)"""
-        self.podcasts = self._load_podcasts()
-        return self.podcasts
+        """Return list of all podcasts"""
+        return self.repository.find_all()
 
     def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
         """Extract RSS feed URL from Apple Podcast URL using iTunes Lookup API"""
@@ -434,9 +460,8 @@ class PodcastFeedManager:
                 rss_url=url,  # Store the YouTube URL as the "RSS" URL
             )
 
-            if not self._podcast_exists(url):
-                self.podcasts.append(podcast)
-                self._save_podcasts()
+            if not self.repository.exists(url):
+                self.repository.save(podcast)
                 logger.info(f"Added YouTube podcast: {podcast.title}")
                 return True
             return False
@@ -485,10 +510,6 @@ class PodcastFeedManager:
             logger.error(f"Error resolving Apple Podcast redirect {url}: {e}")
             return None
 
-    def _podcast_exists(self, rss_url: str) -> bool:
-        """Check if podcast already exists"""
-        return any(str(p.rss_url) == rss_url for p in self.podcasts)
-
     def _parse_date(self, date_tuple) -> datetime:
         """Parse feedparser date tuple to datetime"""
         if date_tuple:
@@ -509,22 +530,3 @@ class PodcastFeedManager:
                 return enclosure.get("href")
 
         return None
-
-    def _load_podcasts(self) -> List[Podcast]:
-        """Load podcasts from storage"""
-        if self.feeds_file.exists():
-            try:
-                with open(self.feeds_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return [Podcast(**podcast_data) for podcast_data in data]
-            except Exception as e:
-                logger.error(f"Error loading podcasts: {e}")
-        return []
-
-    def _save_podcasts(self):
-        """Save podcasts to storage"""
-        try:
-            with open(self.feeds_file, "w", encoding="utf-8") as f:
-                json.dump([p.model_dump(mode="json") for p in self.podcasts], f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving podcasts: {e}")
