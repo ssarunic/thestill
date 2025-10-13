@@ -28,6 +28,7 @@ try:
     from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from .repositories.json_podcast_repository import JsonPodcastRepository
     from .services import PodcastService, StatsService
+    from .utils.cli_formatter import CLIFormatter
     from .utils.config import load_config
     from .utils.logger import setup_logger
     from .utils.path_manager import PathManager
@@ -42,6 +43,7 @@ except ImportError:
     from core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from repositories.json_podcast_repository import JsonPodcastRepository
     from services import PodcastService, StatsService
+    from utils.cli_formatter import CLIFormatter
     from utils.config import load_config
     from utils.logger import setup_logger
     from utils.path_manager import PathManager
@@ -120,20 +122,8 @@ def list(ctx):
     podcast_service = ctx.obj["podcast_service"]
     podcasts = podcast_service.list_podcasts()
 
-    if not podcasts:
-        click.echo("No podcasts tracked yet. Use 'thestill add <rss_url>' to add some!")
-        return
-
-    click.echo(f"\n📻 Tracked Podcasts ({len(podcasts)}):")
-    click.echo("─" * 50)
-
-    for podcast in podcasts:
-        click.echo(f"{podcast.index}. {podcast.title}")
-        click.echo(f"   RSS: {podcast.rss_url}")
-        if podcast.last_processed:
-            click.echo(f"   Last processed: {podcast.last_processed.strftime('%Y-%m-%d %H:%M')}")
-        click.echo(f"   Episodes: {podcast.episodes_processed}/{podcast.episodes_count} processed")
-        click.echo()
+    output = CLIFormatter.format_podcast_list(podcasts)
+    click.echo(output)
 
 
 @main.command()
@@ -582,8 +572,7 @@ def status(ctx):
     # Use shared service from context
     stats_service = ctx.obj["stats_service"]
 
-    click.echo("📊 thestill.ai Status")
-    click.echo("═" * 30)
+    click.echo(CLIFormatter.format_header("thestill.ai Status"))
 
     # Get statistics from service
     stats = stats_service.get_stats()
