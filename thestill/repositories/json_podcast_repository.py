@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from ..models.podcast import Episode, Podcast
+from ..models.podcast import Episode, EpisodeState, Podcast
 from ..utils.path_manager import PathManager
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
@@ -343,16 +343,19 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
         for podcast in podcasts:
             for episode in podcast.episodes:
+                # Check if episode is in the specified state
+                # Episodes are considered "unprocessed" for a state if they're
+                # currently in that state (not yet advanced to the next state)
                 matches = False
 
-                if state == "discovered":
-                    matches = bool(episode.audio_url and not episode.audio_path)
-                elif state == "downloaded":
-                    matches = bool(episode.audio_path and not episode.downsampled_audio_path)
-                elif state == "downsampled":
-                    matches = bool(episode.downsampled_audio_path and not episode.raw_transcript_path)
-                elif state == "transcribed":
-                    matches = bool(episode.raw_transcript_path and not episode.clean_transcript_path)
+                if state == EpisodeState.DISCOVERED.value:
+                    matches = episode.state == EpisodeState.DISCOVERED
+                elif state == EpisodeState.DOWNLOADED.value:
+                    matches = episode.state == EpisodeState.DOWNLOADED
+                elif state == EpisodeState.DOWNSAMPLED.value:
+                    matches = episode.state == EpisodeState.DOWNSAMPLED
+                elif state == EpisodeState.TRANSCRIBED.value:
+                    matches = episode.state == EpisodeState.TRANSCRIBED
                 else:
                     logger.warning(f"Unknown processing state: {state}")
 

@@ -13,9 +13,29 @@
 # limitations under the License.
 
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, HttpUrl
+
+
+class EpisodeState(str, Enum):
+    """
+    Episode processing state enum.
+
+    States represent the progression through the pipeline:
+    - DISCOVERED: Episode found in feed (has audio_url)
+    - DOWNLOADED: Audio file downloaded (has audio_path)
+    - DOWNSAMPLED: Audio converted to 16kHz WAV (has downsampled_audio_path)
+    - TRANSCRIBED: Transcript generated (has raw_transcript_path)
+    - CLEANED: Final cleaned transcript created (has clean_transcript_path)
+    """
+
+    DISCOVERED = "discovered"
+    DOWNLOADED = "downloaded"
+    DOWNSAMPLED = "downsampled"
+    TRANSCRIBED = "transcribed"
+    CLEANED = "cleaned"
 
 
 class Episode(BaseModel):
@@ -31,6 +51,28 @@ class Episode(BaseModel):
     raw_transcript_path: Optional[str] = None  # Filename of the raw transcript JSON (Whisper output)
     clean_transcript_path: Optional[str] = None  # Filename of the cleaned transcript MD (corrected, formatted)
     summary_path: Optional[str] = None  # Filename of the summary (future use)
+
+    @property
+    def state(self) -> EpisodeState:
+        """
+        Compute current episode state from file paths.
+
+        The state is determined by checking which paths are set, from most
+        progressed to least progressed. This ensures we always return the
+        furthest state reached.
+
+        Returns:
+            EpisodeState: Current processing state
+        """
+        if self.clean_transcript_path:
+            return EpisodeState.CLEANED
+        if self.raw_transcript_path:
+            return EpisodeState.TRANSCRIBED
+        if self.downsampled_audio_path:
+            return EpisodeState.DOWNSAMPLED
+        if self.audio_path:
+            return EpisodeState.DOWNLOADED
+        return EpisodeState.DISCOVERED
 
 
 class Podcast(BaseModel):
