@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 class SystemStats(BaseModel):
     """System-wide statistics"""
+
     podcasts_tracked: int
     episodes_total: int
     episodes_processed: int
@@ -82,7 +83,7 @@ class StatsService:
                 # Check if cleaned transcript file actually exists in processed/
                 if episode.summary_path:
                     md_path = self.storage_path / "processed" / episode.summary_path
-                    if md_path.with_suffix('.md').exists():
+                    if md_path.with_suffix(".md").exists():
                         transcripts_available += 1
 
         episodes_unprocessed = episodes_total - episodes_processed
@@ -101,7 +102,7 @@ class StatsService:
             transcripts_available=transcripts_available,
             audio_files_count=audio_files_count,
             storage_path=str(self.storage_path),
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
         )
 
         logger.info(

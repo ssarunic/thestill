@@ -187,7 +187,7 @@ class PathManager:
             self.raw_transcripts_dir(),
             self.clean_transcripts_dir(),
             self.summaries_dir(),
-            self.evaluations_dir()
+            self.evaluations_dir(),
         ]
 
         for directory in directories:
@@ -206,12 +206,12 @@ class PathManager:
             True if the file/directory exists, False otherwise
         """
         dir_map = {
-            'original_audio': self.original_audio_dir(),
-            'downsampled_audio': self.downsampled_audio_dir(),
-            'raw_transcripts': self.raw_transcripts_dir(),
-            'clean_transcripts': self.clean_transcripts_dir(),
-            'summaries': self.summaries_dir(),
-            'evaluations': self.evaluations_dir()
+            "original_audio": self.original_audio_dir(),
+            "downsampled_audio": self.downsampled_audio_dir(),
+            "raw_transcripts": self.raw_transcripts_dir(),
+            "clean_transcripts": self.clean_transcripts_dir(),
+            "summaries": self.summaries_dir(),
+            "evaluations": self.evaluations_dir(),
         }
 
         if directory_type not in dir_map:
@@ -236,12 +236,12 @@ class PathManager:
             Full path to the file
         """
         file_map = {
-            'original_audio': self.original_audio_file,
-            'downsampled_audio': self.downsampled_audio_file,
-            'raw_transcripts': self.raw_transcript_file,
-            'clean_transcripts': self.clean_transcript_file,
-            'summaries': self.summary_file,
-            'evaluations': self.evaluation_file
+            "original_audio": self.original_audio_file,
+            "downsampled_audio": self.downsampled_audio_file,
+            "raw_transcripts": self.raw_transcript_file,
+            "clean_transcripts": self.clean_transcript_file,
+            "summaries": self.summary_file,
+            "evaluations": self.evaluation_file,
         }
 
         if directory_type not in file_map:

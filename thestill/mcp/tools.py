@@ -23,7 +23,7 @@ import logging
 from typing import Any
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 from ..services import PodcastService, StatsService
 
@@ -54,11 +54,11 @@ def setup_tools(server: Server, storage_path: str):
                     "properties": {
                         "url": {
                             "type": "string",
-                            "description": "RSS feed URL, Apple Podcast URL, or YouTube channel/playlist URL"
+                            "description": "RSS feed URL, Apple Podcast URL, or YouTube channel/playlist URL",
                         }
                     },
-                    "required": ["url"]
-                }
+                    "required": ["url"],
+                },
             ),
             Tool(
                 name="remove_podcast",
@@ -66,21 +66,15 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {
-                            "type": "string",
-                            "description": "Podcast index (1, 2, 3...) or RSS URL"
-                        }
+                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"}
                     },
-                    "required": ["podcast_id"]
-                }
+                    "required": ["podcast_id"],
+                },
             ),
             Tool(
                 name="list_podcasts",
                 description="List all tracked podcasts with their indices and statistics.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {}
-                }
+                inputSchema={"type": "object", "properties": {}},
             ),
             Tool(
                 name="list_episodes",
@@ -88,30 +82,24 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {
-                            "type": "string",
-                            "description": "Podcast index (1, 2, 3...) or RSS URL"
-                        },
+                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
                         "limit": {
                             "type": "integer",
                             "description": "Maximum number of episodes to return (default: 10)",
-                            "default": 10
+                            "default": 10,
                         },
                         "since_hours": {
                             "type": "integer",
-                            "description": "Only include episodes published in the last N hours (optional)"
-                        }
+                            "description": "Only include episodes published in the last N hours (optional)",
+                        },
                     },
-                    "required": ["podcast_id"]
-                }
+                    "required": ["podcast_id"],
+                },
             ),
             Tool(
                 name="get_status",
                 description="Get system-wide statistics including podcast count, episode counts, and processing status.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {}
-                }
+                inputSchema={"type": "object", "properties": {}},
             ),
             Tool(
                 name="get_transcript",
@@ -119,18 +107,15 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {
-                            "type": "string",
-                            "description": "Podcast index (1, 2, 3...) or RSS URL"
-                        },
+                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
                         "episode_id": {
                             "type": "string",
-                            "description": "Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID"
-                        }
+                            "description": "Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID",
+                        },
                     },
-                    "required": ["podcast_id", "episode_id"]
-                }
-            )
+                    "required": ["podcast_id", "episode_id"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -151,19 +136,17 @@ def setup_tools(server: Server, storage_path: str):
             if name == "add_podcast":
                 url = arguments.get("url")
                 if not url:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({"success": False, "error": "Missing required parameter: url"})
-                    )]
+                    return [
+                        TextContent(
+                            type="text", text=json.dumps({"success": False, "error": "Missing required parameter: url"})
+                        )
+                    ]
 
                 podcast = podcast_service.add_podcast(url)
                 if podcast:
                     # Get the podcast index
                     podcasts = podcast_service.list_podcasts()
-                    podcast_index = next(
-                        (p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)),
-                        0
-                    )
+                    podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
                     result = {
                         "success": True,
@@ -172,24 +155,23 @@ def setup_tools(server: Server, storage_path: str):
                         "podcast": {
                             "title": podcast.title,
                             "description": podcast.description,
-                            "rss_url": str(podcast.rss_url)
-                        }
+                            "rss_url": str(podcast.rss_url),
+                        },
                     }
                 else:
-                    result = {
-                        "success": False,
-                        "error": "Failed to add podcast or podcast already exists"
-                    }
+                    result = {"success": False, "error": "Failed to add podcast or podcast already exists"}
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "remove_podcast":
                 podcast_id = arguments.get("podcast_id")
                 if not podcast_id:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({"success": False, "error": "Missing required parameter: podcast_id"})
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps({"success": False, "error": "Missing required parameter: podcast_id"}),
+                        )
+                    ]
 
                 # Convert to int if it's a numeric string
                 if isinstance(podcast_id, str) and podcast_id.isdigit():
@@ -197,15 +179,9 @@ def setup_tools(server: Server, storage_path: str):
 
                 success = podcast_service.remove_podcast(podcast_id)
                 if success:
-                    result = {
-                        "success": True,
-                        "message": "Podcast removed successfully"
-                    }
+                    result = {"success": True, "message": "Podcast removed successfully"}
                 else:
-                    result = {
-                        "success": False,
-                        "error": f"Podcast not found: {podcast_id}"
-                    }
+                    result = {"success": False, "error": f"Podcast not found: {podcast_id}"}
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -220,7 +196,7 @@ def setup_tools(server: Server, storage_path: str):
                             "rss_url": p.rss_url,
                             "episodes_count": p.episodes_count,
                             "episodes_processed": p.episodes_processed,
-                            "last_processed": p.last_processed.isoformat() if p.last_processed else None
+                            "last_processed": p.last_processed.isoformat() if p.last_processed else None,
                         }
                         for p in podcasts
                     ]
@@ -231,10 +207,12 @@ def setup_tools(server: Server, storage_path: str):
             elif name == "list_episodes":
                 podcast_id = arguments.get("podcast_id")
                 if not podcast_id:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({"success": False, "error": "Missing required parameter: podcast_id"})
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps({"success": False, "error": "Missing required parameter: podcast_id"}),
+                        )
+                    ]
 
                 # Convert to int if it's a numeric string
                 if isinstance(podcast_id, str) and podcast_id.isdigit():
@@ -245,10 +223,12 @@ def setup_tools(server: Server, storage_path: str):
 
                 episodes = podcast_service.list_episodes(podcast_id, limit, since_hours)
                 if episodes is None:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({"success": False, "error": f"Podcast not found: {podcast_id}"})
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps({"success": False, "error": f"Podcast not found: {podcast_id}"}),
+                        )
+                    ]
 
                 # Get podcast info
                 podcast = podcast_service.get_podcast(podcast_id)
@@ -264,10 +244,10 @@ def setup_tools(server: Server, storage_path: str):
                             "duration": ep.duration,
                             "processed": ep.processed,
                             "transcript_available": ep.transcript_available,
-                            "summary_available": ep.summary_available
+                            "summary_available": ep.summary_available,
                         }
                         for ep in episodes
-                    ]
+                    ],
                 }
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -283,7 +263,7 @@ def setup_tools(server: Server, storage_path: str):
                     "transcripts_available": stats.transcripts_available,
                     "audio_files_count": stats.audio_files_count,
                     "storage_path": stats.storage_path,
-                    "last_updated": stats.last_updated.isoformat()
+                    "last_updated": stats.last_updated.isoformat(),
                 }
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -293,13 +273,14 @@ def setup_tools(server: Server, storage_path: str):
                 episode_id = arguments.get("episode_id")
 
                 if not podcast_id or not episode_id:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({
-                            "success": False,
-                            "error": "Missing required parameters: podcast_id and episode_id"
-                        })
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {"success": False, "error": "Missing required parameters: podcast_id and episode_id"}
+                            ),
+                        )
+                    ]
 
                 # Convert to int if it's a numeric string
                 if isinstance(podcast_id, str) and podcast_id.isdigit():
@@ -310,37 +291,29 @@ def setup_tools(server: Server, storage_path: str):
                 transcript = podcast_service.get_transcript(podcast_id, episode_id)
 
                 if transcript is None:
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({
-                            "success": False,
-                            "error": f"Episode not found: podcast={podcast_id}, episode={episode_id}"
-                        })
-                    )]
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "success": False,
+                                    "error": f"Episode not found: podcast={podcast_id}, episode={episode_id}",
+                                }
+                            ),
+                        )
+                    ]
 
                 # If transcript starts with "N/A", it means it's not available
                 if transcript.startswith("N/A"):
-                    return [TextContent(
-                        type="text",
-                        text=json.dumps({
-                            "success": False,
-                            "error": transcript
-                        })
-                    )]
+                    return [TextContent(type="text", text=json.dumps({"success": False, "error": transcript}))]
 
                 # Return the transcript content directly (not JSON-encoded)
                 return [TextContent(type="text", text=transcript)]
 
             else:
                 logger.error(f"Unknown tool: {name}")
-                return [TextContent(
-                    type="text",
-                    text=json.dumps({"success": False, "error": f"Unknown tool: {name}"})
-                )]
+                return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}))]
 
         except Exception as e:
             logger.error(f"Error calling tool {name}: {e}", exc_info=True)
-            return [TextContent(
-                type="text",
-                text=json.dumps({"success": False, "error": str(e)})
-            )]
+            return [TextContent(type="text", text=json.dumps({"success": False, "error": str(e)}))]

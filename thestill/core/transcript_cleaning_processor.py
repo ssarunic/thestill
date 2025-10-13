@@ -21,6 +21,7 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+
 from .llm_provider import LLMProvider
 from .transcript_formatter import TranscriptFormatter
 
@@ -75,7 +76,7 @@ class TranscriptCleaningProcessor:
         episode_title: str = "",
         episode_description: str = "",
         output_path: Optional[str] = None,
-        save_corrections: bool = True
+        save_corrections: bool = True,
     ) -> Dict:
         """
         Clean a transcript with focus on accuracy and readability.
@@ -106,11 +107,7 @@ class TranscriptCleaningProcessor:
             # Phase 1: Analyze and create corrections list
             print("Phase 1: Analyzing transcript and identifying corrections...")
             corrections = self._analyze_and_correct(
-                formatted_markdown,
-                podcast_title,
-                podcast_description,
-                episode_title,
-                episode_description
+                formatted_markdown, podcast_title, podcast_description, episode_title, episode_description
             )
 
             # Save corrections to debug folder if requested
@@ -128,11 +125,7 @@ class TranscriptCleaningProcessor:
             # Phase 2: Identify speakers (using corrected transcript)
             print("Phase 2: Identifying speakers...")
             speaker_mapping = self._identify_speakers(
-                corrected_markdown,
-                podcast_title,
-                podcast_description,
-                episode_title,
-                episode_description
+                corrected_markdown, podcast_title, podcast_description, episode_title, episode_description
             )
 
             # Save speaker mapping to debug folder if requested
@@ -142,10 +135,7 @@ class TranscriptCleaningProcessor:
             # Phase 3: Generate final cleaned transcript
             print("Phase 3: Generating final cleaned transcript...")
             cleaned_markdown = self._generate_cleaned_transcript(
-                formatted_markdown,
-                corrections,
-                speaker_mapping,
-                episode_title
+                formatted_markdown, corrections, speaker_mapping, episode_title
             )
 
             processing_time = time.time() - start_time
@@ -156,7 +146,7 @@ class TranscriptCleaningProcessor:
                 "cleaned_markdown": cleaned_markdown,
                 "processing_time": processing_time,
                 "episode_title": episode_title,
-                "podcast_title": podcast_title
+                "podcast_title": podcast_title,
             }
 
             # Save outputs if path provided
@@ -184,7 +174,7 @@ class TranscriptCleaningProcessor:
             return [text]
 
         chunks = []
-        lines = text.split('\n')
+        lines = text.split("\n")
         current_chunk = []
         current_size = 0
 
@@ -193,7 +183,7 @@ class TranscriptCleaningProcessor:
 
             if current_size + line_size > self.chunk_size and current_chunk:
                 # Save current chunk and start new one
-                chunks.append('\n'.join(current_chunk))
+                chunks.append("\n".join(current_chunk))
                 current_chunk = [line]
                 current_size = line_size
             else:
@@ -202,7 +192,7 @@ class TranscriptCleaningProcessor:
 
         # Add remaining chunk
         if current_chunk:
-            chunks.append('\n'.join(current_chunk))
+            chunks.append("\n".join(current_chunk))
 
         return chunks
 
@@ -212,7 +202,7 @@ class TranscriptCleaningProcessor:
         podcast_title: str,
         podcast_description: str,
         episode_title: str,
-        episode_description: str
+        episode_description: str,
     ) -> List[Dict]:
         """Phase 1: Analyze transcript and identify all corrections needed"""
 
@@ -307,10 +297,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
 {chunk}"""
 
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": context_info}
-                ]
+                messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": context_info}]
 
                 # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
                 provider_max_tokens = 64000 if "claude" in self.provider.get_model_name().lower() else 65000
@@ -319,7 +306,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                     messages=messages,
                     temperature=0.1,
                     max_tokens=provider_max_tokens,
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"},
                 )
 
                 # Parse JSON response
@@ -362,10 +349,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
 
         # Sort corrections by type priority (spelling first, then grammar, then fillers)
         priority_order = {"spelling": 1, "grammar": 2, "punctuation": 3, "filler": 4, "ad_segment": 5}
-        sorted_corrections = sorted(
-            corrections,
-            key=lambda c: priority_order.get(c.get("type", ""), 99)
-        )
+        sorted_corrections = sorted(corrections, key=lambda c: priority_order.get(c.get("type", ""), 99))
 
         applied_count = 0
         for correction in sorted_corrections:
@@ -390,7 +374,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
         podcast_title: str,
         podcast_description: str,
         episode_title: str,
-        episode_description: str
+        episode_description: str,
     ) -> Dict[str, str]:
         """Phase 2: Identify who the speakers are"""
 
@@ -446,16 +430,13 @@ TRANSCRIPT:
 {sample_text}"""
 
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": context_info}
-            ]
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": context_info}]
 
             response = self.provider.chat_completion(
                 messages=messages,
                 temperature=0.1,
                 max_tokens=2000,  # Increased for Gemini's larger output capacity
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
 
             # Parse JSON response
@@ -479,21 +460,19 @@ TRANSCRIPT:
             return {}
 
     def _generate_cleaned_transcript(
-        self,
-        formatted_markdown: str,
-        corrections: List[Dict],
-        speaker_mapping: Dict[str, str],
-        episode_title: str
+        self, formatted_markdown: str, corrections: List[Dict], speaker_mapping: Dict[str, str], episode_title: str
     ) -> str:
         """Phase 3: Generate final cleaned markdown transcript"""
 
         transcript_text = formatted_markdown
 
         # Build corrections summary for the LLM
-        corrections_summary = "\n".join([
-            f"- {c['type']}: '{c['original']}' → '{c['corrected']}'"
-            for c in corrections[:100]  # Increased limit since we removed 'reason' field
-        ])
+        corrections_summary = "\n".join(
+            [
+                f"- {c['type']}: '{c['original']}' → '{c['corrected']}'"
+                for c in corrections[:100]  # Increased limit since we removed 'reason' field
+            ]
+        )
 
         speaker_mapping_str = json.dumps(speaker_mapping, indent=2)
 
@@ -570,10 +549,7 @@ ORIGINAL TRANSCRIPT{chunk_info}:
 Please produce the final cleaned Markdown transcript."""
 
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ]
+                messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
 
                 # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
                 model_name = self.provider.get_model_name().lower()
@@ -585,18 +561,15 @@ Please produce the final cleaned Markdown transcript."""
                     provider_max_tokens = 32000
 
                 # Use continuation for providers that support it (Claude and OpenAI)
-                if hasattr(self.provider, 'chat_completion_with_continuation') and ("claude" in model_name or "gpt" in model_name):
+                if hasattr(self.provider, "chat_completion_with_continuation") and (
+                    "claude" in model_name or "gpt" in model_name
+                ):
                     response = self.provider.chat_completion_with_continuation(
-                        messages=messages,
-                        temperature=0.3,
-                        max_tokens=provider_max_tokens,
-                        max_attempts=3
+                        messages=messages, temperature=0.3, max_tokens=provider_max_tokens, max_attempts=3
                     )
                 else:
                     response = self.provider.chat_completion(
-                        messages=messages,
-                        temperature=0.3,
-                        max_tokens=provider_max_tokens
+                        messages=messages, temperature=0.3, max_tokens=provider_max_tokens
                     )
 
                 cleaned_chunks.append(response.strip())
@@ -626,33 +599,33 @@ Please produce the final cleaned Markdown transcript."""
         debug_dir.mkdir(parents=True, exist_ok=True)
 
         # Get clean episode ID (remove any existing suffixes)
-        episode_id = output_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+        episode_id = output_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
 
         if phase == "original":
             # Save to debug directory: {episode_id}.original.md
             path = debug_dir / f"{episode_id}.original.md"
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
             print(f"  → Original transcript saved to: {path}")
 
         elif phase == "corrections":
             # Save to debug directory: {episode_id}.corrections.json
             path = debug_dir / f"{episode_id}.corrections.json"
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Corrections saved to: {path}")
 
         elif phase == "corrected":
             # Save to debug directory: {episode_id}.corrected.md
             path = debug_dir / f"{episode_id}.corrected.md"
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
             print(f"  → Corrected transcript saved to: {path}")
 
         elif phase == "speakers":
             # Save to debug directory: {episode_id}.speakers.json
             path = debug_dir / f"{episode_id}.speakers.json"
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Speaker mapping saved to: {path}")
 
@@ -666,7 +639,7 @@ Please produce the final cleaned Markdown transcript."""
         Returns:
             Markdown text with ad paragraphs removed
         """
-        lines = markdown_text.split('\n')
+        lines = markdown_text.split("\n")
         filtered_lines = []
         skip_next_blank = False
 
@@ -675,14 +648,14 @@ Please produce the final cleaned Markdown transcript."""
             line = lines[i]
 
             # Check if line starts with **[AD]** or **[ADVERTISEMENT]**
-            if line.strip().startswith('**[AD]**') or line.strip().startswith('**[ADVERTISEMENT]**'):
+            if line.strip().startswith("**[AD]**") or line.strip().startswith("**[ADVERTISEMENT]**"):
                 # Skip this line
                 skip_next_blank = True
                 i += 1
                 continue
 
             # Skip blank lines immediately after an ad
-            if skip_next_blank and line.strip() == '':
+            if skip_next_blank and line.strip() == "":
                 skip_next_blank = False
                 i += 1
                 continue
@@ -692,7 +665,7 @@ Please produce the final cleaned Markdown transcript."""
             skip_next_blank = False
             i += 1
 
-        return '\n'.join(filtered_lines)
+        return "\n".join(filtered_lines)
 
     def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
         """
@@ -709,22 +682,22 @@ Please produce the final cleaned Markdown transcript."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Get clean episode ID (remove legacy suffixes)
-        episode_id = output_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+        episode_id = output_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
 
         # Save final cleaned markdown: {episode_id}.md
         final_path = output_path.parent / f"{episode_id}.md"
-        with open(final_path, 'w', encoding='utf-8') as f:
+        with open(final_path, "w", encoding="utf-8") as f:
             # Add metadata header
             f.write(f"# {result['episode_title']}\n\n")
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")
             f.write("---\n\n")
-            f.write(result['cleaned_markdown'])
+            f.write(result["cleaned_markdown"])
         print(f"Final transcript saved to: {final_path}")
 
         # Save ad-free version: {episode_id}.no-ads.md
-        no_ads_markdown = self._remove_ads_from_markdown(result['cleaned_markdown'])
+        no_ads_markdown = self._remove_ads_from_markdown(result["cleaned_markdown"])
         no_ads_path = output_path.parent / f"{episode_id}.no-ads.md"
-        with open(no_ads_path, 'w', encoding='utf-8') as f:
+        with open(no_ads_path, "w", encoding="utf-8") as f:
             # Add metadata header
             f.write(f"# {result['episode_title']}\n\n")
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")

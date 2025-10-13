@@ -48,9 +48,7 @@ class TranscriptFormatter:
 
         # Step 3: Build Markdown
         markdown = self._build_markdown(
-            title=episode_title or "Transcript",
-            metadata=metadata,
-            speaker_blocks=speaker_blocks
+            title=episode_title or "Transcript", metadata=metadata, speaker_blocks=speaker_blocks
         )
 
         return markdown
@@ -69,11 +67,7 @@ class TranscriptFormatter:
             if segments:
                 duration = segments[-1].get("end", 0)
 
-        return {
-            "audio_file": audio_file,
-            "language": language,
-            "duration": duration or 0
-        }
+        return {"audio_file": audio_file, "language": language, "duration": duration or 0}
 
     def _normalise_text(self, text: str) -> str:
         """
@@ -87,17 +81,17 @@ class TranscriptFormatter:
         text = text.strip()
 
         # Collapse multiple spaces to one
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r"\s+", " ", text)
 
         # Fix space before punctuation (tokenisation artefacts)
-        text = re.sub(r'\s+([,\.!?;:])', r'\1', text)
+        text = re.sub(r"\s+([,\.!?;:])", r"\1", text)
 
         # Replace inconsistent smart quotes with straight quotes
         text = text.replace('"', '"').replace('"', '"')
-        text = text.replace(''', "'").replace(''', "'")
+        text = text.replace(""", "'").replace(""", "'")
 
         # Normalise ellipses to three dots
-        text = re.sub(r'\.{2,}', '...', text)
+        text = re.sub(r"\.{2,}", "...", text)
 
         return text
 
@@ -126,10 +120,7 @@ class TranscriptFormatter:
             # Add timecode when:
             # 1. Speaker changes, OR
             # 2. Enough time has passed (timecode_interval)
-            should_add_timecode = (
-                current_speaker != speaker or
-                (start_time - last_timecode) >= self.timecode_interval
-            )
+            should_add_timecode = current_speaker != speaker or (start_time - last_timecode) >= self.timecode_interval
 
             # If speaker changed or timecode interval reached, save previous block
             if should_add_timecode and current_text:
@@ -213,7 +204,7 @@ class TranscriptFormatter:
             The formatted Markdown string
         """
         # Load JSON
-        with open(transcript_json_path, 'r', encoding='utf-8') as f:
+        with open(transcript_json_path, "r", encoding="utf-8") as f:
             transcript_data = json.load(f)
 
         # Format to Markdown
@@ -223,7 +214,7 @@ class TranscriptFormatter:
         output_path = Path(output_md_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(markdown)
 
         print(f"Formatted transcript saved to: {output_path}")

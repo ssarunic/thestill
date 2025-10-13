@@ -12,26 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import whisper
 import json
-import time
 import os
-import torch
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import torch
+import whisper
 from pydub import AudioSegment
 from pydub.effects import normalize
 
 try:
     import whisperx
+
     WHISPERX_AVAILABLE = True
 except ImportError:
     WHISPERX_AVAILABLE = False
 
 try:
     from pyannote.audio import Pipeline
+
     PYANNOTE_AVAILABLE = True
 except ImportError:
     PYANNOTE_AVAILABLE = False
@@ -56,9 +59,9 @@ class DiarizationProgressMonitor:
         # Initial empirical ratios: diarization_time = audio_duration * ratio
         # Based on typical pyannote.audio performance with modern hardware
         self.processing_ratios = {
-            "cuda": 0.5,   # GPU: ~0.5x audio duration (very fast)
-            "cpu": 1.0,    # CPU: ~1.0x audio duration (real-time)
-            "mps": 0.7     # Apple Silicon: ~0.7x audio duration
+            "cuda": 0.5,  # GPU: ~0.5x audio duration (very fast)
+            "cpu": 1.0,  # CPU: ~1.0x audio duration (real-time)
+            "mps": 0.7,  # Apple Silicon: ~0.7x audio duration
         }
 
     def _get_estimated_duration(self) -> float:
@@ -111,8 +114,7 @@ class DiarizationProgressMonitor:
             bar = "█" * filled + "░" * (bar_width - filled)
 
             # Print progress (carriage return to overwrite line)
-            print(f"\r  Progress: [{bar}] {progress_pct}% | {elapsed_str} / ~{estimated_str}",
-                  end="", flush=True)
+            print(f"\r  Progress: [{bar}] {progress_pct}% | {elapsed_str} / ~{estimated_str}", end="", flush=True)
 
             # Update every second
             self.stop_event.wait(1.0)
@@ -147,7 +149,7 @@ class WhisperTranscriber:
         if device == "auto":
             if torch.cuda.is_available():
                 return "cuda"
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 # MPS has issues with Whisper in PyTorch 2.8.0, fall back to CPU
                 return "cpu"
             else:
@@ -160,9 +162,10 @@ class WhisperTranscriber:
             print(f"Loading Whisper model: {self.model_name}")
 
             original_load = torch.load
+
             def safe_load(*args, **kwargs):
-                kwargs['weights_only'] = False
-                kwargs['map_location'] = 'cpu'  # Force CPU loading first
+                kwargs["weights_only"] = False
+                kwargs["map_location"] = "cpu"  # Force CPU loading first
                 return original_load(*args, **kwargs)
 
             torch.load = safe_load
@@ -197,9 +200,15 @@ class WhisperTranscriber:
             shutil.rmtree(cache_dir)
             print(f"Cleared Whisper cache: {cache_dir}")
 
-    def transcribe_audio(self, audio_path: str, output_path: str = None,
-                         custom_prompt: str = None, preprocess_audio: bool = False,
-                         clean_transcript: bool = False, cleaning_config: Dict = None) -> Optional[Dict]:
+    def transcribe_audio(
+        self,
+        audio_path: str,
+        output_path: str = None,
+        custom_prompt: str = None,
+        preprocess_audio: bool = False,
+        clean_transcript: bool = False,
+        cleaning_config: Dict = None,
+    ) -> Optional[Dict]:
         """
         Transcribe audio file with optional custom prompt for better accuracy.
 
@@ -235,9 +244,9 @@ class WhisperTranscriber:
                 "word_timestamps": True,
                 "temperature": 0.0,
                 "no_speech_threshold": 0.6,  # Higher threshold to detect silence
-                "logprob_threshold": -1.0,   # Filter out low-probability segments
+                "logprob_threshold": -1.0,  # Filter out low-probability segments
                 "compression_ratio_threshold": 2.4,  # Detect repetitive content
-                "condition_on_previous_text": False  # Reduce hallucination propagation
+                "condition_on_previous_text": False,  # Reduce hallucination propagation
             }
 
             # Add custom prompt if provided (helps with proper nouns, technical terms)
@@ -290,7 +299,7 @@ class WhisperTranscriber:
                 "start": segment.get("start"),
                 "end": segment.get("end"),
                 "text": segment.get("text", "").strip(),
-                "words": []
+                "words": [],
             }
 
             for word in segment.get("words", []):
@@ -298,7 +307,7 @@ class WhisperTranscriber:
                     "word": word.get("word", "").strip(),
                     "start": word.get("start"),
                     "end": word.get("end"),
-                    "probability": word.get("probability", 0.0)
+                    "probability": word.get("probability", 0.0),
                 }
                 segment_data["words"].append(word_data)
 
@@ -314,14 +323,14 @@ class WhisperTranscriber:
             "segments": filtered_segments,
             "processing_time": processing_time,
             "model_used": self.model_name,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
 
     def _save_transcript(self, transcript_data: Dict, output_path: str):
         """Save transcript to JSON file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
             print(f"Transcript saved to: {output_path}")
         except Exception as e:
@@ -347,11 +356,11 @@ class WhisperTranscriber:
     def estimate_processing_time(self, audio_duration_minutes: float) -> float:
         """Estimate transcription time based on audio duration"""
         base_ratio = {
-            "tiny": 0.05,    # 5% of audio length
-            "base": 0.1,     # 10% of audio length
-            "small": 0.15,   # 15% of audio length
+            "tiny": 0.05,  # 5% of audio length
+            "base": 0.1,  # 10% of audio length
+            "small": 0.15,  # 15% of audio length
             "medium": 0.25,  # 25% of audio length
-            "large": 0.4     # 40% of audio length
+            "large": 0.4,  # 40% of audio length
         }
 
         ratio = base_ratio.get(self.model_name, 0.15)
@@ -370,7 +379,9 @@ class WhisperTranscriber:
 
         # Add common proper nouns based on podcast type
         if "politics" in podcast_title.lower():
-            prompt_parts.append("Topics include British politics, international relations, Conservative Party, Labour Party, Parliament, Westminster, Ukraine, Gaza, Nigeria.")
+            prompt_parts.append(
+                "Topics include British politics, international relations, Conservative Party, Labour Party, Parliament, Westminster, Ukraine, Gaza, Nigeria."
+            )
 
         if "rest is politics" in podcast_title.lower():
             prompt_parts.append("Speakers may include Rory Stewart, Alastair Campbell.")
@@ -441,7 +452,7 @@ class WhisperTranscriber:
         # Check for exact word repetition (like "no, no, no, no...")
         word_counts = {}
         for word in words:
-            word_lower = word.lower().strip('.,!?;:')
+            word_lower = word.lower().strip(".,!?;:")
             word_counts[word_lower] = word_counts.get(word_lower, 0) + 1
 
         # If any word appears more than 40% of the time, it's likely a hallucination
@@ -464,7 +475,7 @@ class WhisperTranscriber:
 
         phrase_counts = {}
         for i in range(len(words) - phrase_length + 1):
-            phrase = ' '.join(words[i:i + phrase_length]).lower()
+            phrase = " ".join(words[i : i + phrase_length]).lower()
             phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
 
         # If any phrase appears more than 3 times, it's likely repetitive
@@ -501,7 +512,7 @@ class WhisperTranscriber:
             words = text.split()
             if len(words) > 50:  # Very long segment
                 # Check if it's mostly repetitive
-                unique_words = set(word.lower().strip('.,!?;:') for word in words)
+                unique_words = set(word.lower().strip(".,!?;:") for word in words)
                 if len(unique_words) / len(words) < 0.3:  # Less than 30% unique words
                     return True
 
@@ -521,7 +532,7 @@ class WhisperTranscriber:
             # Apply noise gate - remove very quiet sections that might cause hallucinations
             # Convert to dBFS for analysis
             silence_threshold = -50  # dB threshold for silence
-            min_silence_len = 1000   # 1 second minimum silence to remove
+            min_silence_len = 1000  # 1 second minimum silence to remove
 
             # Split audio on silence
             chunks = self._split_on_silence(audio, silence_threshold, min_silence_len)
@@ -539,8 +550,9 @@ class WhisperTranscriber:
             # Create temporary file for processed audio
             # Use MP3 to avoid format compatibility issues and huge WAV files
             from pathlib import Path
+
             input_ext = Path(audio_path).suffix
-            temp_path = audio_path.replace(input_ext, f'_processed.mp3')
+            temp_path = audio_path.replace(input_ext, f"_processed.mp3")
             processed_audio.export(temp_path, format="mp3", bitrate="128k")
 
             print(f"Audio preprocessed and saved to: {temp_path}")
@@ -558,7 +570,7 @@ class WhisperTranscriber:
         # Process audio in 1-second segments
         segment_length = 1000  # 1 second
         for i in range(0, len(audio), segment_length):
-            segment = audio[i:i + segment_length]
+            segment = audio[i : i + segment_length]
 
             # Check if segment is mostly silent
             if segment.dBFS < silence_thresh:
@@ -589,8 +601,8 @@ class WhisperTranscriber:
         print("=" * 60)
 
         try:
+            from .llm_provider import OllamaProvider, OpenAIProvider
             from .transcript_cleaner import TranscriptCleaner, TranscriptCleanerConfig
-            from .llm_provider import OpenAIProvider, OllamaProvider
 
             # Extract config
             provider_type = cleaning_config.get("provider", "ollama")
@@ -611,9 +623,7 @@ class WhisperTranscriber:
 
             # Create cleaner config
             cleaner_config = TranscriptCleanerConfig(
-                chunk_size=chunk_size,
-                overlap_pct=overlap_pct,
-                extract_entities=extract_entities
+                chunk_size=chunk_size, overlap_pct=overlap_pct, extract_entities=extract_entities
             )
 
             # Create cleaner
@@ -634,7 +644,7 @@ class WhisperTranscriber:
                 "processing_time": cleaned_result["processing_time"],
                 "chunks_processed": cleaned_result["chunks_processed"],
                 "original_tokens": cleaned_result["original_tokens"],
-                "final_tokens": cleaned_result["final_tokens"]
+                "final_tokens": cleaned_result["final_tokens"],
             }
 
             print("=" * 60)
@@ -660,7 +670,7 @@ class WhisperXTranscriber:
         hf_token: str = "",
         min_speakers: Optional[int] = None,
         max_speakers: Optional[int] = None,
-        diarization_model: str = "pyannote/speaker-diarization-3.1"
+        diarization_model: str = "pyannote/speaker-diarization-3.1",
     ):
         self.model_name = model_name
         self.device = self._resolve_device(device)
@@ -685,7 +695,7 @@ class WhisperXTranscriber:
         if device == "auto":
             if torch.cuda.is_available():
                 return "cuda"
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 return "cpu"  # MPS has issues, use CPU
             else:
                 return "cpu"
@@ -697,9 +707,7 @@ class WhisperXTranscriber:
             print(f"Loading WhisperX model: {self.model_name}")
             try:
                 self._model = whisperx.load_model(
-                    self.model_name,
-                    device=self.device,
-                    compute_type="float16" if self.device == "cuda" else "int8"
+                    self.model_name, device=self.device, compute_type="float16" if self.device == "cuda" else "int8"
                 )
                 print("WhisperX model loaded successfully")
             except Exception as e:
@@ -710,10 +718,7 @@ class WhisperXTranscriber:
     def _load_whisper_fallback(self):
         """Load standard Whisper as fallback"""
         if self._whisper_fallback is None:
-            self._whisper_fallback = WhisperTranscriber(
-                model_name=self.model_name,
-                device=self.device
-            )
+            self._whisper_fallback = WhisperTranscriber(model_name=self.model_name, device=self.device)
 
     def transcribe_audio(
         self,
@@ -722,7 +727,7 @@ class WhisperXTranscriber:
         custom_prompt: str = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
-        cleaning_config: Dict = None
+        cleaning_config: Dict = None,
     ) -> Optional[Dict]:
         """
         Transcribe audio with optional speaker diarization.
@@ -742,8 +747,7 @@ class WhisperXTranscriber:
             if not WHISPERX_AVAILABLE:
                 self._load_whisper_fallback()
                 return self._whisper_fallback.transcribe_audio(
-                    audio_path, output_path, custom_prompt,
-                    preprocess_audio, clean_transcript, cleaning_config
+                    audio_path, output_path, custom_prompt, preprocess_audio, clean_transcript, cleaning_config
                 )
 
             self.load_model()
@@ -752,8 +756,7 @@ class WhisperXTranscriber:
             if self._model is None:
                 self._load_whisper_fallback()
                 return self._whisper_fallback.transcribe_audio(
-                    audio_path, output_path, custom_prompt,
-                    preprocess_audio, clean_transcript, cleaning_config
+                    audio_path, output_path, custom_prompt, preprocess_audio, clean_transcript, cleaning_config
                 )
 
             print(f"Starting transcription of: {Path(audio_path).name}")
@@ -767,27 +770,16 @@ class WhisperXTranscriber:
             # Step 1: Transcribe with WhisperX
             print("Step 1: Transcribing audio with WhisperX...")
             result = self._model.transcribe(
-                processed_audio_path,
-                batch_size=16,
-                language="en",
-                print_progress=True  # Enable progress bar
+                processed_audio_path, batch_size=16, language="en", print_progress=True  # Enable progress bar
             )
 
             # Step 2: Align whisper output for accurate word-level timestamps
             print("Step 2: Aligning timestamps for word-level accuracy...")
             print(f"  - Loading alignment model for {result['language']}...")
-            model_a, metadata = whisperx.load_align_model(
-                language_code=result["language"],
-                device=self.device
-            )
+            model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
             print(f"  - Running alignment on {len(result.get('segments', []))} segments...")
             result = whisperx.align(
-                result["segments"],
-                model_a,
-                metadata,
-                processed_audio_path,
-                self.device,
-                return_char_alignments=False
+                result["segments"], model_a, metadata, processed_audio_path, self.device, return_char_alignments=False
             )
             print("  ✓ Alignment complete")
 
@@ -801,10 +793,7 @@ class WhisperXTranscriber:
                     if not PYANNOTE_AVAILABLE:
                         raise ImportError("pyannote.audio is required for speaker diarization")
 
-                    diarize_model = Pipeline.from_pretrained(
-                        self.diarization_model,
-                        use_auth_token=self.hf_token
-                    )
+                    diarize_model = Pipeline.from_pretrained(self.diarization_model, use_auth_token=self.hf_token)
 
                     # Move model to appropriate device
                     if self.device != "cpu":
@@ -820,16 +809,13 @@ class WhisperXTranscriber:
 
                     # Start progress monitor
                     progress_monitor = DiarizationProgressMonitor(
-                        audio_duration_seconds=audio_duration_seconds,
-                        device=self.device
+                        audio_duration_seconds=audio_duration_seconds, device=self.device
                     )
                     progress_monitor.start()
 
                     try:
                         diarize_segments = diarize_model(
-                            processed_audio_path,
-                            min_speakers=self.min_speakers,
-                            max_speakers=self.max_speakers
+                            processed_audio_path, min_speakers=self.min_speakers, max_speakers=self.max_speakers
                         )
                     finally:
                         # Stop progress monitor whether diarization succeeds or fails
@@ -841,14 +827,12 @@ class WhisperXTranscriber:
                     # whisperx expects a pandas DataFrame with 'start', 'end', 'speaker' columns
                     import pandas as pd
 
-                    diarize_df = pd.DataFrame([
-                        {
-                            'start': segment.start,
-                            'end': segment.end,
-                            'speaker': speaker
-                        }
-                        for segment, _, speaker in diarize_segments.itertracks(yield_label=True)
-                    ])
+                    diarize_df = pd.DataFrame(
+                        [
+                            {"start": segment.start, "end": segment.end, "speaker": speaker}
+                            for segment, _, speaker in diarize_segments.itertracks(yield_label=True)
+                        ]
+                    )
 
                     print(f"  - Converted {len(diarize_df)} diarization segments")
                     result = whisperx.assign_word_speakers(diarize_df, result)
@@ -864,6 +848,7 @@ class WhisperXTranscriber:
                 except Exception as e:
                     print(f"  ✗ Diarization failed: {type(e).__name__}: {e}")
                     import traceback
+
                     traceback.print_exc()
                     print("  → Continuing without speaker identification")
 
@@ -881,19 +866,11 @@ class WhisperXTranscriber:
             print(f"✓ Generated {len(result.get('segments', []))} transcript segments")
 
             # Format transcript
-            transcript_data = self._format_transcript(
-                result,
-                processing_time,
-                audio_path,
-                speakers_detected
-            )
+            transcript_data = self._format_transcript(result, processing_time, audio_path, speakers_detected)
 
             # Optional: Clean transcript with LLM
             if clean_transcript and cleaning_config:
-                transcript_data = self._clean_transcript_with_llm(
-                    transcript_data,
-                    cleaning_config
-                )
+                transcript_data = self._clean_transcript_with_llm(transcript_data, cleaning_config)
 
             if output_path:
                 self._save_transcript(transcript_data, output_path)
@@ -905,16 +882,11 @@ class WhisperXTranscriber:
             print("Falling back to standard Whisper")
             self._load_whisper_fallback()
             return self._whisper_fallback.transcribe_audio(
-                audio_path, output_path, custom_prompt,
-                preprocess_audio, clean_transcript, cleaning_config
+                audio_path, output_path, custom_prompt, preprocess_audio, clean_transcript, cleaning_config
             )
 
     def _format_transcript(
-        self,
-        whisperx_result: Dict,
-        processing_time: float,
-        audio_path: str,
-        speakers_detected: Optional[int]
+        self, whisperx_result: Dict, processing_time: float, audio_path: str, speakers_detected: Optional[int]
     ) -> Dict:
         """Format WhisperX output into structured transcript"""
         segments = []
@@ -926,7 +898,7 @@ class WhisperXTranscriber:
                 "end": segment.get("end"),
                 "text": segment.get("text", "").strip(),
                 "speaker": segment.get("speaker"),
-                "words": []
+                "words": [],
             }
 
             for word in segment.get("words", []):
@@ -935,7 +907,7 @@ class WhisperXTranscriber:
                     "start": word.get("start"),
                     "end": word.get("end"),
                     "probability": word.get("score", 0.0),
-                    "speaker": word.get("speaker")
+                    "speaker": word.get("speaker"),
                 }
                 segment_data["words"].append(word_data)
 
@@ -953,14 +925,14 @@ class WhisperXTranscriber:
             "model_used": f"whisperx-{self.model_name}",
             "timestamp": time.time(),
             "diarization_enabled": self.enable_diarization,
-            "speakers_detected": speakers_detected
+            "speakers_detected": speakers_detected,
         }
 
     def _save_transcript(self, transcript_data: Dict, output_path: str):
         """Save transcript to JSON file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
             print(f"Transcript saved to: {output_path}")
         except Exception as e:
@@ -986,10 +958,7 @@ class WhisperXTranscriber:
         """Clean transcript using WhisperTranscriber method"""
         if self._whisper_fallback is None:
             self._load_whisper_fallback()
-        return self._whisper_fallback._clean_transcript_with_llm(
-            transcript_data,
-            cleaning_config
-        )
+        return self._whisper_fallback._clean_transcript_with_llm(transcript_data, cleaning_config)
 
     def get_transcript_text(self, transcript_data: Dict) -> str:
         """Extract plain text from transcript data with speaker labels"""

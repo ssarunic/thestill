@@ -1,0 +1,60 @@
+# Pre-commit hooks for code quality
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Black - Code formatter
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3.9
+
+  # isort - Import sorter
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  # mypy - Type checker (optional - will fix in Task R-019)
+  # Uncomment below to enable strict type checking
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.11.2
+  #   hooks:
+  #     - id: mypy
+  #       additional_dependencies: [
+  #         types-requests,
+  #         types-PyYAML,
+  #         pydantic
+  #       ]
+  #       args: [--ignore-missing-imports, --no-strict-optional]
+  #       exclude: ^tests/
+
+  # pylint - Linter
+  - repo: https://github.com/PyCQA/pylint
+    rev: v3.3.1
+    hooks:
+      - id: pylint
+        args: [
+          --max-line-length=120,
+          --disable=C0114,  # missing-module-docstring
+          --disable=C0115,  # missing-class-docstring
+          --disable=C0116,  # missing-function-docstring
+          --disable=R0913,  # too-many-arguments
+          --disable=R0914,  # too-many-locals
+          --disable=R0801,  # duplicate-code (will address in refactoring)
+          --disable=W0212,  # protected-access (needed for some internal testing)
+          --exit-zero,      # Don't fail on warnings
+        ]
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=10000']
+      - id: check-merge-conflict

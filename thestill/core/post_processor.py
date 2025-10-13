@@ -20,12 +20,14 @@ Produces cleaned Markdown transcripts with notable quotes and social snippets.
 import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, NamedTuple
+from typing import Dict, List, NamedTuple, Optional
+
 from .llm_provider import LLMProvider
 
 
 class ModelLimits(NamedTuple):
     """Rate limits for OpenAI models"""
+
     tpm: int  # Tokens per minute
     rpm: int  # Requests per minute
     tpd: int  # Tokens per day
@@ -48,7 +50,6 @@ MODEL_CONFIGS = {
     "gpt-4o-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo-preview": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
-
     # Ollama/Gemma 3 models (no rate limits for local inference)
     # Using very high tpm/rpm/tpd since there are no actual limits
     "gemma3:270m": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
@@ -77,8 +78,19 @@ class PostProcessorConfig:
         self.audio_base_url = audio_base_url
         self.speaker_map = speaker_map or {}
         self.filler_words = filler_words or [
-            "ah", "uh", "um", "erm", "mmm", "like", "you know",
-            "sort of", "kind of", "I mean", "right", "okay", "yeah"
+            "ah",
+            "uh",
+            "um",
+            "erm",
+            "mmm",
+            "like",
+            "you know",
+            "sort of",
+            "kind of",
+            "I mean",
+            "right",
+            "okay",
+            "yeah",
         ]
         self.ad_detect_patterns = ad_detect_patterns or []
         self.table_layout_for_snappy_sections = table_layout_for_snappy_sections
@@ -152,6 +164,7 @@ Return three blocks:
         # Calculate delay between chunks based on provider type
         # Ollama has no rate limits, so no delay needed
         from .llm_provider import OllamaProvider
+
         if isinstance(provider, OllamaProvider):
             self.chunk_delay = 0
         else:
@@ -202,10 +215,7 @@ FILLER_WORDS = {filler_words_str}"""
             return [transcript_data]
 
         chunks = []
-        current_chunk = {
-            "text": transcript_data.get("text", ""),
-            "segments": []
-        }
+        current_chunk = {"text": transcript_data.get("text", ""), "segments": []}
         current_tokens = 0
         options_str = self._build_options_string(config)
         overhead_tokens = self._estimate_tokens(options_str + self.SYSTEM_PROMPT)
@@ -246,7 +256,7 @@ FILLER_WORDS = {filler_words_str}"""
 
         # Split by paragraphs/sentences
         chunks = []
-        sentences = text.split('. ')
+        sentences = text.split(". ")
         current_chunk_text = ""
 
         for sentence in sentences:
@@ -262,11 +272,7 @@ FILLER_WORDS = {filler_words_str}"""
         return chunks
 
     def _process_single_chunk(
-        self,
-        chunk_data: Dict,
-        config: PostProcessorConfig,
-        chunk_num: int,
-        total_chunks: int
+        self, chunk_data: Dict, config: PostProcessorConfig, chunk_num: int, total_chunks: int
     ) -> str:
         """Process a single transcript chunk"""
         options_str = self._build_options_string(config)
@@ -284,18 +290,12 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
         user_message += f"\n{transcript_json}"
 
         try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ]
+            messages = [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": user_message}]
 
             # Use temperature if model supports it
             temperature = 0.3 if self.model_limits.supports_temperature else None
 
-            response = self.provider.chat_completion(
-                messages=messages,
-                temperature=temperature
-            )
+            response = self.provider.chat_completion(messages=messages, temperature=temperature)
             return response
 
         except Exception as e:
@@ -332,10 +332,7 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
         return combined
 
     def process_transcript(
-        self,
-        transcript_data: Dict,
-        config: Optional[PostProcessorConfig] = None,
-        output_path: Optional[str] = None
+        self, transcript_data: Dict, config: Optional[PostProcessorConfig] = None, output_path: Optional[str] = None
     ) -> Dict:
         """
         Process a transcript with enhanced LLM post-processing.
@@ -398,34 +395,29 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
 
     def _parse_output(self, output_text: str) -> Dict:
         """Parse the LLM output into structured sections"""
-        sections = {
-            "cleaned_transcript": "",
-            "notable_quotes": "",
-            "social_snippets": "",
-            "full_output": output_text
-        }
+        sections = {"cleaned_transcript": "", "notable_quotes": "", "social_snippets": "", "full_output": output_text}
 
         # Simple section splitting based on markdown headers
-        lines = output_text.split('\n')
+        lines = output_text.split("\n")
         current_section = None
         current_content = []
 
         for line in lines:
             lower_line = line.lower().strip()
 
-            if lower_line.startswith('# cleaned transcript'):
+            if lower_line.startswith("# cleaned transcript"):
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
                 current_section = "cleaned_transcript"
                 current_content = []
-            elif lower_line.startswith('# notable quotes'):
+            elif lower_line.startswith("# notable quotes"):
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
                 current_section = "notable_quotes"
                 current_content = []
-            elif lower_line.startswith('# suggested social snippets') or lower_line.startswith('# social snippets'):
+            elif lower_line.startswith("# suggested social snippets") or lower_line.startswith("# social snippets"):
                 if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
                 current_section = "social_snippets"
                 current_content = []
             else:
@@ -433,7 +425,7 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
 
         # Don't forget the last section
         if current_section:
-            sections[current_section] = '\n'.join(current_content).strip()
+            sections[current_section] = "\n".join(current_content).strip()
 
         return sections
 
@@ -443,17 +435,22 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save full output as markdown
-        full_md_path = output_path.with_suffix('.md')
-        with open(full_md_path, 'w', encoding='utf-8') as f:
-            f.write(result['full_output'])
+        full_md_path = output_path.with_suffix(".md")
+        with open(full_md_path, "w", encoding="utf-8") as f:
+            f.write(result["full_output"])
 
         # Save structured JSON
-        json_path = output_path.with_suffix('.json')
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                "cleaned_transcript": result["cleaned_transcript"],
-                "notable_quotes": result["notable_quotes"],
-                "social_snippets": result["social_snippets"]
-            }, f, indent=2, ensure_ascii=False)
+        json_path = output_path.with_suffix(".json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "cleaned_transcript": result["cleaned_transcript"],
+                    "notable_quotes": result["notable_quotes"],
+                    "social_snippets": result["social_snippets"],
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
 
         print(f"Processed output saved to {full_md_path} and {json_path}")

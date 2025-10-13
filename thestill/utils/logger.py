@@ -19,10 +19,7 @@ from typing import Optional
 
 
 def setup_logger(
-    name: str = "thestill",
-    log_file: Optional[str] = None,
-    log_level: str = "INFO",
-    console_output: bool = True
+    name: str = "thestill", log_file: Optional[str] = None, log_level: str = "INFO", console_output: bool = True
 ) -> logging.Logger:
     """Set up logging configuration"""
 
@@ -32,9 +29,7 @@ def setup_logger(
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     if console_output:
         # Use stderr for all logging to keep stdout clean for MCP protocol

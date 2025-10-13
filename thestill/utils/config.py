@@ -16,9 +16,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic.config import ConfigDict
-from dotenv import load_dotenv
+
 from .path_manager import PathManager
 
 
@@ -158,7 +159,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "evaluations_path": storage_path / "evaluations",
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
-        "max_episodes_per_podcast": int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None,
+        "max_episodes_per_podcast": (
+            int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None
+        ),
         "transcription_provider": os.getenv("TRANSCRIPTION_PROVIDER", "whisper"),
         "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
@@ -181,7 +184,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleaning_overlap_pct": float(os.getenv("CLEANING_OVERLAP_PCT", "0.15")),
         "cleaning_extract_entities": os.getenv("CLEANING_EXTRACT_ENTITIES", "true").lower() == "true",
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
-        "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None
+        "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
     }
 
     return Config(**config_data)

@@ -20,6 +20,7 @@ Uses LLM to generate structured evaluation reports.
 import json
 from pathlib import Path
 from typing import Dict
+
 from .llm_provider import LLMProvider
 
 
@@ -71,11 +72,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         """
         self.provider = provider
 
-    def evaluate(
-        self,
-        transcript_data: Dict,
-        output_path: str = None
-    ) -> Dict:
+    def evaluate(self, transcript_data: Dict, output_path: str = None) -> Dict:
         """
         Evaluate the quality of a raw transcript.
 
@@ -93,13 +90,11 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         try:
             messages = [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": f"Evaluate this transcript:\n\n{transcript_json}"}
+                {"role": "user", "content": f"Evaluate this transcript:\n\n{transcript_json}"},
             ]
 
             evaluation_json = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.2,
-                response_format={"type": "json_object"}
+                messages=messages, temperature=0.2, response_format={"type": "json_object"}
             )
 
             evaluation = json.loads(evaluation_json)
@@ -120,7 +115,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(evaluation, f, indent=2, ensure_ascii=False)
 
         print(f"Transcript evaluation saved to {output_path}")
@@ -176,12 +171,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         """
         self.provider = provider
 
-    def evaluate(
-        self,
-        processed_content: Dict,
-        original_transcript: Dict = None,
-        output_path: str = None
-    ) -> Dict:
+    def evaluate(self, processed_content: Dict, original_transcript: Dict = None, output_path: str = None) -> Dict:
         """
         Evaluate the quality of a post-processed transcript.
 
@@ -202,15 +192,10 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
             user_message += f"\n\nOriginal transcript for comparison:\n\n{json.dumps(original_transcript, indent=2)}"
 
         try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ]
+            messages = [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": user_message}]
 
             evaluation_json = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.2,
-                response_format={"type": "json_object"}
+                messages=messages, temperature=0.2, response_format={"type": "json_object"}
             )
 
             evaluation = json.loads(evaluation_json)
@@ -231,7 +216,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(evaluation, f, indent=2, ensure_ascii=False)
 
         print(f"Post-processing evaluation saved to {output_path}")

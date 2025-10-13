@@ -19,9 +19,11 @@ Test script for transcript cleaning processor
 
 import json
 from pathlib import Path
-from thestill.core.transcript_cleaning_processor import TranscriptCleaningProcessor
+
 from thestill.core.llm_provider import create_llm_provider
+from thestill.core.transcript_cleaning_processor import TranscriptCleaningProcessor
 from thestill.utils.config import load_config
+
 
 def main():
     # Load config
@@ -37,15 +39,17 @@ def main():
         gemini_api_key=config.gemini_api_key,
         gemini_model=config.gemini_model,
         anthropic_api_key=config.anthropic_api_key,
-        anthropic_model=config.anthropic_model
+        anthropic_model=config.anthropic_model,
     )
 
     print(f"Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
 
     # Load a test transcript
-    transcript_path = Path("/Users/sasasarunic/_Sources/thestill/data/transcripts/The_Prof_G_Pod_with_Scott_Galloway_How_to_AI-Proof_Your_Career,_Spot_Market_Hype,_and_Raise_Critical_Thinkers_—_ft._Greg_Shove_e884173f_transcript.json")
+    transcript_path = Path(
+        "/Users/sasasarunic/_Sources/thestill/data/transcripts/The_Prof_G_Pod_with_Scott_Galloway_How_to_AI-Proof_Your_Career,_Spot_Market_Hype,_and_Raise_Critical_Thinkers_—_ft._Greg_Shove_e884173f_transcript.json"
+    )
 
-    with open(transcript_path, 'r', encoding='utf-8') as f:
+    with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_data = json.load(f)
 
     print(f"\nLoaded transcript: {transcript_path.name}")
@@ -63,22 +67,22 @@ def main():
         episode_title="How to AI-Proof Your Career, Spot Market Hype, and Raise Critical Thinkers — ft. Greg Shove",
         episode_description="Scott and Greg Shove discuss AI, career advice, and parenting in the modern age.",
         output_path=str(output_path),
-        save_corrections=True
+        save_corrections=True,
     )
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("CLEANING RESULTS:")
-    print("="*50)
+    print("=" * 50)
     print(f"Processing time: {result['processing_time']:.1f}s")
     print(f"Corrections found: {len(result['corrections'])}")
     print(f"Speakers identified: {len(result['speaker_mapping'])}")
 
     print("\nSpeaker Mapping:")
-    for speaker, name in result['speaker_mapping'].items():
+    for speaker, name in result["speaker_mapping"].items():
         print(f"  {speaker} -> {name}")
 
     print(f"\nFirst 500 chars of cleaned transcript:")
-    print(result['cleaned_markdown'][:500])
+    print(result["cleaned_markdown"][:500])
     print("...")
 
     print("\nFiles saved to:")
@@ -86,6 +90,7 @@ def main():
     print(f"  - {output_path}.json")
     print(f"  - {output_path.parent / (output_path.name + '_corrections.json')}")
     print(f"  - {output_path.parent / (output_path.name + '_speakers.json')}")
+
 
 if __name__ == "__main__":
     main()

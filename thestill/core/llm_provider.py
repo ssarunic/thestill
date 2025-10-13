@@ -16,13 +16,14 @@
 Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, and Anthropic.
 """
 
-from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
 import json
-from openai import OpenAI
-import ollama
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
 import google.generativeai as genai
+import ollama
 from anthropic import Anthropic
+from openai import OpenAI
 
 
 class LLMProvider(ABC):
@@ -34,7 +35,7 @@ class LLMProvider(ABC):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Generate a chat completion.
@@ -70,10 +71,7 @@ class OpenAIProvider(LLMProvider):
     """OpenAI API provider"""
 
     # Models that don't support custom temperature and response_format
-    REASONING_MODELS = [
-        "o1", "o1-preview", "o1-mini",
-        "gpt-5", "gpt-5-mini", "gpt-5-turbo", "gpt-5-nano"
-    ]
+    REASONING_MODELS = ["o1", "o1-preview", "o1-mini", "gpt-5", "gpt-5-mini", "gpt-5-turbo", "gpt-5-nano"]
 
     def __init__(self, api_key: str, model: str = "gpt-4o"):
         self.client = OpenAI(api_key=api_key)
@@ -84,7 +82,7 @@ class OpenAIProvider(LLMProvider):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate a chat completion using OpenAI API"""
         return self._create_completion(
@@ -92,7 +90,7 @@ class OpenAIProvider(LLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
-            enable_continuation=False
+            enable_continuation=False,
         )
 
     def chat_completion_with_continuation(
@@ -101,7 +99,7 @@ class OpenAIProvider(LLMProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
-        max_attempts: int = 3
+        max_attempts: int = 3,
     ) -> str:
         """
         Generate a complete chat completion with automatic continuation on truncation.
@@ -122,7 +120,7 @@ class OpenAIProvider(LLMProvider):
             max_tokens=max_tokens,
             response_format=response_format,
             enable_continuation=True,
-            max_attempts=max_attempts
+            max_attempts=max_attempts,
         )
 
     def _create_completion(
@@ -132,7 +130,7 @@ class OpenAIProvider(LLMProvider):
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
         enable_continuation: bool = False,
-        max_attempts: int = 3
+        max_attempts: int = 3,
     ) -> str:
         """Internal method to create completions with optional continuation"""
         full_response = ""
@@ -166,8 +164,10 @@ class OpenAIProvider(LLMProvider):
             full_response += current_text
 
             # Log token usage if available
-            if hasattr(response, 'usage') and response.usage:
-                print(f"  Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}")
+            if hasattr(response, "usage") and response.usage:
+                print(
+                    f"  Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}"
+                )
 
             # Check finish_reason
             finish_reason = response.choices[0].finish_reason
@@ -178,11 +178,13 @@ class OpenAIProvider(LLMProvider):
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
-                        {"role": "user", "content": "Please continue from where you left off."}
+                        {"role": "user", "content": "Please continue from where you left off."},
                     ]
                     continue
                 else:
-                    print(f"⚠️  Warning: OpenAI response truncated due to max_tokens limit (limit: {max_tokens or 'default'})")
+                    print(
+                        f"⚠️  Warning: OpenAI response truncated due to max_tokens limit (limit: {max_tokens or 'default'})"
+                    )
                     if not enable_continuation:
                         print(f"   Consider using smaller chunks or chat_completion_with_continuation()")
                     break
@@ -214,9 +216,7 @@ class OpenAIProvider(LLMProvider):
         try:
             # Simple test with minimal tokens
             self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "test"}],
-                max_completion_tokens=1
+                model=self.model, messages=[{"role": "user", "content": "test"}], max_completion_tokens=1
             )
             return True
         except Exception as e:
@@ -241,7 +241,7 @@ class OllamaProvider(LLMProvider):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate a chat completion using Ollama SDK"""
         # Convert chat messages to a single prompt for generate API
@@ -267,7 +267,7 @@ class OllamaProvider(LLMProvider):
                 prompt=prompt,
                 stream=False,
                 format="json" if response_format and response_format.get("type") == "json_object" else None,
-                options=options if options else None
+                options=options if options else None,
             )
 
             # Check for truncation/completion status
@@ -277,7 +277,9 @@ class OllamaProvider(LLMProvider):
 
             # Log token counts if available
             if "prompt_eval_count" in response and "eval_count" in response:
-                print(f"  Token usage - Input: {response.get('prompt_eval_count', 0)}, Output: {response.get('eval_count', 0)}")
+                print(
+                    f"  Token usage - Input: {response.get('prompt_eval_count', 0)}, Output: {response.get('eval_count', 0)}"
+                )
 
             # Check if response was truncated (hit max_tokens limit)
             if max_tokens and "eval_count" in response:
@@ -318,10 +320,7 @@ class OllamaProvider(LLMProvider):
             model_names = [m.model for m in models_response.models]
 
             # Check for exact match or model with tag
-            model_available = any(
-                self.model == name or self.model == name.split(':')[0]
-                for name in model_names
-            )
+            model_available = any(self.model == name or self.model == name.split(":")[0] for name in model_names)
 
             if not model_available:
                 print(f"⚠️  Model '{self.model}' not found in Ollama.")
@@ -352,7 +351,7 @@ class AnthropicProvider(LLMProvider):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate a chat completion using Anthropic API"""
         return self._create_completion(
@@ -360,7 +359,7 @@ class AnthropicProvider(LLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
-            enable_continuation=False
+            enable_continuation=False,
         )
 
     def chat_completion_with_continuation(
@@ -369,7 +368,7 @@ class AnthropicProvider(LLMProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
-        max_attempts: int = 3
+        max_attempts: int = 3,
     ) -> str:
         """
         Generate a complete chat completion with automatic continuation on truncation.
@@ -390,7 +389,7 @@ class AnthropicProvider(LLMProvider):
             max_tokens=max_tokens,
             response_format=response_format,
             enable_continuation=True,
-            max_attempts=max_attempts
+            max_attempts=max_attempts,
         )
 
     def _create_completion(
@@ -400,7 +399,7 @@ class AnthropicProvider(LLMProvider):
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
         enable_continuation: bool = False,
-        max_attempts: int = 3
+        max_attempts: int = 3,
     ) -> str:
         """Internal method to create completions with optional continuation"""
         full_response = ""
@@ -458,11 +457,11 @@ class AnthropicProvider(LLMProvider):
             full_response += current_text
 
             # Log token usage if available
-            if hasattr(response, 'usage'):
+            if hasattr(response, "usage"):
                 print(f"  Token usage - Input: {response.usage.input_tokens}, Output: {response.usage.output_tokens}")
 
             # Check stop_reason for handling different completion scenarios
-            stop_reason = getattr(response, 'stop_reason', None)
+            stop_reason = getattr(response, "stop_reason", None)
 
             if stop_reason == "max_tokens":
                 if enable_continuation and attempt < max_attempts - 1:
@@ -470,11 +469,13 @@ class AnthropicProvider(LLMProvider):
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
-                        {"role": "user", "content": "Please continue from where you left off."}
+                        {"role": "user", "content": "Please continue from where you left off."},
                     ]
                     continue
                 else:
-                    print(f"⚠️  Warning: Anthropic response truncated due to max_tokens limit (limit: {max_tokens or 4096})")
+                    print(
+                        f"⚠️  Warning: Anthropic response truncated due to max_tokens limit (limit: {max_tokens or 4096})"
+                    )
                     if not enable_continuation:
                         print(f"   Consider using smaller chunks or chat_completion_with_continuation()")
                     break
@@ -495,11 +496,7 @@ class AnthropicProvider(LLMProvider):
         """Check if Anthropic API is accessible"""
         try:
             # Simple test with minimal tokens
-            self.client.messages.create(
-                model=self.model,
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=1
-            )
+            self.client.messages.create(model=self.model, messages=[{"role": "user", "content": "test"}], max_tokens=1)
             return True
         except Exception as e:
             print(f"Anthropic health check failed: {e}")
@@ -523,7 +520,7 @@ class GeminiProvider(LLMProvider):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate a chat completion using Gemini API"""
         # Convert OpenAI-style messages to Gemini format
@@ -543,29 +540,17 @@ class GeminiProvider(LLMProvider):
         # Configure safety settings to be less restrictive for transcript processing
         # This helps avoid false positives when processing podcast content
         safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE"
-            }
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
 
         # Generate response
         response = self.client.generate_content(
             gemini_messages,
             generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
-            safety_settings=safety_settings
+            safety_settings=safety_settings,
         )
 
         # Handle different finish reasons
@@ -611,8 +596,7 @@ class GeminiProvider(LLMProvider):
             )
         elif finish_reason == 3:  # SAFETY
             raise RuntimeError(
-                f"Gemini blocked response due to safety filters. "
-                f"Safety ratings: {candidate.safety_ratings}"
+                f"Gemini blocked response due to safety filters. " f"Safety ratings: {candidate.safety_ratings}"
             )
         elif finish_reason == 4:  # RECITATION
             # We already extracted text above, return it if available
@@ -664,8 +648,7 @@ class GeminiProvider(LLMProvider):
         try:
             # Simple test with minimal tokens
             response = self.client.generate_content(
-                "test",
-                generation_config=genai.GenerationConfig(max_output_tokens=1)
+                "test", generation_config=genai.GenerationConfig(max_output_tokens=1)
             )
             return True
         except Exception as e:
@@ -686,7 +669,7 @@ def create_llm_provider(
     gemini_api_key: str = "",
     gemini_model: str = "gemini-2.0-flash-exp",
     anthropic_api_key: str = "",
-    anthropic_model: str = "claude-3-5-sonnet-20241022"
+    anthropic_model: str = "claude-3-5-sonnet-20241022",
 ) -> LLMProvider:
     """
     Factory function to create the appropriate LLM provider.
@@ -731,4 +714,6 @@ def create_llm_provider(
             raise ValueError("Anthropic API key is required for Anthropic provider")
         return AnthropicProvider(api_key=anthropic_api_key, model=anthropic_model)
     else:
-        raise ValueError(f"Unknown provider type: {provider_type}. Must be 'openai', 'ollama', 'gemini', or 'anthropic'")
+        raise ValueError(
+            f"Unknown provider type: {provider_type}. Must be 'openai', 'ollama', 'gemini', or 'anthropic'"
+        )

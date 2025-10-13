@@ -27,7 +27,7 @@ from mcp.server import Server
 from mcp.types import Resource, TextContent
 
 from ..services import PodcastService
-from .utils import parse_thestill_uri, build_podcast_uri, build_episode_uri, build_transcript_uri, build_audio_uri
+from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = logging.getLogger(__name__)
 
@@ -55,26 +55,26 @@ def setup_resources(server: Server, storage_path: str):
                 uri="thestill://podcasts/{podcast_id}",
                 name="Podcast metadata",
                 description="Get podcast information by index (1, 2, 3...) or RSS URL",
-                mimeType="application/json"
+                mimeType="application/json",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}",
                 name="Episode metadata",
                 description="Get episode information by podcast and episode ID",
-                mimeType="application/json"
+                mimeType="application/json",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/transcript",
                 name="Episode transcript",
                 description="Get cleaned transcript in Markdown format",
-                mimeType="text/markdown"
+                mimeType="text/markdown",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/audio",
                 name="Episode audio reference",
                 description="Get audio file URL and metadata",
-                mimeType="application/json"
-            )
+                mimeType="application/json",
+            ),
         ]
 
     @server.read_resource()
@@ -112,10 +112,7 @@ def setup_resources(server: Server, storage_path: str):
 
             # Get podcast index
             podcasts = podcast_service.list_podcasts()
-            podcast_index = next(
-                (p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)),
-                0
-            )
+            podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
             # Build response
             result = {
@@ -125,7 +122,7 @@ def setup_resources(server: Server, storage_path: str):
                 "rss_url": str(podcast.rss_url),
                 "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
                 "episodes_count": len(podcast.episodes),
-                "episodes_processed": sum(1 for ep in podcast.episodes if ep.processed)
+                "episodes_processed": sum(1 for ep in podcast.episodes if ep.processed),
             }
 
             return json.dumps(result, indent=2)
@@ -143,24 +140,15 @@ def setup_resources(server: Server, storage_path: str):
             if not podcast:
                 raise ValueError(f"Podcast not found: {podcast_id}")
 
-            podcast_index = next(
-                (p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)),
-                0
-            )
+            podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
             # Get episode index (latest = 1, second latest = 2, etc.)
-            sorted_episodes = sorted(
-                podcast.episodes,
-                key=lambda ep: ep.pub_date or "",
-                reverse=True
-            )
-            episode_index = next(
-                (idx for idx, ep in enumerate(sorted_episodes, start=1) if ep.guid == episode.guid),
-                0
-            )
+            sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or "", reverse=True)
+            episode_index = next((idx for idx, ep in enumerate(sorted_episodes, start=1) if ep.guid == episode.guid), 0)
 
             # Build response
             from pathlib import Path
+
             storage_path = Path(podcast_service.storage_path)
             result = {
                 "podcast_index": podcast_index,
@@ -172,9 +160,17 @@ def setup_resources(server: Server, storage_path: str):
                 "guid": episode.guid,
                 "processed": episode.processed,
                 "audio_url": str(episode.audio_url),
-                "transcript_available": bool(episode.raw_transcript_path and (storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()),
-                "clean_transcript_available": bool(episode.clean_transcript_path and (storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()),
-                "summary_available": bool(episode.summary_path and (storage_path / "summaries" / episode.summary_path).exists())
+                "transcript_available": bool(
+                    episode.raw_transcript_path
+                    and (storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()
+                ),
+                "clean_transcript_available": bool(
+                    episode.clean_transcript_path
+                    and (storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()
+                ),
+                "summary_available": bool(
+                    episode.summary_path and (storage_path / "summaries" / episode.summary_path).exists()
+                ),
             }
 
             return json.dumps(result, indent=2)
@@ -197,12 +193,13 @@ def setup_resources(server: Server, storage_path: str):
 
             # Build audio reference response
             from pathlib import Path
+
             result = {
                 "audio_url": str(episode.audio_url),
                 "duration": episode.duration,
                 "title": episode.title,
                 "local_file": episode.audio_path is not None,  # Indicates if downloaded
-                "format": "audio/mpeg"  # Default, could be enhanced with actual format detection
+                "format": "audio/mpeg",  # Default, could be enhanced with actual format detection
             }
 
             return json.dumps(result, indent=2)

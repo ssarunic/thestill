@@ -20,24 +20,26 @@ Uses small LLM models to fix spelling, remove filler words, and improve readabil
 import json
 import re
 import time
-from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     import tiktoken
+
     TIKTOKEN_AVAILABLE = True
 except ImportError:
     TIKTOKEN_AVAILABLE = False
 
 try:
     import nltk
+
     NLTK_AVAILABLE = True
     # Try to use punkt tokenizer, download if needed
     try:
-        nltk.data.find('tokenizers/punkt')
+        nltk.data.find("tokenizers/punkt")
     except LookupError:
         print("Downloading NLTK punkt tokenizer...")
-        nltk.download('punkt', quiet=True)
+        nltk.download("punkt", quiet=True)
 except ImportError:
     NLTK_AVAILABLE = False
 
@@ -56,7 +58,7 @@ class TranscriptCleanerConfig:
         fix_spelling: bool = True,
         fix_grammar: bool = True,
         preserve_timestamps: bool = True,
-        filler_words: Optional[List[str]] = None
+        filler_words: Optional[List[str]] = None,
     ):
         self.chunk_size = chunk_size
         self.overlap_pct = overlap_pct
@@ -66,9 +68,21 @@ class TranscriptCleanerConfig:
         self.fix_grammar = fix_grammar
         self.preserve_timestamps = preserve_timestamps
         self.filler_words = filler_words or [
-            "um", "uh", "ah", "hmm", "mmm", "er", "erm",
-            "like", "you know", "sort of", "kind of",
-            "I mean", "right", "okay", "yeah"
+            "um",
+            "uh",
+            "ah",
+            "hmm",
+            "mmm",
+            "er",
+            "erm",
+            "like",
+            "you know",
+            "sort of",
+            "kind of",
+            "I mean",
+            "right",
+            "okay",
+            "yeah",
         ]
 
 
@@ -169,7 +183,7 @@ Text to clean:
                 print(f"Warning: NLTK sentence tokenization failed: {e}")
 
         # Fallback: simple regex-based splitting
-        sentences = re.split(r'(?<=[.!?])\s+', text)
+        sentences = re.split(r"(?<=[.!?])\s+", text)
         return [s.strip() for s in sentences if s.strip()]
 
     def _extract_entities(self, text: str) -> List[Dict]:
@@ -193,14 +207,11 @@ Text to clean:
         try:
             messages = [
                 {"role": "system", "content": self.ENTITY_EXTRACTION_PROMPT},
-                {"role": "user", "content": text_excerpt}
+                {"role": "user", "content": text_excerpt},
             ]
 
             response = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                max_tokens=2000,
-                response_format={"type": "json_object"}
+                messages=messages, temperature=0.1, max_tokens=2000, response_format={"type": "json_object"}
             )
 
             # Parse JSON response
@@ -297,10 +308,7 @@ Text to clean:
         filler_words_str = ", ".join(self.config.filler_words)
 
         # Build prompt
-        system_prompt = self.CLEANING_PROMPT.format(
-            filler_words=filler_words_str,
-            entities_json=entities_json
-        )
+        system_prompt = self.CLEANING_PROMPT.format(filler_words=filler_words_str, entities_json=entities_json)
 
         # Add chunk info for multi-chunk processing
         user_message = chunk_text
@@ -308,15 +316,10 @@ Text to clean:
             user_message = f"[CHUNK {chunk_num}/{total_chunks}]\n\n{chunk_text}"
 
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
 
             response = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.2,
-                max_tokens=int(self.config.chunk_size * 1.2)  # Allow some expansion
+                messages=messages, temperature=0.2, max_tokens=int(self.config.chunk_size * 1.2)  # Allow some expansion
             )
 
             return response.strip()
@@ -395,6 +398,7 @@ Text to clean:
             # Small delay for cloud providers (local Ollama doesn't need this)
             if i < total_chunks:
                 from .llm_provider import OllamaProvider
+
                 if not isinstance(self.provider, OllamaProvider):
                     time.sleep(2)  # Small delay for API rate limits
 
@@ -415,7 +419,7 @@ Text to clean:
             "processing_time": processing_time,
             "chunks_processed": total_chunks,
             "original_tokens": original_tokens,
-            "final_tokens": final_tokens
+            "final_tokens": final_tokens,
         }
 
         # Save if output path provided
@@ -430,20 +434,20 @@ Text to clean:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save as text file
-        text_path = output_path.with_suffix('.txt')
-        with open(text_path, 'w', encoding='utf-8') as f:
-            f.write(result['cleaned_text'])
+        text_path = output_path.with_suffix(".txt")
+        with open(text_path, "w", encoding="utf-8") as f:
+            f.write(result["cleaned_text"])
 
         # Save metadata as JSON
-        json_path = output_path.with_suffix('.json')
+        json_path = output_path.with_suffix(".json")
         metadata = {
-            "entities": result['entities'],
-            "processing_time": result['processing_time'],
-            "chunks_processed": result['chunks_processed'],
-            "original_tokens": result['original_tokens'],
-            "final_tokens": result['final_tokens']
+            "entities": result["entities"],
+            "processing_time": result["processing_time"],
+            "chunks_processed": result["chunks_processed"],
+            "original_tokens": result["original_tokens"],
+            "final_tokens": result["final_tokens"],
         }
-        with open(json_path, 'w', encoding='utf-8') as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
         print(f"Cleaned transcript saved to {text_path}")

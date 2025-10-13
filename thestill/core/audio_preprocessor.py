@@ -22,6 +22,7 @@ settings for Whisper/Parakeet transcription models (16kHz, 16-bit, mono).
 import os
 from pathlib import Path
 from typing import Optional, Tuple
+
 from pydub import AudioSegment
 
 
@@ -30,8 +31,8 @@ class AudioPreprocessor:
 
     # Optimal settings for Whisper/Parakeet models
     TARGET_SAMPLE_RATE = 16000  # 16kHz
-    TARGET_SAMPLE_WIDTH = 2      # 16-bit (2 bytes)
-    TARGET_CHANNELS = 1          # Mono
+    TARGET_SAMPLE_WIDTH = 2  # 16-bit (2 bytes)
+    TARGET_CHANNELS = 1  # Mono
 
     def __init__(self, logger=None):
         """
@@ -63,18 +64,18 @@ class AudioPreprocessor:
             audio = AudioSegment.from_file(audio_path)
 
             metadata = {
-                'sample_rate': audio.frame_rate,
-                'sample_width': audio.sample_width,
-                'channels': audio.channels,
-                'duration_seconds': len(audio) / 1000.0,
-                'format': Path(audio_path).suffix.lstrip('.')
+                "sample_rate": audio.frame_rate,
+                "sample_width": audio.sample_width,
+                "channels": audio.channels,
+                "duration_seconds": len(audio) / 1000.0,
+                "format": Path(audio_path).suffix.lstrip("."),
             }
 
             # Check if any parameter exceeds optimal settings
             needs_processing = (
-                audio.frame_rate > self.TARGET_SAMPLE_RATE or
-                audio.sample_width > self.TARGET_SAMPLE_WIDTH or
-                audio.channels > self.TARGET_CHANNELS
+                audio.frame_rate > self.TARGET_SAMPLE_RATE
+                or audio.sample_width > self.TARGET_SAMPLE_WIDTH
+                or audio.channels > self.TARGET_CHANNELS
             )
 
             return needs_processing, metadata
@@ -114,7 +115,7 @@ class AudioPreprocessor:
 
             # Export in same format as input
             self._log(f"Saving clipped audio to: {output_path.name}")
-            clipped_audio.export(str(output_path), format=input_path.suffix.lstrip('.'))
+            clipped_audio.export(str(output_path), format=input_path.suffix.lstrip("."))
 
             self._log(f"Clipping complete! Duration reduced from {original_duration_s:.1f}s to {duration_seconds}s")
 
@@ -140,16 +141,20 @@ class AudioPreprocessor:
             needs_processing, metadata = self.needs_preprocessing(audio_path)
 
             if not needs_processing:
-                self._log(f"Audio file already optimized (Sample rate: {metadata.get('sample_rate', 'unknown')}Hz, "
-                         f"Bit depth: {metadata.get('sample_width', 'unknown') * 8}-bit, "
-                         f"Channels: {metadata.get('channels', 'unknown')})")
+                self._log(
+                    f"Audio file already optimized (Sample rate: {metadata.get('sample_rate', 'unknown')}Hz, "
+                    f"Bit depth: {metadata.get('sample_width', 'unknown') * 8}-bit, "
+                    f"Channels: {metadata.get('channels', 'unknown')})"
+                )
                 return audio_path
 
             original_size = os.path.getsize(audio_path)
-            self._log(f"Preprocessing audio file (Original: {metadata.get('sample_rate')}Hz, "
-                     f"{metadata.get('sample_width') * 8}-bit, "
-                     f"{metadata.get('channels')} channel(s), "
-                     f"{original_size / (1024 * 1024):.2f} MB)")
+            self._log(
+                f"Preprocessing audio file (Original: {metadata.get('sample_rate')}Hz, "
+                f"{metadata.get('sample_width') * 8}-bit, "
+                f"{metadata.get('channels')} channel(s), "
+                f"{original_size / (1024 * 1024):.2f} MB)"
+            )
 
             # Load audio
             audio = AudioSegment.from_file(audio_path)
@@ -179,20 +184,24 @@ class AudioPreprocessor:
                 str(output_path),
                 format="wav",
                 parameters=[
-                    "-ar", str(self.TARGET_SAMPLE_RATE),
-                    "-ac", str(self.TARGET_CHANNELS),
-                    "-sample_fmt", "s16"  # 16-bit signed integer
-                ]
+                    "-ar",
+                    str(self.TARGET_SAMPLE_RATE),
+                    "-ac",
+                    str(self.TARGET_CHANNELS),
+                    "-sample_fmt",
+                    "s16",  # 16-bit signed integer
+                ],
             )
 
             # Report size reduction
             new_size = os.path.getsize(str(output_path))
             size_reduction = ((original_size - new_size) / original_size) * 100
 
-            self._log(f"Preprocessing complete! New size: {new_size / (1024 * 1024):.2f} MB "
-                     f"(Reduced by {size_reduction:.1f}%)")
-            self._log(f"Optimized settings: {self.TARGET_SAMPLE_RATE}Hz, "
-                     f"{self.TARGET_SAMPLE_WIDTH * 8}-bit, mono")
+            self._log(
+                f"Preprocessing complete! New size: {new_size / (1024 * 1024):.2f} MB "
+                f"(Reduced by {size_reduction:.1f}%)"
+            )
+            self._log(f"Optimized settings: {self.TARGET_SAMPLE_RATE}Hz, " f"{self.TARGET_SAMPLE_WIDTH * 8}-bit, mono")
 
             return str(output_path)
 
@@ -268,10 +277,13 @@ class AudioPreprocessor:
                 str(output_path),
                 format="wav",
                 parameters=[
-                    "-ar", str(self.TARGET_SAMPLE_RATE),
-                    "-ac", str(self.TARGET_CHANNELS),
-                    "-sample_fmt", "s16"  # 16-bit signed integer
-                ]
+                    "-ar",
+                    str(self.TARGET_SAMPLE_RATE),
+                    "-ac",
+                    str(self.TARGET_CHANNELS),
+                    "-sample_fmt",
+                    "s16",  # 16-bit signed integer
+                ],
             )
 
             # Report results

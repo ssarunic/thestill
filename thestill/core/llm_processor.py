@@ -18,9 +18,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..models.podcast import Quote, ProcessedContent
-from .transcript_compactor import TranscriptCompactor
+from ..models.podcast import ProcessedContent, Quote
 from .llm_provider import LLMProvider
+from .transcript_compactor import TranscriptCompactor
 
 
 class LLMProcessor:
@@ -34,8 +34,9 @@ class LLMProcessor:
         self.provider = provider
         self.compactor = TranscriptCompactor()
 
-    def process_transcript(self, transcript_text: str, episode_guid: str,
-                          output_path: str = None, transcript_json_path: str = None) -> Optional[ProcessedContent]:
+    def process_transcript(
+        self, transcript_text: str, episode_guid: str, output_path: str = None, transcript_json_path: str = None
+    ) -> Optional[ProcessedContent]:
         """Process raw transcript through LLM pipeline using compacted Markdown"""
         try:
             start_time = time.time()
@@ -53,14 +54,14 @@ class LLMProcessor:
                 markdown_path = base_path / "transcripts" / f"{transcript_name}.md"
 
                 compact_result = self.compactor.compact_transcript(
-                    transcript_json_path,
-                    output_md_path=str(markdown_path),
-                    output_json_path=str(pruned_json_path)
+                    transcript_json_path, output_md_path=str(markdown_path), output_json_path=str(pruned_json_path)
                 )
 
                 markdown_text = compact_result["markdown"]
-                print(f"Token savings: ~{compact_result['token_savings_estimate']}% "
-                      f"({compact_result['original_chars']} → {compact_result['markdown_chars']} chars)")
+                print(
+                    f"Token savings: ~{compact_result['token_savings_estimate']}% "
+                    f"({compact_result['original_chars']} → {compact_result['markdown_chars']} chars)"
+                )
 
             print("Step 1: Detecting advertisement segments...")
             cleaned_result = self._clean_and_detect_ads(markdown_text)
@@ -80,7 +81,7 @@ class LLMProcessor:
                 quotes=quotes,
                 ad_segments=cleaned_result["ad_segments"],
                 processing_time=processing_time,
-                created_at=datetime.now()
+                created_at=datetime.now(),
             )
 
             if output_path:
@@ -125,25 +126,16 @@ Here's the transcript to analyze:
 """
 
         try:
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": transcript}
-            ]
+            messages = [{"role": "system", "content": prompt}, {"role": "user", "content": transcript}]
 
             content = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                max_tokens=4000,
-                response_format={"type": "json_object"}
+                messages=messages, temperature=0.1, max_tokens=4000, response_format={"type": "json_object"}
             )
 
             # Check for empty content
             if not content:
                 print("Warning: Provider returned empty content")
-                return {
-                    "cleaned_transcript": transcript,
-                    "ad_segments": []
-                }
+                return {"cleaned_transcript": transcript, "ad_segments": []}
 
             content = content.strip()
 
@@ -167,16 +159,10 @@ Here's the transcript to analyze:
         except json.JSONDecodeError as e:
             print(f"Warning: Failed to parse LLM response as JSON: {e}")
             print(f"Raw response: {content[:500] if content else '(empty)'}...")
-            return {
-                "cleaned_transcript": transcript,
-                "ad_segments": []
-            }
+            return {"cleaned_transcript": transcript, "ad_segments": []}
         except Exception as e:
             print(f"Error in transcript cleaning: {e}")
-            return {
-                "cleaned_transcript": transcript,
-                "ad_segments": []
-            }
+            return {"cleaned_transcript": transcript, "ad_segments": []}
 
     def _generate_summary(self, cleaned_transcript: str) -> str:
         """Generate comprehensive episode summary"""
@@ -198,16 +184,9 @@ Here's the transcript:
 """
 
         try:
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": cleaned_transcript}
-            ]
+            messages = [{"role": "system", "content": prompt}, {"role": "user", "content": cleaned_transcript}]
 
-            response = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.4,
-                max_tokens=600
-            )
+            response = self.provider.chat_completion(messages=messages, temperature=0.4, max_tokens=600)
 
             return response.strip()
 
@@ -257,16 +236,10 @@ Here's the transcript:
 """
 
         try:
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": cleaned_transcript}
-            ]
+            messages = [{"role": "system", "content": prompt}, {"role": "user", "content": cleaned_transcript}]
 
             content = self.provider.chat_completion(
-                messages=messages,
-                temperature=0.3,
-                max_tokens=2000,
-                response_format={"type": "json_object"}
+                messages=messages, temperature=0.3, max_tokens=2000, response_format={"type": "json_object"}
             ).strip()
 
             # Try to extract JSON from the response if it's wrapped in code blocks
@@ -288,7 +261,7 @@ Here's the transcript:
                 quote = Quote(
                     text=quote_data.get("text", ""),
                     speaker=quote_data.get("speaker"),
-                    significance=quote_data.get("significance", "")
+                    significance=quote_data.get("significance", ""),
                 )
                 quotes.append(quote)
 
@@ -306,8 +279,8 @@ Here's the transcript:
         """Save processed content to JSON file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(content.model_dump(mode='json'), f, indent=2, ensure_ascii=False)
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(content.model_dump(mode="json"), f, indent=2, ensure_ascii=False)
             print(f"Processed content saved to: {output_path}")
         except Exception as e:
             print(f"Error saving processed content: {e}")

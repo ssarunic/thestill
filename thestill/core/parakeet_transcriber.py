@@ -13,11 +13,12 @@
 # limitations under the License.
 
 import json
-import time
 import os
-import torch
+import time
 from pathlib import Path
 from typing import Dict, Optional
+
+import torch
 from pydub import AudioSegment
 
 
@@ -38,7 +39,7 @@ class ParakeetTranscriber:
         if device == "auto":
             if torch.cuda.is_available():
                 return "cuda"
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 return "mps"
             else:
                 return "cpu"
@@ -55,21 +56,21 @@ class ParakeetTranscriber:
                 self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
                     self.model_name,
                     torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                    low_cpu_mem_usage=True
+                    low_cpu_mem_usage=True,
                 )
                 self._model.to(self.device)
                 print("Model loaded successfully")
             except ImportError:
                 raise ImportError(
-                    "Parakeet requires the transformers library. "
-                    "Install with: pip install transformers"
+                    "Parakeet requires the transformers library. " "Install with: pip install transformers"
                 )
             except Exception as e:
                 print(f"Error loading Parakeet model: {e}")
                 raise
 
-    def transcribe_audio(self, audio_path: str, output_path: str = None,
-                         custom_prompt: str = None, preprocess_audio: bool = False) -> Optional[Dict]:
+    def transcribe_audio(
+        self, audio_path: str, output_path: str = None, custom_prompt: str = None, preprocess_audio: bool = False
+    ) -> Optional[Dict]:
         """
         Transcribe audio file using Parakeet model.
 
@@ -87,6 +88,7 @@ class ParakeetTranscriber:
 
             # Load and preprocess audio
             import librosa
+
             audio_array, sample_rate = librosa.load(audio_path, sr=16000, mono=True)
 
             # Process audio in chunks if too long (Parakeet has input length limits)
@@ -127,19 +129,12 @@ class ParakeetTranscriber:
 
     def _transcribe_chunk(self, audio_array, sample_rate: int) -> str:
         """Transcribe a single audio chunk"""
-        inputs = self._processor(
-            audio_array,
-            sampling_rate=sample_rate,
-            return_tensors="pt"
-        ).to(self.device)
+        inputs = self._processor(audio_array, sampling_rate=sample_rate, return_tensors="pt").to(self.device)
 
         with torch.no_grad():
             generated_ids = self._model.generate(**inputs)
 
-        transcription = self._processor.batch_decode(
-            generated_ids,
-            skip_special_tokens=True
-        )[0]
+        transcription = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
         return transcription.strip()
 
@@ -161,24 +156,18 @@ class ParakeetTranscriber:
             "language": "en",
             "text": text,
             "segments": [
-                {
-                    "id": 0,
-                    "start": 0.0,
-                    "end": 0.0,  # No timestamp information available
-                    "text": text,
-                    "words": []
-                }
+                {"id": 0, "start": 0.0, "end": 0.0, "text": text, "words": []}  # No timestamp information available
             ],
             "processing_time": processing_time,
             "model_used": self.model_name,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
 
     def _save_transcript(self, transcript_data: Dict, output_path: str):
         """Save transcript to JSON file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
             print(f"Transcript saved to: {output_path}")
         except Exception as e:
@@ -201,7 +190,7 @@ class ParakeetTranscriber:
         if self.device == "cuda":
             ratio = 0.08  # ~8% of audio length on GPU
         else:
-            ratio = 0.2   # ~20% of audio length on CPU
+            ratio = 0.2  # ~20% of audio length on CPU
 
         return audio_duration_minutes * ratio
 

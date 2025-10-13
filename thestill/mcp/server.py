@@ -67,11 +67,7 @@ class ThestillMCPServer:
 
         async with stdio_server() as (read_stream, write_stream):
             logger.info("STDIO transport established")
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options()
-            )
+            await self.server.run(read_stream, write_stream, self.server.create_initialization_options())
 
 
 def main():

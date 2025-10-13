@@ -20,14 +20,14 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from pydub import AudioSegment
 
 try:
-    from google.cloud import speech
-    from google.cloud import storage
+    from google.cloud import speech, storage
     from google.oauth2 import service_account
+
     GOOGLE_CLOUD_AVAILABLE = True
 except ImportError:
     GOOGLE_CLOUD_AVAILABLE = False
@@ -58,7 +58,7 @@ class GoogleCloudTranscriber:
         storage_bucket: Optional[str] = None,
         enable_diarization: bool = True,
         min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None
+        max_speakers: Optional[int] = None,
     ):
         """
         Initialize Google Cloud Speech transcriber.
@@ -72,9 +72,7 @@ class GoogleCloudTranscriber:
             max_speakers: Maximum number of speakers (None = auto-detect)
         """
         if not GOOGLE_CLOUD_AVAILABLE:
-            raise ImportError(
-                "Google Cloud Speech-to-Text libraries not installed"
-            )
+            raise ImportError("Google Cloud Speech-to-Text libraries not installed")
 
         self.credentials_path = credentials_path
         self.project_id = project_id
@@ -91,14 +89,9 @@ class GoogleCloudTranscriber:
         """Initialize Google Cloud clients."""
         try:
             if self.credentials_path:
-                credentials = service_account.Credentials.from_service_account_file(
-                    self.credentials_path
-                )
+                credentials = service_account.Credentials.from_service_account_file(self.credentials_path)
                 self.speech_client = speech.SpeechClient(credentials=credentials)
-                self.storage_client = storage.Client(
-                    credentials=credentials,
-                    project=self.project_id
-                )
+                self.storage_client = storage.Client(credentials=credentials, project=self.project_id)
             else:
                 # Use default credentials (e.g., from GOOGLE_APPLICATION_CREDENTIALS env var)
                 self.speech_client = speech.SpeechClient()
@@ -119,7 +112,7 @@ class GoogleCloudTranscriber:
         custom_prompt: str = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
-        cleaning_config: Dict = None
+        cleaning_config: Dict = None,
     ) -> Optional[Dict]:
         """
         Transcribe audio file with optional speaker diarization.
@@ -165,12 +158,13 @@ class GoogleCloudTranscriber:
         except Exception as e:
             print(f"Error transcribing {audio_path}: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
     def _transcribe_sync(self, audio_path: str, language: str) -> Any:
         """Synchronous transcription for files < 10MB."""
-        with open(audio_path, 'rb') as audio_file:
+        with open(audio_path, "rb") as audio_file:
             audio_content = audio_file.read()
 
         audio = speech.RecognitionAudio(content=audio_content)
@@ -185,8 +179,7 @@ class GoogleCloudTranscriber:
         """Asynchronous transcription via Google Cloud Storage for large files."""
         if not self.storage_client:
             raise RuntimeError(
-                "Google Cloud Storage client not available. "
-                "Cannot transcribe files larger than 10MB without GCS."
+                "Google Cloud Storage client not available. " "Cannot transcribe files larger than 10MB without GCS."
             )
 
         # Determine bucket name
@@ -198,6 +191,7 @@ class GoogleCloudTranscriber:
 
         # Create blob name with timestamp
         from datetime import datetime
+
         blob_name = f"temp-audio-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{Path(audio_path).name}"
 
         try:
@@ -254,14 +248,12 @@ class GoogleCloudTranscriber:
             language_code=language,
             enable_automatic_punctuation=True,
             enable_word_time_offsets=True,
-            model='latest_long'
+            model="latest_long",
         )
 
         # Add diarization configuration if enabled
         if self.enable_diarization:
-            diarization_config = speech.SpeakerDiarizationConfig(
-                enable_speaker_diarization=True
-            )
+            diarization_config = speech.SpeakerDiarizationConfig(enable_speaker_diarization=True)
 
             # Only set speaker counts if explicitly provided
             if self.min_speakers is not None:
@@ -271,18 +263,13 @@ class GoogleCloudTranscriber:
 
             config.diarization_config = diarization_config
 
-            min_display = self.min_speakers if self.min_speakers is not None else 'Google default'
-            max_display = self.max_speakers if self.max_speakers is not None else 'Google default'
+            min_display = self.min_speakers if self.min_speakers is not None else "Google default"
+            max_display = self.max_speakers if self.max_speakers is not None else "Google default"
             print(f"Diarization enabled (min={min_display}, max={max_display})")
 
         return config
 
-    def _format_transcript(
-        self,
-        response: Any,
-        processing_time: float,
-        audio_path: str
-    ) -> Dict:
+    def _format_transcript(self, response: Any, processing_time: float, audio_path: str) -> Dict:
         """
         Format Google Cloud response to match Whisper transcript structure.
 
@@ -326,7 +313,7 @@ class GoogleCloudTranscriber:
             alternative = result.alternatives[0]
 
             # Check if we have word-level diarization
-            if hasattr(alternative, 'words') and alternative.words and self.enable_diarization:
+            if hasattr(alternative, "words") and alternative.words and self.enable_diarization:
                 # Group words by speaker to create segments
                 current_speaker = None
                 current_words = []
@@ -336,7 +323,7 @@ class GoogleCloudTranscriber:
                 for word_info in alternative.words:
                     word_start = word_info.start_time.total_seconds() if word_info.start_time else 0.0
                     word_end = word_info.end_time.total_seconds() if word_info.end_time else 0.0
-                    speaker_tag = getattr(word_info, 'speaker_tag', 1)
+                    speaker_tag = getattr(word_info, "speaker_tag", 1)
                     speaker_id = f"SPEAKER_{speaker_tag:02d}"
                     speakers_detected.add(speaker_id)
 
@@ -344,15 +331,17 @@ class GoogleCloudTranscriber:
                     if current_speaker != speaker_id:
                         # Save previous segment
                         if current_words:
-                            segment_text = ' '.join(w['word'] for w in current_words)
-                            segments.append({
-                                "id": segment_id,
-                                "start": current_start,
-                                "end": current_end,
-                                "text": segment_text,
-                                "speaker": current_speaker,
-                                "words": current_words
-                            })
+                            segment_text = " ".join(w["word"] for w in current_words)
+                            segments.append(
+                                {
+                                    "id": segment_id,
+                                    "start": current_start,
+                                    "end": current_end,
+                                    "text": segment_text,
+                                    "speaker": current_speaker,
+                                    "words": current_words,
+                                }
+                            )
                             full_text_parts.append(segment_text)
                             segment_id += 1
 
@@ -362,26 +351,30 @@ class GoogleCloudTranscriber:
                         current_start = word_start
 
                     # Add word to current segment
-                    current_words.append({
-                        "word": word_info.word,
-                        "start": word_start,
-                        "end": word_end,
-                        "probability": getattr(word_info, 'confidence', alternative.confidence),
-                        "speaker": speaker_id
-                    })
+                    current_words.append(
+                        {
+                            "word": word_info.word,
+                            "start": word_start,
+                            "end": word_end,
+                            "probability": getattr(word_info, "confidence", alternative.confidence),
+                            "speaker": speaker_id,
+                        }
+                    )
                     current_end = word_end
 
                 # Save final segment
                 if current_words:
-                    segment_text = ' '.join(w['word'] for w in current_words)
-                    segments.append({
-                        "id": segment_id,
-                        "start": current_start,
-                        "end": current_end,
-                        "text": segment_text,
-                        "speaker": current_speaker,
-                        "words": current_words
-                    })
+                    segment_text = " ".join(w["word"] for w in current_words)
+                    segments.append(
+                        {
+                            "id": segment_id,
+                            "start": current_start,
+                            "end": current_end,
+                            "text": segment_text,
+                            "speaker": current_speaker,
+                            "words": current_words,
+                        }
+                    )
                     full_text_parts.append(segment_text)
                     segment_id += 1
 
@@ -391,27 +384,31 @@ class GoogleCloudTranscriber:
                 if segment_text:
                     # Extract words if available
                     words = []
-                    if hasattr(alternative, 'words') and alternative.words:
+                    if hasattr(alternative, "words") and alternative.words:
                         for word_info in alternative.words:
-                            words.append({
-                                "word": word_info.word,
-                                "start": word_info.start_time.total_seconds() if word_info.start_time else 0.0,
-                                "end": word_info.end_time.total_seconds() if word_info.end_time else 0.0,
-                                "probability": getattr(word_info, 'confidence', alternative.confidence),
-                                "speaker": None
-                            })
+                            words.append(
+                                {
+                                    "word": word_info.word,
+                                    "start": word_info.start_time.total_seconds() if word_info.start_time else 0.0,
+                                    "end": word_info.end_time.total_seconds() if word_info.end_time else 0.0,
+                                    "probability": getattr(word_info, "confidence", alternative.confidence),
+                                    "speaker": None,
+                                }
+                            )
 
-                    start_time = words[0]['start'] if words else 0.0
-                    end_time = words[-1]['end'] if words else 0.0
+                    start_time = words[0]["start"] if words else 0.0
+                    end_time = words[-1]["end"] if words else 0.0
 
-                    segments.append({
-                        "id": segment_id,
-                        "start": start_time,
-                        "end": end_time,
-                        "text": segment_text,
-                        "speaker": None,
-                        "words": words
-                    })
+                    segments.append(
+                        {
+                            "id": segment_id,
+                            "start": start_time,
+                            "end": end_time,
+                            "text": segment_text,
+                            "speaker": None,
+                            "words": words,
+                        }
+                    )
                     full_text_parts.append(segment_text)
                     segment_id += 1
 
@@ -426,14 +423,14 @@ class GoogleCloudTranscriber:
             "model_used": "google-cloud-speech",
             "timestamp": time.time(),
             "diarization_enabled": self.enable_diarization,
-            "speakers_detected": len(speakers_detected) if self.enable_diarization else None
+            "speakers_detected": len(speakers_detected) if self.enable_diarization else None,
         }
 
     def _save_transcript(self, transcript_data: Dict, output_path: str):
         """Save transcript to JSON file."""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
             print(f"Transcript saved to: {output_path}")
         except Exception as e:

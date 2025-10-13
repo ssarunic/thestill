@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import hashlib
+import os
 from pathlib import Path
 from typing import Optional
-import requests
 from urllib.parse import urlparse
+
+import requests
 
 from ..models.podcast import Episode
 from .youtube_downloader import YouTubeDownloader
@@ -59,24 +60,21 @@ class AudioDownloader:
 
             print(f"Downloading: {episode.title}")
             response = requests.get(
-                str(episode.audio_url),
-                stream=True,
-                headers={'User-Agent': 'thestill.ai/1.0'},
-                timeout=30
+                str(episode.audio_url), stream=True, headers={"User-Agent": "thestill.ai/1.0"}, timeout=30
             )
             response.raise_for_status()
 
-            total_size = int(response.headers.get('content-length', 0))
+            total_size = int(response.headers.get("content-length", 0))
             downloaded = 0
 
-            with open(local_path, 'wb') as f:
+            with open(local_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if total_size > 0:
                             progress = (downloaded / total_size) * 100
-                            print(f"\rProgress: {progress:.1f}%", end='', flush=True)
+                            print(f"\rProgress: {progress:.1f}%", end="", flush=True)
 
             print(f"\nDownload completed: {filename}")
             return str(local_path)
@@ -98,6 +96,7 @@ class AudioDownloader:
     def cleanup_old_files(self, days: int = 30):
         """Remove audio files older than specified days"""
         import time
+
         cutoff_time = time.time() - (days * 24 * 60 * 60)
 
         removed_count = 0
@@ -116,19 +115,19 @@ class AudioDownloader:
         """Remove/replace invalid filename characters"""
         invalid_chars = '<>:"/\\|?*'
         for char in invalid_chars:
-            filename = filename.replace(char, '_')
+            filename = filename.replace(char, "_")
 
-        filename = filename.replace(' ', '_')
-        filename = ''.join(c for c in filename if c.isprintable())
+        filename = filename.replace(" ", "_")
+        filename = "".join(c for c in filename if c.isprintable())
 
         return filename[:100]
 
     def _get_file_extension(self, url_path: str) -> str:
         """Extract file extension from URL path"""
-        extensions = {'.mp3', '.m4a', '.wav', '.aac', '.ogg', '.flac'}
+        extensions = {".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac"}
 
         for ext in extensions:
             if url_path.lower().endswith(ext):
                 return ext
 
-        return '.mp3'
+        return ".mp3"

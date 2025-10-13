@@ -25,8 +25,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from thestill.core.transcript_cleaner import TranscriptCleaner, TranscriptCleanerConfig
 from thestill.core.llm_provider import OllamaProvider, OpenAIProvider
+from thestill.core.transcript_cleaner import TranscriptCleaner, TranscriptCleanerConfig
 
 
 def create_long_sample_transcript(num_words: int = 50000) -> str:
@@ -79,10 +79,7 @@ the L L M models are, you know, really powerful.
 
     # Create provider (use Ollama by default)
     try:
-        provider = OllamaProvider(
-            base_url="http://localhost:11434",
-            model="gemma3:4b"
-        )
+        provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3:4b")
         print(f"\n✅ Using Ollama with gemma3:4b")
     except Exception as e:
         print(f"\n❌ Ollama not available: {e}")
@@ -90,11 +87,7 @@ the L L M models are, you know, really powerful.
         return False
 
     # Create config
-    config = TranscriptCleanerConfig(
-        chunk_size=20000,
-        overlap_pct=0.15,
-        extract_entities=True
-    )
+    config = TranscriptCleanerConfig(chunk_size=20000, overlap_pct=0.15, extract_entities=True)
 
     # Create cleaner
     cleaner = TranscriptCleaner(provider=provider, config=config)
@@ -104,7 +97,7 @@ the L L M models are, you know, really powerful.
         result = cleaner.clean_transcript(text)
 
         print("\n✨ CLEANED TEXT:")
-        print(result['cleaned_text'])
+        print(result["cleaned_text"])
 
         print("\n📊 STATISTICS:")
         print(f"  - Processing time: {result['processing_time']:.1f}s")
@@ -113,9 +106,9 @@ the L L M models are, you know, really powerful.
         print(f"  - Final tokens: {result['final_tokens']}")
         print(f"  - Token change: {result['final_tokens'] - result['original_tokens']}")
 
-        if result['entities']:
+        if result["entities"]:
             print(f"\n🏷️  ENTITIES EXTRACTED:")
-            for entity in result['entities']:
+            for entity in result["entities"]:
                 print(f"  - {entity['term']} ({entity['type']})")
 
         return True
@@ -123,6 +116,7 @@ the L L M models are, you know, really powerful.
     except Exception as e:
         print(f"\n❌ Error during cleaning: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -140,20 +134,13 @@ def test_chunking():
 
     # Create provider
     try:
-        provider = OllamaProvider(
-            base_url="http://localhost:11434",
-            model="gemma3:4b"
-        )
+        provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3:4b")
     except Exception as e:
         print(f"\n❌ Ollama not available: {e}")
         return False
 
     # Create config
-    config = TranscriptCleanerConfig(
-        chunk_size=20000,  # Force chunking
-        overlap_pct=0.15,
-        extract_entities=True
-    )
+    config = TranscriptCleanerConfig(chunk_size=20000, overlap_pct=0.15, extract_entities=True)  # Force chunking
 
     # Create cleaner
     cleaner = TranscriptCleaner(provider=provider, config=config)
@@ -168,24 +155,27 @@ def test_chunking():
         print(f"  - Time per chunk: {result['processing_time'] / result['chunks_processed']:.1f}s")
         print(f"  - Original tokens: {result['original_tokens']:,}")
         print(f"  - Final tokens: {result['final_tokens']:,}")
-        print(f"  - Token reduction: {((result['original_tokens'] - result['final_tokens']) / result['original_tokens'] * 100):.1f}%")
+        print(
+            f"  - Token reduction: {((result['original_tokens'] - result['final_tokens']) / result['original_tokens'] * 100):.1f}%"
+        )
 
-        if result['entities']:
+        if result["entities"]:
             print(f"\n🏷️  ENTITIES EXTRACTED ({len(result['entities'])}):")
-            for entity in result['entities'][:10]:  # Show first 10
+            for entity in result["entities"][:10]:  # Show first 10
                 print(f"  - {entity['term']} ({entity['type']})")
-            if len(result['entities']) > 10:
+            if len(result["entities"]) > 10:
                 print(f"  ... and {len(result['entities']) - 10} more")
 
         # Show sample of cleaned text
         print("\n✨ SAMPLE OF CLEANED TEXT (first 500 chars):")
-        print(result['cleaned_text'][:500] + "...")
+        print(result["cleaned_text"][:500] + "...")
 
         return True
 
     except Exception as e:
         print(f"\n❌ Error during cleaning: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -201,20 +191,13 @@ def test_without_entity_extraction():
     print(f"\n📝 Generated transcript: {len(text):,} characters")
 
     try:
-        provider = OllamaProvider(
-            base_url="http://localhost:11434",
-            model="gemma3:4b"
-        )
+        provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3:4b")
     except Exception as e:
         print(f"\n❌ Ollama not available: {e}")
         return False
 
     # Config without entity extraction
-    config = TranscriptCleanerConfig(
-        chunk_size=20000,
-        overlap_pct=0.15,
-        extract_entities=False  # Disabled for speed
-    )
+    config = TranscriptCleanerConfig(chunk_size=20000, overlap_pct=0.15, extract_entities=False)  # Disabled for speed
 
     cleaner = TranscriptCleaner(provider=provider, config=config)
 
@@ -231,6 +214,7 @@ def test_without_entity_extraction():
     except Exception as e:
         print(f"\n❌ Error during cleaning: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -244,10 +228,7 @@ def main():
     # Check if Ollama is running
     print("\n🔍 Checking Ollama availability...")
     try:
-        provider = OllamaProvider(
-            base_url="http://localhost:11434",
-            model="gemma3:4b"
-        )
+        provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3:4b")
         print("✅ Ollama is available")
     except Exception as e:
         print(f"❌ Ollama is not available: {e}")
@@ -261,7 +242,7 @@ def main():
     tests = [
         ("Basic Cleaning", test_basic_cleaning),
         ("Overlapping Chunking", test_chunking),
-        ("Fast Mode", test_without_entity_extraction)
+        ("Fast Mode", test_without_entity_extraction),
     ]
 
     results = []

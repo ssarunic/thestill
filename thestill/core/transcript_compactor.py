@@ -18,9 +18,9 @@ This significantly reduces token usage for LLM processing while preserving all m
 """
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import timedelta
 
 
 class TranscriptCompactor:
@@ -29,8 +29,9 @@ class TranscriptCompactor:
     def __init__(self):
         self.min_segment_gap = 2.0  # Merge segments within 2 seconds of same speaker
 
-    def compact_transcript(self, transcript_path: str, output_md_path: str = None,
-                          output_json_path: str = None) -> Dict:
+    def compact_transcript(
+        self, transcript_path: str, output_md_path: str = None, output_json_path: str = None
+    ) -> Dict:
         """
         Convert full Whisper JSON to:
         1. Pruned JSON (removed word-level data, probabilities, etc.)
@@ -42,7 +43,7 @@ class TranscriptCompactor:
             - token_savings_estimate: percentage reduction
         """
         try:
-            with open(transcript_path, 'r', encoding='utf-8') as f:
+            with open(transcript_path, "r", encoding="utf-8") as f:
                 full_transcript = json.load(f)
 
             # Create pruned JSON
@@ -61,7 +62,7 @@ class TranscriptCompactor:
                 "markdown": markdown,
                 "token_savings_estimate": round(savings, 1),
                 "original_chars": original_size,
-                "markdown_chars": markdown_size
+                "markdown_chars": markdown_size,
             }
 
             # Save outputs if paths provided
@@ -85,7 +86,7 @@ class TranscriptCompactor:
             pruned_seg = {
                 "start": round(seg.get("start", 0)),  # Round to seconds
                 "end": round(seg.get("end", 0)),
-                "text": seg.get("text", "").strip()
+                "text": seg.get("text", "").strip(),
             }
 
             # Keep speaker info if available (from diarization)
@@ -101,10 +102,12 @@ class TranscriptCompactor:
             "metadata": {
                 "audio_file": full_transcript.get("audio_file", ""),
                 "language": full_transcript.get("language", "en"),
-                "duration": full_transcript.get("segments", [{}])[-1].get("end", 0) if full_transcript.get("segments") else 0,
-                "model": full_transcript.get("model_used", "unknown")
+                "duration": (
+                    full_transcript.get("segments", [{}])[-1].get("end", 0) if full_transcript.get("segments") else 0
+                ),
+                "model": full_transcript.get("model_used", "unknown"),
             },
-            "segments": merged_segments
+            "segments": merged_segments,
         }
 
     def _merge_segments(self, segments: List[Dict]) -> List[Dict]:
@@ -119,8 +122,9 @@ class TranscriptCompactor:
             seg = segments[i]
 
             # Check if same speaker and close in time
-            same_speaker = (current.get("speaker") == seg.get("speaker")) or \
-                          ("speaker" not in current and "speaker" not in seg)
+            same_speaker = (current.get("speaker") == seg.get("speaker")) or (
+                "speaker" not in current and "speaker" not in seg
+            )
             time_gap = seg["start"] - current["end"]
 
             if same_speaker and time_gap <= self.min_segment_gap:
@@ -273,7 +277,7 @@ class TranscriptCompactor:
             "go to ",
             ".com",
             "get % off",
-            "subscribe at"
+            "subscribe at",
         ]
 
         if any(keyword in text_lower for keyword in ad_keywords):
@@ -297,7 +301,7 @@ class TranscriptCompactor:
         """Save pruned JSON to file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(pruned, f, indent=2, ensure_ascii=False)
             print(f"Pruned JSON saved to: {output_path}")
         except Exception as e:
@@ -307,7 +311,7 @@ class TranscriptCompactor:
         """Save Markdown to file"""
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 f.write(markdown)
             print(f"Markdown saved to: {output_path}")
         except Exception as e:

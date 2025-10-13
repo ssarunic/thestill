@@ -12,38 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import click
 import time
 from pathlib import Path
 
+import click
+
 try:
-    from .utils.config import load_config
-    from .utils.logger import setup_logger
-    from .services import PodcastService, StatsService
-    from .core.feed_manager import PodcastFeedManager
     from .core.audio_downloader import AudioDownloader
     from .core.audio_preprocessor import AudioPreprocessor
-    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
+    from .core.feed_manager import PodcastFeedManager
     from .core.google_transcriber import GoogleCloudTranscriber
-    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from .core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from .core.llm_provider import create_llm_provider
+    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from .services import PodcastService, StatsService
+    from .utils.config import load_config
+    from .utils.logger import setup_logger
 except ImportError:
-    from utils.config import load_config
-    from utils.logger import setup_logger
-    from services import PodcastService, StatsService
-    from core.feed_manager import PodcastFeedManager
     from core.audio_downloader import AudioDownloader
     from core.audio_preprocessor import AudioPreprocessor
-    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
+    from core.feed_manager import PodcastFeedManager
     from core.google_transcriber import GoogleCloudTranscriber
-    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from core.evaluator import TranscriptEvaluator, PostProcessorEvaluator, print_evaluation_summary
     from core.llm_provider import create_llm_provider
+    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from services import PodcastService, StatsService
+    from utils.config import load_config
+    from utils.logger import setup_logger
 
 
 @click.group()
-@click.option('--config', '-c', help='Path to config file')
+@click.option("--config", "-c", help="Path to config file")
 @click.pass_context
 def main(ctx, config):
     """thestill.ai - Automated podcast transcription and summarization"""
@@ -53,7 +54,7 @@ def main(ctx, config):
     setup_logger("thestill", log_level="INFO", console_output=True)
 
     try:
-        ctx.obj['config'] = load_config(config)
+        ctx.obj["config"] = load_config(config)
         click.echo("✓ Configuration loaded successfully")
     except Exception as e:
         click.echo(f"❌ Configuration error: {e}", err=True)
@@ -61,14 +62,14 @@ def main(ctx, config):
 
 
 @main.command()
-@click.argument('rss_url')
+@click.argument("rss_url")
 @click.pass_context
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
     podcast_service = PodcastService(str(config.storage_path))
 
     podcast = podcast_service.add_podcast(rss_url)
@@ -79,14 +80,14 @@ def add(ctx, rss_url):
 
 
 @main.command()
-@click.argument('podcast_id')
+@click.argument("podcast_id")
 @click.pass_context
 def remove(ctx, podcast_id):
     """Remove a podcast by RSS URL or index number"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
     podcast_service = PodcastService(str(config.storage_path))
 
     if podcast_service.remove_podcast(podcast_id):
@@ -99,10 +100,10 @@ def remove(ctx, podcast_id):
 @click.pass_context
 def list(ctx):
     """List all tracked podcasts"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
     podcast_service = PodcastService(str(config.storage_path))
 
     podcasts = podcast_service.list_podcasts()
@@ -124,16 +125,16 @@ def list(ctx):
 
 
 @main.command()
-@click.option('--podcast-id', help='Refresh specific podcast (index or RSS URL)')
-@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to discover per podcast')
-@click.option('--dry-run', '-d', is_flag=True, help='Show what would be discovered without updating feeds.json')
+@click.option("--podcast-id", help="Refresh specific podcast (index or RSS URL)")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to discover per podcast")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be discovered without updating feeds.json")
 @click.pass_context
 def refresh(ctx, podcast_id, max_episodes, dry_run):
     """Refresh podcast feeds and discover new episodes (step 1)"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
     podcast_service = PodcastService(str(config.storage_path))
@@ -193,16 +194,16 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
 
 
 @main.command()
-@click.option('--podcast-id', help='Download from specific podcast (index or RSS URL)')
-@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to download per podcast')
-@click.option('--dry-run', '-d', is_flag=True, help='Show what would be downloaded without downloading')
+@click.option("--podcast-id", help="Download from specific podcast (index or RSS URL)")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to download per podcast")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be downloaded without downloading")
 @click.pass_context
 def download(ctx, podcast_id, max_episodes, dry_run):
     """Download audio files for episodes that need downloading (step 2)"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
     downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
@@ -224,8 +225,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
             click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
             ctx.exit(1)
 
-        episodes_to_download = [(p, eps) for p, eps in episodes_to_download
-                                if str(p.rss_url) == str(podcast.rss_url)]
+        episodes_to_download = [(p, eps) for p, eps in episodes_to_download if str(p.rss_url) == str(podcast.rss_url)]
 
         if not episodes_to_download:
             click.echo(f"✓ No episodes need downloading for podcast: {podcast.title}")
@@ -273,11 +273,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                     # Store just the filename
                     audio_filename = Path(audio_path).name
 
-                    feed_manager.mark_episode_downloaded(
-                        str(podcast.rss_url),
-                        episode.guid,
-                        audio_filename
-                    )
+                    feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.guid, audio_filename)
                     downloaded_count += 1
                     click.echo("✅ Downloaded successfully")
                 else:
@@ -295,16 +291,16 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 
 
 @main.command()
-@click.option('--podcast-id', help='Podcast ID (RSS URL or index) to downsample')
-@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to downsample')
-@click.option('--dry-run', '-d', is_flag=True, help='Preview what would be downsampled')
+@click.option("--podcast-id", help="Podcast ID (RSS URL or index) to downsample")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to downsample")
+@click.option("--dry-run", "-d", is_flag=True, help="Preview what would be downsampled")
 @click.pass_context
 def downsample(ctx, podcast_id, max_episodes, dry_run):
     """Downsample downloaded audio to 16kHz, 16-bit, mono WAV format"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
     preprocessor = AudioPreprocessor()
@@ -326,8 +322,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
             click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
             ctx.exit(1)
 
-        episodes_to_downsample = [(p, eps) for p, eps in episodes_to_downsample
-                                  if str(p.rss_url) == str(podcast.rss_url)]
+        episodes_to_downsample = [
+            (p, eps) for p, eps in episodes_to_downsample if str(p.rss_url) == str(podcast.rss_url)
+        ]
 
         if not episodes_to_downsample:
             click.echo(f"✓ No episodes need downsampling for podcast: {podcast.title}")
@@ -379,19 +376,14 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                 # Downsample
                 click.echo("🔧 Downsampling to 16kHz, 16-bit, mono WAV...")
                 downsampled_path = preprocessor.downsample_audio(
-                    str(original_audio_file),
-                    str(config.path_manager.downsampled_audio_dir())
+                    str(original_audio_file), str(config.path_manager.downsampled_audio_dir())
                 )
 
                 if downsampled_path:
                     # Store just the filename
                     downsampled_filename = Path(downsampled_path).name
 
-                    feed_manager.mark_episode_downsampled(
-                        str(podcast.rss_url),
-                        episode.guid,
-                        downsampled_filename
-                    )
+                    feed_manager.mark_episode_downsampled(str(podcast.rss_url), episode.guid, downsampled_filename)
                     downsampled_count += 1
                     click.echo("✅ Downsampled successfully")
                 else:
@@ -400,6 +392,7 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
             except Exception as e:
                 click.echo(f"❌ Error downsampling: {e}")
                 import traceback
+
                 traceback.print_exc()
                 continue
 
@@ -409,20 +402,21 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
 
 
 @main.command()
-@click.option('--dry-run', '-d', is_flag=True, help='Show what would be processed without actually processing')
-@click.option('--max-episodes', '-m', default=5, help='Maximum episodes to process per podcast')
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed without actually processing")
+@click.option("--max-episodes", "-m", default=5, help="Maximum episodes to process per podcast")
 @click.pass_context
 def clean_transcript(ctx, dry_run, max_episodes):
     """Clean existing transcripts with LLM post-processing"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
+
+    import json
+    from datetime import datetime
 
     from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
     from .models.podcast import CleanedTranscript
-    from datetime import datetime
-    import json
 
     feed_manager = PodcastFeedManager(str(config.storage_path))
 
@@ -437,7 +431,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
             anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model
+            anthropic_model=config.anthropic_model,
         )
         click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
     except Exception as e:
@@ -493,7 +487,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
         try:
             # Load transcript
-            with open(transcript_path, 'r', encoding='utf-8') as f:
+            with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript_data = json.load(f)
 
             # Clean transcript with context
@@ -507,7 +501,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                 episode_title=episode.title,
                 episode_description=episode.description,
                 output_path=str(cleaned_path),
-                save_corrections=True
+                save_corrections=True,
             )
 
             if result:
@@ -516,23 +510,23 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     episode_guid=episode.guid,
                     episode_title=episode.title,
                     podcast_title=podcast.title,
-                    corrections=result['corrections'],
-                    speaker_mapping=result['speaker_mapping'],
-                    cleaned_markdown=result['cleaned_markdown'],
-                    processing_time=result['processing_time'],
-                    created_at=datetime.now()
+                    corrections=result["corrections"],
+                    speaker_mapping=result["speaker_mapping"],
+                    cleaned_markdown=result["cleaned_markdown"],
+                    processing_time=result["processing_time"],
+                    created_at=datetime.now(),
                 )
 
                 # Update feed manager to mark as processed
                 # The TranscriptCleaningProcessor removes '_transcript_cleaned' and '_transcript' suffixes
                 # So we need to match the actual filename it creates: {episode_id}.md
-                episode_id = cleaned_path.stem.replace('_transcript_cleaned', '').replace('_transcript', '')
+                episode_id = cleaned_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
                 cleaned_md_filename = f"{episode_id}.md"
                 feed_manager.mark_episode_processed(
                     str(podcast.rss_url),
                     episode.guid,
                     raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
-                    clean_transcript_path=cleaned_md_filename  # Just the cleaned MD filename
+                    clean_transcript_path=cleaned_md_filename,  # Just the cleaned MD filename
                 )
 
                 total_processed += 1
@@ -543,6 +537,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
         except Exception as e:
             click.echo(f"❌ Error cleaning transcript: {e}")
             import traceback
+
             traceback.print_exc()
             continue
 
@@ -555,10 +550,10 @@ def clean_transcript(ctx, dry_run, max_episodes):
 @click.pass_context
 def status(ctx):
     """Show system status and statistics"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
     stats_service = StatsService(str(config.storage_path))
 
     click.echo("📊 thestill.ai Status")
@@ -626,10 +621,10 @@ def status(ctx):
 @click.pass_context
 def cleanup(ctx):
     """Clean up old audio files"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
     downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
 
     click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
@@ -638,11 +633,11 @@ def cleanup(ctx):
 
 
 @main.command()
-@click.argument('audio_path', type=click.Path(exists=True), required=False)
-@click.option('--downsample', is_flag=True, help='Enable audio downsampling (16kHz, mono, 16-bit)')
-@click.option('--podcast-id', help='Transcribe episodes from specific podcast (index or RSS URL)')
-@click.option('--episode-id', help='Transcribe specific episode (requires --podcast-id)')
-@click.option('--max-episodes', '-m', type=int, help='Maximum episodes to transcribe')
+@click.argument("audio_path", type=click.Path(exists=True), required=False)
+@click.option("--downsample", is_flag=True, help="Enable audio downsampling (16kHz, mono, 16-bit)")
+@click.option("--podcast-id", help="Transcribe episodes from specific podcast (index or RSS URL)")
+@click.option("--episode-id", help="Transcribe specific episode (requires --podcast-id)")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to transcribe")
 @click.pass_context
 def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes):
     """Transcribe audio files to JSON transcripts.
@@ -650,15 +645,15 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     Without arguments: Transcribes all downloaded episodes that need transcription.
     With audio_path: Transcribes a specific audio file (standalone mode).
     """
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     preprocessor = AudioPreprocessor()
 
     # Initialize the appropriate transcriber based on config settings
-    if config.transcription_provider.lower() == 'google':
+    if config.transcription_provider.lower() == "google":
         click.echo("🎤 Using Google Cloud Speech-to-Text")
         if not config.google_app_credentials and not config.google_cloud_project_id:
             click.echo("❌ Google Cloud credentials not configured", err=True)
@@ -672,14 +667,15 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 storage_bucket=config.google_storage_bucket or None,
                 enable_diarization=config.enable_diarization,
                 min_speakers=config.min_speakers,
-                max_speakers=config.max_speakers
+                max_speakers=config.max_speakers,
             )
         except ImportError as e:
             click.echo(f"❌ {e}", err=True)
             click.echo("   Install with: pip install google-cloud-speech google-cloud-storage", err=True)
             ctx.exit(1)
-    elif config.transcription_model.lower() == 'parakeet':
+    elif config.transcription_model.lower() == "parakeet":
         from .core.parakeet_transcriber import ParakeetTranscriber
+
         transcriber = ParakeetTranscriber(config.whisper_device)
     elif config.enable_diarization:
         click.echo("🎤 Using WhisperX with speaker diarization enabled")
@@ -690,7 +686,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             hf_token=config.huggingface_token,
             min_speakers=config.min_speakers,
             max_speakers=config.max_speakers,
-            diarization_model=config.diarization_model
+            diarization_model=config.diarization_model,
         )
     else:
         click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
@@ -729,14 +725,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     "overlap_pct": config.cleaning_overlap_pct,
                     "extract_entities": config.cleaning_extract_entities,
                     "base_url": config.ollama_base_url,
-                    "api_key": config.openai_api_key
+                    "api_key": config.openai_api_key,
                 }
 
             transcript_data = transcriber.transcribe_audio(
                 transcription_audio_path,
                 output,
                 clean_transcript=config.enable_transcript_cleaning,
-                cleaning_config=cleaning_config
+                cleaning_config=cleaning_config,
             )
 
             # Cleanup temporary files
@@ -753,7 +749,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         except Exception as e:
             click.echo(f"❌ Error during transcription: {e}", err=True)
             # Cleanup on error
-            if 'preprocessed_audio_path' in locals() and preprocessed_audio_path and preprocessed_audio_path != audio_path:
+            if (
+                "preprocessed_audio_path" in locals()
+                and preprocessed_audio_path
+                and preprocessed_audio_path != audio_path
+            ):
                 preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
             ctx.exit(1)
         return
@@ -783,8 +783,9 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
             ctx.exit(1)
 
-        episodes_to_transcribe = [(p, eps) for p, eps in episodes_to_transcribe
-                                  if str(p.rss_url) == str(podcast.rss_url)]
+        episodes_to_transcribe = [
+            (p, eps) for p, eps in episodes_to_transcribe if str(p.rss_url) == str(podcast.rss_url)
+        ]
 
         if not episodes_to_transcribe:
             click.echo(f"✓ No episodes need transcription for podcast: {podcast.title}")
@@ -798,8 +799,9 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 ctx.exit(1)
 
             # Filter to only the specific episode
-            episodes_to_transcribe = [(p, [ep for ep in eps if ep.guid == target_episode.guid])
-                                     for p, eps in episodes_to_transcribe]
+            episodes_to_transcribe = [
+                (p, [ep for ep in eps if ep.guid == target_episode.guid]) for p, eps in episodes_to_transcribe
+            ]
             episodes_to_transcribe = [(p, eps) for p, eps in episodes_to_transcribe if eps]
 
             if not episodes_to_transcribe:
@@ -866,22 +868,20 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         "overlap_pct": config.cleaning_overlap_pct,
                         "extract_entities": config.cleaning_extract_entities,
                         "base_url": config.ollama_base_url,
-                        "api_key": config.openai_api_key
+                        "api_key": config.openai_api_key,
                     }
 
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
                     output,
                     clean_transcript=config.enable_transcript_cleaning,
-                    cleaning_config=cleaning_config
+                    cleaning_config=cleaning_config,
                 )
 
                 if transcript_data:
                     # Mark episode as having transcript
                     feed_manager.mark_episode_processed(
-                        str(podcast.rss_url),
-                        episode.guid,
-                        raw_transcript_path=output_filename
+                        str(podcast.rss_url), episode.guid, raw_transcript_path=output_filename
                     )
                     transcribed_count += 1
                     click.echo("✅ Transcription complete!")
@@ -891,6 +891,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             except Exception as e:
                 click.echo(f"❌ Error during transcription: {e}")
                 import traceback
+
                 traceback.print_exc()
                 continue
 
@@ -900,23 +901,24 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
 
 @main.command()
-@click.argument('transcript_path', type=click.Path(exists=True))
-@click.option('--add-timestamps/--no-timestamps', default=True, help='Add timestamps to sections')
-@click.option('--audio-url', default='', help='Base URL for audio deep links')
-@click.option('--speaker-map', default='{}', help='JSON dict of speaker name corrections')
-@click.option('--table-layout/--no-table-layout', default=True, help='Use table layout for ads')
-@click.option('--output', '-o', help='Output path (defaults to transcript_path with _processed suffix)')
+@click.argument("transcript_path", type=click.Path(exists=True))
+@click.option("--add-timestamps/--no-timestamps", default=True, help="Add timestamps to sections")
+@click.option("--audio-url", default="", help="Base URL for audio deep links")
+@click.option("--speaker-map", default="{}", help="JSON dict of speaker name corrections")
+@click.option("--table-layout/--no-table-layout", default=True, help="Use table layout for ads")
+@click.option("--output", "-o", help="Output path (defaults to transcript_path with _processed suffix)")
 @click.pass_context
 def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, table_layout, output):
     """Post-process a transcript with enhanced LLM processing"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     # Load transcript and parse speaker map
     import json
-    with open(transcript_path, 'r', encoding='utf-8') as f:
+
+    with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_data = json.load(f)
 
     try:
@@ -930,7 +932,7 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
         make_audio_links=bool(audio_url),
         audio_base_url=audio_url,
         speaker_map=speaker_map_dict,
-        table_layout_for_snappy_sections=table_layout
+        table_layout_for_snappy_sections=table_layout,
     )
 
     # Determine output path
@@ -949,7 +951,7 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
             anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model
+            anthropic_model=config.anthropic_model,
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -969,19 +971,20 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
 
 
 @main.command()
-@click.argument('transcript_path', type=click.Path(exists=True))
-@click.option('--output', '-o', help='Output path for evaluation report')
+@click.argument("transcript_path", type=click.Path(exists=True))
+@click.option("--output", "-o", help="Output path for evaluation report")
 @click.pass_context
 def evaluate_transcript(ctx, transcript_path, output):
     """Evaluate the quality of a raw transcript"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     # Load transcript
     import json
-    with open(transcript_path, 'r', encoding='utf-8') as f:
+
+    with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_data = json.load(f)
 
     # Determine output path
@@ -1000,7 +1003,7 @@ def evaluate_transcript(ctx, transcript_path, output):
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
             anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model
+            anthropic_model=config.anthropic_model,
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -1020,21 +1023,22 @@ def evaluate_transcript(ctx, transcript_path, output):
 
 
 @main.command()
-@click.argument('processed_path', type=click.Path(exists=True))
-@click.option('--original', help='Path to original transcript for comparison')
-@click.option('--output', '-o', help='Output path for evaluation report')
+@click.argument("processed_path", type=click.Path(exists=True))
+@click.option("--original", help="Path to original transcript for comparison")
+@click.option("--output", "-o", help="Output path for evaluation report")
 @click.pass_context
 def evaluate_postprocess(ctx, processed_path, original, output):
     """Evaluate the quality of a post-processed transcript"""
-    if ctx.obj is None or 'config' not in ctx.obj:
+    if ctx.obj is None or "config" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj['config']
+    config = ctx.obj["config"]
 
     # Load processed content
     import json
-    with open(processed_path, 'r', encoding='utf-8') as f:
-        if processed_path.endswith('.json'):
+
+    with open(processed_path, "r", encoding="utf-8") as f:
+        if processed_path.endswith(".json"):
             processed_data = json.load(f)
         else:
             # If it's markdown, wrap it as content
@@ -1043,7 +1047,7 @@ def evaluate_postprocess(ctx, processed_path, original, output):
     # Load original if provided
     original_data = None
     if original:
-        with open(original, 'r', encoding='utf-8') as f:
+        with open(original, "r", encoding="utf-8") as f:
             original_data = json.load(f)
 
     # Determine output path
@@ -1062,7 +1066,7 @@ def evaluate_postprocess(ctx, processed_path, original, output):
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
             anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model
+            anthropic_model=config.anthropic_model,
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -1081,5 +1085,5 @@ def evaluate_postprocess(ctx, processed_path, original, output):
         ctx.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -24,13 +24,14 @@ from typing import List, Optional, Union
 from pydantic import BaseModel
 
 from ..core.feed_manager import PodcastFeedManager
-from ..models.podcast import Podcast, Episode
+from ..models.podcast import Episode, Podcast
 
 logger = logging.getLogger(__name__)
 
 
 class PodcastWithIndex(BaseModel):
     """Podcast with human-friendly index number"""
+
     index: int
     title: str
     description: str
@@ -42,6 +43,7 @@ class PodcastWithIndex(BaseModel):
 
 class EpisodeWithIndex(BaseModel):
     """Episode with human-friendly index numbers"""
+
     podcast_index: int
     episode_index: int
     title: str
@@ -139,15 +141,17 @@ class PodcastService:
         result = []
         for idx, podcast in enumerate(podcasts, start=1):
             episodes_processed = sum(1 for ep in podcast.episodes if ep.processed)
-            result.append(PodcastWithIndex(
-                index=idx,
-                title=podcast.title,
-                description=podcast.description,
-                rss_url=str(podcast.rss_url),
-                last_processed=podcast.last_processed,
-                episodes_count=len(podcast.episodes),
-                episodes_processed=episodes_processed
-            ))
+            result.append(
+                PodcastWithIndex(
+                    index=idx,
+                    title=podcast.title,
+                    description=podcast.description,
+                    rss_url=str(podcast.rss_url),
+                    last_processed=podcast.last_processed,
+                    episodes_count=len(podcast.episodes),
+                    episodes_processed=episodes_processed,
+                )
+            )
 
         return result
 
@@ -184,11 +188,7 @@ class PodcastService:
         logger.warning(f"Podcast not found: {podcast_id}")
         return None
 
-    def get_episode(
-        self,
-        podcast_id: Union[str, int],
-        episode_id: Union[str, int]
-    ) -> Optional[Episode]:
+    def get_episode(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[Episode]:
         """
         Get an episode by podcast ID and episode ID.
 
@@ -210,11 +210,7 @@ class PodcastService:
             return None
 
         # Sort episodes by pub_date descending (latest first)
-        sorted_episodes = sorted(
-            podcast.episodes,
-            key=lambda ep: ep.pub_date or datetime.min,
-            reverse=True
-        )
+        sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or datetime.min, reverse=True)
 
         # Handle "latest" keyword
         if episode_id == "latest":
@@ -234,7 +230,7 @@ class PodcastService:
             return self.get_episode(podcast_id, int(episode_id))
 
         # Handle date format (YYYY-MM-DD)
-        if isinstance(episode_id, str) and len(episode_id) == 10 and episode_id.count('-') == 2:
+        if isinstance(episode_id, str) and len(episode_id) == 10 and episode_id.count("-") == 2:
             try:
                 target_date = datetime.fromisoformat(episode_id).date()
                 for episode in sorted_episodes:
@@ -256,10 +252,7 @@ class PodcastService:
         return None
 
     def list_episodes(
-        self,
-        podcast_id: Union[str, int],
-        limit: int = 10,
-        since_hours: Optional[int] = None
+        self, podcast_id: Union[str, int], limit: int = 10, since_hours: Optional[int] = None
     ) -> Optional[List[EpisodeWithIndex]]:
         """
         List episodes for a podcast with optional filtering.
@@ -280,25 +273,15 @@ class PodcastService:
 
         # Get podcast index for response
         podcasts = self.list_podcasts()
-        podcast_index = next(
-            (p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)),
-            0
-        )
+        podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
         # Sort episodes by pub_date descending (latest first)
-        sorted_episodes = sorted(
-            podcast.episodes,
-            key=lambda ep: ep.pub_date or datetime.min,
-            reverse=True
-        )
+        sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or datetime.min, reverse=True)
 
         # Filter by date if since_hours specified
         if since_hours is not None:
             cutoff_time = datetime.now() - timedelta(hours=since_hours)
-            sorted_episodes = [
-                ep for ep in sorted_episodes
-                if ep.pub_date and ep.pub_date >= cutoff_time
-            ]
+            sorted_episodes = [ep for ep in sorted_episodes if ep.pub_date and ep.pub_date >= cutoff_time]
             logger.debug(f"Filtered to {len(sorted_episodes)} episodes from last {since_hours}h")
 
         # Apply limit
@@ -307,29 +290,35 @@ class PodcastService:
         # Build result with indices
         result = []
         for idx, episode in enumerate(sorted_episodes, start=1):
-            result.append(EpisodeWithIndex(
-                podcast_index=podcast_index,
-                episode_index=idx,
-                title=episode.title,
-                description=episode.description,
-                pub_date=episode.pub_date,
-                audio_url=str(episode.audio_url),
-                duration=episode.duration,
-                guid=episode.guid,
-                processed=episode.processed,
-                transcript_available=bool(episode.raw_transcript_path and (self.storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()),
-                clean_transcript_available=bool(episode.clean_transcript_path and (self.storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()),
-                summary_available=bool(episode.summary_path and (self.storage_path / "summaries" / episode.summary_path).exists())
-            ))
+            result.append(
+                EpisodeWithIndex(
+                    podcast_index=podcast_index,
+                    episode_index=idx,
+                    title=episode.title,
+                    description=episode.description,
+                    pub_date=episode.pub_date,
+                    audio_url=str(episode.audio_url),
+                    duration=episode.duration,
+                    guid=episode.guid,
+                    processed=episode.processed,
+                    transcript_available=bool(
+                        episode.raw_transcript_path
+                        and (self.storage_path / "raw_transcripts" / episode.raw_transcript_path).exists()
+                    ),
+                    clean_transcript_available=bool(
+                        episode.clean_transcript_path
+                        and (self.storage_path / "clean_transcripts" / episode.clean_transcript_path).exists()
+                    ),
+                    summary_available=bool(
+                        episode.summary_path and (self.storage_path / "summaries" / episode.summary_path).exists()
+                    ),
+                )
+            )
 
         logger.debug(f"Listed {len(result)} episodes from: {podcast.title}")
         return result
 
-    def get_transcript(
-        self,
-        podcast_id: Union[str, int],
-        episode_id: Union[str, int]
-    ) -> Optional[str]:
+    def get_transcript(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
         Get the cleaned transcript for an episode.
 
@@ -359,7 +348,7 @@ class PodcastService:
             return "N/A - Transcript file not found"
 
         try:
-            with open(md_path, 'r', encoding='utf-8') as f:
+            with open(md_path, "r", encoding="utf-8") as f:
                 content = f.read()
             logger.info(f"Retrieved transcript for: {episode.title}")
             return content

@@ -59,7 +59,7 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
         raise ValueError(f"Invalid URI scheme: {uri}. Expected thestill://")
 
     # Extract and parse path
-    path = uri[len("thestill://"):]
+    path = uri[len("thestill://") :]
     parts = [unquote(p) for p in path.split("/") if p]
 
     if len(parts) < 2:
@@ -74,10 +74,7 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
 
     # Case 1: thestill://podcasts/{podcast_id}
     if len(parts) == 2:
-        return {
-            "resource": "podcast",
-            "podcast_id": podcast_id
-        }
+        return {"resource": "podcast", "podcast_id": podcast_id}
 
     # Validate episodes namespace
     if len(parts) >= 3 and parts[2] != "episodes":
@@ -91,32 +88,20 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
 
     # Case 2: thestill://podcasts/{podcast_id}/episodes/{episode_id}
     if len(parts) == 4:
-        return {
-            "resource": "episode",
-            "podcast_id": podcast_id,
-            "episode_id": episode_id
-        }
+        return {"resource": "episode", "podcast_id": podcast_id, "episode_id": episode_id}
 
     # Case 3: thestill://podcasts/{podcast_id}/episodes/{episode_id}/{sub-resource}
     if len(parts) == 5:
         sub_resource = parts[4].lower()
 
         if sub_resource not in ["transcript", "audio"]:
-            raise ValueError(
-                f"Invalid sub-resource: {sub_resource}. "
-                f"Expected 'transcript' or 'audio'"
-            )
+            raise ValueError(f"Invalid sub-resource: {sub_resource}. " f"Expected 'transcript' or 'audio'")
 
-        return {
-            "resource": sub_resource,
-            "podcast_id": podcast_id,
-            "episode_id": episode_id
-        }
+        return {"resource": sub_resource, "podcast_id": podcast_id, "episode_id": episode_id}
 
     # Too many path segments
     raise ValueError(
-        f"Invalid URI format: {uri}. "
-        f"Expected thestill://podcasts/{{id}}/episodes/{{id}}/[transcript|audio]"
+        f"Invalid URI format: {uri}. " f"Expected thestill://podcasts/{{id}}/episodes/{{id}}/[transcript|audio]"
     )
 
 
