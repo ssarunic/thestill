@@ -1,0 +1,362 @@
+"""
+Unit tests for PodcastFeedManager.
+
+Tests RSS parsing, YouTube integration, and episode discovery with mocked dependencies.
+"""
+
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from time import struct_time
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+
+from thestill.core.feed_manager import PodcastFeedManager
+from thestill.models.podcast import Episode, Podcast
+from thestill.repositories.podcast_repository import PodcastRepository
+from thestill.utils.path_manager import PathManager
+
+
+@pytest.fixture
+def temp_storage():
+    """Create temporary storage directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Path(tmpdir)
+
+
+@pytest.fixture
+def mock_repository():
+    """Create mock podcast repository."""
+    mock_repo = Mock(spec=PodcastRepository)
+    mock_repo.exists = Mock(return_value=False)
+    mock_repo.save = Mock(return_value=True)
+    mock_repo.delete = Mock(return_value=True)
+    mock_repo.find_all = Mock(return_value=[])
+    mock_repo.find_by_url = Mock(return_value=None)
+    mock_repo.update = Mock(return_value=True)
+    return mock_repo
+
+
+@pytest.fixture
+def path_manager(temp_storage):
+    """Create real PathManager for testing."""
+    return PathManager(str(temp_storage))
+
+
+@pytest.fixture
+def sample_podcasts():
+    """Create sample podcasts for testing."""
+    return [
+        Podcast(
+            title="Tech Talk",
+            description="A tech podcast",
+            rss_url="https://example.com/tech.xml",
+            episodes=[
+                Episode(
+                    title="Episode 1",
+                    audio_url="https://example.com/ep1.mp3",
+                    guid="ep1",
+                    pub_date=datetime(2025, 1, 10),
+                    description="First episode",
+                ),
+                Episode(
+                    title="Episode 2",
+                    audio_url="https://example.com/ep2.mp3",
+                    guid="ep2",
+                    pub_date=datetime(2025, 1, 5),
+                    description="Second episode",
+                    audio_path="ep2.mp3",
+                ),
+            ],
+        ),
+        Podcast(
+            title="News Daily",
+            description="Daily news",
+            rss_url="https://example.com/news.xml",
+            episodes=[
+                Episode(
+                    title="News Today",
+                    audio_url="https://example.com/news1.mp3",
+                    guid="news1",
+                    pub_date=datetime(2025, 1, 15),
+                    description="Today's news",
+                ),
+            ],
+        ),
+    ]
+
+
+@pytest.fixture
+def feed_manager(mock_repository, path_manager):
+    """Create FeedManager with mocked dependencies."""
+    manager = PodcastFeedManager(mock_repository, path_manager)
+    # Mock YouTube downloader to avoid actual network calls
+    manager.youtube_downloader = Mock()
+    manager.youtube_downloader.is_youtube_url = Mock(return_value=False)
+    return manager
+
+
+class TestFeedManagerInitialization:
+    """Test FeedManager initialization."""
+
+    def test_init_creates_storage_directory(self, mock_repository, temp_storage):
+        """Should create storage directory if it doesn't exist."""
+        storage_path = temp_storage / "new_dir"
+        path_manager = PathManager(str(storage_path))
+
+        manager = PodcastFeedManager(mock_repository, path_manager)
+
+        assert manager.repository is mock_repository
+        assert manager.path_manager is path_manager
+        assert storage_path.exists()
+
+    def test_init_with_existing_directory(self, mock_repository, path_manager):
+        """Should work with existing directory."""
+        manager = PodcastFeedManager(mock_repository, path_manager)
+
+        assert manager.storage_path.exists()
+
+
+class TestAddPodcast:
+    """Test add_podcast method."""
+
+    @patch("thestill.core.feed_manager.feedparser.parse")
+    def test_add_rss_podcast_success(self, mock_parse, feed_manager, mock_repository):
+        """Should add RSS podcast successfully."""
+        # Setup mock RSS feed
+        mock_feed = Mock()
+        mock_feed.bozo = False
+        mock_feed.feed = {
+            "title": "Test Podcast",
+            "description": "A test podcast",
+        }
+        mock_parse.return_value = mock_feed
+
+        mock_repository.exists.return_value = False
+
+        # Execute
+        result = feed_manager.add_podcast("https://example.com/feed.xml")
+
+        # Verify
+        assert result is True
+        mock_repository.save.assert_called_once()
+        saved_podcast = mock_repository.save.call_args[0][0]
+        assert saved_podcast.title == "Test Podcast"
+        assert str(saved_podcast.rss_url) == "https://example.com/feed.xml"
+
+    @patch("thestill.core.feed_manager.feedparser.parse")
+    def test_add_podcast_already_exists(self, mock_parse, feed_manager, mock_repository):
+        """Should return False if podcast already exists."""
+        # Setup
+        mock_feed = Mock()
+        mock_feed.bozo = False
+        mock_feed.feed = {"title": "Existing", "description": ""}
+        mock_parse.return_value = mock_feed
+
+        mock_repository.exists.return_value = True
+
+        # Execute
+        result = feed_manager.add_podcast("https://example.com/feed.xml")
+
+        # Verify
+        assert result is False
+        mock_repository.save.assert_not_called()
+
+    @patch("thestill.core.feed_manager.feedparser.parse")
+    def test_add_podcast_invalid_rss(self, mock_parse, feed_manager):
+        """Should return False for invalid RSS feed."""
+        # Setup - bozo flag indicates invalid feed
+        mock_feed = Mock()
+        mock_feed.bozo = True
+        mock_parse.return_value = mock_feed
+
+        # Execute
+        result = feed_manager.add_podcast("https://example.com/bad.xml")
+
+        # Verify
+        assert result is False
+
+    def test_add_youtube_podcast(self, feed_manager, mock_repository):
+        """Should handle YouTube URLs."""
+        # Setup
+        feed_manager.youtube_downloader.is_youtube_url.return_value = True
+        feed_manager._add_youtube_podcast = Mock(return_value=True)
+
+        # Execute
+        result = feed_manager.add_podcast("https://youtube.com/watch?v=123")
+
+        # Verify
+        assert result is True
+        feed_manager._add_youtube_podcast.assert_called_once_with("https://youtube.com/watch?v=123")
+
+
+class TestRemovePodcast:
+    """Test remove_podcast method."""
+
+    def test_remove_podcast_success(self, feed_manager, mock_repository):
+        """Should remove podcast successfully."""
+        mock_repository.delete.return_value = True
+
+        result = feed_manager.remove_podcast("https://example.com/feed.xml")
+
+        assert result is True
+        mock_repository.delete.assert_called_once_with("https://example.com/feed.xml")
+
+    def test_remove_podcast_not_found(self, feed_manager, mock_repository):
+        """Should return False if podcast not found."""
+        mock_repository.delete.return_value = False
+
+        result = feed_manager.remove_podcast("https://example.com/notfound.xml")
+
+        assert result is False
+
+
+class TestListPodcasts:
+    """Test list_podcasts method."""
+
+    def test_list_podcasts_empty(self, feed_manager, mock_repository):
+        """Should return empty list when no podcasts."""
+        mock_repository.find_all.return_value = []
+
+        result = feed_manager.list_podcasts()
+
+        assert result == []
+
+    def test_list_podcasts_with_data(self, feed_manager, mock_repository, sample_podcasts):
+        """Should return all podcasts."""
+        mock_repository.find_all.return_value = sample_podcasts
+
+        result = feed_manager.list_podcasts()
+
+        assert len(result) == 2
+        assert result[0].title == "Tech Talk"
+        assert result[1].title == "News Daily"
+
+
+class TestGetNewEpisodes:
+    """Test get_new_episodes method - simplified tests."""
+
+    def test_get_new_episodes_youtube(self, feed_manager, mock_repository):
+        """Should handle YouTube podcasts."""
+        # Setup YouTube podcast
+        youtube_podcast = Podcast(
+            title="YouTube Channel",
+            description="YT",
+            rss_url="https://youtube.com/channel/123",
+            episodes=[],
+        )
+        mock_repository.find_all.return_value = [youtube_podcast]
+
+        # Setup YouTube downloader
+        feed_manager.youtube_downloader.is_youtube_url.return_value = True
+        feed_manager._get_youtube_episodes = Mock(
+            return_value=[
+                Episode(
+                    title="YT Video",
+                    audio_url="https://youtube.com/watch?v=abc",
+                    guid="yt-abc",
+                    pub_date=datetime(2025, 1, 20),
+                    description="Video",
+                )
+            ]
+        )
+
+        # Execute
+        result = feed_manager.get_new_episodes()
+
+        # Verify
+        assert len(result) == 1
+        podcast, episodes = result[0]
+        assert len(episodes) == 1
+        assert episodes[0].title == "YT Video"
+
+
+class TestEpisodeMarking:
+    """Test episode marking methods - use repository.update_episode API."""
+
+    def test_mark_episode_downloaded(self, feed_manager, mock_repository):
+        """Should call repository.update_episode for downloaded episodes."""
+        mock_repository.update_episode = Mock(return_value=True)
+
+        # Execute
+        feed_manager.mark_episode_downloaded("https://example.com/feed.xml", "ep1", "/path/to/audio.mp3")
+
+        # Verify
+        mock_repository.update_episode.assert_called_once_with(
+            "https://example.com/feed.xml", "ep1", {"audio_path": "/path/to/audio.mp3"}
+        )
+
+    def test_mark_episode_downsampled(self, feed_manager, mock_repository):
+        """Should call repository.update_episode for downsampled episodes."""
+        mock_repository.update_episode = Mock(return_value=True)
+
+        # Execute
+        feed_manager.mark_episode_downsampled("https://example.com/feed.xml", "ep1", "/path/to/audio_16k.wav")
+
+        # Verify
+        mock_repository.update_episode.assert_called_once_with(
+            "https://example.com/feed.xml",
+            "ep1",
+            {"downsampled_audio_path": "/path/to/audio_16k.wav"},
+        )
+
+    def test_mark_episode_processed(self, feed_manager, mock_repository):
+        """Should call repository.update_episode for processed episodes."""
+        mock_repository.update_episode = Mock(return_value=True)
+
+        # Execute
+        feed_manager.mark_episode_processed(
+            "https://example.com/feed.xml",
+            "ep1",
+            raw_transcript_path="/path/to/transcript.json",
+            summary_path="/path/to/summary.md",
+        )
+
+        # Verify
+        mock_repository.update_episode.assert_called_once()
+        call_args = mock_repository.update_episode.call_args[0]
+        assert call_args[0] == "https://example.com/feed.xml"
+        assert call_args[1] == "ep1"
+        updates = call_args[2]
+        assert updates["processed"] is True
+        assert updates["raw_transcript_path"] == "/path/to/transcript.json"
+        assert updates["summary_path"] == "/path/to/summary.md"
+
+
+class TestEdgeCases:
+    """Test edge cases and error handling."""
+
+    @patch("thestill.core.feed_manager.feedparser.parse")
+    def test_add_podcast_network_error(self, mock_parse, feed_manager):
+        """Should handle network errors gracefully."""
+        mock_parse.side_effect = Exception("Network error")
+
+        result = feed_manager.add_podcast("https://example.com/feed.xml")
+
+        assert result is False
+
+    @patch("thestill.core.feed_manager.feedparser.parse")
+    def test_get_new_episodes_malformed_feed(self, mock_parse, feed_manager, mock_repository):
+        """Should skip podcasts with malformed feeds."""
+        podcast = Podcast(title="Bad Feed", description="", rss_url="https://example.com/bad.xml", episodes=[])
+        mock_repository.find_all.return_value = [podcast]
+
+        # Simulate parsing error
+        mock_parse.side_effect = Exception("Parse error")
+
+        # Execute
+        result = feed_manager.get_new_episodes()
+
+        # Verify - should return empty list, not crash
+        assert result == []
+
+    def test_mark_episode_not_found(self, feed_manager, mock_repository):
+        """Should handle marking non-existent episode gracefully."""
+        mock_repository.update_episode = Mock(return_value=False)
+
+        # Should not raise exception
+        feed_manager.mark_episode_downloaded("https://notfound.xml", "ep1", "/path")
+
+        # Verify - called but returned False
+        mock_repository.update_episode.assert_called_once()
