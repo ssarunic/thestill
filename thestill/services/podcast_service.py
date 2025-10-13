@@ -73,6 +73,12 @@ class PodcastService:
     - "latest" keyword - most recent episode
     - Date string (YYYY-MM-DD) - match by publish date
     - GUID string - exact match
+
+    Attributes:
+        storage_path: Path to data storage directory
+        path_manager: Path manager for file operations
+        repository: Repository for podcast persistence
+        feed_manager: Feed manager for RSS operations
     """
 
     def __init__(
@@ -80,7 +86,7 @@ class PodcastService:
         storage_path: Union[str, Path],
         podcast_repository: PodcastRepository,
         path_manager: PathManager,
-    ):
+    ) -> None:
         """
         Initialize podcast service.
 
@@ -89,12 +95,14 @@ class PodcastService:
             podcast_repository: Repository for podcast persistence
             path_manager: Path manager for file path operations
         """
-        self.storage_path = Path(storage_path) if isinstance(storage_path, str) else storage_path
-        self.path_manager = path_manager
-        self.repository = podcast_repository
+        self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
+        self.path_manager: PathManager = path_manager
+        self.repository: PodcastRepository = podcast_repository
 
         # Initialize FeedManager with repository and path manager
-        self.feed_manager = PodcastFeedManager(podcast_repository=podcast_repository, path_manager=path_manager)
+        self.feed_manager: PodcastFeedManager = PodcastFeedManager(
+            podcast_repository=podcast_repository, path_manager=path_manager
+        )
 
         logger.info(f"PodcastService initialized with storage: {self.storage_path}")
 
@@ -317,10 +325,6 @@ class PodcastService:
                     guid=episode.guid,
                     processed=episode.processed,
                     transcript_available=bool(
-                        episode.raw_transcript_path
-                        and self.path_manager.raw_transcript_file(episode.raw_transcript_path).exists()
-                    ),
-                    clean_transcript_available=bool(
                         episode.clean_transcript_path
                         and self.path_manager.clean_transcript_file(episode.clean_transcript_path).exists()
                     ),

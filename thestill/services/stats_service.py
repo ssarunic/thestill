@@ -45,6 +45,11 @@ class SystemStats(BaseModel):
 class StatsService:
     """
     Service for retrieving system statistics and status information.
+
+    Attributes:
+        storage_path: Path to data storage directory
+        repository: Repository for podcast persistence
+        path_manager: Path manager for file operations
     """
 
     def __init__(
@@ -52,7 +57,7 @@ class StatsService:
         storage_path: Union[str, Path],
         podcast_repository: PodcastRepository,
         path_manager: PathManager,
-    ):
+    ) -> None:
         """
         Initialize stats service.
 
@@ -61,9 +66,9 @@ class StatsService:
             podcast_repository: Repository for podcast persistence
             path_manager: Path manager for file path operations
         """
-        self.storage_path = Path(storage_path) if isinstance(storage_path, str) else storage_path
-        self.repository = podcast_repository
-        self.path_manager = path_manager
+        self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
+        self.repository: PodcastRepository = podcast_repository
+        self.path_manager: PathManager = path_manager
         logger.info(f"StatsService initialized with storage: {self.storage_path}")
 
     def get_stats(self) -> SystemStats:

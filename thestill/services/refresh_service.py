@@ -45,9 +45,13 @@ class RefreshService:
     - Filtering by podcast ID
     - Applying episode limits
     - Managing dry-run mode
+
+    Attributes:
+        feed_manager: Feed manager for RSS operations
+        podcast_service: Podcast service for podcast lookups
     """
 
-    def __init__(self, feed_manager: PodcastFeedManager, podcast_service: PodcastService):
+    def __init__(self, feed_manager: PodcastFeedManager, podcast_service: PodcastService) -> None:
         """
         Initialize refresh service.
 
@@ -55,8 +59,8 @@ class RefreshService:
             feed_manager: Feed manager for RSS operations
             podcast_service: Podcast service for podcast lookups
         """
-        self.feed_manager = feed_manager
-        self.podcast_service = podcast_service
+        self.feed_manager: PodcastFeedManager = feed_manager
+        self.podcast_service: PodcastService = podcast_service
 
     def refresh(
         self,
@@ -118,7 +122,7 @@ class RefreshService:
 
         # Persist changes if not dry-run
         if not dry_run:
-            self.feed_manager._save_podcasts()
+            # Changes are already persisted by feed_manager.get_new_episodes()
             logger.info(f"Refresh complete! Discovered {total_episodes} new episode(s)")
 
         return RefreshResult(
