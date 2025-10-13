@@ -26,6 +26,14 @@ from .youtube_downloader import YouTubeDownloader
 
 logger = logging.getLogger(__name__)
 
+# Network Configuration Constants
+DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
+DEFAULT_CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
+
+# Filename Constants
+MAX_FILENAME_LENGTH = 100  # Maximum characters for sanitized filenames
+URL_HASH_LENGTH = 8  # Number of characters from MD5 hash to include in filename
+
 
 class AudioDownloader:
     def __init__(self, storage_path: str = "./data/original_audio"):
@@ -49,7 +57,7 @@ class AudioDownloader:
             safe_podcast_title = self._sanitize_filename(podcast_title)
             safe_episode_title = self._sanitize_filename(episode.title)
 
-            url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:8]
+            url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:URL_HASH_LENGTH]
 
             parsed_url = urlparse(str(episode.audio_url))
             extension = self._get_file_extension(parsed_url.path)
@@ -63,7 +71,10 @@ class AudioDownloader:
 
             logger.info(f"Downloading episode: {episode.title}")
             response = requests.get(
-                str(episode.audio_url), stream=True, headers={"User-Agent": "thestill.ai/1.0"}, timeout=30
+                str(episode.audio_url),
+                stream=True,
+                headers={"User-Agent": "thestill.ai/1.0"},
+                timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
 
@@ -71,7 +82,7 @@ class AudioDownloader:
             downloaded = 0
 
             with open(local_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=DEFAULT_CHUNK_SIZE_BYTES):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -125,7 +136,7 @@ class AudioDownloader:
         filename = filename.replace(" ", "_")
         filename = "".join(c for c in filename if c.isprintable())
 
-        return filename[:100]
+        return filename[:MAX_FILENAME_LENGTH]
 
     def _get_file_extension(self, url_path: str) -> str:
         """Extract file extension from URL path"""
