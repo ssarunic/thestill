@@ -658,15 +658,40 @@ def status(ctx):
 
     # LLM settings
     click.echo(f"  LLM provider: {config.llm_provider}")
+    # Create provider instances directly to avoid health checks in create_llm_provider
     if config.llm_provider == "openai":
-        click.echo(f"  LLM model: {config.openai_model}")
+        from thestill.core.llm_provider import OpenAIProvider
+
+        try:
+            llm_provider = OpenAIProvider(api_key=config.openai_api_key, model=config.openai_model)
+            click.echo(f"  LLM model: {llm_provider.get_model_display_name()}")
+        except Exception:
+            click.echo(f"  LLM model: OpenAI {config.openai_model}")
     elif config.llm_provider == "ollama":
-        click.echo(f"  LLM model: {config.ollama_model}")
+        from thestill.core.llm_provider import OllamaProvider
+
+        try:
+            llm_provider = OllamaProvider(base_url=config.ollama_base_url, model=config.ollama_model)
+            click.echo(f"  LLM model: {llm_provider.get_model_display_name()}")
+        except Exception:
+            click.echo(f"  LLM model: Ollama {config.ollama_model}")
         click.echo(f"  Ollama URL: {config.ollama_base_url}")
     elif config.llm_provider == "gemini":
-        click.echo(f"  LLM model: {config.gemini_model}")
+        from thestill.core.llm_provider import GeminiProvider
+
+        try:
+            llm_provider = GeminiProvider(api_key=config.gemini_api_key, model=config.gemini_model)
+            click.echo(f"  LLM model: {llm_provider.get_model_display_name()}")
+        except Exception:
+            click.echo(f"  LLM model: Google {config.gemini_model}")
     elif config.llm_provider == "anthropic":
-        click.echo(f"  LLM model: {config.anthropic_model}")
+        from thestill.core.llm_provider import AnthropicProvider
+
+        try:
+            llm_provider = AnthropicProvider(api_key=config.anthropic_api_key, model=config.anthropic_model)
+            click.echo(f"  LLM model: {llm_provider.get_model_display_name()}")
+        except Exception:
+            click.echo(f"  LLM model: Anthropic {config.anthropic_model}")
 
     # Transcript cleaning settings
     if config.enable_transcript_cleaning:

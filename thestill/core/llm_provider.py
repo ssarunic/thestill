@@ -66,6 +66,11 @@ class LLMProvider(ABC):
         """Get the current model name"""
         pass
 
+    @abstractmethod
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        pass
+
 
 class OpenAIProvider(LLMProvider):
     """OpenAI API provider"""
@@ -227,6 +232,10 @@ class OpenAIProvider(LLMProvider):
         """Get the current model name"""
         return self.model
 
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        return f"OpenAI {self.model}"
+
 
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider using official SDK"""
@@ -337,6 +346,10 @@ class OllamaProvider(LLMProvider):
     def get_model_name(self) -> str:
         """Get the current model name"""
         return self.model
+
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        return f"Ollama {self.model}"
 
 
 class AnthropicProvider(LLMProvider):
@@ -506,6 +519,10 @@ class AnthropicProvider(LLMProvider):
         """Get the current model name"""
         return self.model
 
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        return f"Anthropic {self.model}"
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini API provider"""
@@ -658,6 +675,10 @@ class GeminiProvider(LLMProvider):
     def get_model_name(self) -> str:
         """Get the current model name"""
         return self.model
+
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        return f"Google {self.model}"
 
 
 def create_llm_provider(
