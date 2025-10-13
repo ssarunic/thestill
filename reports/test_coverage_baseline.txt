@@ -1,0 +1,108 @@
+# Thestill Testing Infrastructure - Baseline Report
+# Generated: 2025-10-11
+# Task: R-001 - Set Up Testing Infrastructure
+
+## Test Discovery
+
+Pytest successfully configured with:
+- Test discovery path: thestill/tests
+- Test files pattern: test_*.py
+- Test functions pattern: test_*
+- Marker filtering: -m "not slow" (skips slow tests by default)
+
+## Tests Discovered
+
+Total test files: 3
+1. test_transcript_cleaner.py (3 test functions)
+   - test_basic_cleaning
+   - test_chunking
+   - test_without_entity_extraction
+
+2. test_formatter.py
+3. test_cleaning.py
+
+Total test functions: 3 (shown by pytest --collect-only)
+
+## Coverage Configuration
+
+Branch coverage: ENABLED
+Coverage source: thestill package only
+Coverage reports:
+  - Terminal (term-missing): Shows uncovered lines
+  - HTML (htmlcov/): Local detailed analysis
+  - XML (coverage.xml): CI/CD integration
+
+Exclusions:
+  - Test files (*/tests/*)
+  - Virtual environments
+  - Site packages
+  - Defensive code patterns (abstract methods, TYPE_CHECKING, etc.)
+
+## Baseline Status
+
+**Note**: Baseline coverage measurement not completed due to test execution timeout.
+The existing tests in test_transcript_cleaner.py make actual LLM API calls, causing
+tests to run for >2 minutes.
+
+**Action Required**:
+- Task R-017+ will add faster unit tests with mocked dependencies
+- Current tests are integration tests and should be marked with @pytest.mark.slow
+
+**Infrastructure Status**: ✅ COMPLETE
+- pytest 8.4.2 installed
+- pytest-cov 7.0.0 installed
+- pytest.ini configured
+- .coveragerc configured with branch coverage
+- Test discovery verified working
+- Reports directory created
+
+**Next Steps**:
+1. Mark slow integration tests with @pytest.mark.slow decorator
+2. Add fast unit tests (Tasks R-003, R-017, R-018)
+3. Run full coverage baseline once fast tests are added
+4. Target: 70% line coverage, 60% branch coverage
+
+## Files Created
+
+- pytest.ini (28 lines)
+- .coveragerc (51 lines)
+- reports/test_coverage_baseline.txt (this file)
+
+## Files Modified
+
+- pyproject.toml (+1 line: pytest-cov>=4.1.0)
+
+## Validation Checklist
+
+✅ pytest installation verified (version 8.4.2)
+✅ pytest-cov installation verified (version 7.0.0)
+✅ Test discovery works (3 tests found)
+✅ Branch coverage enabled in .coveragerc
+✅ Slow marker configured (skip with -m "not slow")
+✅ Coverage source restricted to thestill package
+✅ Minimal omit list (tests, venv, site-packages only)
+✅ All __init__.py files inspected (no logic, safe to include)
+✅ Multiple report formats configured (terminal, HTML, XML)
+✅ Build backend verified (hatchling)
+
+## Known Issues
+
+1. Existing tests call LLM APIs and timeout (>2min execution)
+   - Solution: Mark with @pytest.mark.slow in future task
+
+2. No coverage baseline percentage established
+   - Solution: Will measure after adding fast unit tests
+
+## Configuration Summary
+
+**pytest.ini**:
+- Single-line addopts (pytest multiline parsing issue)
+- Marker filtering: -m "not slow"
+- Strict markers enabled
+- Short tracebacks
+
+**.coveragerc**:
+- Branch coverage: True
+- Source: thestill
+- Validated regex patterns
+- No duplicate configuration with pytest.ini

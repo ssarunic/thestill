@@ -1,0 +1,49 @@
+[run]
+# Measure both line and branch coverage
+branch = True
+
+# Only measure our package
+source = thestill
+
+# Minimal omit list - only absolute excludes
+omit =
+    */tests/*           # Test code itself
+    */venv/*            # Virtual environments
+    */.venv/*
+    */site-packages/*   # Installed packages
+
+# Note: __init__.py NOT omitted - will inspect first
+# Note: cli.py and mcp/server.py NOT omitted initially
+#       Will add to omit list ONLY after confirming they need integration tests
+#       See Task R-020 for integration test plan
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+skip_empty = True
+
+# Exclude patterns - validated regexes only
+exclude_lines =
+    # Pragma
+    pragma: no cover
+
+    # Type checking blocks
+    ^\s*if\s+TYPE_CHECKING:
+    ^\s*if\s+typing\.TYPE_CHECKING:
+
+    # Abstract methods and defensive code
+    ^\s*@abstractmethod
+    ^\s*raise\s+AssertionError
+    ^\s*raise\s+NotImplementedError
+
+    # Script entry points
+    ^\s*if\s+__name__\s*==\s*["']__main__["']:
+
+[html]
+directory = htmlcov
+# Note: htmlcov/ should be in .gitignore (for local use only)
+
+[xml]
+output = coverage.xml
+# Note: coverage.xml used by CI/CD, can be gitignored locally
