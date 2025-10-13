@@ -27,7 +27,7 @@ try:
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from .repositories.json_podcast_repository import JsonPodcastRepository
-    from .services import PodcastService, StatsService
+    from .services import PodcastService, RefreshService, StatsService
     from .utils.cli_formatter import CLIFormatter
     from .utils.config import load_config
     from .utils.logger import setup_logger
@@ -42,7 +42,7 @@ except ImportError:
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.transcriber import WhisperTranscriber, WhisperXTranscriber
     from repositories.json_podcast_repository import JsonPodcastRepository
-    from services import PodcastService, StatsService
+    from services import PodcastService, RefreshService, StatsService
     from utils.cli_formatter import CLIFormatter
     from utils.config import load_config
     from utils.logger import setup_logger
@@ -144,6 +144,9 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
     path_manager = ctx.obj["path_manager"]
     feed_manager = PodcastFeedManager(repository, path_manager)
 
+    # Create RefreshService
+    refresh_service = RefreshService(feed_manager, podcast_service)
+
     # Use CLI option if provided, otherwise fall back to config
     max_episodes_limit = max_episodes if max_episodes else config.max_episodes_per_podcast
 
@@ -151,50 +154,36 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
     click.echo("🔍 Checking for new episodes...")
     if max_episodes_limit:
         click.echo(f"   (Limiting to {max_episodes_limit} episodes per podcast)")
-    new_episodes = feed_manager.get_new_episodes(max_episodes_per_podcast=max_episodes_limit)
 
-    if not new_episodes:
-        click.echo("✓ No new episodes found")
+    try:
+        result = refresh_service.refresh(
+            podcast_id=podcast_id,
+            max_episodes=max_episodes,
+            max_episodes_per_podcast=max_episodes_limit,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+
+    if result.total_episodes == 0:
+        if result.podcast_filter_applied:
+            click.echo(f"✓ No new episodes found for podcast: {result.podcast_filter_applied}")
+        else:
+            click.echo("✓ No new episodes found")
         return
 
-    # Filter by podcast_id if specified
-    if podcast_id:
-        podcast = podcast_service.get_podcast(podcast_id)
-        if not podcast:
-            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
-            ctx.exit(1)
-
-        # Filter new_episodes to only include the specified podcast
-        new_episodes = [(p, eps) for p, eps in new_episodes if str(p.rss_url) == str(podcast.rss_url)]
-
-        if not new_episodes:
-            click.echo(f"✓ No new episodes found for podcast: {podcast.title}")
-            return
-
-    # Apply max_episodes limit
-    episodes_to_add = []
-    for podcast, episodes in new_episodes:
-        if max_episodes:
-            episodes = episodes[:max_episodes]
-        episodes_to_add.append((podcast, episodes))
-
-    # Count total episodes
-    total_episodes = sum(len(eps) for _, eps in episodes_to_add)
-    click.echo(f"📡 Found {total_episodes} new episode(s)")
+    click.echo(f"📡 Found {result.total_episodes} new episode(s)")
 
     if dry_run:
-        for podcast, episodes in episodes_to_add:
+        for podcast, episodes in result.episodes_by_podcast:
             click.echo(f"\n📻 {podcast.title}")
             for episode in episodes:
                 click.echo(f"  • {episode.title}")
         click.echo("\n(Run without --dry-run to update feeds.json)")
         return
 
-    # Episodes are already added to feed_manager.podcasts by get_new_episodes()
-    # Just need to save to persist
-    feed_manager._save_podcasts()
-
-    click.echo(f"\n✅ Refresh complete! Discovered {total_episodes} new episode(s)")
+    click.echo(f"\n✅ Refresh complete! Discovered {result.total_episodes} new episode(s)")
     click.echo("💡 Next step: Run 'thestill download' to download audio files")
 
 
