@@ -49,29 +49,63 @@ except ImportError:
     from utils.path_manager import PathManager
 
 
+class CLIContext:
+    """Container for CLI dependency injection with type safety."""
+
+    def __init__(
+        self,
+        config,
+        path_manager: PathManager,
+        repository,
+        podcast_service,
+        stats_service,
+        feed_manager,
+        audio_downloader,
+        audio_preprocessor,
+    ):
+        self.config = config
+        self.path_manager = path_manager
+        self.repository = repository
+        self.podcast_service = podcast_service
+        self.stats_service = stats_service
+        self.feed_manager = feed_manager
+        self.audio_downloader = audio_downloader
+        self.audio_preprocessor = audio_preprocessor
+
+
 @click.group()
 @click.option("--config", "-c", help="Path to config file")
 @click.pass_context
 def main(ctx, config):
     """thestill.ai - Automated podcast transcription and summarization"""
-    ctx.ensure_object(dict)
-
     # Initialize logging to stderr (important for MCP server compatibility)
     setup_logger("thestill", log_level="INFO", console_output=True)
 
     try:
-        ctx.obj["config"] = load_config(config)
+        config_obj = load_config(config)
         click.echo("✓ Configuration loaded successfully")
 
-        # Initialize shared services (dependency injection)
-        storage_path = ctx.obj["config"].storage_path  # Path object
+        # Initialize all shared services once (dependency injection)
+        storage_path = config_obj.storage_path  # Path object
         path_manager = PathManager(str(storage_path))
         repository = JsonPodcastRepository(str(storage_path))
+        podcast_service = PodcastService(storage_path, repository, path_manager)
+        stats_service = StatsService(storage_path, repository, path_manager)
+        feed_manager = PodcastFeedManager(repository, path_manager)
+        audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
+        audio_preprocessor = AudioPreprocessor()
 
-        ctx.obj["path_manager"] = path_manager
-        ctx.obj["repository"] = repository
-        ctx.obj["podcast_service"] = PodcastService(storage_path, repository, path_manager)
-        ctx.obj["stats_service"] = StatsService(storage_path, repository, path_manager)
+        # Store all services in typed context object
+        ctx.obj = CLIContext(
+            config=config_obj,
+            path_manager=path_manager,
+            repository=repository,
+            podcast_service=podcast_service,
+            stats_service=stats_service,
+            feed_manager=feed_manager,
+            audio_downloader=audio_downloader,
+            audio_preprocessor=audio_preprocessor,
+        )
 
     except Exception as e:
         click.echo(f"❌ Configuration error: {e}", err=True)
@@ -83,12 +117,11 @@ def main(ctx, config):
 @click.pass_context
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
-    if ctx.obj is None or "podcast_service" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    podcast_service = ctx.obj["podcast_service"]
-    podcast = podcast_service.add_podcast(rss_url)
+    podcast = ctx.obj.podcast_service.add_podcast(rss_url)
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
     else:
@@ -100,12 +133,11 @@ def add(ctx, rss_url):
 @click.pass_context
 def remove(ctx, podcast_id):
     """Remove a podcast by RSS URL or index number"""
-    if ctx.obj is None or "podcast_service" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    podcast_service = ctx.obj["podcast_service"]
-    if podcast_service.remove_podcast(podcast_id):
+    if ctx.obj.podcast_service.remove_podcast(podcast_id):
         click.echo("✓ Podcast removed")
     else:
         click.echo("❌ Podcast not found", err=True)
@@ -115,13 +147,11 @@ def remove(ctx, podcast_id):
 @click.pass_context
 def list(ctx):
     """List all tracked podcasts"""
-    if ctx.obj is None or "podcast_service" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    podcast_service = ctx.obj["podcast_service"]
-    podcasts = podcast_service.list_podcasts()
-
+    podcasts = ctx.obj.podcast_service.list_podcasts()
     output = CLIFormatter.format_podcast_list(podcasts)
     click.echo(output)
 
@@ -133,19 +163,13 @@ def list(ctx):
 @click.pass_context
 def refresh(ctx, podcast_id, max_episodes, dry_run):
     """Refresh podcast feeds and discover new episodes (step 1)"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
     # Use shared services from context
-    podcast_service = ctx.obj["podcast_service"]
-    repository = ctx.obj["repository"]
-    path_manager = ctx.obj["path_manager"]
-    feed_manager = PodcastFeedManager(repository, path_manager)
-
-    # Create RefreshService
-    refresh_service = RefreshService(feed_manager, podcast_service)
+    config = ctx.obj.config
+    refresh_service = RefreshService(ctx.obj.feed_manager, ctx.obj.podcast_service)
 
     # Use CLI option if provided, otherwise fall back to config
     max_episodes_limit = max_episodes if max_episodes else config.max_episodes_per_podcast
@@ -194,17 +218,15 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
 @click.pass_context
 def download(ctx, podcast_id, max_episodes, dry_run):
     """Download audio files for episodes that need downloading (step 2)"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
     # Use shared services from context
-    podcast_service = ctx.obj["podcast_service"]
-    repository = ctx.obj["repository"]
-    path_manager = ctx.obj["path_manager"]
-    feed_manager = PodcastFeedManager(repository, path_manager)
-    downloader = AudioDownloader(str(path_manager.original_audio_dir()))
+    config = ctx.obj.config
+    feed_manager = ctx.obj.feed_manager
+    downloader = ctx.obj.audio_downloader
+    podcast_service = ctx.obj.podcast_service
 
     # Get episodes that need downloading
     click.echo("🔍 Looking for episodes to download...")
@@ -294,17 +316,15 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 @click.pass_context
 def downsample(ctx, podcast_id, max_episodes, dry_run):
     """Downsample downloaded audio to 16kHz, 16-bit, mono WAV format"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
     # Use shared services from context
-    podcast_service = ctx.obj["podcast_service"]
-    repository = ctx.obj["repository"]
-    path_manager = ctx.obj["path_manager"]
-    feed_manager = PodcastFeedManager(repository, path_manager)
-    preprocessor = AudioPreprocessor()
+    config = ctx.obj.config
+    podcast_service = ctx.obj.podcast_service
+    feed_manager = ctx.obj.feed_manager
+    preprocessor = ctx.obj.audio_preprocessor
 
     click.echo("🔍 Looking for episodes to downsample...")
 
@@ -407,10 +427,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
 @click.pass_context
 def clean_transcript(ctx, dry_run, max_episodes):
     """Clean existing transcripts with LLM post-processing"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
     import json
     from datetime import datetime
@@ -419,9 +438,8 @@ def clean_transcript(ctx, dry_run, max_episodes):
     from .models.podcast import CleanedTranscript
 
     # Use shared services from context
-    repository = ctx.obj["repository"]
-    path_manager = ctx.obj["path_manager"]
-    feed_manager = PodcastFeedManager(repository, path_manager)
+    config = ctx.obj.config
+    feed_manager = ctx.obj.feed_manager
 
     # Create LLM provider based on configuration
     try:
@@ -553,13 +571,13 @@ def clean_transcript(ctx, dry_run, max_episodes):
 @click.pass_context
 def status(ctx):
     """Show system status and statistics"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
-    # Use shared service from context
-    stats_service = ctx.obj["stats_service"]
+    # Use shared services from context
+    config = ctx.obj.config
+    stats_service = ctx.obj.stats_service
 
     click.echo(CLIFormatter.format_header("thestill.ai Status"))
 
@@ -625,11 +643,12 @@ def status(ctx):
 @click.pass_context
 def cleanup(ctx):
     """Clean up old audio files"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
-    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
+
+    config = ctx.obj.config
+    downloader = ctx.obj.audio_downloader
 
     click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
     downloader.cleanup_old_files(config.cleanup_days)
@@ -649,12 +668,12 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     Without arguments: Transcribes all downloaded episodes that need transcription.
     With audio_path: Transcribes a specific audio file (standalone mode).
     """
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
 
-    preprocessor = AudioPreprocessor()
+    config = ctx.obj.config
+    preprocessor = ctx.obj.audio_preprocessor
 
     # Initialize the appropriate transcriber based on config settings
     if config.transcription_provider.lower() == "google":
@@ -764,10 +783,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
     # Mode 2: Batch transcription of downloaded episodes
     # Use shared services from context
-    podcast_service = ctx.obj["podcast_service"]
-    repository = ctx.obj["repository"]
-    path_manager = ctx.obj["path_manager"]
-    feed_manager = PodcastFeedManager(repository, path_manager)
+    podcast_service = ctx.obj.podcast_service
+    feed_manager = ctx.obj.feed_manager
 
     # Validate episode_id requires podcast_id
     if episode_id and not podcast_id:
@@ -917,10 +934,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 @click.pass_context
 def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, table_layout, output):
     """Post-process a transcript with enhanced LLM processing"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
+
+    config = ctx.obj.config
 
     # Load transcript and parse speaker map
     import json
@@ -983,10 +1001,11 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
 @click.pass_context
 def evaluate_transcript(ctx, transcript_path, output):
     """Evaluate the quality of a raw transcript"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
+
+    config = ctx.obj.config
 
     # Load transcript
     import json
@@ -1036,10 +1055,11 @@ def evaluate_transcript(ctx, transcript_path, output):
 @click.pass_context
 def evaluate_postprocess(ctx, processed_path, original, output):
     """Evaluate the quality of a post-processed transcript"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
+
+    config = ctx.obj.config
 
     # Load processed content
     import json
