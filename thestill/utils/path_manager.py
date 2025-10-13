@@ -248,3 +248,30 @@ class PathManager:
             raise ValueError(f"Unknown directory type: {directory_type}")
 
         return file_map[directory_type](filename)
+
+    def require_file_exists(self, file_path: Path, error_message: str) -> Path:
+        """
+        Check if file exists and raise FileNotFoundError if not.
+
+        This helper centralizes file existence checking with custom error messages,
+        reducing repeated existence checks across CLI and services.
+
+        Args:
+            file_path: Path to check
+            error_message: Custom error message to include in exception
+
+        Returns:
+            The same path if it exists
+
+        Raises:
+            FileNotFoundError: If file does not exist
+
+        Example:
+            >>> path = path_manager.require_file_exists(
+            ...     episode_path,
+            ...     "Episode audio file not found"
+            ... )
+        """
+        if not file_path.exists():
+            raise FileNotFoundError(f"{error_message}: {file_path}")
+        return file_path

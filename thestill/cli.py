@@ -426,7 +426,10 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                 # Build paths
                 original_audio_file = config.path_manager.original_audio_file(episode.audio_path)
 
-                if not original_audio_file.exists():
+                # Verify file exists before downsampling
+                try:
+                    config.path_manager.require_file_exists(original_audio_file, "Original audio file not found")
+                except FileNotFoundError:
                     click.echo(f"❌ Original audio file not found: {episode.audio_path}")
                     continue
 
@@ -972,7 +975,10 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
                 audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
 
-                if not audio_file.exists():
+                # Verify downsampled audio exists before transcription
+                try:
+                    config.path_manager.require_file_exists(audio_file, "Downsampled audio file not found")
+                except FileNotFoundError:
                     click.echo(f"❌ Downsampled audio file not found: {episode.downsampled_audio_path}")
                     continue
 

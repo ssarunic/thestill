@@ -4,19 +4,19 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 25/35 tasks complete (71.4%)**
+> **Progress: 26/35 tasks complete (74.3%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 25 tasks (28 hours invested)**
+**✅ Completed: 26 tasks (28.5 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 10 tasks**
+**⏳ Remaining: 9 tasks**
 
 **Current Status:**
 - Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
-- Tests passing: 221/221 (100%)
+- Tests passing: 226/226 (100%)
 - Repository layer: ✅ 100% complete
 - Week 1 foundation: ✅ 100% complete (8/8 tasks)
 - Week 2 foundation: ✅ 100% complete (9/9 tasks)
@@ -504,41 +504,19 @@ transcript_available=bool(
 
 ---
 
-### Task R-027: Add PathManager require_file_exists Helper
-**Priority**: Low
-**Effort**: 30 minutes
-**Scope**: `utils/path_manager.py`
+### Task R-027: Add PathManager require_file_exists Helper ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
+**Commit**: (pending) - feat(utils): add require_file_exists helper to PathManager
 
-**Steps**:
-1. Add `require_file_exists(file_path, error_msg)` method to PathManager
-2. Replace repeated existence checks in CLI and services
-3. Centralize error messages
-4. Add test
+**Completed**:
+- ✅ Added `require_file_exists(file_path, error_message)` method to PathManager
+- ✅ Added 5 comprehensive unit tests (100% coverage)
+- ✅ Replaced file existence checks in CLI (2 locations: downsample and transcribe commands)
+- ✅ Replaced file existence check in PodcastService.get_transcript()
+- ✅ Centralized error messages with custom messages
+- ✅ All 226 tests passing (up from 221)
 
-**Example**:
-```python
-def require_file_exists(self, file_path: Path, error_message: str) -> Path:
-    """
-    Check if file exists and raise FileNotFoundError if not.
-
-    Args:
-        file_path: Path to check
-        error_message: Custom error message
-
-    Returns:
-        The same path if it exists
-
-    Raises:
-        FileNotFoundError: If file does not exist
-    """
-    if not file_path.exists():
-        raise FileNotFoundError(f"{error_message}: {file_path}")
-    return file_path
-```
-
-**Safety**: Add tests
-**Risk**: Low
-**Commit**: `feat(utils): add require_file_exists helper to PathManager`
+**Benefits**: Centralized file validation, consistent error messages, reduces code duplication
 
 ---
 
@@ -917,7 +895,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (24/35 = 68.6%)
+### Completed Tasks ✅ (26/35 = 74.3%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -946,28 +924,28 @@ If a refactor causes issues:
 | R-023 | `0348e7e` | 1h | ✅ Contract tests (32 tests, prevents API breakage) |
 | R-024 | `ee15382` | 30m | ✅ cleanup_old_files with dry-run support |
 | R-026 | `19b6a15` | 30m | ✅ LLM provider display name method (abstraction improvement) |
+| R-027 | (pending) | 30m | ✅ PathManager require_file_exists helper (5 tests, centralized validation) |
 
-**Total time invested: 28 hours**
+**Total time invested: 28.5 hours**
 
-### Next 5 Priority Tasks
+### Next 4 Priority Tasks
 
 1. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
-2. **R-027** - Add PathManager require_file_exists Helper (30m) - Utility improvement
-3. **R-028** - Add FeedManager Transaction Context Manager (45m) - Data safety
-4. **R-029** - Create YouTube Source Strategy Pattern (1h) - Architecture improvement
-5. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
+2. **R-028** - Add FeedManager Transaction Context Manager (45m) - Data safety
+3. **R-029** - Create YouTube Source Strategy Pattern (1h) - Architecture improvement
+4. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
 
-**Estimated effort for next 5: 3.75 hours**
+**Estimated effort for next 4: 3.25 hours**
 
 ### Key Metrics
 
 - **Test coverage**: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 221/221 (100%)
+- **Tests passing**: 226/226 (100%)
 - **Models coverage**: ✅ 100% (podcast.py with branch coverage)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
 - **CLI Context**: ✅ Fully refactored with typed dependency injection
-- **Atomic commits**: 23 refactoring commits
+- **Atomic commits**: 24 refactoring commits
 - **Files changed**: 19 files (8 new, 11 modified)
 
 ### Critical Path Forward

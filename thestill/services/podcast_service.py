@@ -362,7 +362,10 @@ class PodcastService:
         # clean_transcript_path is just the filename (e.g., "episode_cleaned.md")
         md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
 
-        if not md_path.exists():
+        # Verify transcript file exists
+        try:
+            self.path_manager.require_file_exists(md_path, "Cleaned transcript file not found")
+        except FileNotFoundError:
             logger.warning(f"Cleaned transcript file not found: {md_path}")
             return "N/A - Transcript file not found"
 

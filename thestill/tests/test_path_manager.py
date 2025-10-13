@@ -403,3 +403,73 @@ class TestPathManagerEdgeCases:
 
         assert feeds_path == Path("/tmp/test/feeds.json")
         assert feeds_path.parent == pm.storage_path
+
+
+class TestRequireFileExists:
+    """Test require_file_exists helper method"""
+
+    def test_require_file_exists_when_file_exists(self):
+        """Test require_file_exists returns path when file exists"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pm = PathManager(storage_path=tmpdir)
+            pm.ensure_directories_exist()
+
+            # Create a test file
+            test_file = pm.original_audio_file("test.mp3")
+            test_file.touch()
+
+            # Should return the path without raising
+            result = pm.require_file_exists(test_file, "Test file not found")
+            assert result == test_file
+
+    def test_require_file_exists_when_file_not_exists(self):
+        """Test require_file_exists raises FileNotFoundError when file doesn't exist"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pm = PathManager(storage_path=tmpdir)
+            pm.ensure_directories_exist()
+
+            # File doesn't exist
+            test_file = pm.original_audio_file("nonexistent.mp3")
+
+            # Should raise FileNotFoundError
+            with pytest.raises(FileNotFoundError, match="Test file not found"):
+                pm.require_file_exists(test_file, "Test file not found")
+
+    def test_require_file_exists_error_message_includes_path(self):
+        """Test require_file_exists error message includes the file path"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pm = PathManager(storage_path=tmpdir)
+            pm.ensure_directories_exist()
+
+            test_file = pm.original_audio_file("missing.mp3")
+
+            # Should include both custom message and path in error
+            with pytest.raises(FileNotFoundError) as exc_info:
+                pm.require_file_exists(test_file, "Custom error message")
+
+            error_message = str(exc_info.value)
+            assert "Custom error message" in error_message
+            assert str(test_file) in error_message
+
+    def test_require_file_exists_with_directory(self):
+        """Test require_file_exists works with directories too"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pm = PathManager(storage_path=tmpdir)
+            pm.ensure_directories_exist()
+
+            # Should work with existing directory
+            audio_dir = pm.original_audio_dir()
+            result = pm.require_file_exists(audio_dir, "Directory not found")
+            assert result == audio_dir
+
+    def test_require_file_exists_with_nonexistent_directory(self):
+        """Test require_file_exists raises for non-existent directory"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pm = PathManager(storage_path=tmpdir)
+            # Don't create directories
+
+            audio_dir = pm.original_audio_dir()
+
+            # Should raise for non-existent directory
+            with pytest.raises(FileNotFoundError, match="Directory not found"):
+                pm.require_file_exists(audio_dir, "Directory not found")
