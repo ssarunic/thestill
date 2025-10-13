@@ -94,7 +94,8 @@ class AudioDownloader:
         """Get file size in bytes"""
         try:
             return os.path.getsize(file_path)
-        except:
+        except (OSError, FileNotFoundError, TypeError) as e:
+            logger.debug(f"Failed to get file size for {file_path}: {e}")
             return 0
 
     def cleanup_old_files(self, days: int = 30):
