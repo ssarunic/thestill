@@ -640,8 +640,9 @@ def status(ctx):
 
 
 @main.command()
+@click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
 @click.pass_context
-def cleanup(ctx):
+def cleanup(ctx, dry_run):
     """Clean up old audio files"""
     if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
@@ -650,9 +651,23 @@ def cleanup(ctx):
     config = ctx.obj.config
     downloader = ctx.obj.audio_downloader
 
-    click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
-    downloader.cleanup_old_files(config.cleanup_days)
-    click.echo("✓ Cleanup complete")
+    if dry_run:
+        click.echo(f"🧹 [DRY RUN] Previewing cleanup of files older than {config.cleanup_days} days...")
+    else:
+        click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
+
+    count = downloader.cleanup_old_files(config.cleanup_days, dry_run=dry_run)
+
+    if dry_run:
+        if count > 0:
+            click.echo(f"✓ Would delete {count} file(s) (dry-run mode)")
+        else:
+            click.echo("✓ No files would be deleted")
+    else:
+        if count > 0:
+            click.echo(f"✓ Cleanup complete - deleted {count} file(s)")
+        else:
+            click.echo("✓ Cleanup complete - no files to delete")
 
 
 @main.command()

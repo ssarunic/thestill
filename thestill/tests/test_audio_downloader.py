@@ -431,6 +431,76 @@ class TestCleanupOldFiles:
         # File still exists because unlink failed
         assert test_file.exists()
 
+    def test_cleanup_dry_run_mode(self, audio_downloader, temp_storage):
+        """Should preview cleanup without deleting files in dry-run mode."""
+        # Create old file
+        old_file = temp_storage / "old_file.mp3"
+        old_file.write_text("old content")
+
+        # Set modification time to 60 days ago
+        old_time = time.time() - (60 * 24 * 60 * 60)
+        os.utime(old_file, (old_time, old_time))
+
+        # Create recent file
+        recent_file = temp_storage / "recent_file.mp3"
+        recent_file.write_text("recent content")
+
+        # Execute cleanup with dry-run
+        count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
+
+        # Verify - files should still exist
+        assert old_file.exists()
+        assert recent_file.exists()
+        # Should have counted the old file
+        assert count == 1
+
+    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, caplog):
+        """Should log correct messages in dry-run mode."""
+        import logging
+
+        # Create multiple old files
+        old_file1 = temp_storage / "old_file1.mp3"
+        old_file1.write_text("content1")
+        old_file2 = temp_storage / "old_file2.mp3"
+        old_file2.write_text("content2")
+
+        # Set modification time to 60 days ago
+        old_time = time.time() - (60 * 24 * 60 * 60)
+        os.utime(old_file1, (old_time, old_time))
+        os.utime(old_file2, (old_time, old_time))
+
+        # Execute cleanup with dry-run
+        with caplog.at_level(logging.INFO):
+            count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
+
+        # Verify return count
+        assert count == 2
+
+        # Verify log messages contain "Would delete"
+        log_messages = [record.message for record in caplog.records]
+        assert any("Would delete: old_file1.mp3" in msg for msg in log_messages)
+        assert any("Would delete: old_file2.mp3" in msg for msg in log_messages)
+        assert any("Would clean up 2 old audio files (dry-run)" in msg for msg in log_messages)
+
+    def test_cleanup_returns_count(self, audio_downloader, temp_storage):
+        """Should return correct count of deleted files."""
+        # Create 3 old files
+        for i in range(3):
+            old_file = temp_storage / f"old_file{i}.mp3"
+            old_file.write_text(f"content{i}")
+            old_time = time.time() - (60 * 24 * 60 * 60)
+            os.utime(old_file, (old_time, old_time))
+
+        # Execute cleanup
+        count = audio_downloader.cleanup_old_files(days=30)
+
+        # Verify count
+        assert count == 3
+
+        # Verify files are deleted
+        for i in range(3):
+            assert not (temp_storage / f"old_file{i}.mp3").exists()
+
 
 class TestEdgeCases:
     """Test edge cases and error handling."""

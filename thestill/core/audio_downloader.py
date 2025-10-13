@@ -154,12 +154,16 @@ class AudioDownloader:
             logger.debug(f"Failed to get file size for {file_path}: {e}")
             return 0
 
-    def cleanup_old_files(self, days: int = 30) -> None:
+    def cleanup_old_files(self, days: int = 30, dry_run: bool = False) -> int:
         """
         Remove audio files older than specified days.
 
         Args:
             days: Number of days after which files are considered old
+            dry_run: If True, only log what would be deleted without actually deleting
+
+        Returns:
+            Number of files that were deleted (or would be deleted in dry-run mode)
         """
         import time
 
@@ -168,14 +172,24 @@ class AudioDownloader:
         removed_count = 0
         for file_path in self.storage_path.glob("*"):
             if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
-                try:
-                    file_path.unlink()
+                if dry_run:
+                    logger.info(f"Would delete: {file_path.name}")
                     removed_count += 1
-                except Exception as e:
-                    logger.error(f"Error removing {file_path}: {e}")
+                else:
+                    try:
+                        file_path.unlink()
+                        logger.info(f"Deleted old file: {file_path.name}")
+                        removed_count += 1
+                    except Exception as e:
+                        logger.error(f"Error removing {file_path}: {e}")
 
         if removed_count > 0:
-            logger.info(f"Cleaned up {removed_count} old audio files")
+            if dry_run:
+                logger.info(f"Would clean up {removed_count} old audio files (dry-run)")
+            else:
+                logger.info(f"Cleaned up {removed_count} old audio files")
+
+        return removed_count
 
     def _sanitize_filename(self, filename: str) -> str:
         """Remove/replace invalid filename characters"""
