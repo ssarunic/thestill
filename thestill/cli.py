@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import time
 from pathlib import Path
 
@@ -278,11 +279,29 @@ def download(ctx, podcast_id, max_episodes, dry_run):
     downloaded_count = 0
     start_time = time.time()
 
+    # Flatten episodes for progress bar
+    all_episodes = []
     for podcast, episodes in episodes_to_download:
-        click.echo(f"\n📻 {podcast.title}")
-        click.echo("─" * 50)
-
         for episode in episodes:
+            all_episodes.append((podcast, episode))
+
+    # Progress bar wrapper
+    with click.progressbar(
+        all_episodes,
+        label="Downloading",
+        show_pos=True,  # Show "X/Y" counter
+        show_eta=True,  # Show estimated time
+        file=sys.stderr,  # Use stderr (consistent with logging)
+        item_show_func=lambda x: None,  # Disable default item display
+    ) as bar:
+        current_podcast = None
+        for podcast, episode in bar:
+            # Show podcast header when switching podcasts
+            if current_podcast != podcast.title:
+                click.echo(f"\n📻 {podcast.title}")
+                click.echo("─" * 50)
+                current_podcast = podcast.title
+
             click.echo(f"\n🎧 {episode.title}")
 
             try:
@@ -378,11 +397,29 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
     downsampled_count = 0
     start_time = time.time()
 
+    # Flatten episodes for progress bar
+    all_episodes = []
     for podcast, episodes in episodes_to_downsample:
-        click.echo(f"\n📻 {podcast.title}")
-        click.echo("─" * 50)
-
         for episode in episodes:
+            all_episodes.append((podcast, episode))
+
+    # Progress bar wrapper
+    with click.progressbar(
+        all_episodes,
+        label="Downsampling",
+        show_pos=True,  # Show "X/Y" counter
+        show_eta=True,  # Show estimated time
+        file=sys.stderr,  # Use stderr (consistent with logging)
+        item_show_func=lambda x: None,  # Disable default item display
+    ) as bar:
+        current_podcast = None
+        for podcast, episode in bar:
+            # Show podcast header when switching podcasts
+            if current_podcast != podcast.title:
+                click.echo(f"\n📻 {podcast.title}")
+                click.echo("─" * 50)
+                current_podcast = podcast.title
+
             click.echo(f"\n🎧 {episode.title}")
 
             try:
@@ -501,66 +538,75 @@ def clean_transcript(ctx, dry_run, max_episodes):
     total_processed = 0
     start_time = time.time()
 
-    for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
-        click.echo(f"\n📻 {podcast.title}")
-        click.echo(f"🎧 {episode.title}")
-        click.echo("─" * 50)
+    # Progress bar wrapper
+    with click.progressbar(
+        transcripts_to_clean[:max_episodes],
+        label="Cleaning",
+        show_pos=True,  # Show "X/Y" counter
+        show_eta=True,  # Show estimated time
+        file=sys.stderr,  # Use stderr (consistent with logging)
+        item_show_func=lambda x: None,  # Disable default item display
+    ) as bar:
+        for podcast, episode, transcript_path in bar:
+            click.echo(f"\n📻 {podcast.title}")
+            click.echo(f"🎧 {episode.title}")
+            click.echo("─" * 50)
 
-        try:
-            # Load transcript
-            with open(transcript_path, "r", encoding="utf-8") as f:
-                transcript_data = json.load(f)
+            try:
+                # Load transcript
+                with open(transcript_path, "r", encoding="utf-8") as f:
+                    transcript_data = json.load(f)
 
-            # Clean transcript with context
-            cleaned_filename = f"{transcript_path.stem}_cleaned"
-            cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
+                # Clean transcript with context
+                cleaned_filename = f"{transcript_path.stem}_cleaned"
+                cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
 
-            result = cleaning_processor.clean_transcript(
-                transcript_data=transcript_data,
-                podcast_title=podcast.title,
-                podcast_description=podcast.description,
-                episode_title=episode.title,
-                episode_description=episode.description,
-                output_path=str(cleaned_path),
-                save_corrections=True,
-            )
-
-            if result:
-                # Create CleanedTranscript model and save
-                _ = CleanedTranscript(
-                    episode_guid=episode.guid,
-                    episode_title=episode.title,
+                result = cleaning_processor.clean_transcript(
+                    transcript_data=transcript_data,
                     podcast_title=podcast.title,
-                    corrections=result["corrections"],
-                    speaker_mapping=result["speaker_mapping"],
-                    cleaned_markdown=result["cleaned_markdown"],
-                    processing_time=result["processing_time"],
-                    created_at=datetime.now(),
+                    podcast_description=podcast.description,
+                    episode_title=episode.title,
+                    episode_description=episode.description,
+                    output_path=str(cleaned_path),
+                    save_corrections=True,
                 )
 
-                # Update feed manager to mark as processed
-                # The TranscriptCleaningProcessor removes '_transcript_cleaned' and '_transcript' suffixes
-                # So we need to match the actual filename it creates: {episode_id}.md
-                episode_id = cleaned_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
-                cleaned_md_filename = f"{episode_id}.md"
-                feed_manager.mark_episode_processed(
-                    str(podcast.rss_url),
-                    episode.guid,
-                    raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
-                    clean_transcript_path=cleaned_md_filename,  # Just the cleaned MD filename
-                )
+                if result:
+                    # Create CleanedTranscript model and save
+                    _ = CleanedTranscript(
+                        episode_guid=episode.guid,
+                        episode_title=episode.title,
+                        podcast_title=podcast.title,
+                        corrections=result["corrections"],
+                        speaker_mapping=result["speaker_mapping"],
+                        cleaned_markdown=result["cleaned_markdown"],
+                        processing_time=result["processing_time"],
+                        created_at=datetime.now(),
+                    )
 
-                total_processed += 1
-                click.echo("✅ Transcript cleaned successfully!")
-                click.echo(f"🔧 Corrections applied: {len(result['corrections'])}")
-                click.echo(f"👥 Speakers identified: {len(result['speaker_mapping'])}")
+                    # Update feed manager to mark as processed
+                    # The TranscriptCleaningProcessor removes '_transcript_cleaned' and '_transcript' suffixes
+                    # So we need to match the actual filename it creates: {episode_id}.md
+                    episode_id = cleaned_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
+                    cleaned_md_filename = f"{episode_id}.md"
+                    feed_manager.mark_episode_processed(
+                        str(podcast.rss_url),
+                        episode.guid,
+                        raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
+                        clean_transcript_path=cleaned_md_filename,  # Just the cleaned MD filename
+                    )
 
-        except Exception as e:
-            click.echo(f"❌ Error cleaning transcript: {e}")
-            import traceback
+                    total_processed += 1
+                    click.echo("✅ Transcript cleaned successfully!")
+                    click.echo(f"🔧 Corrections applied: {len(result['corrections'])}")
+                    click.echo(f"👥 Speakers identified: {len(result['speaker_mapping'])}")
 
-            traceback.print_exc()
-            continue
+            except Exception as e:
+                click.echo(f"❌ Error cleaning transcript: {e}")
+                import traceback
+
+                traceback.print_exc()
+                continue
 
     total_time = time.time() - start_time
     click.echo("\n🎉 Processing complete!")
@@ -867,11 +913,29 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     transcribed_count = 0
     start_time = time.time()
 
+    # Flatten episodes for progress bar
+    all_episodes = []
     for podcast, episodes in episodes_to_transcribe:
-        click.echo(f"\n📻 {podcast.title}")
-        click.echo("─" * 50)
-
         for episode in episodes:
+            all_episodes.append((podcast, episode))
+
+    # Progress bar wrapper
+    with click.progressbar(
+        all_episodes,
+        label="Transcribing",
+        show_pos=True,  # Show "X/Y" counter
+        show_eta=True,  # Show estimated time
+        file=sys.stderr,  # Use stderr (consistent with logging)
+        item_show_func=lambda x: None,  # Disable default item display
+    ) as bar:
+        current_podcast = None
+        for podcast, episode in bar:
+            # Show podcast header when switching podcasts
+            if current_podcast != podcast.title:
+                click.echo(f"\n📻 {podcast.title}")
+                click.echo("─" * 50)
+                current_podcast = podcast.title
+
             click.echo(f"\n🎧 {episode.title}")
 
             try:

@@ -4,21 +4,22 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 21/35 tasks complete (60.0%)**
+> **Progress: 24/35 tasks complete (68.6%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 21 tasks (25.25 hours invested)**
+**✅ Completed: 24 tasks (27.5 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 14 tasks**
+**⏳ Remaining: 11 tasks**
 
 **Current Status:**
-- Test coverage: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
+- Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
+- Tests passing: 221/221 (100%)
 - Repository layer: ✅ 100% complete
 - Week 1 foundation: ✅ 100% complete (8/8 tasks)
-- Week 2 foundation: ✅ 100% complete (7/7 tasks)
+- Week 2 foundation: ✅ 100% complete (9/9 tasks)
 
 **Guiding Principles**:
 1. Keep tests passing after every commit
@@ -141,7 +142,7 @@ See [REPOSITORY_LAYER_PLAN.md](REPOSITORY_LAYER_PLAN.md) for implementation deta
 ## Week 2: Service Layer & CLI Refactoring
 
 **Goal**: Extract business logic from CLI, improve separation of concerns
-**Status**: ✅ **7/7 tasks complete (100%)** | **Time invested: 6.25 hours**
+**Status**: ✅ **8/9 tasks complete (89%)** | **Time invested: 7.5 hours**
 
 ### Task R-009: Add PathManager to PodcastService ✅
 **Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
@@ -201,42 +202,19 @@ transcript_available=bool(
 
 ---
 
-### Task R-012: Use Click Context for Service Injection
-**Priority**: Medium
-**Effort**: 45 minutes
-**Scope**: `cli.py`
+### Task R-012: Use Click Context for Service Injection ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 45 minutes
+**Commit**: `b40db2f` - Use typed CLIContext class for dependency injection (R-012)
 
-**Steps**:
-1. In `main()`, instantiate services once and store in `ctx.obj`:
-   - `podcast_service`
-   - `stats_service`
-   - `feed_manager`
-2. Update all commands to use `ctx.obj['podcast_service']` instead of creating new instances
-3. Remove duplicate service instantiations
+**Completed**:
+- ✅ Created typed `CLIContext` class for dependency injection
+- ✅ Instantiate all services once in `main()` and store in `ctx.obj`
+- ✅ Updated all commands to use `ctx.obj.podcast_service`, `ctx.obj.feed_manager`, etc.
+- ✅ Removed duplicate service instantiations across commands
+- ✅ Type-safe access to services throughout CLI
+- ✅ All 221 tests passing
 
-**Example**:
-```python
-@click.group()
-@click.pass_context
-def main(ctx, config):
-    ctx.ensure_object(dict)
-    ctx.obj['config'] = load_config(config)
-    ctx.obj['podcast_service'] = PodcastService(str(ctx.obj['config'].storage_path))
-    ctx.obj['stats_service'] = StatsService(str(ctx.obj['config'].storage_path))
-    # ... etc
-
-@main.command()
-@click.pass_context
-def list(ctx):
-    """List all tracked podcasts"""
-    podcast_service = ctx.obj['podcast_service']  # Reuse
-    podcasts = podcast_service.list_podcasts()
-    # ...
-```
-
-**Safety**: Test all commands
-**Risk**: Low
-**Commit**: `refactor(cli): use Click context for service dependency injection`
+**Benefits**: Eliminates duplicate instantiation, improves performance, better type safety
 
 ---
 
@@ -284,31 +262,23 @@ def list(ctx):
 
 ---
 
-### Task R-015: Add Progress Bars for Batch Operations
-**Priority**: Low
-**Effort**: 45 minutes
-**Scope**: `cli.py`
+### Task R-015: Add Progress Bars for Batch Operations ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 45 minutes
+**Commit**: (pending) - Add progress bars for batch operations (R-015)
 
-**Steps**:
-1. Wrap multi-episode loops with `click.progressbar()`
-2. Update download, downsample, transcribe commands
-3. Show "X of Y" counters
-4. Preserve detailed output with `--verbose` flag
+**Completed**:
+- ✅ Added `click.progressbar()` to download command
+- ✅ Added `click.progressbar()` to downsample command
+- ✅ Added `click.progressbar()` to transcribe command
+- ✅ Added `click.progressbar()` to clean_transcript command
+- ✅ Shows "X/Y" counter with `show_pos=True`
+- ✅ Shows ETA with `show_eta=True`
+- ✅ Progress bar on stderr (MCP-safe)
+- ✅ Preserves all detailed status messages
+- ✅ Auto-disabled in non-TTY environments
+- ✅ All 221 tests passing
 
-**Example**:
-```python
-with click.progressbar(
-    episodes_to_download,
-    label="Downloading episodes",
-    item_show_func=lambda ep: ep.title if ep else ""
-) as bar:
-    for podcast, episodes in bar:
-        # processing logic
-```
-
-**Safety**: Manual testing
-**Risk**: Low
-**Commit**: `feat(cli): add progress bars for batch operations`
+**Benefits**: Improved UX for long-running batch operations, MCP-compatible, graceful degradation in non-interactive environments
 
 ---
 
@@ -483,37 +453,20 @@ with click.progressbar(
 
 **Goal**: Final cleanup, documentation, and validation
 
-### Task R-024: Complete cleanup_old_files Implementation
-**Priority**: Low
-**Effort**: 30 minutes
-**Scope**: `audio_downloader.py`
+### Task R-024: Complete cleanup_old_files Implementation ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
+**Commit**: `ee15382` - Add dry-run support to cleanup_old_files (R-024)
 
-**Steps**:
-1. Complete `cleanup_old_files()` implementation
-2. Add logic to find files older than `days` parameter
-3. Add dry-run mode
-4. Add logging for deleted files
-5. Add test
+**Completed**:
+- ✅ Completed `cleanup_old_files()` implementation in audio_downloader.py
+- ✅ Added logic to find files older than `days` parameter (using mtime)
+- ✅ Added dry-run mode to preview deletions without actually deleting
+- ✅ Added proper logging for deleted files
+- ✅ Returns count of files deleted (or would be deleted in dry-run)
+- ✅ Error handling for file deletion failures
+- ✅ All 221 tests passing
 
-**Example**:
-```python
-def cleanup_old_files(self, days: int = 30, dry_run: bool = False):
-    """Remove audio files older than specified days"""
-    import time
-    cutoff_time = time.time() - (days * 86400)
-
-    for file_path in self.storage_path.glob("*"):
-        if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
-            if dry_run:
-                logger.info(f"Would delete: {file_path.name}")
-            else:
-                file_path.unlink()
-                logger.info(f"Deleted old file: {file_path.name}")
-```
-
-**Safety**: Test with dry_run first
-**Risk**: Medium (file deletion)
-**Commit**: `feat(core): complete implementation of cleanup_old_files with dry-run support`
+**Benefits**: Safe storage management, prevents accidental deletions with dry-run mode
 
 ---
 
@@ -980,7 +933,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (21/35 = 60.0%)
+### Completed Tasks ✅ (24/35 = 68.6%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -995,8 +948,10 @@ If a refactor causes issues:
 | R-009 | `9c69381` | 30m | ✅ PathManager integration complete |
 | R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
 | R-011 | `3f85c4d` | 1h | ✅ CLI Formatter extraction (centralized formatting) |
+| R-012 | `b40db2f` | 45m | ✅ CLI Context dependency injection (typed) |
 | R-013 | `341f3a0` | 1h | ✅ RefreshService extraction (business logic separation) |
 | R-014 | `2205e63` | 45m | ✅ Retry logic with exponential backoff |
+| R-015 | (pending) | 45m | ✅ Progress bars for batch operations (MCP-safe) |
 | R-016 | `42ab754` | 30m | ✅ Magic numbers extraction (4 constants) |
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
@@ -1005,28 +960,30 @@ If a refactor causes issues:
 | R-021 | `6aa6090` | 1h | ✅ Type hints for service layer (mypy clean, 2 bugs fixed) |
 | R-022 | `72e4760` | 1h | ✅ EpisodeState enum (18 tests, 100% model coverage) |
 | R-023 | `0348e7e` | 1h | ✅ Contract tests (32 tests, prevents API breakage) |
+| R-024 | `ee15382` | 30m | ✅ cleanup_old_files with dry-run support |
 
-**Total time invested: 25.25 hours**
+**Total time invested: 27.5 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-012** - Use Click Context for Service Injection (45m) - CLI refactoring
-2. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
-3. **R-015** - Add Progress Bars for Batch Operations (45m) - UX improvement
-4. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
-5. **R-026** - Add LLM Provider Display Name Method (30m) - Code cleanup
+1. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
+2. **R-026** - Add LLM Provider Display Name Method (30m) - Code cleanup
+3. **R-027** - Add PathManager require_file_exists Helper (30m) - Utility improvement
+4. **R-028** - Add FeedManager Transaction Context Manager (45m) - Data safety
+5. **R-029** - Create YouTube Source Strategy Pattern (1h) - Architecture improvement
 
-**Estimated effort for next 5: 3.5 hours**
+**Estimated effort for next 5: 3.75 hours**
 
 ### Key Metrics
 
-- **Test coverage**: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 218/218 (100%)
+- **Test coverage**: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
+- **Tests passing**: 221/221 (100%)
 - **Models coverage**: ✅ 100% (podcast.py with branch coverage)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
-- **Commits this week**: 16 atomic commits
-- **Files changed**: 17 files (8 new, 9 modified)
+- **CLI Context**: ✅ Fully refactored with typed dependency injection
+- **Atomic commits**: 23 refactoring commits
+- **Files changed**: 19 files (8 new, 11 modified)
 
 ### Critical Path Forward
 
@@ -1049,7 +1006,12 @@ If a refactor causes issues:
 - Integration tests (R-020) ✅ **DONE**
 - EpisodeState enum (R-022) ✅ **DONE**
 - Contract tests (R-023) ✅ **DONE**
-- **Target**: 50%+ completion rate by end of week ✅ **EXCEEDED (60.0%)**
+- **Target**: 50%+ completion rate by end of week ✅ **EXCEEDED (65.7%)**
+
+**Week 4 Status**: 🚧 **IN PROGRESS**
+- CLI Context injection (R-012) ✅ **DONE**
+- cleanup_old_files (R-024) ✅ **DONE**
+- **Target**: Complete remaining 12 tasks for 100% plan completion
 
 ---
 
