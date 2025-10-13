@@ -125,32 +125,34 @@ class TestDownloadEpisode:
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_network_error(self, mock_get, audio_downloader, sample_episode):
-        """Should handle network errors gracefully."""
-        # Setup mock to raise exception
+        """Should handle network errors gracefully after retries."""
+        # Setup mock to raise exception (will retry 3 times)
         mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
         # Execute
         result = audio_downloader.download_episode(sample_episode, "Test Podcast")
 
-        # Verify
+        # Verify - should fail after 3 retry attempts
         assert result is None
+        assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_timeout(self, mock_get, audio_downloader, sample_episode):
-        """Should handle timeout errors."""
-        # Setup mock to raise timeout
+        """Should handle timeout errors after retries."""
+        # Setup mock to raise timeout (will retry 3 times)
         mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
 
         # Execute
         result = audio_downloader.download_episode(sample_episode, "Test Podcast")
 
-        # Verify
+        # Verify - should fail after 3 retry attempts
         assert result is None
+        assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_http_error(self, mock_get, audio_downloader, sample_episode):
-        """Should handle HTTP errors (404, 500, etc)."""
-        # Setup mock to raise HTTP error
+        """Should handle HTTP errors (404, 500, etc) after retries."""
+        # Setup mock to raise HTTP error (will retry 3 times)
         mock_response = Mock()
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
         mock_get.return_value = mock_response
@@ -158,8 +160,54 @@ class TestDownloadEpisode:
         # Execute
         result = audio_downloader.download_episode(sample_episode, "Test Podcast")
 
-        # Verify
+        # Verify - should fail after 3 retry attempts
         assert result is None
+        assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
+
+    @patch("thestill.core.audio_downloader.requests.get")
+    def test_download_retry_succeeds_on_second_attempt(self, mock_get, audio_downloader, sample_episode):
+        """Should succeed if retry attempt succeeds."""
+        # Setup mock to fail first time, succeed second time
+        mock_response = Mock()
+        mock_response.headers = {"content-length": "100"}
+        mock_response.iter_content = Mock(return_value=[b"chunk1", b"chunk2"])
+        mock_response.raise_for_status = Mock()
+
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("Network error"),  # First attempt fails
+            mock_response,  # Second attempt succeeds
+        ]
+
+        # Execute
+        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+
+        # Verify - should succeed on second attempt
+        assert result is not None
+        assert Path(result).exists()
+        assert mock_get.call_count == 2  # Failed once, succeeded on retry
+
+    @patch("thestill.core.audio_downloader.requests.get")
+    def test_download_retry_succeeds_on_third_attempt(self, mock_get, audio_downloader, sample_episode):
+        """Should succeed if final retry attempt succeeds."""
+        # Setup mock to fail twice, succeed on third attempt
+        mock_response = Mock()
+        mock_response.headers = {"content-length": "100"}
+        mock_response.iter_content = Mock(return_value=[b"data"])
+        mock_response.raise_for_status = Mock()
+
+        mock_get.side_effect = [
+            requests.exceptions.Timeout("Timeout 1"),  # First attempt fails
+            requests.exceptions.ConnectionError("Error 2"),  # Second attempt fails
+            mock_response,  # Third attempt succeeds
+        ]
+
+        # Execute
+        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+
+        # Verify - should succeed on third attempt
+        assert result is not None
+        assert Path(result).exists()
+        assert mock_get.call_count == 3
 
     def test_download_youtube_url(self, audio_downloader):
         """Should delegate YouTube URLs to YouTubeDownloader."""

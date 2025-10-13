@@ -20,6 +20,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..models.podcast import Episode
 from .youtube_downloader import YouTubeDownloader
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 # Network Configuration Constants
 DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
 DEFAULT_CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
+
+# Retry Configuration Constants
+MAX_RETRY_ATTEMPTS = 3  # Maximum number of download retry attempts
+RETRY_WAIT_MIN_SECONDS = 1  # Minimum wait time between retries (exponential backoff start)
+RETRY_WAIT_MAX_SECONDS = 60  # Maximum wait time between retries (exponential backoff cap)
+RETRY_WAIT_MULTIPLIER = 1  # Multiplier for exponential backoff (2^attempt * multiplier)
 
 # Filename Constants
 MAX_FILENAME_LENGTH = 100  # Maximum characters for sanitized filenames
@@ -70,26 +77,9 @@ class AudioDownloader:
                 return str(local_path)
 
             logger.info(f"Downloading episode: {episode.title}")
-            response = requests.get(
-                str(episode.audio_url),
-                stream=True,
-                headers={"User-Agent": "thestill.ai/1.0"},
-                timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
-
-            with open(local_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=DEFAULT_CHUNK_SIZE_BYTES):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = (downloaded / total_size) * 100
-                            # Use \r for same-line progress updates to stderr
-                            logger.info(f"\rProgress: {progress:.1f}%")
+            # Use retry-enabled download method for network operations
+            self._download_with_retry(str(episode.audio_url), local_path)
 
             logger.info(f"Download completed: {filename}")
             return str(local_path)
@@ -100,6 +90,47 @@ class AudioDownloader:
         except Exception as e:
             logger.error(f"Error downloading {episode.title}: {e}")
             return None
+
+    @retry(
+        stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
+        wait=wait_exponential(multiplier=RETRY_WAIT_MULTIPLIER, min=RETRY_WAIT_MIN_SECONDS, max=RETRY_WAIT_MAX_SECONDS),
+        retry=retry_if_exception_type(requests.exceptions.RequestException),
+        reraise=True,
+    )
+    def _download_with_retry(self, url: str, local_path: Path) -> None:
+        """
+        Download file from URL with automatic retry on network errors.
+
+        Uses exponential backoff: waits 1s, 2s, 4s between attempts.
+        Retries up to 3 times for transient network errors.
+
+        Args:
+            url: Source URL to download from
+            local_path: Destination file path
+
+        Raises:
+            requests.exceptions.RequestException: If download fails after all retries
+        """
+        response = requests.get(
+            url,
+            stream=True,
+            headers={"User-Agent": "thestill.ai/1.0"},
+            timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded = 0
+
+        with open(local_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=DEFAULT_CHUNK_SIZE_BYTES):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        progress = (downloaded / total_size) * 100
+                        # Use \r for same-line progress updates to stderr
+                        logger.info(f"\rProgress: {progress:.1f}%")
 
     def get_file_size(self, file_path: str) -> int:
         """Get file size in bytes"""
