@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 18/35 tasks complete (51.4%)**
+> **Progress: 19/35 tasks complete (54.3%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 18 tasks (21.25 hours invested)**
+**✅ Completed: 19 tasks (22.25 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 17 tasks**
+**⏳ Remaining: 16 tasks**
 
 **Current Status:**
 - Test coverage: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
@@ -409,19 +409,24 @@ with click.progressbar(
 
 ---
 
-### Task R-021: Add Type Hints to Service Layer
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `services/podcast_service.py`, `services/stats_service.py`
+### Task R-021: Add Type Hints to Service Layer ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `6aa6090` - Add comprehensive type hints to service layer (R-021)
 
-**Steps**:
-1. Add type hints to all public methods
-2. Run `mypy thestill/services/` and fix errors
-3. Ensure consistent type usage with core modules
+**Completed**:
+- ✅ Added type hints to all __init__ methods in podcast_service.py, stats_service.py, refresh_service.py
+- ✅ Documented attributes in class docstrings
+- ✅ All modules pass mypy validation with zero errors
+- ✅ Consistent type hint style with core modules (R-019)
+- ✅ All 177 tests passing
 
-**Safety**: Run mypy
-**Risk**: Low
-**Commit**: `refactor(services): add comprehensive type hints to service layer`
+**Bug Fixes** (discovered during type checking):
+- ✅ Fixed EpisodeWithIndex field assignment bug (removed non-existent clean_transcript_available field)
+- ✅ Fixed refresh service calling non-existent _save_podcasts() method
+
+**Changes**: 3 files changed, 30 insertions(+), 17 deletions(-)
+
+**Benefits**: Complete type coverage across service layer, better IDE support, type-safe refactoring
 
 ---
 
@@ -980,7 +985,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (18/35 = 51.4%)
+### Completed Tasks ✅ (19/35 = 54.3%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1001,19 +1006,20 @@ If a refactor causes issues:
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
 | R-019 | `6a0dbfe` | 1.5h | ✅ Type hints for core modules (mypy clean) |
+| R-021 | `6aa6090` | 1h | ✅ Type hints for service layer (mypy clean, 2 bugs fixed) |
 | R-022 | `72e4760` | 1h | ✅ EpisodeState enum (18 tests, 100% model coverage) |
 
-**Total time invested: 21.25 hours**
+**Total time invested: 22.25 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-021** - Add Type Hints to Service Layer (1h) - Complete type coverage
-2. **R-020** - Add Integration Tests for Full Pipeline (2h) - End-to-end testing
-3. **R-023** - Add Contract Tests for Service Boundaries (1h) - Prevent interface breakage
-4. **R-012** - Use Click Context for Service Injection (45m) - CLI refactoring
-5. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
+1. **R-020** - Add Integration Tests for Full Pipeline (2h) - End-to-end testing
+2. **R-023** - Add Contract Tests for Service Boundaries (1h) - Prevent interface breakage
+3. **R-012** - Use Click Context for Service Injection (45m) - CLI refactoring
+4. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
+5. **R-015** - Add Progress Bars for Batch Operations (45m) - UX improvement
 
-**Estimated effort for next 5: 5.25 hours**
+**Estimated effort for next 5: 5 hours**
 
 ### Key Metrics
 
@@ -1042,11 +1048,11 @@ If a refactor causes issues:
 
 **Week 3 Focus** (CURRENT):
 - Type hints for core modules (R-019) ✅ **DONE**
-- Type hints for service layer (R-021)
+- Type hints for service layer (R-021) ✅ **DONE**
 - Integration tests (R-020)
 - EpisodeState enum (R-022) ✅ **DONE**
 - Contract tests (R-023)
-- **Target**: 50%+ completion rate by end of week ✅ **ACHIEVED (51.4%)**
+- **Target**: 50%+ completion rate by end of week ✅ **ACHIEVED (54.3%)**
 
 ---
 
