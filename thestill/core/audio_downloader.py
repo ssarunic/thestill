@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,8 @@ import requests
 
 from ..models.podcast import Episode
 from .youtube_downloader import YouTubeDownloader
+
+logger = logging.getLogger(__name__)
 
 
 class AudioDownloader:
@@ -55,10 +58,10 @@ class AudioDownloader:
             local_path = self.storage_path / filename
 
             if local_path.exists():
-                print(f"File already exists: {filename}")
+                logger.info(f"File already exists: {filename}")
                 return str(local_path)
 
-            print(f"Downloading: {episode.title}")
+            logger.info(f"Downloading episode: {episode.title}")
             response = requests.get(
                 str(episode.audio_url), stream=True, headers={"User-Agent": "thestill.ai/1.0"}, timeout=30
             )
@@ -74,16 +77,17 @@ class AudioDownloader:
                         downloaded += len(chunk)
                         if total_size > 0:
                             progress = (downloaded / total_size) * 100
-                            print(f"\rProgress: {progress:.1f}%", end="", flush=True)
+                            # Use \r for same-line progress updates to stderr
+                            logger.info(f"\rProgress: {progress:.1f}%")
 
-            print(f"\nDownload completed: {filename}")
+            logger.info(f"Download completed: {filename}")
             return str(local_path)
 
         except requests.exceptions.RequestException as e:
-            print(f"Network error downloading {episode.title}: {e}")
+            logger.error(f"Network error downloading {episode.title}: {e}")
             return None
         except Exception as e:
-            print(f"Error downloading {episode.title}: {e}")
+            logger.error(f"Error downloading {episode.title}: {e}")
             return None
 
     def get_file_size(self, file_path: str) -> int:
@@ -106,10 +110,10 @@ class AudioDownloader:
                     file_path.unlink()
                     removed_count += 1
                 except Exception as e:
-                    print(f"Error removing {file_path}: {e}")
+                    logger.error(f"Error removing {file_path}: {e}")
 
         if removed_count > 0:
-            print(f"Cleaned up {removed_count} old audio files")
+            logger.info(f"Cleaned up {removed_count} old audio files")
 
     def _sanitize_filename(self, filename: str) -> str:
         """Remove/replace invalid filename characters"""

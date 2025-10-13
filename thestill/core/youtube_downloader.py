@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import hashlib
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,6 +21,8 @@ from typing import Dict, List, Optional
 import yt_dlp
 
 from ..models.podcast import Episode
+
+logger = logging.getLogger(__name__)
 
 
 class YouTubeDownloader:
@@ -76,7 +79,7 @@ class YouTubeDownloader:
                 }
 
         except Exception as e:
-            print(f"Error extracting YouTube info from {url}: {e}")
+            logger.error(f"Error extracting YouTube info from {url}: {e}")
             return None
 
     def get_episodes_from_playlist(self, url: str) -> List[Episode]:
@@ -84,14 +87,14 @@ class YouTubeDownloader:
         try:
             from datetime import datetime
 
-            print(f"Fetching YouTube episodes from: {url}")
+            logger.info(f"Fetching YouTube episodes from: {url}")
 
             # For channels, convert to /videos URL to get actual videos
             if "/@" in url or "/channel/" in url or "/c/" in url:
                 # Ensure we're getting the videos tab
                 if not url.endswith("/videos"):
                     url = url.rstrip("/") + "/videos"
-                print(f"Using videos URL: {url}")
+                logger.info(f"Using videos URL: {url}")
 
             # Use flat extraction first to get video IDs quickly
             ydl_opts = {
@@ -110,7 +113,7 @@ class YouTubeDownloader:
                 episodes = []
                 entries = info.get("entries", []) if info.get("_type") == "playlist" else [info]
 
-                print(f"Found {len(entries)} videos")
+                logger.info(f"Found {len(entries)} videos")
 
                 for entry in entries:
                     if not entry:
@@ -149,14 +152,11 @@ class YouTubeDownloader:
                     )
                     episodes.append(episode)
 
-                print(f"Returning {len(episodes)} valid episodes")
+                logger.info(f"Returning {len(episodes)} valid episodes")
                 return episodes
 
         except Exception as e:
-            print(f"Error getting episodes from YouTube: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"Error getting episodes from YouTube: {e}", exc_info=True)
             return []
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
@@ -172,10 +172,10 @@ class YouTubeDownloader:
             local_path = self.storage_path / filename
 
             if local_path.exists():
-                print(f"File already exists: {filename}")
+                logger.info(f"File already exists: {filename}")
                 return str(local_path)
 
-            print(f"Downloading from YouTube: {episode.title}")
+            logger.info(f"Downloading from YouTube: {episode.title}")
 
             # yt-dlp options optimized for audio extraction
             ydl_opts = {
@@ -202,14 +202,14 @@ class YouTubeDownloader:
                 if possible_path.exists():
                     local_path = possible_path
                 else:
-                    print("Warning: Download completed but file not found at expected location")
+                    logger.warning("Download completed but file not found at expected location")
                     return None
 
-            print(f"\nDownload completed: {filename}")
+            logger.info(f"Download completed: {filename}")
             return str(local_path)
 
         except Exception as e:
-            print(f"Error downloading YouTube video {episode.title}: {e}")
+            logger.error(f"Error downloading YouTube video {episode.title}: {e}")
             return None
 
     def _progress_hook(self, d):
@@ -217,9 +217,10 @@ class YouTubeDownloader:
         if d["status"] == "downloading":
             if d.get("total_bytes"):
                 progress = (d.get("downloaded_bytes", 0) / d["total_bytes"]) * 100
-                print(f"\rProgress: {progress:.1f}%", end="", flush=True)
+                # Use debug level to avoid cluttering logs with progress updates
+                logger.debug(f"Progress: {progress:.1f}%")
         elif d["status"] == "finished":
-            print("\nProcessing audio...")
+            logger.info("Processing audio...")
 
     def _sanitize_filename(self, filename: str) -> str:
         """Remove/replace invalid filename characters"""
