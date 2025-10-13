@@ -130,38 +130,27 @@ logger.info(f"Downloading episode: {episode.title}")
 
 ---
 
-### Task R-006: Extract CLI Filtering Helper Function
-**Priority**: High
-**Effort**: 45 minutes
-**Scope**: `cli.py`
+### Task R-006: ~~Extract CLI Filtering Helper Function~~ → REPLACED BY R-006b
+**Priority**: ~~High~~ → **SUPERSEDED**
+**Status**: ⚠️ **REPLACED** - See [Repository Layer Plan](REPOSITORY_LAYER_PLAN.md)
 
-**Steps**:
-1. Create `_filter_by_podcast()` helper function in cli.py
-2. Move podcast_id filtering logic (lines 154-166, 220-232, etc.)
-3. Replace 4+ duplicate blocks with single function call
-4. Test refresh, download, downsample, transcribe commands
+**Original scope**: Extract CLI duplication into helper function (45 minutes)
 
-**Example**:
-```python
-def _filter_by_podcast(
-    ctx, podcast_service, items_by_podcast, podcast_id, operation_name
-):
-    """Filter podcast/episode tuples by podcast_id"""
-    if not podcast_id:
-        return items_by_podcast
+**Why replaced**: The user identified a better architectural approach - creating a repository layer to abstract data persistence. This enables future migration to SQLite/PostgreSQL and provides better separation of concerns.
 
-    podcast = podcast_service.get_podcast(podcast_id)
-    if not podcast:
-        click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
-        ctx.exit(1)
+**New approach**: Task R-006b (Repository Layer Implementation)
+- See detailed plan: [docs/REPOSITORY_LAYER_PLAN.md](REPOSITORY_LAYER_PLAN.md)
+- Effort: 6.5 hours (spread across Week 1-2)
+- Benefits: Migration-ready, testable, scalable architecture
 
-    return [(p, eps) for p, eps in items_by_podcast
-            if str(p.rss_url) == str(podcast.rss_url)]
-```
+**Tasks breakdown**:
+- R-006b-1: Create repository abstractions (1 hour)
+- R-006b-2: Implement JsonPodcastRepository (1.5 hours)
+- R-006b-3: Add unit tests for repository (1 hour)
+- R-006b-4: Refactor FeedManager to use repository (2 hours)
+- R-006b-5: Update PodcastService to use repository (1 hour)
 
-**Safety**: Test all affected commands
-**Risk**: Low
-**Commit**: `refactor(cli): extract duplicate podcast filtering logic into helper`
+**Note**: The original CLI filtering helper may still be useful later, but the repository layer is the higher-priority architectural improvement.
 
 ---
 
