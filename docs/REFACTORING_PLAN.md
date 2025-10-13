@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 10/35 tasks complete (28.6%)**
+> **Progress: 11/35 tasks complete (31.4%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 10 tasks (14 hours invested)**
+**✅ Completed: 11 tasks (14.5 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 25 tasks**
+**⏳ Remaining: 24 tasks**
 
 **Current Status:**
 - Test coverage: 28.89% (↑61% from baseline) → Target 70%+ by Week 3
@@ -162,21 +162,19 @@ transcript_available=bool(
 
 ---
 
-### Task R-010: Remove Path Attributes from Config
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `utils/config.py`, all consumers
+### Task R-010: Remove Path Attributes from Config ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
+**Commit**: `2a37854` - Remove redundant path attributes (R-010)
 
-**Steps**:
-1. Remove `audio_path`, `downsampled_audio_path`, etc. from Config
-2. Keep only `storage_path` and `path_manager`
-3. Update all consumers to use `config.path_manager.*_dir()` instead
-4. Update `load_config()` to stop setting these attributes
-5. Update tests
+**Completed**:
+- ✅ Removed 6 redundant path attributes from Config class
+- ✅ Updated load_config() to remove path assignments
+- ✅ Added comments directing to use config.path_manager
+- ✅ Verified all consumers already using PathManager (no updates needed)
+- ✅ Net code reduction: -13 lines
+- ✅ All 129 tests passing
 
-**Safety**: Grep for all uses of removed attributes, update one by one
-**Risk**: Medium (many consumers)
-**Commit**: `refactor(config): remove redundant path attributes, use PathManager exclusively`
+**Outcome**: PathManager is now the single source of truth for all file paths
 
 ---
 
@@ -1063,7 +1061,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (10/35 = 28.6%)
+### Completed Tasks ✅ (11/35 = 31.4%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1076,19 +1074,20 @@ If a refactor causes issues:
 | R-007 | `c5507a3` | 30m | ✅ Custom exception classes |
 | R-008 | `d5a54c5` | 1.5h | ✅ PodcastService tests (38 tests, 92% coverage) |
 | R-009 | `9c69381` | 30m | ✅ PathManager integration complete |
+| R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
 
-**Total time invested: 14 hours**
+**Total time invested: 14.5 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-010** - Remove path attributes from Config (1h) 🔥 **HIGH PRIORITY** - Finish PathManager work
-2. **R-017** - Unit tests for AudioDownloader (1h) - Increase coverage to ~35%
-3. **R-011** - Extract CLI Formatter Class (1h) - Reduce CLI complexity
-4. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
-5. **R-013** - Create RefreshService (1h) - Extract business logic
+1. **R-017** - Unit tests for AudioDownloader (1h) - Increase coverage to ~35%
+2. **R-011** - Extract CLI Formatter Class (1h) - Reduce CLI complexity
+3. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
+4. **R-013** - Create RefreshService (1h) - Extract business logic
+5. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
 
-**Estimated effort for next 5: 5.5 hours**
+**Estimated effort for next 5: 5.25 hours**
 
 ### Key Metrics
 
