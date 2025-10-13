@@ -360,3 +360,160 @@ class TestEdgeCases:
 
         # Verify - called but returned False
         mock_repository.update_episode.assert_called_once()
+
+
+class TestTransactionContextManager:
+    """Test transaction context manager for batch updates."""
+
+    def test_transaction_batches_saves(self, feed_manager, mock_repository, sample_podcasts):
+        """Should defer repository saves until transaction completes."""
+        # Setup: Mock repository to return a podcast
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Multiple updates within transaction
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep1", "audio.mp3")
+            feed_manager.mark_episode_downsampled(str(podcast.rss_url), "ep1", "audio_16k.wav")
+            feed_manager.mark_episode_processed(str(podcast.rss_url), "ep1", raw_transcript_path="transcript.json")
+
+            # Verify: Repository save NOT called yet (still in transaction)
+            mock_repository.save.assert_not_called()
+            # Verify: Repository update_episode NOT called (transaction mode)
+            mock_repository.update_episode.assert_not_called()
+
+        # Verify: Repository save called ONCE after transaction completes
+        assert mock_repository.save.call_count == 1
+        saved_podcast = mock_repository.save.call_args[0][0]
+        assert saved_podcast.episodes[0].audio_path == "audio.mp3"
+        assert saved_podcast.episodes[0].downsampled_audio_path == "audio_16k.wav"
+        assert saved_podcast.episodes[0].raw_transcript_path == "transcript.json"
+        assert saved_podcast.episodes[0].processed is True
+
+    def test_transaction_single_save_per_podcast(self, feed_manager, mock_repository, sample_podcasts):
+        """Should save each podcast only once even with multiple episode updates."""
+        # Setup
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Multiple updates to different episodes
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep1", "audio1.mp3")
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep2", "audio2.mp3")
+
+        # Verify: Repository save called exactly once for the podcast
+        assert mock_repository.save.call_count == 1
+
+    def test_transaction_multiple_podcasts(self, feed_manager, mock_repository, sample_podcasts):
+        """Should handle updates to multiple podcasts in one transaction."""
+        # Setup
+        podcast1 = sample_podcasts[0]
+        podcast2 = sample_podcasts[1]
+
+        def find_by_url_side_effect(url):
+            if url == str(podcast1.rss_url):
+                return podcast1
+            elif url == str(podcast2.rss_url):
+                return podcast2
+            return None
+
+        mock_repository.find_by_url.side_effect = find_by_url_side_effect
+
+        # Execute
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast1.rss_url), "ep1", "audio1.mp3")
+            feed_manager.mark_episode_downloaded(str(podcast2.rss_url), "news1", "news1.mp3")
+
+        # Verify: Repository save called twice (once per podcast)
+        assert mock_repository.save.call_count == 2
+
+    def test_transaction_nested_is_noop(self, feed_manager, mock_repository, sample_podcasts):
+        """Should handle nested transactions (inner is no-op)."""
+        # Setup
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Nested transaction
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep1", "audio.mp3")
+
+            # Inner transaction (should be no-op)
+            with feed_manager.transaction():
+                feed_manager.mark_episode_downsampled(str(podcast.rss_url), "ep1", "audio_16k.wav")
+
+            # Still in outer transaction
+            mock_repository.save.assert_not_called()
+
+        # Verify: Save called once after outer transaction
+        assert mock_repository.save.call_count == 1
+
+    def test_transaction_persists_on_exception(self, feed_manager, mock_repository, sample_podcasts):
+        """Should still persist changes if exception occurs in transaction."""
+        # Setup
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Exception within transaction
+        try:
+            with feed_manager.transaction():
+                feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep1", "audio.mp3")
+                raise ValueError("Test exception")
+        except ValueError:
+            pass
+
+        # Verify: Save still called (no rollback in current implementation)
+        assert mock_repository.save.call_count == 1
+
+    def test_transaction_episode_not_found(self, feed_manager, mock_repository, sample_podcasts):
+        """Should handle episode not found within transaction."""
+        # Setup
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Update non-existent episode
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "nonexistent", "audio.mp3")
+
+        # Verify: Save called but episode not found (logged warning)
+        assert mock_repository.save.call_count == 1
+
+    def test_transaction_podcast_not_found(self, feed_manager, mock_repository):
+        """Should handle podcast not found within transaction."""
+        # Setup
+        mock_repository.find_by_url.return_value = None
+
+        # Execute: Update episode on non-existent podcast
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded("https://notfound.xml", "ep1", "audio.mp3")
+
+        # Verify: No save called (no podcast to save)
+        mock_repository.save.assert_not_called()
+
+    def test_transaction_caches_podcast(self, feed_manager, mock_repository, sample_podcasts):
+        """Should cache podcast on first access and reuse for subsequent updates."""
+        # Setup
+        podcast = sample_podcasts[0]
+        mock_repository.find_by_url.return_value = podcast
+
+        # Execute: Multiple updates within transaction
+        with feed_manager.transaction():
+            feed_manager.mark_episode_downloaded(str(podcast.rss_url), "ep1", "audio.mp3")
+            feed_manager.mark_episode_downsampled(str(podcast.rss_url), "ep1", "audio_16k.wav")
+
+        # Verify: Repository find_by_url called only once (cached)
+        assert mock_repository.find_by_url.call_count == 1
+
+    def test_without_transaction_uses_repository_directly(self, feed_manager, mock_repository):
+        """Should use repository.update_episode when not in transaction."""
+        # Setup
+        mock_repository.update_episode = Mock(return_value=True)
+
+        # Execute: Update without transaction
+        feed_manager.mark_episode_downloaded("https://example.com/feed.xml", "ep1", "audio.mp3")
+
+        # Verify: Repository update_episode called directly
+        mock_repository.update_episode.assert_called_once_with(
+            "https://example.com/feed.xml", "ep1", {"audio_path": "audio.mp3"}
+        )
+        # Verify: Repository save NOT called
+        mock_repository.save.assert_not_called()

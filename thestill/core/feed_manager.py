@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -58,6 +59,73 @@ class PodcastFeedManager:
         self.storage_path: Path = Path(path_manager.storage_path)
         self.storage_path.mkdir(exist_ok=True)
         self.youtube_downloader: YouTubeDownloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
+        self._in_transaction: bool = False
+        self._transaction_podcasts: Dict[str, Podcast] = {}
+
+    @contextmanager
+    def transaction(self):
+        """
+        Context manager for batch updates with deferred save.
+
+        Use this when performing multiple episode state updates to avoid
+        multiple file I/O operations. The repository save will happen
+        once when the context exits.
+
+        Example:
+            with feed_manager.transaction():
+                feed_manager.mark_episode_downloaded(url1, guid1, path1)
+                feed_manager.mark_episode_downsampled(url1, guid1, path2)
+                feed_manager.mark_episode_processed(url1, guid1, raw_path, clean_path)
+            # Auto-saves once at end
+
+        Note:
+            - Nested transactions are not supported (inner transaction is no-op)
+            - All updates within transaction apply to in-memory podcast objects
+            - Changes are persisted to disk only when context exits normally
+            - If an exception occurs, changes may still be persisted (no rollback)
+        """
+        # If already in transaction, this is a no-op (nested transaction)
+        if self._in_transaction:
+            yield self
+            return
+
+        # Start transaction
+        self._in_transaction = True
+        self._transaction_podcasts = {}
+
+        try:
+            yield self
+        finally:
+            # Commit: Save all modified podcasts
+            for podcast in self._transaction_podcasts.values():
+                self.repository.save(podcast)
+
+            # Clear transaction state
+            self._in_transaction = False
+            self._transaction_podcasts = {}
+
+    def _get_or_cache_podcast(self, podcast_rss_url: str) -> Optional[Podcast]:
+        """
+        Get podcast from transaction cache or repository.
+
+        Helper for transaction-aware episode updates. Loads podcast from
+        repository on first access within transaction and caches for subsequent updates.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+
+        Returns:
+            Podcast object if found, None otherwise
+        """
+        # Check cache first
+        if podcast_rss_url in self._transaction_podcasts:
+            return self._transaction_podcasts[podcast_rss_url]
+
+        # Load from repository and cache
+        podcast = self.repository.find_by_url(podcast_rss_url)
+        if podcast:
+            self._transaction_podcasts[podcast_rss_url] = podcast
+        return podcast
 
     def add_podcast(self, url: str) -> bool:
         """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
@@ -199,11 +267,25 @@ class PodcastFeedManager:
             episode_guid: GUID of the episode
             audio_path: Path to the downloaded audio file
         """
-        success = self.repository.update_episode(podcast_rss_url, episode_guid, {"audio_path": audio_path})
-        if success:
-            logger.info(f"Marked episode as downloaded: {episode_guid}")
+        if self._in_transaction:
+            # Update in-memory cache
+            podcast = self._get_or_cache_podcast(podcast_rss_url)
+            if podcast:
+                for episode in podcast.episodes:
+                    if episode.guid == episode_guid:
+                        episode.audio_path = audio_path
+                        logger.info(f"Marked episode as downloaded (in transaction): {episode_guid}")
+                        return
+                logger.warning(f"Episode not found for download marking: {episode_guid}")
+            else:
+                logger.warning(f"Podcast not found: {podcast_rss_url}")
         else:
-            logger.warning(f"Episode not found for download marking: {episode_guid}")
+            # Direct repository update
+            success = self.repository.update_episode(podcast_rss_url, episode_guid, {"audio_path": audio_path})
+            if success:
+                logger.info(f"Marked episode as downloaded: {episode_guid}")
+            else:
+                logger.warning(f"Episode not found for download marking: {episode_guid}")
 
     def mark_episode_downsampled(self, podcast_rss_url: str, episode_guid: str, downsampled_audio_path: str) -> None:
         """
@@ -214,13 +296,27 @@ class PodcastFeedManager:
             episode_guid: GUID of the episode
             downsampled_audio_path: Path to the downsampled audio file
         """
-        success = self.repository.update_episode(
-            podcast_rss_url, episode_guid, {"downsampled_audio_path": downsampled_audio_path}
-        )
-        if success:
-            logger.info(f"Marked episode as downsampled: {episode_guid}")
+        if self._in_transaction:
+            # Update in-memory cache
+            podcast = self._get_or_cache_podcast(podcast_rss_url)
+            if podcast:
+                for episode in podcast.episodes:
+                    if episode.guid == episode_guid:
+                        episode.downsampled_audio_path = downsampled_audio_path
+                        logger.info(f"Marked episode as downsampled (in transaction): {episode_guid}")
+                        return
+                logger.warning(f"Episode not found for downsample marking: {episode_guid}")
+            else:
+                logger.warning(f"Podcast not found: {podcast_rss_url}")
         else:
-            logger.warning(f"Episode not found for downsample marking: {episode_guid}")
+            # Direct repository update
+            success = self.repository.update_episode(
+                podcast_rss_url, episode_guid, {"downsampled_audio_path": downsampled_audio_path}
+            )
+            if success:
+                logger.info(f"Marked episode as downsampled: {episode_guid}")
+            else:
+                logger.warning(f"Episode not found for downsample marking: {episode_guid}")
 
     def mark_episode_processed(
         self,
@@ -240,60 +336,85 @@ class PodcastFeedManager:
             clean_transcript_path: Optional path to cleaned transcript file
             summary_path: Optional path to summary file
         """
-        # Build updates dictionary
-        updates: Dict[str, Any] = {"processed": True}
-        if raw_transcript_path:
-            updates["raw_transcript_path"] = raw_transcript_path
-        if clean_transcript_path:
-            updates["clean_transcript_path"] = clean_transcript_path
-        if summary_path:
-            updates["summary_path"] = summary_path
+        if self._in_transaction:
+            # Update in-memory cache
+            podcast = self._get_or_cache_podcast(podcast_rss_url)
+            if podcast:
+                episode_found = False
+                for episode in podcast.episodes:
+                    if episode.guid == episode_guid:
+                        episode.processed = True
+                        if raw_transcript_path:
+                            episode.raw_transcript_path = raw_transcript_path
+                        if clean_transcript_path:
+                            episode.clean_transcript_path = clean_transcript_path
+                        if summary_path:
+                            episode.summary_path = summary_path
+                        podcast.last_processed = datetime.now()
+                        logger.info(f"Marked episode as processed (in transaction): {episode_guid}")
+                        episode_found = True
+                        break
 
-        # Try to update existing episode
-        success = self.repository.update_episode(podcast_rss_url, episode_guid, updates)
+                if not episode_found:
+                    logger.warning(f"Episode not found for processing marking: {episode_guid}")
+            else:
+                logger.warning(f"Podcast not found: {podcast_rss_url}")
+        else:
+            # Direct repository update (original logic)
+            # Build updates dictionary
+            updates: Dict[str, Any] = {"processed": True}
+            if raw_transcript_path:
+                updates["raw_transcript_path"] = raw_transcript_path
+            if clean_transcript_path:
+                updates["clean_transcript_path"] = clean_transcript_path
+            if summary_path:
+                updates["summary_path"] = summary_path
 
-        # If episode not found in stored episodes, fetch it from RSS and add it
-        if not success:
-            try:
-                podcast = self.repository.find_by_url(podcast_rss_url)
-                if not podcast:
-                    logger.error(f"Podcast not found: {podcast_rss_url}")
+            # Try to update existing episode
+            success = self.repository.update_episode(podcast_rss_url, episode_guid, updates)
+
+            # If episode not found in stored episodes, fetch it from RSS and add it
+            if not success:
+                try:
+                    podcast = self.repository.find_by_url(podcast_rss_url)
+                    if not podcast:
+                        logger.error(f"Podcast not found: {podcast_rss_url}")
+                        return
+
+                    parsed_feed = feedparser.parse(str(podcast.rss_url))
+                    for entry in parsed_feed.entries:
+                        entry_guid = entry.get("guid", entry.get("id", ""))
+                        if entry_guid == episode_guid:
+                            episode_date = self._parse_date(entry.get("published_parsed"))
+                            audio_url = self._extract_audio_url(entry)
+                            if audio_url:
+                                episode = Episode(
+                                    title=entry.get("title", "Unknown Episode"),
+                                    description=entry.get("description", ""),
+                                    pub_date=episode_date,
+                                    audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
+                                    duration=entry.get("itunes_duration"),
+                                    guid=entry_guid,
+                                    processed=True,
+                                    raw_transcript_path=raw_transcript_path,
+                                    clean_transcript_path=clean_transcript_path,
+                                    summary_path=summary_path,
+                                )
+                                podcast.episodes.append(episode)
+                                podcast.last_processed = datetime.now()
+                                self.repository.save(podcast)
+                                logger.info(f"Added and marked new episode as processed: {episode.title}")
+                                return
+                except Exception as e:
+                    logger.error(f"Error fetching episode info for {episode_guid}: {e}")
                     return
 
-                parsed_feed = feedparser.parse(str(podcast.rss_url))
-                for entry in parsed_feed.entries:
-                    entry_guid = entry.get("guid", entry.get("id", ""))
-                    if entry_guid == episode_guid:
-                        episode_date = self._parse_date(entry.get("published_parsed"))
-                        audio_url = self._extract_audio_url(entry)
-                        if audio_url:
-                            episode = Episode(
-                                title=entry.get("title", "Unknown Episode"),
-                                description=entry.get("description", ""),
-                                pub_date=episode_date,
-                                audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
-                                duration=entry.get("itunes_duration"),
-                                guid=entry_guid,
-                                processed=True,
-                                raw_transcript_path=raw_transcript_path,
-                                clean_transcript_path=clean_transcript_path,
-                                summary_path=summary_path,
-                            )
-                            podcast.episodes.append(episode)
-                            podcast.last_processed = datetime.now()
-                            self.repository.save(podcast)
-                            logger.info(f"Added and marked new episode as processed: {episode.title}")
-                            return
-            except Exception as e:
-                logger.error(f"Error fetching episode info for {episode_guid}: {e}")
-                return
-
-        # Update podcast last_processed timestamp
-        podcast = self.repository.find_by_url(podcast_rss_url)
-        if podcast:
-            podcast.last_processed = datetime.now()
-            self.repository.save(podcast)
-            logger.info(f"Marked episode as processed: {episode_guid}")
+            # Update podcast last_processed timestamp
+            podcast = self.repository.find_by_url(podcast_rss_url)
+            if podcast:
+                podcast.last_processed = datetime.now()
+                self.repository.save(podcast)
+                logger.info(f"Marked episode as processed: {episode_guid}")
 
     def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, List[Episode]]]:
         """
