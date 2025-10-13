@@ -264,7 +264,7 @@ transcript_available=bool(
 
 ### Task R-015: Add Progress Bars for Batch Operations ✅
 **Status**: ✅ **COMPLETED** | **Effort**: 45 minutes
-**Commit**: (pending) - Add progress bars for batch operations (R-015)
+**Commit**: `e2124d9` - Add progress bars for batch operations (R-015)
 
 **Completed**:
 - ✅ Added `click.progressbar()` to download command
@@ -951,7 +951,7 @@ If a refactor causes issues:
 | R-012 | `b40db2f` | 45m | ✅ CLI Context dependency injection (typed) |
 | R-013 | `341f3a0` | 1h | ✅ RefreshService extraction (business logic separation) |
 | R-014 | `2205e63` | 45m | ✅ Retry logic with exponential backoff |
-| R-015 | (pending) | 45m | ✅ Progress bars for batch operations (MCP-safe) |
+| R-015 | `e2124d9` | 45m | ✅ Progress bars for batch operations (MCP-safe) |
 | R-016 | `42ab754` | 30m | ✅ Magic numbers extraction (4 constants) |
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
