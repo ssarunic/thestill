@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 15/35 tasks complete (42.9%)**
+> **Progress: 16/35 tasks complete (45.7%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 15 tasks (18 hours invested)**
+**✅ Completed: 16 tasks (18.75 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 20 tasks**
+**⏳ Remaining: 19 tasks**
 
 **Current Status:**
 - Test coverage: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
@@ -140,6 +140,7 @@ See [REPOSITORY_LAYER_PLAN.md](REPOSITORY_LAYER_PLAN.md) for implementation deta
 ## Week 2: Service Layer & CLI Refactoring
 
 **Goal**: Extract business logic from CLI, improve separation of concerns
+**Status**: ✅ **7/7 tasks complete (100%)** | **Time invested: 6.25 hours**
 
 ### Task R-009: Add PathManager to PodcastService ✅
 **Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
@@ -259,35 +260,26 @@ def list(ctx):
 
 ---
 
-### Task R-014: Add Retry Logic for Downloads
-**Priority**: Medium
-**Effort**: 45 minutes
-**Scope**: `audio_downloader.py`, `pyproject.toml`
+### Task R-014: Add Retry Logic for Downloads ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 45 minutes
+**Commit**: `2205e63` - Add retry logic with exponential backoff (R-014)
 
-**Steps**:
-1. Add `tenacity` to dependencies
-2. Decorate `download_episode()` with `@retry` decorator
-3. Configure exponential backoff (initial=1s, max=60s, max_attempts=3)
-4. Add logging for retry attempts
-5. Add config for max retries (DOWNLOAD_MAX_RETRIES in .env)
+**Completed**:
+- ✅ Added tenacity>=8.2.0 dependency to pyproject.toml
+- ✅ Extracted network download logic to _download_with_retry() method
+- ✅ Added @retry decorator with exponential backoff (1s, 2s, 4s)
+- ✅ Retries up to 3 times for requests.exceptions.RequestException
+- ✅ Added 4 retry configuration constants:
+  - MAX_RETRY_ATTEMPTS = 3
+  - RETRY_WAIT_MIN_SECONDS = 1
+  - RETRY_WAIT_MAX_SECONDS = 60
+  - RETRY_WAIT_MULTIPLIER = 1
+- ✅ Updated existing network error tests to verify retry behavior
+- ✅ Added test_download_retry_succeeds_on_second_attempt
+- ✅ Added test_download_retry_succeeds_on_third_attempt
+- ✅ All 159 tests passing (up from 157)
 
-**Example**:
-```python
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=60),
-    reraise=True
-)
-def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
-    logger.info(f"Downloading episode: {episode.title}")
-    # existing logic
-```
-
-**Safety**: Test with failing URLs
-**Risk**: Low
-**Commit**: `feat(core): add retry logic with exponential backoff for downloads`
+**Benefits**: Improves download reliability for transient network errors, automatic recovery without user intervention
 
 ---
 
