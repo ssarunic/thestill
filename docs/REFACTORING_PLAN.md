@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 12/35 tasks complete (34.3%)**
+> **Progress: 13/35 tasks complete (37.1%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 12 tasks (15.5 hours invested)**
+**✅ Completed: 13 tasks (16.5 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 23 tasks**
+**⏳ Remaining: 22 tasks**
 
 **Current Status:**
 - Test coverage: 32.58% (↑81% from baseline) → Target 70%+ by Week 3
@@ -178,42 +178,24 @@ transcript_available=bool(
 
 ---
 
-### Task R-011: Extract CLI Formatter Class
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `cli.py`, new `cli_formatter.py`
+### Task R-011: Extract CLI Formatter Class ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `3f85c4d` - Extract CLI formatter class (R-011)
 
-**Steps**:
-1. Create `utils/cli_formatter.py`
-2. Extract output formatting methods:
-   - `format_podcast_list(podcasts) -> str`
-   - `format_episode_list(episodes) -> str`
-   - `format_stats(stats) -> str`
-   - `format_error(message) -> str`
-   - `format_success(message) -> str`
-3. Replace inline formatting in cli.py with formatter calls
-4. Add tests for formatter
+**Completed**:
+- ✅ Created `utils/cli_formatter.py` with CLIFormatter class
+- ✅ Extracted formatting methods:
+  - format_podcast_list() - podcast listings
+  - format_episode_list() - episode listings
+  - format_header() - section headers
+  - format_success/error/info() - status messages
+  - format_progress/completion() - progress messages
+- ✅ Updated list command to use CLIFormatter
+- ✅ Updated status command header to use CLIFormatter
+- ✅ Net code reduction: -12 lines in cli.py
+- ✅ All 157 tests passing
 
-**Example**:
-```python
-class CLIFormatter:
-    @staticmethod
-    def format_podcast_list(podcasts: List[PodcastWithIndex]) -> str:
-        lines = [f"\n📻 Tracked Podcasts ({len(podcasts)}):"]
-        lines.append("─" * 50)
-        for podcast in podcasts:
-            lines.append(f"{podcast.index}. {podcast.title}")
-            lines.append(f"   RSS: {podcast.rss_url}")
-            if podcast.last_processed:
-                lines.append(f"   Last processed: {podcast.last_processed.strftime('%Y-%m-%d %H:%M')}")
-            lines.append(f"   Episodes: {podcast.episodes_processed}/{podcast.episodes_count} processed")
-            lines.append("")
-        return "\n".join(lines)
-```
-
-**Safety**: Compare output before and after
-**Risk**: Low
-**Commit**: `refactor(cli): extract output formatting into CLIFormatter class`
+**Benefits**: Centralized formatting, better testability, consistent output
 
 ---
 
@@ -1060,7 +1042,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (12/35 = 34.3%)
+### Completed Tasks ✅ (13/35 = 37.1%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1074,18 +1056,19 @@ If a refactor causes issues:
 | R-008 | `d5a54c5` | 1.5h | ✅ PodcastService tests (38 tests, 92% coverage) |
 | R-009 | `9c69381` | 30m | ✅ PathManager integration complete |
 | R-010 | `2a37854` | 30m | ✅ Config cleanup (removed 6 redundant paths) |
+| R-011 | `3f85c4d` | 1h | ✅ CLI Formatter extraction (centralized formatting) |
 | R-017 | `45017ec` | 1h | ✅ AudioDownloader tests (28 tests, 99% coverage) |
 | R-018 | `4bd81d5` | 1.5h | ✅ FeedManager tests (17 tests, 26% coverage) |
 
-**Total time invested: 15.5 hours**
+**Total time invested: 16.5 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-011** - Extract CLI Formatter Class (1h) - Reduce CLI complexity
-2. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
-3. **R-013** - Create RefreshService (1h) - Extract business logic
-4. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
-5. **R-016** - Extract Magic Numbers to Constants (30m) - Improve readability
+1. **R-019** - Add Type Hints to Core Modules (1.5h) - Better IDE support
+2. **R-013** - Create RefreshService (1h) - Extract business logic
+3. **R-014** - Add Retry Logic for Downloads (45m) - Improve resilience
+4. **R-016** - Extract Magic Numbers to Constants (30m) - Improve readability
+5. **R-020** - Add Docstrings to Public APIs (1h) - Better documentation
 
 **Estimated effort for next 5: 4.75 hours**
 
