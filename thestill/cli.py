@@ -26,9 +26,11 @@ try:
     from .core.llm_provider import create_llm_provider
     from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from .repositories.json_podcast_repository import JsonPodcastRepository
     from .services import PodcastService, StatsService
     from .utils.config import load_config
     from .utils.logger import setup_logger
+    from .utils.path_manager import PathManager
 except ImportError:
     from core.audio_downloader import AudioDownloader
     from core.audio_preprocessor import AudioPreprocessor
@@ -38,9 +40,11 @@ except ImportError:
     from core.llm_provider import create_llm_provider
     from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
     from core.transcriber import WhisperTranscriber, WhisperXTranscriber
+    from repositories.json_podcast_repository import JsonPodcastRepository
     from services import PodcastService, StatsService
     from utils.config import load_config
     from utils.logger import setup_logger
+    from utils.path_manager import PathManager
 
 
 @click.group()
@@ -56,6 +60,17 @@ def main(ctx, config):
     try:
         ctx.obj["config"] = load_config(config)
         click.echo("✓ Configuration loaded successfully")
+
+        # Initialize shared services (dependency injection)
+        storage_path = str(ctx.obj["config"].storage_path)
+        path_manager = PathManager(storage_path)
+        repository = JsonPodcastRepository(storage_path)
+
+        ctx.obj["path_manager"] = path_manager
+        ctx.obj["repository"] = repository
+        ctx.obj["podcast_service"] = PodcastService(storage_path, repository, path_manager)
+        ctx.obj["stats_service"] = StatsService(storage_path, repository, path_manager)
+
     except Exception as e:
         click.echo(f"❌ Configuration error: {e}", err=True)
         ctx.exit(1)
@@ -66,12 +81,11 @@ def main(ctx, config):
 @click.pass_context
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None or "podcast_service" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
-    podcast_service = PodcastService(str(config.storage_path))
 
+    podcast_service = ctx.obj["podcast_service"]
     podcast = podcast_service.add_podcast(rss_url)
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
@@ -84,12 +98,11 @@ def add(ctx, rss_url):
 @click.pass_context
 def remove(ctx, podcast_id):
     """Remove a podcast by RSS URL or index number"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None or "podcast_service" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
-    podcast_service = PodcastService(str(config.storage_path))
 
+    podcast_service = ctx.obj["podcast_service"]
     if podcast_service.remove_podcast(podcast_id):
         click.echo("✓ Podcast removed")
     else:
@@ -100,12 +113,11 @@ def remove(ctx, podcast_id):
 @click.pass_context
 def list(ctx):
     """List all tracked podcasts"""
-    if ctx.obj is None or "config" not in ctx.obj:
+    if ctx.obj is None or "podcast_service" not in ctx.obj:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
-    config = ctx.obj["config"]
-    podcast_service = PodcastService(str(config.storage_path))
 
+    podcast_service = ctx.obj["podcast_service"]
     podcasts = podcast_service.list_podcasts()
 
     if not podcasts:
@@ -136,8 +148,11 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
         ctx.exit(1)
     config = ctx.obj["config"]
 
-    feed_manager = PodcastFeedManager(str(config.storage_path))
-    podcast_service = PodcastService(str(config.storage_path))
+    # Use shared services from context
+    podcast_service = ctx.obj["podcast_service"]
+    repository = ctx.obj["repository"]
+    path_manager = ctx.obj["path_manager"]
+    feed_manager = PodcastFeedManager(repository, path_manager)
 
     # Use CLI option if provided, otherwise fall back to config
     max_episodes_limit = max_episodes if max_episodes else config.max_episodes_per_podcast
@@ -205,9 +220,12 @@ def download(ctx, podcast_id, max_episodes, dry_run):
         ctx.exit(1)
     config = ctx.obj["config"]
 
-    feed_manager = PodcastFeedManager(str(config.storage_path))
-    downloader = AudioDownloader(str(config.path_manager.original_audio_dir()))
-    podcast_service = PodcastService(str(config.storage_path))
+    # Use shared services from context
+    podcast_service = ctx.obj["podcast_service"]
+    repository = ctx.obj["repository"]
+    path_manager = ctx.obj["path_manager"]
+    feed_manager = PodcastFeedManager(repository, path_manager)
+    downloader = AudioDownloader(str(path_manager.original_audio_dir()))
 
     # Get episodes that need downloading
     click.echo("🔍 Looking for episodes to download...")
@@ -302,9 +320,12 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
         ctx.exit(1)
     config = ctx.obj["config"]
 
-    feed_manager = PodcastFeedManager(str(config.storage_path))
+    # Use shared services from context
+    podcast_service = ctx.obj["podcast_service"]
+    repository = ctx.obj["repository"]
+    path_manager = ctx.obj["path_manager"]
+    feed_manager = PodcastFeedManager(repository, path_manager)
     preprocessor = AudioPreprocessor()
-    podcast_service = PodcastService(str(config.storage_path))
 
     click.echo("🔍 Looking for episodes to downsample...")
 
@@ -418,7 +439,10 @@ def clean_transcript(ctx, dry_run, max_episodes):
     from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
     from .models.podcast import CleanedTranscript
 
-    feed_manager = PodcastFeedManager(str(config.storage_path))
+    # Use shared services from context
+    repository = ctx.obj["repository"]
+    path_manager = ctx.obj["path_manager"]
+    feed_manager = PodcastFeedManager(repository, path_manager)
 
     # Create LLM provider based on configuration
     try:
@@ -554,7 +578,9 @@ def status(ctx):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
     config = ctx.obj["config"]
-    stats_service = StatsService(str(config.storage_path))
+
+    # Use shared service from context
+    stats_service = ctx.obj["stats_service"]
 
     click.echo("📊 thestill.ai Status")
     click.echo("═" * 30)
@@ -759,8 +785,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         return
 
     # Mode 2: Batch transcription of downloaded episodes
-    feed_manager = PodcastFeedManager(str(config.storage_path))
-    podcast_service = PodcastService(str(config.storage_path))
+    # Use shared services from context
+    podcast_service = ctx.obj["podcast_service"]
+    repository = ctx.obj["repository"]
+    path_manager = ctx.obj["path_manager"]
+    feed_manager = PodcastFeedManager(repository, path_manager)
 
     # Validate episode_id requires podcast_id
     if episode_id and not podcast_id:

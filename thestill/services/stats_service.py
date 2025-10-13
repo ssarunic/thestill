@@ -22,7 +22,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from ..core.feed_manager import PodcastFeedManager
+from ..repositories.podcast_repository import PodcastRepository
+from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +46,18 @@ class StatsService:
     Service for retrieving system statistics and status information.
     """
 
-    def __init__(self, storage_path: str):
+    def __init__(self, storage_path: str, podcast_repository: PodcastRepository, path_manager: PathManager):
         """
         Initialize stats service.
 
         Args:
             storage_path: Path to data storage directory
+            podcast_repository: Repository for podcast persistence
+            path_manager: Path manager for file path operations
         """
         self.storage_path = Path(storage_path)
-        self.feed_manager = PodcastFeedManager(str(storage_path))
+        self.repository = podcast_repository
+        self.path_manager = path_manager
         logger.info(f"StatsService initialized with storage: {storage_path}")
 
     def get_stats(self) -> SystemStats:
@@ -66,7 +70,7 @@ class StatsService:
         logger.debug("Gathering system statistics")
 
         # Get podcast data
-        podcasts = self.feed_manager.list_podcasts()
+        podcasts = self.repository.find_all()
         podcasts_tracked = len(podcasts)
 
         # Count episodes

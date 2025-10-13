@@ -25,6 +25,9 @@ from pydantic import BaseModel
 
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
+from ..repositories.json_podcast_repository import JsonPodcastRepository
+from ..repositories.podcast_repository import PodcastRepository
+from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,15 +75,22 @@ class PodcastService:
     - GUID string - exact match
     """
 
-    def __init__(self, storage_path: str):
+    def __init__(self, storage_path: str, podcast_repository: PodcastRepository, path_manager: PathManager):
         """
         Initialize podcast service.
 
         Args:
             storage_path: Path to data storage directory
+            podcast_repository: Repository for podcast persistence
+            path_manager: Path manager for file path operations
         """
         self.storage_path = Path(storage_path)
-        self.feed_manager = PodcastFeedManager(str(storage_path))
+        self.path_manager = path_manager
+        self.repository = podcast_repository
+
+        # Initialize FeedManager with repository and path manager
+        self.feed_manager = PodcastFeedManager(podcast_repository=podcast_repository, path_manager=path_manager)
+
         logger.info(f"PodcastService initialized with storage: {storage_path}")
 
     def add_podcast(self, url: str) -> Optional[Podcast]:
