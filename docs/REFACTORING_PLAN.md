@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-13
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 20/35 tasks complete (57.1%)**
+> **Progress: 21/35 tasks complete (60.0%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 20 tasks (24.25 hours invested)**
+**✅ Completed: 21 tasks (25.25 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 15 tasks**
+**⏳ Remaining: 14 tasks**
 
 **Current Status:**
 - Test coverage: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
@@ -461,41 +461,21 @@ with click.progressbar(
 
 ---
 
-### Task R-023: Add Contract Tests for Service Boundaries
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `tests/test_contracts.py`
+### Task R-023: Add Contract Tests for Service Boundaries ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: `0348e7e` - Add contract tests for service boundaries (R-023)
 
-**Steps**:
-1. Create `tests/test_contracts.py`
-2. Test contracts between:
-   - CLI → Services (input validation, output format)
-   - Services → Core (method signatures, return types)
-   - Core → Models (data validation)
-3. Use property-based testing (hypothesis) for edge cases (optional)
+**Completed**:
+- ✅ Created `tests/test_service_contracts.py` with 32 contract tests (517 lines)
+- ✅ TestPodcastServiceContract: 11 tests for constructors, methods, return types, models
+- ✅ TestRefreshServiceContract: 8 tests for refresh operations and error handling
+- ✅ TestStatsServiceContract: 6 tests for stats retrieval and SystemStats model
+- ✅ TestServiceContractStability: 7 tests ensuring method/field name stability
+- ✅ Prevents accidental API breakage during refactoring
+- ✅ Pydantic v2 compatibility (model_fields vs __fields__)
+- ✅ All 218 tests passing (186 existing + 32 new)
 
-**Example**:
-```python
-def test_podcast_service_get_podcast_contract():
-    """Test that get_podcast accepts both int and str IDs"""
-    service = PodcastService("./test_data")
-
-    # Should accept int
-    podcast = service.get_podcast(1)
-    assert podcast is None or isinstance(podcast, Podcast)
-
-    # Should accept string
-    podcast = service.get_podcast("https://example.com/feed.xml")
-    assert podcast is None or isinstance(podcast, Podcast)
-
-    # Should handle invalid ID gracefully
-    podcast = service.get_podcast(-1)
-    assert podcast is None
-```
-
-**Safety**: Tests only
-**Risk**: Low
-**Commit**: `test(contracts): add contract tests for service boundaries`
+**Benefits**: Documents expected service contracts, enables confident refactoring of internals, complements R-020 integration tests
 
 ---
 
@@ -1000,7 +980,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (20/35 = 57.1%)
+### Completed Tasks ✅ (21/35 = 60.0%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -1024,28 +1004,29 @@ If a refactor causes issues:
 | R-020 | `7926926` | 2h | ✅ Integration tests (9 tests, full pipeline coverage) |
 | R-021 | `6aa6090` | 1h | ✅ Type hints for service layer (mypy clean, 2 bugs fixed) |
 | R-022 | `72e4760` | 1h | ✅ EpisodeState enum (18 tests, 100% model coverage) |
+| R-023 | `0348e7e` | 1h | ✅ Contract tests (32 tests, prevents API breakage) |
 
-**Total time invested: 24.25 hours**
+**Total time invested: 25.25 hours**
 
 ### Next 5 Priority Tasks
 
-1. **R-023** - Add Contract Tests for Service Boundaries (1h) - Prevent interface breakage
-2. **R-012** - Use Click Context for Service Injection (45m) - CLI refactoring
-3. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
-4. **R-015** - Add Progress Bars for Batch Operations (45m) - UX improvement
-5. **R-025** - Add Docstrings to All Public Methods (1.5h) - Documentation
+1. **R-012** - Use Click Context for Service Injection (45m) - CLI refactoring
+2. **R-024** - Complete cleanup_old_files Implementation (30m) - Storage management
+3. **R-015** - Add Progress Bars for Batch Operations (45m) - UX improvement
+4. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
+5. **R-026** - Add LLM Provider Display Name Method (30m) - Code cleanup
 
-**Estimated effort for next 5: 4.5 hours**
+**Estimated effort for next 5: 3.5 hours**
 
 ### Key Metrics
 
 - **Test coverage**: 33.78% (↑88% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 177/177 (100%)
+- **Tests passing**: 218/218 (100%)
 - **Models coverage**: ✅ 100% (podcast.py with branch coverage)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
-- **Commits this week**: 15 atomic commits
-- **Files changed**: 16 files (7 new, 9 modified)
+- **Commits this week**: 16 atomic commits
+- **Files changed**: 17 files (8 new, 9 modified)
 
 ### Critical Path Forward
 
@@ -1062,13 +1043,13 @@ If a refactor causes issues:
 - Retry logic implemented
 - Magic numbers extracted
 
-**Week 3 Focus** (CURRENT):
+**Week 3 Status**: ✅ **100% COMPLETE**
 - Type hints for core modules (R-019) ✅ **DONE**
 - Type hints for service layer (R-021) ✅ **DONE**
 - Integration tests (R-020) ✅ **DONE**
 - EpisodeState enum (R-022) ✅ **DONE**
-- Contract tests (R-023)
-- **Target**: 50%+ completion rate by end of week ✅ **ACHIEVED (57.1%)**
+- Contract tests (R-023) ✅ **DONE**
+- **Target**: 50%+ completion rate by end of week ✅ **EXCEEDED (60.0%)**
 
 ---
 
