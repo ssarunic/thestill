@@ -38,14 +38,9 @@ class Config(BaseModel):
 
     # Storage Paths
     storage_path: Path = Path("./data")
-    audio_path: Path = Path("./data/original_audio")  # Original downloaded audio files
-    downsampled_audio_path: Path = Path("./data/downsampled_audio")  # Downsampled WAV files for transcription
-    raw_transcripts_path: Path = Path("./data/raw_transcripts")  # Raw Whisper JSON transcripts
-    clean_transcripts_path: Path = Path("./data/clean_transcripts")  # Cleaned/formatted transcripts
-    summaries_path: Path = Path("./data/summaries")
-    evaluations_path: Path = Path("./data/evaluations")
 
     # Path Manager (initialized after model creation)
+    # All path operations should use path_manager methods instead of direct path attributes
     path_manager: Optional[PathManager] = Field(default=None, exclude=True)
 
     # Processing Configuration
@@ -151,12 +146,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "google_cloud_project_id": os.getenv("GOOGLE_CLOUD_PROJECT_ID", ""),
         "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
         "storage_path": storage_path,
-        "audio_path": storage_path / "original_audio",
-        "downsampled_audio_path": storage_path / "downsampled_audio",
-        "raw_transcripts_path": storage_path / "raw_transcripts",
-        "clean_transcripts_path": storage_path / "clean_transcripts",
-        "summaries_path": storage_path / "summaries",
-        "evaluations_path": storage_path / "evaluations",
+        # Note: Path operations should use config.path_manager methods
+        # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
+        # clean_transcripts_path, summaries_path, evaluations_path
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
