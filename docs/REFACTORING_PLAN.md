@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-14
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 28/35 tasks complete (80.0%)**
+> **Progress: 29/35 tasks complete (82.9%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 28 tasks (31.25 hours invested)**
+**✅ Completed: 29 tasks (32.25 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 7 tasks**
+**⏳ Remaining: 6 tasks**
 
 **Current Status:**
 - Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
@@ -470,21 +470,51 @@ transcript_available=bool(
 
 ---
 
-### Task R-025: Audit Transcript Cleaning Pipeline Performance
-**Priority**: Medium
-**Effort**: 1 hour
-**Scope**: `transcript_cleaning_processor.py`
+### Task R-025: Audit Transcript Cleaning Pipeline Performance ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 1 hour
+**Commit**: (pending) - perf(core): add performance metrics tracking to transcript cleaning pipeline
 
-**Steps**:
-1. Add timing metrics for each phase
-2. Log phase durations
-3. Benchmark: Can phases be combined?
-4. Document findings in code comments
-5. Add config flag to skip Phase 2 if speakers already known
+**Completed**:
+- ✅ Created `TranscriptCleaningMetrics` Pydantic model with comprehensive metrics
+- ✅ Added timing instrumentation to all 5 phases (Phase 0-3, 1.5)
+- ✅ Track LLM calls, chunk counts, corrections, and speakers per phase
+- ✅ Compute derived metrics (chars/sec, corrections/1000 chars, seconds/LLM call)
+- ✅ Compute phase breakdown percentages
+- ✅ Save metrics to `{episode_id}.metrics.json` alongside clean transcripts
+- ✅ Print performance summary after processing
+- ✅ Updated CLI to pass `episode_guid` and `save_metrics` parameters
+- ✅ All 269 tests passing
 
-**Safety**: Observation only, no changes yet
-**Risk**: Low
-**Commit**: `perf(core): add timing metrics to transcript cleaning pipeline phases`
+**Metrics Storage Format**:
+```json
+{
+  "episode_guid": "...",
+  "total_duration_seconds": 45.2,
+  "total_transcript_chars": 125000,
+  "phase1_analysis_duration_seconds": 12.5,
+  "phase1_corrections_found": 47,
+  "phase2_speaker_duration_seconds": 3.2,
+  "phase3_generation_duration_seconds": 25.1,
+  "total_llm_calls": 6,
+  "phase_breakdown_percent": {
+    "phase1_analysis": 27.7,
+    "phase2_speaker": 7.1,
+    "phase3_generation": 55.5
+  },
+  "efficiency_metrics": {
+    "chars_per_second": 2765.5,
+    "seconds_per_llm_call": 7.53,
+    "corrections_per_1000_chars": 0.4
+  }
+}
+```
+
+**Benefits**:
+- Performance optimization analysis per episode
+- Identify bottlenecks (Phase 3 typically slowest)
+- Track LLM API costs and efficiency trends
+- JSON format enables easy querying and aggregation
+- Human-readable for manual inspection
 
 ---
 
@@ -890,7 +920,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (28/35 = 80.0%)
+### Completed Tasks ✅ (29/35 = 82.9%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -921,17 +951,18 @@ If a refactor causes issues:
 | R-026 | `19b6a15` | 30m | ✅ LLM provider display name method (abstraction improvement) |
 | R-027 | `3c98735` | 30m | ✅ PathManager require_file_exists helper (5 tests, centralized validation) |
 | R-028 | `933a055` | 45m | ✅ FeedManager transaction context manager (9 tests, batch operations) |
-| R-029 | (pending) | 2h | ✅ MediaSource strategy pattern (RSS + YouTube abstraction, 34 tests, 269 total) |
+| R-029 | `90ed0db` | 2h | ✅ MediaSource strategy pattern (RSS + YouTube abstraction, 34 tests, 269 total) |
+| R-025 | (pending) | 1h | ✅ Performance metrics tracking (TranscriptCleaningMetrics model, phase timing) |
 
-**Total time invested: 31.25 hours**
+**Total time invested: 32.25 hours**
 
 ### Next 3 Priority Tasks
 
-1. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
-2. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
-3. **R-031** - Add Makefile for Common Commands (20m) - Developer tooling
+1. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
+2. **R-031** - Add Makefile for Common Commands (20m) - Developer tooling
+3. **R-032** - Add GitHub Actions CI Workflow (45m) - CI/CD
 
-**Estimated effort for next 3: 1.83 hours**
+**Estimated effort for next 3: 1.58 hours**
 
 ### Key Metrics
 

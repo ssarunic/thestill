@@ -19,9 +19,11 @@ Acts as a copywriter to fix spelling, grammar, remove filler words, and identify
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..models.podcast import TranscriptCleaningMetrics
 from .llm_provider import LLMProvider
 from .transcript_formatter import TranscriptFormatter
 
@@ -75,8 +77,10 @@ class TranscriptCleaningProcessor:
         podcast_description: str = "",
         episode_title: str = "",
         episode_description: str = "",
+        episode_guid: str = "",
         output_path: Optional[str] = None,
         save_corrections: bool = True,
+        save_metrics: bool = True,
     ) -> Dict:
         """
         Clean a transcript with focus on accuracy and readability.
@@ -87,18 +91,36 @@ class TranscriptCleaningProcessor:
             podcast_description: Description of the podcast
             episode_title: Title of the episode
             episode_description: Description of the episode
+            episode_guid: Unique identifier for the episode
             output_path: Optional path to save outputs
             save_corrections: Whether to save corrections list for debugging
+            save_metrics: Whether to save performance metrics (default: True)
 
         Returns:
-            Dict with keys: corrections, speaker_mapping, cleaned_markdown, processing_time
+            Dict with keys: corrections, speaker_mapping, cleaned_markdown, processing_time, metrics
         """
         start_time = time.time()
+
+        # Initialize performance tracking
+        metrics_data = {
+            "episode_guid": episode_guid,
+            "episode_title": episode_title,
+            "podcast_title": podcast_title,
+            "llm_provider": self.provider.__class__.__name__,
+            "llm_model": self.provider.get_model_name(),
+            "chunk_size": self.chunk_size,
+            "phase1_llm_calls": 0,
+            "phase2_llm_calls": 0,
+            "phase3_llm_calls": 0,
+        }
 
         try:
             # Phase 0: Format JSON to clean Markdown (efficient for LLM)
             print("Phase 0: Formatting transcript to clean Markdown...")
+            phase0_start = time.time()
             formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
+            metrics_data["phase0_format_duration_seconds"] = time.time() - phase0_start
+            metrics_data["total_transcript_chars"] = len(formatted_markdown)
 
             # Save formatted markdown to debug folder if requested
             if output_path and save_corrections:
@@ -106,9 +128,14 @@ class TranscriptCleaningProcessor:
 
             # Phase 1: Analyze and create corrections list
             print("Phase 1: Analyzing transcript and identifying corrections...")
-            corrections = self._analyze_and_correct(
+            phase1_start = time.time()
+            corrections, phase1_chunks = self._analyze_and_correct(
                 formatted_markdown, podcast_title, podcast_description, episode_title, episode_description
             )
+            metrics_data["phase1_analysis_duration_seconds"] = time.time() - phase1_start
+            metrics_data["phase1_corrections_found"] = len(corrections)
+            metrics_data["phase1_chunks_processed"] = phase1_chunks
+            metrics_data["phase1_llm_calls"] = phase1_chunks
 
             # Save corrections to debug folder if requested
             if output_path and save_corrections:
@@ -116,7 +143,10 @@ class TranscriptCleaningProcessor:
 
             # Phase 1.5: Apply corrections before speaker identification
             print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
-            corrected_markdown = self._apply_corrections(formatted_markdown, corrections)
+            phase1_5_start = time.time()
+            corrected_markdown, applied_count = self._apply_corrections(formatted_markdown, corrections)
+            metrics_data["phase1_5_apply_duration_seconds"] = time.time() - phase1_5_start
+            metrics_data["phase1_5_corrections_applied"] = applied_count
 
             # Save corrected markdown to debug folder if requested
             if output_path and save_corrections:
@@ -124,9 +154,13 @@ class TranscriptCleaningProcessor:
 
             # Phase 2: Identify speakers (using corrected transcript)
             print("Phase 2: Identifying speakers...")
+            phase2_start = time.time()
             speaker_mapping = self._identify_speakers(
                 corrected_markdown, podcast_title, podcast_description, episode_title, episode_description
             )
+            metrics_data["phase2_speaker_duration_seconds"] = time.time() - phase2_start
+            metrics_data["phase2_speakers_identified"] = len(speaker_mapping)
+            metrics_data["phase2_llm_calls"] = 1  # Speaker identification is always 1 LLM call
 
             # Save speaker mapping to debug folder if requested
             if output_path and save_corrections:
@@ -134,11 +168,21 @@ class TranscriptCleaningProcessor:
 
             # Phase 3: Generate final cleaned transcript
             print("Phase 3: Generating final cleaned transcript...")
-            cleaned_markdown = self._generate_cleaned_transcript(
+            phase3_start = time.time()
+            cleaned_markdown, phase3_chunks = self._generate_cleaned_transcript(
                 formatted_markdown, corrections, speaker_mapping, episode_title
             )
+            metrics_data["phase3_generation_duration_seconds"] = time.time() - phase3_start
+            metrics_data["phase3_chunks_processed"] = phase3_chunks
+            metrics_data["phase3_llm_calls"] = phase3_chunks
 
             processing_time = time.time() - start_time
+            metrics_data["total_duration_seconds"] = processing_time
+            metrics_data["total_chunks_processed"] = phase1_chunks + phase3_chunks
+            metrics_data["timestamp"] = datetime.now()
+
+            # Create metrics model
+            metrics = TranscriptCleaningMetrics(**metrics_data)
 
             result = {
                 "corrections": corrections,
@@ -147,13 +191,18 @@ class TranscriptCleaningProcessor:
                 "processing_time": processing_time,
                 "episode_title": episode_title,
                 "podcast_title": podcast_title,
+                "metrics": metrics,
             }
 
             # Save outputs if path provided
             if output_path:
-                self._save_outputs(result, output_path, save_corrections)
+                self._save_outputs(result, output_path, save_corrections, save_metrics)
 
+            # Print performance summary
             print(f"Transcript cleaning completed in {processing_time:.1f} seconds")
+            print(
+                f"  Performance: {metrics.efficiency_metrics['chars_per_second']:.0f} chars/sec, {metrics.total_llm_calls} LLM calls"
+            )
             return result
 
         except Exception as e:
@@ -203,8 +252,13 @@ class TranscriptCleaningProcessor:
         podcast_description: str,
         episode_title: str,
         episode_description: str,
-    ) -> List[Dict]:
-        """Phase 1: Analyze transcript and identify all corrections needed"""
+    ) -> tuple[List[Dict], int]:
+        """
+        Phase 1: Analyze transcript and identify all corrections needed.
+
+        Returns:
+            Tuple of (corrections list, number of chunks processed)
+        """
 
         # Markdown is already clean and ready for LLM
         transcript_text = formatted_markdown
@@ -331,9 +385,9 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 continue
 
         print(f"  Found {len(all_corrections)} corrections across {len(chunks)} chunk(s)")
-        return all_corrections
+        return all_corrections, len(chunks)
 
-    def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> str:
+    def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> tuple[str, int]:
         """
         Apply corrections from Phase 1 to the transcript text.
         This ensures speaker names are properly spelled before speaker identification.
@@ -343,7 +397,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
             corrections: List of correction objects from Phase 1
 
         Returns:
-            Corrected transcript text
+            Tuple of (corrected transcript text, number of corrections applied)
         """
         corrected_text = transcript_text
 
@@ -366,7 +420,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 applied_count += 1
 
         print(f"  Applied {applied_count} corrections to transcript")
-        return corrected_text
+        return corrected_text, applied_count
 
     def _identify_speakers(
         self,
@@ -461,8 +515,13 @@ TRANSCRIPT:
 
     def _generate_cleaned_transcript(
         self, formatted_markdown: str, corrections: List[Dict], speaker_mapping: Dict[str, str], episode_title: str
-    ) -> str:
-        """Phase 3: Generate final cleaned markdown transcript"""
+    ) -> tuple[str, int]:
+        """
+        Phase 3: Generate final cleaned markdown transcript.
+
+        Returns:
+            Tuple of (cleaned transcript, number of chunks processed)
+        """
 
         transcript_text = formatted_markdown
 
@@ -581,7 +640,7 @@ Please produce the final cleaned Markdown transcript."""
 
         # Combine chunks with proper spacing
         final_transcript = "\n\n".join(cleaned_chunks)
-        return final_transcript
+        return final_transcript, len(chunks)
 
     def _save_phase_output(self, output_path: str, phase: str, data):
         """
@@ -667,13 +726,14 @@ Please produce the final cleaned Markdown transcript."""
 
         return "\n".join(filtered_lines)
 
-    def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool):
+    def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True):
         """
         Save final outputs to standard locations.
 
         File structure:
         - data/processed/{episode_id}.md - Final cleaned transcript (main output)
         - data/processed/{episode_id}.no-ads.md - Transcript with ads removed
+        - data/processed/{episode_id}.metrics.json - Performance metrics
         - data/processed/debug/{episode_id}.corrections.json - Debug: corrections list
         - data/processed/debug/{episode_id}.speakers.json - Debug: speaker mapping
         - data/processed/debug/{episode_id}.corrected.md - Debug: pre-speaker-formatting text
@@ -704,3 +764,14 @@ Please produce the final cleaned Markdown transcript."""
             f.write("---\n\n")
             f.write(no_ads_markdown)
         print(f"Ad-free transcript saved to: {no_ads_path}")
+
+        # Save performance metrics: {episode_id}.metrics.json
+        if save_metrics and "metrics" in result:
+            metrics_path = output_path.parent / f"{episode_id}.metrics.json"
+            metrics_dict = result["metrics"].model_dump(mode="json")
+            # Add computed properties
+            metrics_dict["phase_breakdown_percent"] = result["metrics"].phase_breakdown_percent
+            metrics_dict["efficiency_metrics"] = result["metrics"].efficiency_metrics
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump(metrics_dict, f, indent=2, ensure_ascii=False, default=str)
+            print(f"Performance metrics saved to: {metrics_path}")

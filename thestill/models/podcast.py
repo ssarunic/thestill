@@ -136,3 +136,93 @@ class CleanedTranscript(BaseModel):
     cleaned_markdown: str
     processing_time: float
     created_at: datetime
+
+
+class TranscriptCleaningMetrics(BaseModel):
+    """
+    Performance metrics for transcript cleaning pipeline.
+
+    Tracks timing and resource usage for each phase to enable:
+    - Performance optimization analysis
+    - Cost estimation (LLM API usage)
+    - Bottleneck identification
+    - Trend analysis across episodes
+    """
+
+    episode_guid: str
+    episode_title: str
+    podcast_title: str
+
+    # Overall metrics
+    total_duration_seconds: float
+    total_transcript_chars: int
+    total_chunks_processed: int
+
+    # Phase 0: Formatting
+    phase0_format_duration_seconds: float
+
+    # Phase 1: Corrections analysis
+    phase1_analysis_duration_seconds: float
+    phase1_chunks_processed: int
+    phase1_corrections_found: int
+    phase1_llm_calls: int
+
+    # Phase 1.5: Apply corrections
+    phase1_5_apply_duration_seconds: float
+    phase1_5_corrections_applied: int
+
+    # Phase 2: Speaker identification
+    phase2_speaker_duration_seconds: float
+    phase2_speakers_identified: int
+    phase2_llm_calls: int
+
+    # Phase 3: Generate cleaned transcript
+    phase3_generation_duration_seconds: float
+    phase3_chunks_processed: int
+    phase3_llm_calls: int
+
+    # LLM provider info
+    llm_provider: str
+    llm_model: str
+    chunk_size: int
+
+    # Metadata
+    timestamp: datetime
+
+    @property
+    def total_llm_calls(self) -> int:
+        """Total number of LLM API calls made across all phases"""
+        return self.phase1_llm_calls + self.phase2_llm_calls + self.phase3_llm_calls
+
+    @property
+    def phase_breakdown_percent(self) -> dict:
+        """Percentage of time spent in each phase"""
+        if self.total_duration_seconds == 0:
+            return {}
+
+        return {
+            "phase0_format": round(100 * self.phase0_format_duration_seconds / self.total_duration_seconds, 1),
+            "phase1_analysis": round(100 * self.phase1_analysis_duration_seconds / self.total_duration_seconds, 1),
+            "phase1_5_apply": round(100 * self.phase1_5_apply_duration_seconds / self.total_duration_seconds, 1),
+            "phase2_speaker": round(100 * self.phase2_speaker_duration_seconds / self.total_duration_seconds, 1),
+            "phase3_generation": round(100 * self.phase3_generation_duration_seconds / self.total_duration_seconds, 1),
+        }
+
+    @property
+    def efficiency_metrics(self) -> dict:
+        """Derived efficiency metrics"""
+        return {
+            "chars_per_second": (
+                round(self.total_transcript_chars / self.total_duration_seconds, 1)
+                if self.total_duration_seconds > 0
+                else 0
+            ),
+            "seconds_per_llm_call": (
+                round(self.total_duration_seconds / self.total_llm_calls, 2) if self.total_llm_calls > 0 else 0
+            ),
+            "corrections_per_1000_chars": (
+                round(1000 * self.phase1_corrections_found / self.total_transcript_chars, 1)
+                if self.total_transcript_chars > 0
+                else 0
+            ),
+        }

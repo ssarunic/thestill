@@ -570,8 +570,10 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     podcast_description=podcast.description,
                     episode_title=episode.title,
                     episode_description=episode.description,
+                    episode_guid=episode.guid,
                     output_path=str(cleaned_path),
                     save_corrections=True,
+                    save_metrics=True,
                 )
 
                 if result:
