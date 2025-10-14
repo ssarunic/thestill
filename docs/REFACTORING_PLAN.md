@@ -10,7 +10,7 @@
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 31 tasks (33 hours invested)**
+**✅ Completed: 31 tasks (33.25 hours invested)**
 **🚧 In Progress: 0 tasks**
 **⏳ Remaining: 4 tasks**
 
@@ -689,21 +689,23 @@ feed_manager.mark_episode_downloaded(url, guid, path)
 
 ---
 
-### Task R-033: Simplify CLI Import Pattern
-**Priority**: Low
-**Effort**: 30 minutes
-**Scope**: `cli.py`
+### Task R-033: Simplify CLI Import Pattern ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
+**Commit**: `e2adffe` - refactor(cli): simplify import pattern and document execution modes (R-033)
 
-**Steps**:
-1. Remove try/except import block (lines 19-42)
-2. Use consistent relative imports
-3. Add `if __name__ == '__main__'` guard at bottom for standalone execution
-4. Document when standalone execution is needed vs package execution
-5. Test both `python -m thestill.cli` and `thestill` entry point
+**Completed**:
+- ✅ Removed try/except import block (lines 21-50)
+- ✅ Use consistent relative imports (.core, .utils, etc.)
+- ✅ Added documentation comment explaining execution modes
+- ✅ `__main__` guard already existed at bottom of file
+- ✅ Tested both execution modes:
+  - Package mode: `thestill --help` ✓
+  - Module mode: `python3 -m thestill.cli --help` ✓
+- ✅ All 269 tests passing (100%)
+- ✅ All pre-commit hooks passing (black, isort, pylint)
+- ✅ Net code reduction: -12 lines (30 deletions, 18 insertions)
 
-**Safety**: Test both execution modes
-**Risk**: Medium (could break entry point)
-**Commit**: `refactor(cli): simplify import pattern and document execution modes`
+**Benefits**: Cleaner code, modern Python packaging standards, better maintainability, self-documenting
 
 ---
 
@@ -933,9 +935,9 @@ If a refactor causes issues:
 
 ---
 
-## Progress Summary (Updated 2025-10-13)
+## Progress Summary (Updated 2025-10-14)
 
-### Completed Tasks ✅ (30/35 = 85.7%)
+### Completed Tasks ✅ (31/35 = 88.6%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -969,14 +971,15 @@ If a refactor causes issues:
 | R-029 | `90ed0db` | 2h | ✅ MediaSource strategy pattern (RSS + YouTube abstraction, 34 tests, 269 total) |
 | R-025 | (pending) | 1h | ✅ Performance metrics tracking (TranscriptCleaningMetrics model, phase timing) |
 | R-030 | `1c83a45` | 30m | ✅ CLAUDE.md documentation (testing, type hints, architecture, error handling) |
+| R-033 | `e2adffe` | 30m | ✅ CLI import pattern simplified (-12 lines, both execution modes tested) |
 
-**Total time invested: 32.75 hours**
+**Total time invested: 33.25 hours**
 
 ### Next 3 Priority Tasks
 
 1. **R-031** - Add Makefile for Common Commands (20m) - Developer tooling
 2. **R-032** - Add GitHub Actions CI Workflow (45m) - CI/CD
-3. **R-033** - Simplify CLI Import Pattern (30m) - Code cleanup
+3. **R-034** - Add Episode GUID Uniqueness Validation (30m) - Data validation
 
 **Estimated effort for next 3: 1.58 hours**
 
@@ -988,8 +991,8 @@ If a refactor causes issues:
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
 - **CLI Context**: ✅ Fully refactored with typed dependency injection
-- **Atomic commits**: 24 refactoring commits
-- **Files changed**: 19 files (8 new, 11 modified)
+- **Atomic commits**: 25 refactoring commits
+- **Files changed**: 20 files (8 new, 12 modified)
 
 ### Critical Path Forward
 
@@ -1014,11 +1017,12 @@ If a refactor causes issues:
 - Contract tests (R-023) ✅ **DONE**
 - **Target**: 50%+ completion rate by end of week ✅ **EXCEEDED (65.7%)**
 
-**Week 4 Status**: 🚧 **IN PROGRESS (85.7% overall)**
+**Week 4 Status**: 🚧 **IN PROGRESS (88.6% overall)**
 - CLI Context injection (R-012) ✅ **DONE**
 - cleanup_old_files (R-024) ✅ **DONE**
 - CLAUDE.md documentation (R-030) ✅ **DONE**
-- **Target**: Complete remaining 5 tasks for 100% plan completion
+- CLI import pattern simplification (R-033) ✅ **DONE**
+- **Target**: Complete remaining 4 tasks for 100% plan completion
 
 ---
 
