@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-14
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 31/35 tasks complete (88.6%)**
+> **Progress: 32/35 tasks complete (91.4%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 31 tasks (33.25 hours invested)**
+**✅ Completed: 32 tasks (33.75 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 4 tasks**
+**⏳ Remaining: 3 tasks**
 
 **Current Status:**
 - Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
@@ -452,6 +452,7 @@ transcript_available=bool(
 ## Week 4: Polish & Documentation
 
 **Goal**: Final cleanup, documentation, and validation
+**Status**: ✅ **8/9 tasks complete (88.9%)** | **Time invested: 4.25 hours**
 
 ### Task R-024: Complete cleanup_old_files Implementation ✅
 **Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
@@ -734,22 +735,34 @@ feed_manager.mark_episode_downloaded(url, guid, path)
 
 ---
 
-### Task R-035: Review and Update README
-**Priority**: Low
-**Effort**: 30 minutes
-**Scope**: `README.md`
+### Task R-035: Review and Update README ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 30 minutes
+**Commit**: `4488819` - docs(readme): update README with testing, linting, and contributing guidelines (R-035)
 
-**Steps**:
-1. Update installation instructions
-2. Add section on running tests
-3. Add section on code quality tools
-4. Link to CODE_GUIDELINES.md
-5. Add contributing section
-6. Update examples with latest CLI usage
+**Completed**:
+- ✅ Updated Overview with current capabilities and atomic pipeline
+- ✅ Added comprehensive Configuration section with all LLM providers (OpenAI, Ollama, Gemini, Claude)
+- ✅ Added transcription configuration (Whisper and Google Cloud)
+- ✅ Replaced Basic Usage with detailed 5-step atomic workflow
+- ✅ Added Common Workflows section with practical examples
+- ✅ Updated Commands Reference with all current CLI options
+- ✅ Improved Output Structure with episode state progression
+- ✅ Added comprehensive Development section:
+  - Makefile commands reference
+  - Testing structure and coverage targets (70%+ overall)
+  - Code quality tools (black, isort, pylint, mypy)
+  - Pre-commit hooks documentation
+  - Type hints coverage (100% core/service layers)
+  - Architecture diagram showing layered design
+- ✅ Added Contributing section:
+  - Development workflow (fork → branch → test → commit → PR)
+  - Code standards (type hints, tests, small PRs)
+  - Pull request checklist
+  - Refactoring status (29/35 complete, 82.9%)
+  - Link to CODE_GUIDELINES.md for detailed standards
+- ✅ 403 lines added, 72 lines removed (net +331 lines)
 
-**Safety**: Documentation only
-**Risk**: None
-**Commit**: `docs(readme): update README with testing, linting, and contributing guidelines`
+**Impact**: Comprehensive README now reflects current architecture, all features, testing infrastructure, and clear contribution guidelines
 
 ---
 
