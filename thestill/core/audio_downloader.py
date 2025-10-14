@@ -145,10 +145,8 @@ class AudioDownloader:
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        # Use \r for same-line progress updates to stderr
-                        logger.info(f"\rProgress: {progress:.1f}%")
+                    # Progress updates are handled by CLI progress bar
+                    # Removed per-chunk logging to avoid terminal spam
 
     def get_file_size(self, file_path: str) -> int:
         """Get file size in bytes"""
