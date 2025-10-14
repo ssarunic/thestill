@@ -69,8 +69,40 @@ thestill cleanup
 ```
 
 ### Testing and Code Quality
+
+**Quick Commands (using Makefile):**
 ```bash
-# Run tests (when implemented)
+# Show all available commands
+make help
+
+# Install with dev dependencies
+make install-dev
+
+# Run tests with coverage
+make test
+
+# Run tests without coverage (faster)
+make test-fast
+
+# Format code (black + isort)
+make format
+
+# Run linters (pylint + mypy)
+make lint
+
+# Run type checking only
+make typecheck
+
+# Run ALL checks before committing
+make check
+
+# Clean generated files
+make clean
+```
+
+**Direct Commands:**
+```bash
+# Run tests
 pytest
 
 # Format code

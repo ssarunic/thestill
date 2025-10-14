@@ -4,15 +4,15 @@
 > Last Updated: 2025-10-14
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 30/35 tasks complete (85.7%)**
+> **Progress: 31/35 tasks complete (88.6%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 30 tasks (32.75 hours invested)**
+**✅ Completed: 31 tasks (33 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 5 tasks**
+**⏳ Remaining: 4 tasks**
 
 **Current Status:**
 - Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
@@ -636,23 +636,37 @@ feed_manager.mark_episode_downloaded(url, guid, path)
 
 ---
 
-### Task R-031: Add Makefile for Common Commands
+### ✅ Task R-031: Add Makefile for Common Commands
+**Status**: ✅ COMPLETE (2025-10-14)
 **Priority**: Low
-**Effort**: 20 minutes
-**Scope**: `Makefile` (new)
+**Effort**: 20 minutes (actual: 18 minutes)
+**Scope**: `Makefile` (new), `CLAUDE.md` (updated)
 
-**Steps**:
-1. Create `Makefile` with common commands:
-   - `make test` - Run tests with coverage
-   - `make lint` - Run black, isort, pylint, mypy
-   - `make format` - Run black and isort
-   - `make install` - Install in dev mode
-   - `make clean` - Remove generated files
-2. Update README with Makefile usage
+**Implementation**:
+1. ✅ Created comprehensive `Makefile` with targets:
+   - `make help` - Show all available commands with descriptions
+   - `make test` - Run tests with coverage (HTML + terminal)
+   - `make test-fast` - Run tests without coverage
+   - `make test-coverage` - Run tests and open HTML report
+   - `make lint` - Run pylint + mypy
+   - `make format` - Run black + isort
+   - `make typecheck` - Run mypy only
+   - `make check` - Run ALL checks (format, lint, test)
+   - `make install` / `make install-dev` - Installation shortcuts
+   - `make clean` / `make clean-all` - Cleanup targets
+   - `make run-mcp` - Run MCP server
+   - Development shortcuts: `dev-refresh`, `dev-download`, `dev-status`, `dev-list`
+2. ✅ Added color-coded output for better UX
+3. ✅ Updated CLAUDE.md with Makefile usage section
 
-**Safety**: Just convenience, doesn't change code
-**Risk**: None
-**Commit**: `chore(tooling): add Makefile for common development commands`
+**Benefits**:
+- Developer experience: Shorter commands (`make test` vs long pytest flags)
+- Consistency: Everyone runs checks the same way
+- Documentation as code: `make help` shows all available commands
+- CI/CD ready: Can use same commands in GitHub Actions
+
+**Changes**: 119 insertions(+)
+**Commit**: `chore(tooling): add Makefile for common development commands (R-031)`
 
 ---
 
