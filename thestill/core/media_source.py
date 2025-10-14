@@ -210,8 +210,11 @@ class RSSMediaSource(MediaSource):
                 episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
                 # Skip already processed episodes
+                from ..models.podcast import EpisodeState
+
                 already_processed = any(
-                    ep.external_id == episode_external_id and ep.processed for ep in existing_episodes
+                    ep.external_id == episode_external_id and ep.state == EpisodeState.CLEANED
+                    for ep in existing_episodes
                 )
                 if already_processed:
                     continue
@@ -219,7 +222,7 @@ class RSSMediaSource(MediaSource):
                 # Include episode if:
                 # 1. It's newer than last_processed, OR
                 # 2. We have very few processed episodes (indicates tracking was broken)
-                num_processed_episodes = len([ep for ep in existing_episodes if ep.processed])
+                num_processed_episodes = len([ep for ep in existing_episodes if ep.state == EpisodeState.CLEANED])
 
                 should_include = (
                     last_processed is None or episode_date > last_processed or num_processed_episodes < 3
@@ -492,10 +495,13 @@ class YouTubeMediaSource(MediaSource):
                 all_episodes = all_episodes[:max_episodes]
 
             # Filter out already processed episodes
+            from ..models.podcast import EpisodeState
+
             new_episodes = []
             for episode in all_episodes:
                 already_processed = any(
-                    ep.external_id == episode.external_id and ep.processed for ep in existing_episodes
+                    ep.external_id == episode.external_id and ep.state == EpisodeState.CLEANED
+                    for ep in existing_episodes
                 )
                 if not already_processed:
                     # Check if episode already exists (but not processed)

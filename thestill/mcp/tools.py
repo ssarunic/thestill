@@ -242,7 +242,7 @@ def setup_tools(server: Server, storage_path: str):
                             "title": ep.title,
                             "pub_date": ep.pub_date.isoformat() if ep.pub_date else None,
                             "duration": ep.duration,
-                            "processed": ep.processed,
+                            "state": ep.state,
                             "transcript_available": ep.transcript_available,
                             "summary_available": ep.summary_available,
                         }

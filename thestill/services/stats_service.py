@@ -34,8 +34,18 @@ class SystemStats(BaseModel):
 
     podcasts_tracked: int
     episodes_total: int
-    episodes_processed: int
-    episodes_unprocessed: int
+
+    # Episode counts by state (pipeline progression)
+    episodes_discovered: int  # Not yet downloaded
+    episodes_downloaded: int  # Downloaded but not downsampled
+    episodes_downsampled: int  # Downsampled but not transcribed
+    episodes_transcribed: int  # Transcribed but not cleaned
+    episodes_cleaned: int  # Fully processed
+
+    # Legacy fields (for backward compatibility)
+    episodes_processed: int  # Same as episodes_cleaned
+    episodes_unprocessed: int  # Sum of all non-cleaned states
+
     transcripts_available: int
     audio_files_count: int
     storage_path: str
@@ -84,16 +94,31 @@ class StatsService:
         podcasts = self.repository.find_all()
         podcasts_tracked = len(podcasts)
 
-        # Count episodes
+        # Count episodes by state
+        from ..models.podcast import EpisodeState
+
         episodes_total = 0
-        episodes_processed = 0
+        episodes_discovered = 0
+        episodes_downloaded = 0
+        episodes_downsampled = 0
+        episodes_transcribed = 0
+        episodes_cleaned = 0
         transcripts_available = 0
 
         for podcast in podcasts:
             episodes_total += len(podcast.episodes)
             for episode in podcast.episodes:
-                if episode.processed:
-                    episodes_processed += 1
+                # Count by state
+                if episode.state == EpisodeState.DISCOVERED:
+                    episodes_discovered += 1
+                elif episode.state == EpisodeState.DOWNLOADED:
+                    episodes_downloaded += 1
+                elif episode.state == EpisodeState.DOWNSAMPLED:
+                    episodes_downsampled += 1
+                elif episode.state == EpisodeState.TRANSCRIBED:
+                    episodes_transcribed += 1
+                elif episode.state == EpisodeState.CLEANED:
+                    episodes_cleaned += 1
 
                 # Check if cleaned transcript file actually exists using PathManager
                 if episode.summary_path:
@@ -101,7 +126,9 @@ class StatsService:
                     if md_path.with_suffix(".md").exists():
                         transcripts_available += 1
 
-        episodes_unprocessed = episodes_total - episodes_processed
+        # Legacy fields for backward compatibility
+        episodes_processed = episodes_cleaned
+        episodes_unprocessed = episodes_total - episodes_cleaned
 
         # Count audio files using PathManager
         audio_path = self.path_manager.original_audio_dir()
@@ -112,6 +139,11 @@ class StatsService:
         stats = SystemStats(
             podcasts_tracked=podcasts_tracked,
             episodes_total=episodes_total,
+            episodes_discovered=episodes_discovered,
+            episodes_downloaded=episodes_downloaded,
+            episodes_downsampled=episodes_downsampled,
+            episodes_transcribed=episodes_transcribed,
+            episodes_cleaned=episodes_cleaned,
             episodes_processed=episodes_processed,
             episodes_unprocessed=episodes_unprocessed,
             transcripts_available=transcripts_available,

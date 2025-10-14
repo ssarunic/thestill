@@ -213,7 +213,7 @@ class TestPodcastServiceContract:
         assert hasattr(ep, "audio_url")
         assert hasattr(ep, "duration")
         assert hasattr(ep, "external_id")
-        assert hasattr(ep, "processed")
+        assert hasattr(ep, "state")
         assert hasattr(ep, "transcript_available")
         assert hasattr(ep, "summary_available")
 
@@ -224,7 +224,8 @@ class TestPodcastServiceContract:
         assert isinstance(ep.description, str)
         assert isinstance(ep.audio_url, str)
         assert isinstance(ep.external_id, str)
-        assert isinstance(ep.processed, bool)
+        assert isinstance(ep.state, str)
+        assert ep.state in ["discovered", "downloaded", "downsampled", "transcribed", "cleaned"]
         assert isinstance(ep.transcript_available, bool)
         assert isinstance(ep.summary_available, bool)
 
@@ -389,6 +390,13 @@ class TestStatsServiceContract:
         # Required fields
         assert hasattr(stats, "podcasts_tracked")
         assert hasattr(stats, "episodes_total")
+        # State breakdown fields
+        assert hasattr(stats, "episodes_discovered")
+        assert hasattr(stats, "episodes_downloaded")
+        assert hasattr(stats, "episodes_downsampled")
+        assert hasattr(stats, "episodes_transcribed")
+        assert hasattr(stats, "episodes_cleaned")
+        # Legacy fields
         assert hasattr(stats, "episodes_processed")
         assert hasattr(stats, "episodes_unprocessed")
         assert hasattr(stats, "transcripts_available")
@@ -399,6 +407,11 @@ class TestStatsServiceContract:
         # Field types
         assert isinstance(stats.podcasts_tracked, int)
         assert isinstance(stats.episodes_total, int)
+        assert isinstance(stats.episodes_discovered, int)
+        assert isinstance(stats.episodes_downloaded, int)
+        assert isinstance(stats.episodes_downsampled, int)
+        assert isinstance(stats.episodes_transcribed, int)
+        assert isinstance(stats.episodes_cleaned, int)
         assert isinstance(stats.episodes_processed, int)
         assert isinstance(stats.episodes_unprocessed, int)
         assert isinstance(stats.transcripts_available, int)
@@ -415,6 +428,11 @@ class TestStatsServiceContract:
         # All counts should be non-negative
         assert stats.podcasts_tracked >= 0
         assert stats.episodes_total >= 0
+        assert stats.episodes_discovered >= 0
+        assert stats.episodes_downloaded >= 0
+        assert stats.episodes_downsampled >= 0
+        assert stats.episodes_transcribed >= 0
+        assert stats.episodes_cleaned >= 0
         assert stats.episodes_processed >= 0
         assert stats.episodes_unprocessed >= 0
         assert stats.transcripts_available >= 0
@@ -426,8 +444,19 @@ class TestStatsServiceContract:
 
         stats = service.get_stats()
 
-        # Processed + unprocessed should equal total
-        assert stats.episodes_processed + stats.episodes_unprocessed == stats.episodes_total
+        # Sum of all states should equal total
+        state_sum = (
+            stats.episodes_discovered
+            + stats.episodes_downloaded
+            + stats.episodes_downsampled
+            + stats.episodes_transcribed
+            + stats.episodes_cleaned
+        )
+        assert state_sum == stats.episodes_total
+
+        # Legacy fields should be consistent
+        assert stats.episodes_processed == stats.episodes_cleaned
+        assert stats.episodes_unprocessed == stats.episodes_total - stats.episodes_cleaned
 
 
 class TestServiceContractStability:
@@ -492,7 +521,7 @@ class TestServiceContractStability:
             "audio_url",
             "duration",
             "external_id",
-            "processed",
+            "state",  # Changed from "processed" (bool) to "state" (str)
             "transcript_available",
             "summary_available",
         ]

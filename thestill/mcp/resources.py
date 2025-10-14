@@ -122,7 +122,7 @@ def setup_resources(server: Server, storage_path: str):
                 "rss_url": str(podcast.rss_url),
                 "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
                 "episodes_count": len(podcast.episodes),
-                "episodes_processed": sum(1 for ep in podcast.episodes if ep.processed),
+                "episodes_processed": sum(1 for ep in podcast.episodes if ep.state.value == "cleaned"),
             }
 
             return json.dumps(result, indent=2)
@@ -160,7 +160,7 @@ def setup_resources(server: Server, storage_path: str):
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "duration": episode.duration,
                 "external_id": episode.external_id,
-                "processed": episode.processed,
+                "state": episode.state.value,
                 "audio_url": str(episode.audio_url),
                 "transcript_available": bool(
                     episode.raw_transcript_path

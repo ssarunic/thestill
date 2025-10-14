@@ -406,7 +406,6 @@ class TestFullPipelineIntegration:
         assert podcast is not None
         episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.CLEANED
-        assert episode.processed is True
 
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_multiple_podcasts_isolation(self, mock_parse, podcast_service, feed_manager, sample_rss_feed):

@@ -74,13 +74,22 @@ class CLIFormatter:
             lines.append("")
 
         for episode in episodes:
-            status_icon = "✓" if episode.processed else "○"
+            # Map episode state to status icon
+            state_icons = {
+                "discovered": "○",  # Not downloaded
+                "downloaded": "↓",  # Downloaded
+                "downsampled": "♪",  # Audio ready
+                "transcribed": "✎",  # Transcribed (pencil writing)
+                "cleaned": "✓",  # Fully processed
+            }
+            status_icon = state_icons.get(episode.state, "?")
+
             lines.append(f"  {status_icon} {episode.episode_index}. {episode.title}")
             if episode.pub_date:
                 lines.append(f"     Published: {episode.pub_date.strftime('%Y-%m-%d')}")
             if episode.duration:
                 lines.append(f"     Duration: {episode.duration}")
-            if episode.processed:
+            if episode.state == "cleaned":
                 if episode.transcript_available:
                     lines.append("     📝 Transcript available")
                 if episode.summary_available:

@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, computed_field
 
 
 class EpisodeState(str, Enum):
@@ -54,9 +54,6 @@ class Episode(BaseModel):
     audio_url: HttpUrl
     duration: Optional[str] = None
 
-    # Processing status
-    processed: bool = False
-
     # File paths (filenames only, relative to storage directories)
     audio_path: Optional[str] = None  # Filename of the original downloaded audio file (in original_audio/)
     downsampled_audio_path: Optional[str] = None  # Filename of the downsampled WAV file (in downsampled_audio/)
@@ -64,6 +61,7 @@ class Episode(BaseModel):
     clean_transcript_path: Optional[str] = None  # Filename of the cleaned transcript MD (corrected, formatted)
     summary_path: Optional[str] = None  # Filename of the summary (future use)
 
+    @computed_field  # type: ignore[misc]
     @property
     def state(self) -> EpisodeState:
         """
@@ -72,6 +70,9 @@ class Episode(BaseModel):
         The state is determined by checking which paths are set, from most
         progressed to least progressed. This ensures we always return the
         furthest state reached.
+
+        This is a computed property that dynamically reflects the current
+        processing state based on which file paths are set.
 
         Returns:
             EpisodeState: Current processing state

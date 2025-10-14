@@ -149,7 +149,7 @@ class TestRSSMediaSource:
             external_id="ep1",
             pub_date=datetime(2025, 1, 10),
             description="First episode",
-            processed=True,
+            clean_transcript_path="ep1_clean.md",  # Mark as cleaned
         )
 
         # Mock feedparser with same episode
@@ -401,7 +401,7 @@ class TestYouTubeMediaSource:
             external_id="abc123",
             pub_date=datetime(2025, 1, 10),
             description="First video",
-            processed=True,
+            clean_transcript_path="video1_clean.md",  # Mark as cleaned
         )
 
         mock_episodes = [

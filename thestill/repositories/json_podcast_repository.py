@@ -109,6 +109,24 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
                     episode["created_at"] = datetime.utcnow().isoformat()
                     migrated = True
 
+                # Migrate processed (bool) → state (enum)
+                if "processed" in episode and "state" not in episode:
+                    # Infer state from file paths (same logic as model validator)
+                    if episode.get("clean_transcript_path"):
+                        episode["state"] = "cleaned"
+                    elif episode.get("raw_transcript_path"):
+                        episode["state"] = "transcribed"
+                    elif episode.get("downsampled_audio_path"):
+                        episode["state"] = "downsampled"
+                    elif episode.get("audio_path"):
+                        episode["state"] = "downloaded"
+                    else:
+                        episode["state"] = "discovered"
+
+                    # Remove old processed field
+                    del episode["processed"]
+                    migrated = True
+
         return podcast_data
 
     def _read_podcasts(self) -> List[Podcast]:
@@ -140,7 +158,12 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
                     break
                 if "episodes" in podcast_data:
                     for episode in podcast_data["episodes"]:
-                        if "guid" in episode or "id" not in episode or "created_at" not in episode:
+                        if (
+                            "guid" in episode
+                            or "id" not in episode
+                            or "created_at" not in episode
+                            or "processed" in episode  # Old boolean field
+                        ):
                             needs_migration = True
                             break
 

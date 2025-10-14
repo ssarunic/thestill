@@ -55,7 +55,7 @@ class EpisodeWithIndex(BaseModel):
     audio_url: str
     duration: Optional[str] = None
     external_id: str  # External ID from RSS feed (publisher's GUID)
-    processed: bool = False
+    state: str  # Processing state (discovered, downloaded, downsampled, transcribed, cleaned)
     transcript_available: bool = False
     summary_available: bool = False
 
@@ -161,9 +161,11 @@ class PodcastService:
         podcasts = self.feed_manager.list_podcasts()
         logger.debug(f"Listing {len(podcasts)} podcasts")
 
+        from ..models.podcast import EpisodeState
+
         result = []
         for idx, podcast in enumerate(podcasts, start=1):
-            episodes_processed = sum(1 for ep in podcast.episodes if ep.processed)
+            episodes_processed = sum(1 for ep in podcast.episodes if ep.state == EpisodeState.CLEANED)
             result.append(
                 PodcastWithIndex(
                     index=idx,
@@ -323,7 +325,7 @@ class PodcastService:
                     audio_url=str(episode.audio_url),
                     duration=episode.duration,
                     external_id=episode.external_id,
-                    processed=episode.processed,
+                    state=episode.state.value,
                     transcript_available=bool(
                         episode.clean_transcript_path
                         and self.path_manager.clean_transcript_file(episode.clean_transcript_path).exists()
@@ -353,8 +355,10 @@ class PodcastService:
             logger.warning(f"Episode not found for transcript: {podcast_id}/{episode_id}")
             return None
 
+        from ..models.podcast import EpisodeState
+
         # Check if processed and has clean transcript
-        if not episode.processed or not episode.clean_transcript_path:
+        if episode.state != EpisodeState.CLEANED or not episode.clean_transcript_path:
             logger.info(f"Episode not yet processed: {episode.title}")
             return "N/A - Episode not yet processed"
 

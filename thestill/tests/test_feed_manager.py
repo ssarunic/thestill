@@ -325,7 +325,7 @@ class TestEpisodeMarking:
         assert call_args[0] == "https://example.com/feed.xml"
         assert call_args[1] == "ep1"
         updates = call_args[2]
-        assert updates["processed"] is True
+        # No longer sets processed=True - state is auto-computed from file paths
         assert updates["raw_transcript_path"] == "/path/to/transcript.json"
         assert updates["summary_path"] == "/path/to/summary.md"
 
@@ -389,12 +389,14 @@ class TestTransactionContextManager:
             mock_repository.update_episode.assert_not_called()
 
         # Verify: Repository save called ONCE after transaction completes
+        from ..models.podcast import EpisodeState
+
         assert mock_repository.save.call_count == 1
         saved_podcast = mock_repository.save.call_args[0][0]
         assert saved_podcast.episodes[0].audio_path == "audio.mp3"
         assert saved_podcast.episodes[0].downsampled_audio_path == "audio_16k.wav"
         assert saved_podcast.episodes[0].raw_transcript_path == "transcript.json"
-        assert saved_podcast.episodes[0].processed is True
+        assert saved_podcast.episodes[0].state == EpisodeState.TRANSCRIBED
 
     def test_transaction_single_save_per_podcast(self, feed_manager, mock_repository, sample_podcasts):
         """Should save each podcast only once even with multiple episode updates."""

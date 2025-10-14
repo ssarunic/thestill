@@ -697,12 +697,21 @@ def status(ctx):
     if config.max_episodes_per_podcast:
         click.echo(f"  Max episodes per podcast: {config.max_episodes_per_podcast}")
 
-    # Podcast stats
+    # Podcast stats with pipeline breakdown
     click.echo("\nPodcast Statistics:")
     click.echo(f"  Tracked podcasts: {stats.podcasts_tracked}")
     click.echo(f"  Total episodes: {stats.episodes_total}")
-    click.echo(f"  Processed episodes: {stats.episodes_processed}")
-    click.echo(f"  Unprocessed episodes: {stats.episodes_unprocessed}")
+    click.echo("")
+    click.echo("  Pipeline Progress:")
+    click.echo(f"    ○ Discovered (not downloaded):  {stats.episodes_discovered}")
+    click.echo(f"    ↓ Downloaded:                   {stats.episodes_downloaded}")
+    click.echo(f"    ♪ Downsampled:                  {stats.episodes_downsampled}")
+    click.echo(f"    ✎ Transcribed:                  {stats.episodes_transcribed}")
+    click.echo(f"    ✓ Cleaned (fully processed):    {stats.episodes_cleaned}")
+    click.echo("")
+    click.echo(
+        f"  Summary: {stats.episodes_cleaned}/{stats.episodes_total} fully processed ({stats.episodes_unprocessed} in progress)"
+    )
 
 
 @main.command()

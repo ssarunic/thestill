@@ -51,7 +51,6 @@ def sample_podcasts():
                     external_id="ep1",
                     pub_date=datetime(2025, 1, 10),
                     description="First episode",
-                    processed=True,
                     raw_transcript_path="ep1_raw.json",
                     clean_transcript_path="ep1_clean.md",
                 ),
@@ -402,7 +401,7 @@ class TestListEpisodes:
         assert result[0].podcast_index == 1
         assert result[0].episode_index == 1  # Latest by date
         assert result[0].title == "Episode 1"
-        assert result[0].processed is True
+        assert result[0].state == "cleaned"
 
     def test_list_episodes_podcast_not_found(self, podcast_service, sample_podcasts):
         """Should return None if podcast not found."""

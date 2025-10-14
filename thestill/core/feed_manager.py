@@ -194,8 +194,10 @@ class PodcastFeedManager:
                 # Apply max_episodes_per_podcast limit if set
                 if episodes and max_episodes_per_podcast:
                     # Keep already processed episodes + most recent unprocessed episodes up to limit
-                    processed_eps = [ep for ep in podcast.episodes if ep.processed]
-                    unprocessed_eps = [ep for ep in podcast.episodes if not ep.processed]
+                    from ..models.podcast import EpisodeState
+
+                    processed_eps = [ep for ep in podcast.episodes if ep.state == EpisodeState.CLEANED]
+                    unprocessed_eps = [ep for ep in podcast.episodes if ep.state != EpisodeState.CLEANED]
                     unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
 
                     # Calculate available slots for unprocessed episodes
@@ -302,7 +304,7 @@ class PodcastFeedManager:
                 episode_found = False
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
-                        episode.processed = True
+                        # Set file paths - state will be auto-computed by model validator
                         if raw_transcript_path:
                             episode.raw_transcript_path = raw_transcript_path
                         if clean_transcript_path:
@@ -320,8 +322,8 @@ class PodcastFeedManager:
                 logger.warning(f"Podcast not found: {podcast_rss_url}")
         else:
             # Direct repository update (original logic)
-            # Build updates dictionary
-            updates: Dict[str, Any] = {"processed": True}
+            # Build updates dictionary - only file paths, state will be auto-computed
+            updates: Dict[str, Any] = {}
             if raw_transcript_path:
                 updates["raw_transcript_path"] = raw_transcript_path
             if clean_transcript_path:
