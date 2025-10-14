@@ -29,9 +29,11 @@ def temp_storage():
 def audio_downloader(temp_storage):
     """Create AudioDownloader with temporary storage."""
     downloader = AudioDownloader(str(temp_storage))
-    # Mock YouTube downloader to avoid actual network calls
-    downloader.youtube_downloader = Mock()
-    downloader.youtube_downloader.is_youtube_url = Mock(return_value=False)
+    # Mock media source factory to avoid actual network calls
+    downloader.media_source_factory = Mock()
+    mock_source = Mock()
+    mock_source.download_episode = Mock(return_value=None)  # Default: delegate to HTTP download
+    downloader.media_source_factory.detect_source = Mock(return_value=mock_source)
     return downloader
 
 
@@ -65,7 +67,7 @@ class TestAudioDownloaderInitialization:
         downloader = AudioDownloader(str(temp_storage))
 
         assert downloader.storage_path.exists()
-        assert downloader.youtube_downloader is not None
+        assert downloader.media_source_factory is not None
 
 
 class TestDownloadEpisode:
@@ -210,7 +212,7 @@ class TestDownloadEpisode:
         assert mock_get.call_count == 3
 
     def test_download_youtube_url(self, audio_downloader):
-        """Should delegate YouTube URLs to YouTubeDownloader."""
+        """Should delegate YouTube URLs to YouTube source."""
         # Setup
         youtube_episode = Episode(
             title="YouTube Video",
@@ -220,18 +222,22 @@ class TestDownloadEpisode:
             description="YouTube video",
         )
 
-        audio_downloader.youtube_downloader.is_youtube_url.return_value = True
-        audio_downloader.youtube_downloader.download_episode.return_value = "/path/to/youtube.m4a"
+        # Mock YouTube source to handle download
+        mock_youtube_source = Mock()
+        mock_youtube_source.download_episode.return_value = "/path/to/youtube.m4a"
+        audio_downloader.media_source_factory.detect_source.return_value = mock_youtube_source
 
         # Execute
         result = audio_downloader.download_episode(youtube_episode, "YouTube Channel")
 
         # Verify
         assert result == "/path/to/youtube.m4a"
-        audio_downloader.youtube_downloader.is_youtube_url.assert_called_once_with(
+        audio_downloader.media_source_factory.detect_source.assert_called_once_with(
             "https://www.youtube.com/watch?v=abc123"
         )
-        audio_downloader.youtube_downloader.download_episode.assert_called_once_with(youtube_episode, "YouTube Channel")
+        mock_youtube_source.download_episode.assert_called_once_with(
+            youtube_episode, "YouTube Channel", str(audio_downloader.storage_path)
+        )
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_different_extensions(self, mock_get, audio_downloader):

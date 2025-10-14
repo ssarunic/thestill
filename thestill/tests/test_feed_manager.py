@@ -91,9 +91,9 @@ def sample_podcasts():
 def feed_manager(mock_repository, path_manager):
     """Create FeedManager with mocked dependencies."""
     manager = PodcastFeedManager(mock_repository, path_manager)
-    # Mock YouTube downloader to avoid actual network calls
-    manager.youtube_downloader = Mock()
-    manager.youtube_downloader.is_youtube_url = Mock(return_value=False)
+    # Mock media source factory to avoid actual network calls
+    manager.media_source_factory = Mock()
+    manager.media_source_factory.detect_source = Mock()
     return manager
 
 
@@ -124,16 +124,16 @@ class TestAddPodcast:
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_add_rss_podcast_success(self, mock_parse, feed_manager, mock_repository):
         """Should add RSS podcast successfully."""
-        # Setup mock RSS feed
-        mock_feed = Mock()
-        mock_feed.bozo = False
-        mock_feed.feed = {
+        # Setup mock media source to return RSS metadata
+        mock_source = Mock()
+        mock_source.extract_metadata.return_value = {
             "title": "Test Podcast",
             "description": "A test podcast",
+            "rss_url": "https://example.com/feed.xml",
         }
-        mock_parse.return_value = mock_feed
-
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
         mock_repository.exists.return_value = False
+        mock_repository.save.return_value = True
 
         # Execute
         result = feed_manager.add_podcast("https://example.com/feed.xml")
@@ -179,16 +179,23 @@ class TestAddPodcast:
 
     def test_add_youtube_podcast(self, feed_manager, mock_repository):
         """Should handle YouTube URLs."""
-        # Setup
-        feed_manager.youtube_downloader.is_youtube_url.return_value = True
-        feed_manager._add_youtube_podcast = Mock(return_value=True)
+        # Setup - mock media source factory to return YouTube metadata
+        mock_source = Mock()
+        mock_source.extract_metadata.return_value = {
+            "title": "YouTube Podcast",
+            "description": "A YouTube channel",
+            "rss_url": "https://youtube.com/watch?v=123",
+        }
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
+        mock_repository.exists.return_value = False
+        mock_repository.save.return_value = True
 
         # Execute
         result = feed_manager.add_podcast("https://youtube.com/watch?v=123")
 
         # Verify
         assert result is True
-        feed_manager._add_youtube_podcast.assert_called_once_with("https://youtube.com/watch?v=123")
+        mock_repository.save.assert_called_once()
 
 
 class TestRemovePodcast:
@@ -248,19 +255,18 @@ class TestGetNewEpisodes:
         )
         mock_repository.find_all.return_value = [youtube_podcast]
 
-        # Setup YouTube downloader
-        feed_manager.youtube_downloader.is_youtube_url.return_value = True
-        feed_manager._get_youtube_episodes = Mock(
-            return_value=[
-                Episode(
-                    title="YT Video",
-                    audio_url="https://youtube.com/watch?v=abc",
-                    guid="yt-abc",
-                    pub_date=datetime(2025, 1, 20),
-                    description="Video",
-                )
-            ]
-        )
+        # Setup media source to return YouTube episodes
+        mock_source = Mock()
+        mock_source.fetch_episodes.return_value = [
+            Episode(
+                title="YT Video",
+                audio_url="https://youtube.com/watch?v=abc",
+                guid="yt-abc",
+                pub_date=datetime(2025, 1, 20),
+                description="Video",
+            )
+        ]
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
 
         # Execute
         result = feed_manager.get_new_episodes()

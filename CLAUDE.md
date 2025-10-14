@@ -85,34 +85,44 @@ mypy thestill/
 
 ### Core Components
 
-1. **Feed Manager** (`thestill/core/feed_manager.py`)
-   - Handles RSS feed parsing and episode tracking
-   - Supports Apple Podcasts URL resolution via iTunes API
-   - Integrates YouTube playlist/channel support
+1. **Media Source Strategy Pattern** (`thestill/core/media_source.py`) **NEW**
+   - Abstracts different podcast sources (RSS, YouTube, etc.)
+   - **MediaSource ABC**: Defines interface for URL validation, episode fetching, downloading
+   - **RSSMediaSource**: Handles RSS feeds and Apple Podcasts URL resolution
+   - **YouTubeMediaSource**: Wraps YouTube downloader for playlists/channels
+   - **MediaSourceFactory**: Auto-detects source type from URL
+   - **Benefits**: Clean separation, easy extensibility (Spotify, SoundCloud), better testability
+
+2. **Feed Manager** (`thestill/core/feed_manager.py`)
+   - Coordinates podcast feed management across all sources
+   - Uses MediaSourceFactory for source-specific operations
    - Stores podcast metadata and processing status
    - Identifies new episodes since last run
+   - Transaction context manager for batch updates
 
-2. **Audio Downloader** (`thestill/core/audio_downloader.py`)
-   - Downloads podcast audio files from RSS feeds and YouTube to `data/original_audio/`
+3. **Audio Downloader** (`thestill/core/audio_downloader.py`)
+   - Downloads podcast audio files from all sources to `data/original_audio/`
+   - Uses MediaSourceFactory to delegate source-specific downloads
    - Handles various audio formats (MP3, M4A, etc.)
    - Manages file cleanup and storage
-   - Routes YouTube URLs to YouTubeDownloader
+   - Retry logic with exponential backoff for network errors
    - **Atomic operation**: Only downloads, does not process audio
 
-3. **Audio Preprocessor** (`thestill/core/audio_preprocessor.py`)
+4. **Audio Preprocessor** (`thestill/core/audio_preprocessor.py`)
    - Downsamples audio to 16kHz, 16-bit, mono WAV format
    - Saves downsampled WAV files to `data/downsampled_audio/`
    - **Important**: Solves pyannote.audio M4A/MP3 compatibility issues
    - No audio enhancement (preserves original quality)
    - **Atomic operation**: Only downsamples, does not download or transcribe
 
-4. **YouTube Downloader** (`thestill/core/youtube_downloader.py`)
+5. **YouTube Downloader** (`thestill/core/youtube_downloader.py`)
    - Uses yt-dlp for robust YouTube video/audio extraction
    - Handles dynamic URLs and format selection
    - Extracts playlist and channel metadata
    - Downloads best quality audio and converts to M4A
+   - **Note**: Now wrapped by YouTubeMediaSource for clean abstraction
 
-5. **Transcriber** (`thestill/core/transcriber.py` and `thestill/core/google_transcriber.py`)
+6. **Transcriber** (`thestill/core/transcriber.py` and `thestill/core/google_transcriber.py`)
    - **WhisperTranscriber**: Standard OpenAI Whisper for local speech-to-text
    - **WhisperXTranscriber**: Enhanced local transcription with speaker diarization
    - **GoogleCloudTranscriber**: Cloud-based Google Speech-to-Text API (NEW)
@@ -124,7 +134,7 @@ mypy thestill/
    - Configurable via `TRANSCRIPTION_PROVIDER` (whisper or google)
    - Automatic fallback to standard Whisper if diarization fails (WhisperX only)
 
-6. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
+7. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
    - **NEW**: Three-phase LLM cleaning pipeline focused on accuracy:
      - Phase 1: Analyze and identify corrections (spelling, grammar, filler words, ads)
      - Phase 2: Identify speakers from context and self-introductions
@@ -133,11 +143,11 @@ mypy thestill/
    - Saves corrections list for debugging
    - British English output
 
-7. **Models** (`thestill/models/podcast.py`)
+8. **Models** (`thestill/models/podcast.py`)
    - Pydantic models for type safety
    - Episode, Podcast, Quote, ProcessedContent, and CleanedTranscript schemas
 
-8. **Path Manager** (`thestill/utils/path_manager.py`)
+9. **Path Manager** (`thestill/utils/path_manager.py`)
    - **Centralized path management** for all file artifacts
    - Single source of truth for directory and file paths
    - Prevents scattered path logic across codebase

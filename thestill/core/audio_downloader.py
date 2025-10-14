@@ -23,7 +23,7 @@ import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..models.podcast import Episode
-from .youtube_downloader import YouTubeDownloader
+from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class AudioDownloader:
 
     Attributes:
         storage_path: Directory where downloaded audio files are stored
-        youtube_downloader: Handler for YouTube-specific downloads
+        media_source_factory: Factory for detecting and handling different media sources
     """
 
     def __init__(self, storage_path: str = "./data/original_audio") -> None:
@@ -60,7 +60,7 @@ class AudioDownloader:
         """
         self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        self.youtube_downloader: YouTubeDownloader = YouTubeDownloader(storage_path)
+        self.media_source_factory: MediaSourceFactory = MediaSourceFactory(storage_path)
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
         """
@@ -70,11 +70,15 @@ class AudioDownloader:
             Path to downloaded audio file, or None if download failed
         """
         try:
-            # Check if this is a YouTube URL
-            if self.youtube_downloader.is_youtube_url(str(episode.audio_url)):
-                return self.youtube_downloader.download_episode(episode, podcast_title)
+            # Detect source type and delegate if needed
+            source = self.media_source_factory.detect_source(str(episode.audio_url))
+            source_result = source.download_episode(episode, podcast_title, str(self.storage_path))
 
-            # Handle regular audio URLs
+            # If source handled download (e.g., YouTube), return result
+            if source_result is not None:
+                return source_result
+
+            # Handle standard HTTP downloads (RSS feeds)
             safe_podcast_title = self._sanitize_filename(podcast_title)
             safe_episode_title = self._sanitize_filename(episode.title)
 

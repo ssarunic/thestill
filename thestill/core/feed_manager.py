@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import logging
-import re
-import urllib.request
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +23,7 @@ import feedparser
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
-from .youtube_downloader import YouTubeDownloader
+from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +55,7 @@ class PodcastFeedManager:
         self.path_manager: PathManager = path_manager
         self.storage_path: Path = Path(path_manager.storage_path)
         self.storage_path.mkdir(exist_ok=True)
-        self.youtube_downloader: YouTubeDownloader = YouTubeDownloader(str(self.path_manager.original_audio_dir()))
+        self.media_source_factory: MediaSourceFactory = MediaSourceFactory(str(self.path_manager.original_audio_dir()))
         self._in_transaction: bool = False
         self._transaction_podcasts: Dict[str, Podcast] = {}
 
@@ -130,28 +127,26 @@ class PodcastFeedManager:
     def add_podcast(self, url: str) -> bool:
         """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
         try:
-            # Check if this is a YouTube URL
-            if self.youtube_downloader.is_youtube_url(url):
-                return self._add_youtube_podcast(url)
+            # Detect source type and extract metadata
+            source = self.media_source_factory.detect_source(url)
+            metadata = source.extract_metadata(url)
 
-            # Check if this is an Apple Podcast URL and extract RSS if needed
-            rss_url = self._extract_rss_from_apple_url(url)
-            if not rss_url:
-                rss_url = url  # Assume it's already an RSS URL
+            if not metadata:
+                logger.error(f"Could not extract metadata from {url}")
+                return False
 
-            parsed_feed = feedparser.parse(rss_url)
-            if parsed_feed.bozo:
-                raise ValueError(f"Invalid RSS feed: {rss_url}")
-
-            feed = parsed_feed.feed
+            # Create podcast entry
             podcast = Podcast(
-                title=feed.get("title", "Unknown Podcast"),
-                description=feed.get("description", ""),
-                rss_url=rss_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
+                title=metadata.get("title", "Unknown Podcast"),
+                description=metadata.get("description", ""),
+                rss_url=metadata.get("rss_url", url),  # type: ignore[arg-type]  # Pydantic validates to HttpUrl
             )
 
-            if not self.repository.exists(rss_url):
+            # Save if not already exists
+            podcast_url = str(podcast.rss_url)
+            if not self.repository.exists(podcast_url):
                 self.repository.save(podcast)
+                logger.info(f"Added podcast: {podcast.title}")
                 return True
             return False
 
@@ -179,63 +174,23 @@ class PodcastFeedManager:
 
         for podcast in podcasts:
             try:
-                # Check if this is a YouTube podcast
-                if self.youtube_downloader.is_youtube_url(str(podcast.rss_url)):
-                    episodes = self._get_youtube_episodes(podcast, max_episodes_per_podcast)
-                    if episodes:
-                        new_episodes.append((podcast, episodes))
-                    continue
+                # Detect source type and fetch episodes
+                source = self.media_source_factory.detect_source(str(podcast.rss_url))
+                episodes = source.fetch_episodes(
+                    url=str(podcast.rss_url),
+                    existing_episodes=podcast.episodes,
+                    last_processed=podcast.last_processed,
+                    max_episodes=max_episodes_per_podcast,
+                )
 
-                # Handle regular RSS feeds
-                parsed_feed = feedparser.parse(str(podcast.rss_url))
-                episodes = []
-
-                for entry in parsed_feed.entries:
-                    episode_date = self._parse_date(entry.get("published_parsed"))
-                    episode_guid = entry.get("guid", entry.get("id", str(episode_date)))
-
-                    # Check if this episode is already processed
-                    already_processed = any(ep.guid == episode_guid and ep.processed for ep in podcast.episodes)
-                    if already_processed:
-                        continue
-
-                    # Include episode if:
-                    # 1. It's newer than last_processed, OR
-                    # 2. We have very few processed episodes (indicates tracking was broken)
-                    num_processed_episodes = len([ep for ep in podcast.episodes if ep.processed])
-
-                    should_include = (
-                        podcast.last_processed is None
-                        or episode_date > podcast.last_processed
-                        or num_processed_episodes < 3
-                    )  # Assume most feeds have >3 episodes
-
-                    if should_include:
-                        audio_url = self._extract_audio_url(entry)
-                        if audio_url:
-                            episode = Episode(
-                                title=entry.get("title", "Unknown Episode"),
-                                description=entry.get("description", ""),
-                                pub_date=episode_date,
-                                audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
-                                duration=entry.get("itunes_duration"),
-                                guid=episode_guid,
-                            )
-
-                            # Check if episode already exists in podcast.episodes (but not processed)
-                            existing_episode = next((ep for ep in podcast.episodes if ep.guid == episode_guid), None)
-                            if not existing_episode:
-                                podcast.episodes.append(episode)
-
-                            episodes.append(episode)
+                # Add new episodes to podcast
+                for episode in episodes:
+                    existing_episode = next((ep for ep in podcast.episodes if ep.guid == episode.guid), None)
+                    if not existing_episode:
+                        podcast.episodes.append(episode)
 
                 # Apply max_episodes_per_podcast limit if set
                 if episodes and max_episodes_per_podcast:
-                    # Sort by pub_date (most recent first) and apply limit
-                    episodes.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-                    episodes = episodes[:max_episodes_per_podcast]
-
-                    # Also trim podcast.episodes to respect the limit
                     # Keep already processed episodes + most recent unprocessed episodes up to limit
                     processed_eps = [ep for ep in podcast.episodes if ep.processed]
                     unprocessed_eps = [ep for ep in podcast.episodes if not ep.processed]
@@ -535,166 +490,6 @@ class PodcastFeedManager:
     def list_podcasts(self) -> List[Podcast]:
         """Return list of all podcasts"""
         return self.repository.find_all()
-
-    def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
-        """Extract RSS feed URL from Apple Podcast URL using iTunes Lookup API"""
-        try:
-            # Check if this is an Apple Podcast URL
-            if "podcasts.apple.com" not in url and "itunes.apple.com" not in url:
-                return None
-
-            # Extract podcast ID from URL
-            # URLs can be like:
-            # https://podcasts.apple.com/gb/channel/the-rest-is-politics/id6443145599
-            # https://itunes.apple.com/us/podcast/podcast-name/id1234567890
-            id_match = re.search(r"id(\d+)", url)
-            if not id_match:
-                logger.warning(f"Could not extract podcast ID from Apple URL: {url}")
-                return None
-
-            podcast_id = id_match.group(1)
-
-            # Use iTunes Lookup API to get RSS feed
-            lookup_url = f"https://itunes.apple.com/lookup?id={podcast_id}"
-
-            with urllib.request.urlopen(lookup_url) as response:
-                data = json.load(response)
-
-            if data.get("resultCount", 0) > 0:
-                result = data["results"][0]
-                feed_url = result.get("feedUrl")
-                if feed_url:
-                    logger.info(f"Extracted RSS feed from Apple Podcast: {feed_url}")
-                    return str(feed_url)  # Ensure we return str
-                logger.warning(f"No RSS feed URL found for podcast ID {podcast_id}")
-                return None
-            # If the ID doesn't work, try to get the page and extract the real ID
-            logger.info(f"No podcast found for ID {podcast_id}, attempting to resolve redirect...")
-            return self._resolve_apple_podcast_redirect(url)
-
-        except Exception as e:
-            logger.error(f"Error extracting RSS from Apple URL {url}: {e}")
-            return None
-
-    def _get_youtube_episodes(self, podcast: Podcast, max_episodes_per_podcast: Optional[int] = None) -> List[Episode]:
-        """
-        Get new episodes from a YouTube playlist/channel.
-
-        Args:
-            podcast: The podcast to get episodes for
-            max_episodes_per_podcast: Optional limit on episodes to discover
-
-        Returns:
-            List of new episodes from YouTube
-        """
-        try:
-            # Get all episodes from YouTube
-            all_episodes = self.youtube_downloader.get_episodes_from_playlist(str(podcast.rss_url))
-
-            # Apply limit before filtering (most recent episodes first)
-            if max_episodes_per_podcast:
-                all_episodes.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-                all_episodes = all_episodes[:max_episodes_per_podcast]
-
-            # Filter out already processed episodes
-            new_episodes = []
-            for episode in all_episodes:
-                already_processed = any(ep.guid == episode.guid and ep.processed for ep in podcast.episodes)
-                if not already_processed:
-                    # Check if episode already exists in podcast.episodes (but not processed)
-                    existing_episode = next((ep for ep in podcast.episodes if ep.guid == episode.guid), None)
-                    if not existing_episode:
-                        podcast.episodes.append(episode)
-                    new_episodes.append(episode)
-
-            # Apply limit to podcast.episodes as well (similar to RSS logic)
-            if max_episodes_per_podcast:
-                processed_eps = [ep for ep in podcast.episodes if ep.processed]
-                unprocessed_eps = [ep for ep in podcast.episodes if not ep.processed]
-                unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-
-                total_limit = max_episodes_per_podcast
-                available_slots = max(0, total_limit - len(processed_eps))
-                podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
-
-            return new_episodes
-
-        except Exception as e:
-            logger.error(f"Error getting YouTube episodes for {podcast.rss_url}: {e}")
-            return []
-
-    def _add_youtube_podcast(self, url: str) -> bool:
-        """Add a YouTube playlist/channel as a podcast"""
-        try:
-            playlist_info = self.youtube_downloader.extract_playlist_info(url)
-            if not playlist_info:
-                logger.warning(f"Could not extract YouTube playlist info from: {url}")
-                return False
-
-            # Create podcast entry with YouTube URL
-            podcast = Podcast(
-                title=playlist_info.get("title", "Unknown YouTube Podcast"),
-                description=playlist_info.get("description", ""),
-                rss_url=url,  # type: ignore[arg-type]  # YouTube URL treated as RSS URL, Pydantic validates
-            )
-
-            if not self.repository.exists(url):
-                self.repository.save(podcast)
-                logger.info(f"Added YouTube podcast: {podcast.title}")
-                return True
-            return False
-
-        except Exception as e:
-            logger.error(f"Error adding YouTube podcast {url}: {e}")
-            return False
-
-    def _resolve_apple_podcast_redirect(self, url: str) -> Optional[str]:
-        """
-        Resolve Apple Podcast redirects to get the actual podcast ID.
-
-        Args:
-            url: Apple Podcast URL that may redirect
-
-        Returns:
-            RSS feed URL if found, None otherwise
-        """
-        try:
-            # Some Apple Podcast URLs redirect to different IDs
-            # We'll make a request and follow redirects to get the real URL
-            request = urllib.request.Request(url)
-            request.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-
-            with urllib.request.urlopen(request) as response:
-                _ = response.geturl()
-                page_content = response.read().decode("utf-8", errors="ignore")
-
-                # Extract all potential IDs from the page content
-                id_matches = re.findall(r"id(\d+)", page_content)
-
-                # Try each ID found on the page
-                for potential_id in set(id_matches):  # Use set to avoid duplicates
-                    logger.debug(f"Trying podcast ID: {potential_id}")
-
-                    lookup_url = f"https://itunes.apple.com/lookup?id={potential_id}"
-                    try:
-                        with urllib.request.urlopen(lookup_url) as api_response:
-                            data = json.load(api_response)
-
-                        if data.get("resultCount", 0) > 0:
-                            result = data["results"][0]
-                            feed_url = result.get("feedUrl")
-                            if feed_url:
-                                logger.info(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
-                                return str(feed_url)  # Ensure we return str
-                    except Exception as id_error:
-                        logger.debug(f"Failed to lookup ID {potential_id}: {id_error}")
-                        continue
-
-                return None
-
-        except Exception as e:
-            logger.error(f"Error resolving Apple Podcast redirect {url}: {e}")
-            return None
 
     def _parse_date(self, date_tuple: Any) -> datetime:
         """

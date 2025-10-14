@@ -330,33 +330,30 @@ class TestRefreshServiceContract:
     def test_refresh_handles_invalid_podcast_gracefully(self, podcast_service, sample_podcast):
         """Contract: refresh() raises ValueError for invalid podcast_id when podcast not found (and episodes exist)."""
         from thestill.core.feed_manager import PodcastFeedManager
+        from thestill.models.podcast import Episode
 
         feed_manager = podcast_service.feed_manager
         service = RefreshService(feed_manager=feed_manager, podcast_service=podcast_service)
 
-        # Add episode to sample podcast to ensure new_episodes is not empty
-        with patch("thestill.core.feed_manager.feedparser.parse") as mock_parse:
-            mock_feed = Mock()
-            mock_feed.feed = {"title": "Test", "description": "Test"}
-            mock_feed.entries = [
-                {
-                    "title": "Episode 1",
-                    "description": "Test",
-                    "guid": "ep1",
-                    "published_parsed": datetime.now().timetuple(),
-                    "links": [{"type": "audio/mpeg", "href": "https://example.com/ep1.mp3"}],
-                    "enclosures": [],
-                }
-            ]
-            mock_feed.bozo = False
-            mock_parse.return_value = mock_feed
+        # Mock media source to return episodes
+        mock_source = Mock()
+        mock_source.fetch_episodes.return_value = [
+            Episode(
+                title="Episode 1",
+                description="Test",
+                guid="ep1",
+                pub_date=datetime.now(),
+                audio_url="https://example.com/ep1.mp3",
+            )
+        ]
+        feed_manager.media_source_factory.detect_source = Mock(return_value=mock_source)
 
-            # Discover episodes first
-            feed_manager.get_new_episodes()
+        # Discover episodes first
+        feed_manager.get_new_episodes()
 
-            # Now test with invalid podcast_id - should raise ValueError
-            with pytest.raises(ValueError, match="Podcast not found"):
-                service.refresh(podcast_id=999)  # Non-existent podcast
+        # Now test with invalid podcast_id - should raise ValueError
+        with pytest.raises(ValueError, match="Podcast not found"):
+            service.refresh(podcast_id=999)  # Non-existent podcast
 
 
 class TestStatsServiceContract:

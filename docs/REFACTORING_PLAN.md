@@ -1,22 +1,22 @@
 # Refactoring Plan for Thestill
 
 > Generated: 2025-10-11
-> Last Updated: 2025-10-13
+> Last Updated: 2025-10-14
 > Duration: 2-4 weeks (assuming 1-2 hours per day)
 > Approach: Small atomic commits, tests green at all times
-> **Progress: 27/35 tasks complete (77.1%)**
+> **Progress: 28/35 tasks complete (80.0%)**
 
 ## Overview
 
 This plan breaks down refactoring work into ~35 atomic tasks, each taking under 1 hour. Tasks are organized by week and priority. All changes maintain existing behavior (no feature additions).
 
-**✅ Completed: 27 tasks (29.25 hours invested)**
+**✅ Completed: 28 tasks (31.25 hours invested)**
 **🚧 In Progress: 0 tasks**
-**⏳ Remaining: 8 tasks**
+**⏳ Remaining: 7 tasks**
 
 **Current Status:**
 - Test coverage: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
-- Tests passing: 235/235 (100%)
+- Tests passing: 269/269 (100%)
 - Repository layer: ✅ 100% complete
 - Week 1 foundation: ✅ 100% complete (8/8 tasks)
 - Week 2 foundation: ✅ 100% complete (9/9 tasks)
@@ -553,40 +553,37 @@ feed_manager.mark_episode_downloaded(url, guid, path)
 
 ---
 
-### Task R-029: Create YouTube Source Strategy Pattern
-**Priority**: Low
-**Effort**: 1 hour
-**Scope**: `core/media_source.py` (new), `core/feed_manager.py`, `core/audio_downloader.py`
+### Task R-029: Create YouTube Source Strategy Pattern ✅
+**Status**: ✅ **COMPLETED** | **Effort**: 2 hours
+**Commit**: (pending) - refactor(core): introduce MediaSource strategy pattern for RSS and YouTube (R-029)
 
-**Steps**:
-1. Create abstract `MediaSource` interface
-2. Implement `RSSMediaSource` and `YouTubeMediaSource`
-3. Add `MediaSourceDetector` to identify source type
-4. Refactor FeedManager and AudioDownloader to use strategy pattern
-5. Add tests
+**Completed**:
+- ✅ Created `core/media_source.py` with MediaSource ABC (606 lines)
+- ✅ Implemented RSSMediaSource with Apple Podcasts support
+- ✅ Implemented YouTubeMediaSource wrapping YouTubeDownloader
+- ✅ Added MediaSourceFactory for auto-detection
+- ✅ Refactored FeedManager to use MediaSourceFactory (removed 150 lines)
+- ✅ Refactored AudioDownloader to use MediaSourceFactory
+- ✅ Added 34 comprehensive unit tests in test_media_source.py
+- ✅ Updated existing tests (test_feed_manager.py, test_audio_downloader.py)
+- ✅ All 269 tests passing (100%)
+- ✅ Updated CLAUDE.md with architecture documentation
 
-**Example**:
-```python
-class MediaSource(ABC):
-    @abstractmethod
-    def is_valid_url(self, url: str) -> bool:
-        """Check if URL matches this source"""
+**Changes**:
+- `core/media_source.py` (new): +606 lines
+- `core/feed_manager.py`: -150 lines (removed YouTube/Apple logic)
+- `core/audio_downloader.py`: +10 lines (cleaner delegation)
+- `tests/test_media_source.py` (new): +500 lines (34 tests)
+- `tests/test_feed_manager.py`: ~20 lines (mock updates)
+- `tests/test_audio_downloader.py`: ~20 lines (mock updates)
 
-    @abstractmethod
-    def fetch_episodes(self, url: str) -> List[Episode]:
-        """Fetch episodes from this source"""
+**Net change**: +966 lines added, -130 lines removed = +836 lines total
 
-class YouTubeMediaSource(MediaSource):
-    def is_valid_url(self, url: str) -> bool:
-        return "youtube.com" in url or "youtu.be" in url
-
-    def fetch_episodes(self, url: str) -> List[Episode]:
-        # YouTube-specific logic
-```
-
-**Safety**: Add tests for each source
-**Risk**: Medium (significant refactor)
-**Commit**: `refactor(core): introduce MediaSource strategy pattern for RSS and YouTube`
+**Benefits**:
+- ✅ Clean separation of RSS vs YouTube logic
+- ✅ Easy to add new sources (Spotify, SoundCloud, etc.)
+- ✅ Better testability (each source tested independently)
+- ✅ No more scattered `if "youtube.com" in url` checks
 
 ---
 
@@ -893,7 +890,7 @@ If a refactor causes issues:
 
 ## Progress Summary (Updated 2025-10-13)
 
-### Completed Tasks ✅ (27/35 = 77.1%)
+### Completed Tasks ✅ (28/35 = 80.0%)
 
 | Task | Commit | Time | Status |
 |------|--------|------|--------|
@@ -923,22 +920,23 @@ If a refactor causes issues:
 | R-024 | `ee15382` | 30m | ✅ cleanup_old_files with dry-run support |
 | R-026 | `19b6a15` | 30m | ✅ LLM provider display name method (abstraction improvement) |
 | R-027 | `3c98735` | 30m | ✅ PathManager require_file_exists helper (5 tests, centralized validation) |
-| R-028 | (pending) | 45m | ✅ FeedManager transaction context manager (9 tests, batch operations) |
+| R-028 | `933a055` | 45m | ✅ FeedManager transaction context manager (9 tests, batch operations) |
+| R-029 | (pending) | 2h | ✅ MediaSource strategy pattern (RSS + YouTube abstraction, 34 tests, 269 total) |
 
-**Total time invested: 29.25 hours**
+**Total time invested: 31.25 hours**
 
 ### Next 3 Priority Tasks
 
 1. **R-025** - Audit Transcript Cleaning Pipeline Performance (1h) - Performance analysis
-2. **R-029** - Create YouTube Source Strategy Pattern (1h) - Architecture improvement
-3. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
+2. **R-030** - Update CLAUDE.md with Refactoring Notes (30m) - Documentation
+3. **R-031** - Add Makefile for Common Commands (20m) - Developer tooling
 
-**Estimated effort for next 3: 2.5 hours**
+**Estimated effort for next 3: 1.83 hours**
 
 ### Key Metrics
 
 - **Test coverage**: 41.05% (↑128% from baseline) → Target 70%+ by Week 3
-- **Tests passing**: 235/235 (100%)
+- **Tests passing**: 269/269 (100%)
 - **Models coverage**: ✅ 100% (podcast.py with branch coverage)
 - **Repository layer**: ✅ 100% complete (1,192 lines changed)
 - **PathManager**: ✅ 100% integrated
