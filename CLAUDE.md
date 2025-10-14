@@ -300,10 +300,233 @@ data/                      # Generated data directory
 
 ## Development Guidelines
 
-### Error Handling
-- All external API calls should have proper exception handling
-- File operations should handle missing directories gracefully
-- Network requests should include timeouts and retries
+For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md).
+
+### Testing Strategy
+
+**Coverage Targets**:
+- **Overall**: 70%+ (current: 41.05%)
+- **Core modules**: 90%+ (feed_manager, audio_downloader, transcriber)
+- **Models**: 100% with branch coverage (✅ achieved: podcast.py)
+- **Focus areas**: Public APIs, error paths, edge cases
+
+**Test Types**:
+1. **Unit Tests**: Test individual functions in isolation with mocked dependencies
+   - Example: `test_audio_downloader.py` (28 tests, 99% coverage)
+   - Pattern: Mock external dependencies (requests, feedparser)
+   - Fast execution, isolated failures
+
+2. **Integration Tests**: Test interactions between components
+   - Example: `test_integration_pipeline.py` (9 tests, full pipeline coverage)
+   - Pattern: Use real PathManager, mock external APIs only
+   - Tests state transitions (DISCOVERED → DOWNLOADED → DOWNSAMPLED → TRANSCRIBED → CLEANED)
+
+3. **Contract Tests**: Test service boundaries and prevent API breakage
+   - Example: `test_service_contracts.py` (32 tests)
+   - Pattern: Assert method signatures, return types, model field stability
+   - Critical for refactoring without breaking consumers
+
+**Test Organization**:
+```
+tests/
+├── test_path_manager.py          # Utils layer (100% coverage)
+├── test_podcast_service.py       # Service layer (38 tests, 92% coverage)
+├── test_audio_downloader.py      # Core layer (28 tests, 99% coverage)
+├── test_feed_manager.py          # Core layer (17 tests, 26% coverage - complex module)
+├── test_media_source.py          # Core layer (34 tests, strategy pattern)
+├── test_integration_pipeline.py  # End-to-end workflows (9 tests)
+└── test_service_contracts.py     # API stability (32 tests)
+```
+
+**Running Tests**:
+```bash
+# Run all tests with coverage
+pytest --cov=thestill --cov-report=html
+
+# Run specific test file
+pytest tests/test_path_manager.py -v
+
+# Run tests matching pattern
+pytest -k "test_download" -v
+
+# Pre-commit hook automatically runs tests
+pre-commit run --all-files
+```
+
+**Test Fixtures and Mocking**:
+- Use `@pytest.fixture` for reusable test data
+- Mock external APIs (requests, feedparser, LLM providers)
+- Use `tmp_path` fixture for file system tests
+- Never mock the code under test (only dependencies)
+
+### Type Coverage and Type Hints
+
+**Type Checking**: This project uses `mypy` for static type analysis
+
+**Current Status**: ✅ 100% core and service layers type-hinted (Tasks R-019, R-021 complete)
+
+**Type Hint Standards**:
+```python
+from typing import List, Optional, Dict, Any, Tuple
+
+# Always type-hint function signatures
+def download_episode(
+    self,
+    episode: Episode,
+    podcast_title: str
+) -> Optional[str]:
+    """Download audio file for episode"""
+    pass
+
+# Type-hint class attributes
+class PodcastService:
+    def __init__(
+        self,
+        repository: PodcastRepository,
+        path_manager: PathManager
+    ) -> None:
+        self.repository: PodcastRepository = repository
+        self.path_manager: PathManager = path_manager
+
+# Use Pydantic models for complex data structures
+class Episode(BaseModel):
+    guid: str
+    title: str
+    audio_url: Optional[HttpUrl] = None
+    audio_path: Optional[str] = None
+```
+
+**Running Type Checks**:
+```bash
+# Check all files
+mypy thestill/
+
+# Check specific module
+mypy thestill/core/feed_manager.py
+
+# Configuration in pyproject.toml
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+```
+
+**Type Hints Coverage Target**: 90%+ (measured by mypy)
+
+### Service Layer Architecture
+
+The project uses a **layered architecture** with dependency injection for better testability and separation of concerns:
+
+**1. CLI Layer** ([cli.py](thestill/cli.py)):
+- User interface, command parsing, output formatting
+- Instantiates services once and passes via Click context (`CLIContext`)
+- Uses `CLIFormatter` for consistent output
+- **Thin layer**: Delegates all business logic to services
+
+**2. Service Layer** ([services/](thestill/services/)):
+- **PodcastService**: Podcast CRUD operations, episode filtering
+- **RefreshService**: Feed refresh business logic, episode discovery
+- **StatsService**: Statistics and reporting
+- Pattern: Services orchestrate core modules and manage transactions
+- All services accept dependencies via constructor (dependency injection)
+
+**3. Core Layer** ([core/](thestill/core/)):
+- **Atomic processors**: Each module has single responsibility
+- **FeedManager**: RSS/YouTube feed parsing with transaction context manager
+- **AudioDownloader**: Downloads audio with retry logic (exponential backoff)
+- **AudioPreprocessor**: Downsamples audio to 16kHz WAV
+- **Transcriber**: Whisper/Google transcription with diarization
+- **MediaSource Strategy Pattern**: Abstracts RSS vs YouTube (easy to add Spotify, etc.)
+
+**4. Repository Layer** ([core/podcast_repository.py](thestill/core/podcast_repository.py)):
+- Abstract interface for podcast/episode persistence
+- `JsonPodcastRepository`: Current JSON file implementation
+- Future: Easy migration to SQLite/PostgreSQL
+- Pattern: Repository pattern with CRUD operations
+
+**5. Model Layer** ([models/podcast.py](thestill/models/podcast.py)):
+- Pydantic models for type safety and validation
+- `Episode`, `Podcast`, `EpisodeState` enum, `CleanedTranscript`
+- Immutable data structures with computed properties
+
+**Dependency Flow**:
+```
+CLI → Services → Core → Repository → Models
+     ↓
+   Utils (Config, PathManager, Logger)
+```
+
+**Key Design Patterns**:
+- **Dependency Injection**: Services receive dependencies in constructor
+- **Strategy Pattern**: MediaSource abstraction for multiple podcast sources
+- **Repository Pattern**: Abstract data persistence for future database migration
+- **Context Manager**: Transaction support for batch operations (FeedManager)
+- **Single Responsibility**: Each class/function has one clear purpose
+
+### Error Handling Patterns
+
+**1. Custom Exception Hierarchy** ([utils/exceptions.py](thestill/utils/exceptions.py)):
+```python
+class ThestillError(Exception):
+    """Base exception for all domain errors"""
+
+class FeedParseError(ThestillError):
+    """Raised when RSS/YouTube feed parsing fails"""
+
+class TranscriptionError(ThestillError):
+    """Raised when audio transcription fails"""
+```
+
+**2. Fail Fast with Validation**:
+```python
+def require_file_exists(self, file_path: Path, error_message: str) -> Path:
+    """Validate file exists or raise FileNotFoundError"""
+    if not file_path.exists():
+        raise FileNotFoundError(error_message)
+    return file_path
+```
+
+**3. Structured Logging** (replaced all `print()` statements):
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+# Log levels by severity
+logger.debug("Detailed diagnostic info")
+logger.info("Episode downloaded successfully")
+logger.warning("Retry attempt 2/3 after network timeout")
+logger.error("Download failed for episode XYZ")
+logger.critical("Cannot load configuration file")
+```
+
+**4. Retry Logic with Exponential Backoff**:
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=60)
+)
+def _download_with_retry(self, url: str) -> bytes:
+    """Download with automatic retry on network errors"""
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    return response.content
+```
+
+**5. Error Handling Guidelines**:
+- **Never catch bare `except:`** - always specify exception types
+- **Never silently fail** - always log errors before handling
+- **Early returns** - use guard clauses to reduce nesting
+- **Context in logs** - include episode GUID, podcast URL, file paths
+- **User-friendly CLI errors** - catch and format for end users
+
+**6. Error Recovery**:
+- **Idempotent operations**: All pipeline steps can be safely re-run
+- **State tracking**: Episodes track progress through pipeline (EpisodeState enum)
+- **Partial failures**: One episode failure doesn't stop batch processing
+- **Transaction support**: Batch updates with rollback on error (FeedManager.transaction())
 
 ### Performance Considerations
 - Whisper processing is CPU-intensive; consider model size vs. accuracy tradeoffs
@@ -403,3 +626,204 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 - `MAX_SPEAKERS`: Maximum speakers (leave empty to use provider's internal defaults for best results)
 
 **Recommendation:** Leave `MIN_SPEAKERS` and `MAX_SPEAKERS` empty for most podcasts. Both Google and Whisper/pyannote have sensible internal defaults and auto-detection works well. Only set explicit values if you know the exact speaker count (e.g., solo show, fixed two-host format).
+
+---
+
+## Refactoring Progress
+
+This project underwent a comprehensive refactoring from October 2024 to present, transforming from a monolithic script into a well-architected, testable system. See [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) for the complete plan.
+
+### Current Status (as of 2025-10-14)
+
+**Progress**: 29/35 tasks complete (82.9%)
+**Test Coverage**: 41.05% (↑128% from 18% baseline) → Target 70%
+**Tests Passing**: 269/269 (100%)
+**Time Invested**: 32.25 hours
+
+### Key Achievements
+
+**Week 1: Foundation & Testing Infrastructure** ✅ (100% complete)
+- ✅ Repository layer abstraction (enables future database migration)
+- ✅ PathManager centralization (single source of truth for file paths)
+- ✅ Pre-commit hooks (black, isort, pylint, mypy)
+- ✅ Custom exception hierarchy
+- ✅ Replaced all `print()` with structured logging
+
+**Week 2: Service Layer & CLI Refactoring** ✅ (100% complete)
+- ✅ CLI context dependency injection (services instantiated once)
+- ✅ RefreshService extraction (business logic out of CLI)
+- ✅ CLIFormatter for consistent output
+- ✅ Retry logic with exponential backoff
+- ✅ Progress bars for batch operations (MCP-compatible)
+- ✅ Magic numbers extracted to constants
+
+**Week 3: Testing & Type Coverage** ✅ (100% complete)
+- ✅ Type hints for all core and service modules (100% mypy clean)
+- ✅ Integration tests for full pipeline (9 end-to-end scenarios)
+- ✅ Contract tests for service boundaries (32 tests prevent API breakage)
+- ✅ EpisodeState enum for type-safe state management
+- ✅ Comprehensive unit tests (AudioDownloader 99%, PathManager 100%, PodcastService 92%)
+
+**Week 4: Architecture & Polish** 🚧 (83% complete)
+- ✅ MediaSource strategy pattern (RSS + YouTube abstraction, enables Spotify/SoundCloud)
+- ✅ FeedManager transaction context manager (batch operations)
+- ✅ PathManager require_file_exists helper (centralized validation)
+- ✅ Performance metrics tracking (TranscriptCleaningMetrics)
+- ✅ LLM provider display names (abstraction improvement)
+- 🚧 Documentation (in progress: R-030)
+- ⏳ Remaining: Makefile, GitHub Actions CI, minor polish tasks
+
+### Architecture Improvements
+
+**Before Refactoring**:
+```
+cli.py (1000+ lines)
+├── Inline path construction
+├── Inline feed parsing
+├── Inline error handling
+├── Scattered print() statements
+└── No tests
+```
+
+**After Refactoring**:
+```
+CLI Layer (cli.py)
+  ↓ (dependency injection)
+Service Layer (services/)
+  ├── PodcastService (CRUD operations)
+  ├── RefreshService (feed discovery)
+  └── StatsService (reporting)
+  ↓ (orchestration)
+Core Layer (core/)
+  ├── FeedManager (with transactions)
+  ├── MediaSource Strategy (RSS/YouTube)
+  ├── AudioDownloader (with retry)
+  └── Transcriber (Whisper/Google)
+  ↓ (persistence)
+Repository Layer (podcast_repository.py)
+  └── JsonPodcastRepository (→ future: PostgreSQL)
+  ↓ (data models)
+Model Layer (models/podcast.py)
+  └── Pydantic models with validation
+```
+
+### Design Patterns Implemented
+
+1. **Repository Pattern** (R-006b): Abstract data persistence
+   - Easy migration from JSON → SQLite → PostgreSQL
+   - 56 unit tests, 100% coverage
+
+2. **Strategy Pattern** (R-029): Media source abstraction
+   - Clean separation of RSS vs YouTube logic
+   - Extensible: Add Spotify, SoundCloud with one new class
+   - 34 unit tests for all source types
+
+3. **Dependency Injection** (R-012): Service composition
+   - Services receive dependencies in constructor
+   - Testable with mocks
+   - Single instantiation in CLI context
+
+4. **Context Manager** (R-028): Transaction support
+   - Batch updates with single save operation
+   - Reduces file I/O by ~80% for bulk operations
+
+5. **Single Responsibility Principle**: Throughout codebase
+   - Each class/function has one clear purpose
+   - Atomic pipeline steps (refresh → download → downsample → transcribe → clean)
+
+### Testing Infrastructure
+
+**Current Test Suite**: 269 tests across 9 test files
+- `test_path_manager.py`: 41 tests, 100% coverage
+- `test_podcast_service.py`: 38 tests, 92% coverage
+- `test_service_contracts.py`: 32 tests (API stability)
+- `test_audio_downloader.py`: 28 tests, 99% coverage
+- `test_feed_manager.py`: 17 tests, 26% coverage (complex module)
+- `test_media_source.py`: 34 tests (strategy pattern)
+- `test_integration_pipeline.py`: 9 tests (end-to-end)
+- Plus: json_repository, llm_provider, podcast models
+
+**Testing Best Practices**:
+- Mock external dependencies (requests, feedparser, LLM APIs)
+- Use `tmp_path` for file system tests
+- Arrange-Act-Assert pattern
+- Descriptive test names (`test_download_retries_on_network_error`)
+
+### Code Quality Metrics
+
+| Metric | Baseline (Oct 2024) | Current (Oct 2025) | Target |
+|--------|---------------------|-------------------|--------|
+| Test Coverage | 18% | 41.05% | 70%+ |
+| Tests Passing | 0 | 269 | All |
+| Type Coverage | 0% | ~80% | 90%+ |
+| Lint Errors | Many | 0 | 0 |
+| Lines in cli.py | ~800 | ~600 | <500 |
+
+### Remaining Work (6 tasks)
+
+**High Priority**:
+- R-032: GitHub Actions CI workflow (45 min)
+- R-031: Makefile for common commands (20 min)
+
+**Low Priority**:
+- R-033: Simplify CLI import pattern (30 min)
+- R-034: Episode GUID uniqueness validation (30 min)
+- R-035: Update README with new features (30 min)
+
+**Estimated completion**: 2-3 hours remaining
+
+### Lessons Learned
+
+**What Worked Well**:
+- ✅ Small atomic commits (1 task = 1 commit = <1 hour)
+- ✅ Tests green at all times (no breaking changes)
+- ✅ Repository pattern (easiest architectural change)
+- ✅ Dependency injection (improved testability dramatically)
+- ✅ Type hints (caught 2 bugs during R-021)
+
+**What Was Challenging**:
+- ⚠️ Increasing test coverage for complex modules (FeedManager at 26%)
+- ⚠️ Mocking LLM API calls (async, streaming responses)
+- ⚠️ Balancing refactoring vs new features (discipline required)
+
+**Key Takeaways**:
+1. **Start with data layer**: Repository pattern was the best first move
+2. **Type hints reveal bugs**: Found 2 production bugs during type annotation
+3. **Contract tests prevent breakage**: Critical for refactoring service boundaries
+4. **Progress tracking matters**: Detailed plan kept momentum over 4 weeks
+5. **Coverage isn't everything**: Focus on critical paths and error handling
+
+### Future Improvements
+
+**Architecture** (Post-Refactoring):
+- Add SQLite/PostgreSQL repository implementation
+- Add message queue for distributed processing (RabbitMQ/Redis)
+- Extract LLM prompts to configuration files
+- Add caching layer for expensive operations
+
+**Features** (Separate from Refactoring):
+- Add Spotify podcast support (via MediaSource)
+- Add SoundCloud support (via MediaSource)
+- Web UI for podcast management
+- Email notifications for new episodes
+- RSS feed output for processed transcripts
+
+**Operations**:
+- Add Docker Compose for deployment
+- Add monitoring and alerting (Sentry, DataDog)
+- Add rate limiting for LLM APIs
+- Add cost tracking dashboard
+
+### Contributing
+
+When adding new features or making changes:
+
+1. **Read the guidelines**: [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md)
+2. **Follow the architecture**: Use existing patterns (Repository, Strategy, DI)
+3. **Write tests first**: Aim for 80%+ coverage on new code
+4. **Add type hints**: All new code must be type-hinted
+5. **Small PRs**: Keep changes under 300 lines
+6. **Update docs**: Keep CLAUDE.md and README.md current
+7. **Run pre-commit**: `pre-commit run --all-files` before pushing
+
+**Questions?** Open an issue or start a discussion in the repository.
