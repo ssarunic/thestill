@@ -142,6 +142,7 @@ thestill downsample --podcast-id 1         # Downsample specific podcast
 thestill transcribe
 thestill transcribe --podcast-id 1         # Transcribe specific podcast
 thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
+thestill transcribe --dry-run              # Preview without transcribing
 
 # 6. Clean transcripts with LLM (optional)
 thestill clean-transcript
@@ -208,7 +209,7 @@ For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 - `thestill refresh [--podcast-id ID] [--max-episodes N] [--dry-run]` - Discover new episodes
 - `thestill download [--podcast-id ID] [--max-episodes N] [--dry-run]` - Download audio files
 - `thestill downsample [--podcast-id ID] [--max-episodes N] [--dry-run]` - Convert to 16kHz WAV
-- `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N]` - Transcribe audio
+- `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N] [--dry-run]` - Transcribe audio
 - `thestill clean-transcript [--dry-run] [--max-episodes N]` - Clean with LLM
 
 ### System Management

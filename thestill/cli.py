@@ -740,8 +740,9 @@ def cleanup(ctx, dry_run):
 @click.option("--podcast-id", help="Transcribe episodes from specific podcast (index or RSS URL)")
 @click.option("--episode-id", help="Transcribe specific episode (requires --podcast-id)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to transcribe")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be transcribed without transcribing")
 @click.pass_context
-def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes):
+def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run):
     """Transcribe audio files to JSON transcripts.
 
     Without arguments: Transcribes all downloaded episodes that need transcription.
@@ -926,6 +927,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     # Count total episodes
     total_count = sum(len(eps) for _, eps in episodes_to_transcribe)
     click.echo(f"📝 Found {total_count} episode(s) to transcribe")
+
+    if dry_run:
+        for podcast, episodes in episodes_to_transcribe:
+            click.echo(f"\n📻 {podcast.title}")
+            for episode in episodes:
+                click.echo(f"  • {episode.title}")
+        click.echo("\n(Run without --dry-run to actually transcribe)")
+        return
 
     # Transcribe episodes
     transcribed_count = 0

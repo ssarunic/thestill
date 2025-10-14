@@ -54,6 +54,7 @@ thestill transcribe                        # Transcribe all downsampled audio
 thestill transcribe --podcast-id 1         # Transcribe from specific podcast
 thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
 thestill transcribe --max-episodes 3       # Limit transcriptions
+thestill transcribe --dry-run              # Preview what would be transcribed
 
 # Clean existing transcripts with LLM (step 5)
 thestill clean-transcript [--dry-run] [--max-episodes 5]
