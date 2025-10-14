@@ -35,7 +35,7 @@ class LLMProcessor:
         self.compactor = TranscriptCompactor()
 
     def process_transcript(
-        self, transcript_text: str, episode_guid: str, output_path: str = None, transcript_json_path: str = None
+        self, transcript_text: str, episode_external_id: str, output_path: str = None, transcript_json_path: str = None
     ) -> Optional[ProcessedContent]:
         """Process raw transcript through LLM pipeline using compacted Markdown"""
         try:
@@ -75,7 +75,7 @@ class LLMProcessor:
             processing_time = time.time() - start_time
 
             processed_content = ProcessedContent(
-                episode_guid=episode_guid,
+                episode_external_id=episode_external_id,
                 cleaned_transcript=cleaned_result["cleaned_transcript"],
                 summary=summary,
                 quotes=quotes,

@@ -44,14 +44,14 @@ def sample_podcast():
             Episode(
                 title="Episode 1",
                 audio_url="https://example.com/ep1.mp3",
-                guid="ep1-guid",
+                external_id="ep1-guid",
                 pub_date=datetime(2024, 1, 1),
                 description="First episode",
             ),
             Episode(
                 title="Episode 2",
                 audio_url="https://example.com/ep2.mp3",
-                guid="ep2-guid",
+                external_id="ep2-guid",
                 pub_date=datetime(2024, 1, 2),
                 description="Second episode",
             ),
@@ -70,7 +70,7 @@ def another_podcast():
             Episode(
                 title="Episode A",
                 audio_url="https://example.com/epA.mp3",
-                guid="epA-guid",
+                external_id="epA-guid",
                 pub_date=datetime(2024, 2, 1),
                 description="Episode A",
             )
@@ -170,29 +170,29 @@ class TestPodcastCRUD:
         found = repository.find_by_url("https://nonexistent.com/feed.xml")
         assert found is None
 
-    def test_find_by_id_success(self, repository, sample_podcast, another_podcast):
+    def test_find_by_index_success(self, repository, sample_podcast, another_podcast):
         """Should find podcast by 1-based index."""
         repository.save(sample_podcast)
         repository.save(another_podcast)
 
         # Test 1-based indexing
-        found_first = repository.find_by_id(1)
+        found_first = repository.find_by_index(1)
         assert found_first is not None
         assert found_first.title == "Test Podcast"
 
-        found_second = repository.find_by_id(2)
+        found_second = repository.find_by_index(2)
         assert found_second is not None
         assert found_second.title == "Another Podcast"
 
-    def test_find_by_id_out_of_range(self, repository, sample_podcast):
+    def test_find_by_index_out_of_range(self, repository, sample_podcast):
         """Should return None for invalid IDs."""
         repository.save(sample_podcast)
 
         # Test various invalid IDs
-        assert repository.find_by_id(0) is None
-        assert repository.find_by_id(-1) is None
-        assert repository.find_by_id(999) is None
-        assert repository.find_by_id(2) is None  # Only 1 podcast exists
+        assert repository.find_by_index(0) is None
+        assert repository.find_by_index(-1) is None
+        assert repository.find_by_index(999) is None
+        assert repository.find_by_index(2) is None  # Only 1 podcast exists
 
     def test_exists_true(self, repository, sample_podcast):
         """Should return True when podcast exists."""
@@ -308,21 +308,21 @@ class TestEpisodeOperations:
         episodes = repository.find_by_podcast("https://nonexistent.com/feed.xml")
         assert episodes == []
 
-    def test_find_by_guid_success(self, repository, sample_podcast):
+    def test_find_by_external_id_success(self, repository, sample_podcast):
         """Should find episode by GUID."""
         repository.save(sample_podcast)
 
-        episode = repository.find_by_guid(str(sample_podcast.rss_url), "ep1-guid")
+        episode = repository.find_by_external_id(str(sample_podcast.rss_url), "ep1-guid")
 
         assert episode is not None
         assert episode.title == "Episode 1"
-        assert episode.guid == "ep1-guid"
+        assert episode.external_id == "ep1-guid"
 
-    def test_find_by_guid_not_found(self, repository, sample_podcast):
+    def test_find_by_external_id_not_found(self, repository, sample_podcast):
         """Should return None when episode not found."""
         repository.save(sample_podcast)
 
-        episode = repository.find_by_guid(str(sample_podcast.rss_url), "nonexistent-guid")
+        episode = repository.find_by_external_id(str(sample_podcast.rss_url), "nonexistent-guid")
 
         assert episode is None
 

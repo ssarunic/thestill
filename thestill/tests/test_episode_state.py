@@ -45,7 +45,7 @@ class TestEpisodeStateProperty:
             "title": "Test Episode",
             "description": "Test Description",
             "audio_url": HttpUrl("https://example.com/audio.mp3"),
-            "guid": "test-guid-123",
+            "external_id": "test-guid-123",
         }
 
     def test_discovered_state(self, base_episode_data):
@@ -122,7 +122,7 @@ class TestStateTransitions:
             "title": "Test Episode",
             "description": "Test Description",
             "audio_url": HttpUrl("https://example.com/audio.mp3"),
-            "guid": "test-guid-123",
+            "external_id": "test-guid-123",
         }
 
     def test_full_pipeline_progression(self, base_episode_data):
@@ -200,7 +200,7 @@ class TestStateValidation:
             "title": "Test Episode",
             "description": "Test Description",
             "audio_url": HttpUrl("https://example.com/audio.mp3"),
-            "guid": "test-guid-123",
+            "external_id": "test-guid-123",
         }
 
     def test_episode_with_all_none_paths(self, base_episode_data):

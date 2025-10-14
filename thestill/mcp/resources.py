@@ -144,7 +144,9 @@ def setup_resources(server: Server, storage_path: str):
 
             # Get episode index (latest = 1, second latest = 2, etc.)
             sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or "", reverse=True)
-            episode_index = next((idx for idx, ep in enumerate(sorted_episodes, start=1) if ep.guid == episode.guid), 0)
+            episode_index = next(
+                (idx for idx, ep in enumerate(sorted_episodes, start=1) if ep.external_id == episode.external_id), 0
+            )
 
             # Build response
             from pathlib import Path
@@ -157,7 +159,7 @@ def setup_resources(server: Server, storage_path: str):
                 "description": episode.description,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "duration": episode.duration,
-                "guid": episode.guid,
+                "external_id": episode.external_id,
                 "processed": episode.processed,
                 "audio_url": str(episode.audio_url),
                 "transcript_available": bool(

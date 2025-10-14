@@ -182,7 +182,7 @@ class YouTubeDownloader:
                         description=entry.get("description", "")[:500] if entry.get("description") else "",
                         audio_url=video_url,  # type: ignore[arg-type]  # video_url is str, Pydantic validates to HttpUrl
                         duration=str(entry.get("duration")) if entry.get("duration") else None,
-                        guid=video_id,
+                        external_id=video_id,
                         pub_date=pub_date,
                     )
                     episodes.append(episode)
@@ -209,8 +209,8 @@ class YouTubeDownloader:
             safe_podcast_title = self._sanitize_filename(podcast_title)
             safe_episode_title = self._sanitize_filename(episode.title)
 
-            # Use video ID as hash
-            video_id = episode.guid or hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:8]
+            # Use external ID (video ID) as hash
+            video_id = episode.external_id or hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:8]
 
             filename = f"{safe_podcast_title}_{safe_episode_title}_{video_id}.m4a"
             local_path = self.storage_path / filename

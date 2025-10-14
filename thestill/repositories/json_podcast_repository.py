@@ -4,12 +4,20 @@ JSON file-based implementation of podcast repository.
 This implementation stores all podcasts and episodes in a single JSON file (feeds.json).
 It provides the same interface as other repository implementations, making it easy
 to migrate to SQLite or PostgreSQL in the future.
+
+Migration support:
+- Automatically generates UUIDs for podcasts/episodes without 'id' field
+- Automatically sets 'created_at' for records without timestamp
+- Migrates old 'guid' field to 'external_id' for backward compatibility
 """
 
 import json
 import logging
+import shutil
+import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..models.podcast import Episode, EpisodeState, Podcast
 from ..utils.path_manager import PathManager
@@ -54,9 +62,63 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
             self._write_podcasts([])
             logger.debug(f"Created feeds file: {self.feeds_file}")
 
+    def _migrate_podcast_data(self, podcast_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Migrate podcast data from old format to new format.
+
+        Handles:
+        - Adding 'id' field (UUID) if missing
+        - Adding 'created_at' field if missing
+        - Migrating episodes' 'guid' → 'external_id'
+        - Adding episode 'id' and 'created_at' if missing
+
+        Args:
+            podcast_data: Raw podcast dictionary from JSON
+
+        Returns:
+            Migrated podcast dictionary
+        """
+        migrated = False
+
+        # Migrate podcast-level fields
+        if "id" not in podcast_data:
+            podcast_data["id"] = str(uuid.uuid4())
+            migrated = True
+            logger.debug(f"Generated UUID for podcast: {podcast_data.get('title', 'unknown')}")
+
+        if "created_at" not in podcast_data:
+            podcast_data["created_at"] = datetime.utcnow().isoformat()
+            migrated = True
+            logger.debug(f"Set created_at for podcast: {podcast_data.get('title', 'unknown')}")
+
+        # Migrate episodes
+        if "episodes" in podcast_data:
+            for episode in podcast_data["episodes"]:
+                # Migrate guid → external_id
+                if "guid" in episode and "external_id" not in episode:
+                    episode["external_id"] = episode.pop("guid")
+                    migrated = True
+
+                # Generate UUID if missing
+                if "id" not in episode:
+                    episode["id"] = str(uuid.uuid4())
+                    migrated = True
+
+                # Set created_at if missing
+                if "created_at" not in episode:
+                    episode["created_at"] = datetime.utcnow().isoformat()
+                    migrated = True
+
+        return podcast_data
+
     def _read_podcasts(self) -> List[Podcast]:
         """
-        Read all podcasts from JSON file.
+        Read all podcasts from JSON file with automatic migration.
+
+        Automatically migrates old data format to new format:
+        - Generates UUIDs for podcasts/episodes without 'id'
+        - Sets 'created_at' timestamps if missing
+        - Migrates 'guid' → 'external_id' in episodes
 
         Returns:
             List of podcasts, or empty list if file doesn't exist or is invalid
@@ -64,11 +126,44 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         Note:
             This method handles errors gracefully and returns empty list on failure.
             Errors are logged but not raised.
+            Migration happens automatically and is idempotent.
         """
         try:
             with open(self.feeds_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return [Podcast(**podcast_data) for podcast_data in data]
+
+            # Check if migration is needed
+            needs_migration = False
+            for podcast_data in data:
+                if "id" not in podcast_data or "created_at" not in podcast_data:
+                    needs_migration = True
+                    break
+                if "episodes" in podcast_data:
+                    for episode in podcast_data["episodes"]:
+                        if "guid" in episode or "id" not in episode or "created_at" not in episode:
+                            needs_migration = True
+                            break
+
+            # Create backup before migration
+            if needs_migration and self.feeds_file.exists():
+                backup_file = self.feeds_file.with_suffix(".backup.json")
+                shutil.copy2(self.feeds_file, backup_file)
+                logger.info(f"Created backup before migration: {backup_file}")
+
+            # Migrate data
+            migrated_data = []
+            for podcast_data in data:
+                migrated_podcast = self._migrate_podcast_data(podcast_data)
+                migrated_data.append(migrated_podcast)
+
+            # Save migrated data if changes were made
+            if needs_migration:
+                self._write_podcasts([Podcast(**p) for p in migrated_data])
+                logger.info("Migration complete: Updated feeds.json with new format")
+
+            # Parse and return podcasts
+            return [Podcast(**podcast_data) for podcast_data in migrated_data]
+
         except FileNotFoundError:
             logger.debug(f"Feeds file not found: {self.feeds_file}")
             return []
@@ -125,19 +220,35 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         """
         return self._read_podcasts()
 
-    def find_by_id(self, podcast_id: int) -> Optional[Podcast]:
+    def find_by_id(self, podcast_id: str) -> Optional[Podcast]:
         """
-        Find podcast by 1-based index.
+        Find podcast by internal UUID.
 
         Args:
-            podcast_id: 1-based index (human-friendly ID)
+            podcast_id: Internal UUID of the podcast
 
         Returns:
             Podcast if found, None otherwise
         """
         podcasts = self._read_podcasts()
-        if 1 <= podcast_id <= len(podcasts):
-            return podcasts[podcast_id - 1]
+        for podcast in podcasts:
+            if podcast.id == podcast_id:
+                return podcast
+        return None
+
+    def find_by_index(self, index: int) -> Optional[Podcast]:
+        """
+        Find podcast by 1-based index (for CLI/user convenience).
+
+        Args:
+            index: 1-based index (human-friendly ID)
+
+        Returns:
+            Podcast if found, None otherwise
+        """
+        podcasts = self._read_podcasts()
+        if 1 <= index <= len(podcasts):
+            return podcasts[index - 1]
         return None
 
     def find_by_url(self, url: str) -> Optional[Podcast]:
@@ -229,7 +340,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         logger.debug(f"Podcast not found for deletion: {url}")
         return False
 
-    def update_episode(self, podcast_url: str, episode_guid: str, updates: dict) -> bool:
+    def update_episode(self, podcast_url: str, episode_external_id: str, updates: dict) -> bool:
         """
         Update specific episode fields.
 
@@ -238,7 +349,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
         Args:
             podcast_url: URL of the podcast containing the episode
-            episode_guid: GUID of the episode to update
+            episode_external_id: External ID (from RSS feed) of the episode to update
             updates: Dictionary of field names and new values
 
         Returns:
@@ -260,7 +371,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
             # Find the episode within the podcast
             for episode in podcast.episodes:
-                if episode.guid != episode_guid:
+                if episode.external_id != episode_external_id:
                     continue
 
                 # Update episode fields
@@ -274,13 +385,13 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
                 if updated_fields:
                     self._write_podcasts(podcasts)
-                    logger.debug(f"Updated episode {episode_guid}: {', '.join(updated_fields)}")
+                    logger.debug(f"Updated episode {episode_external_id}: {', '.join(updated_fields)}")
                     return True
                 else:
-                    logger.debug(f"No valid fields to update for episode {episode_guid}")
+                    logger.debug(f"No valid fields to update for episode {episode_external_id}")
                     return False
 
-        logger.debug(f"Episode not found: {episode_guid} in {podcast_url}")
+        logger.debug(f"Episode not found: {episode_external_id} in {podcast_url}")
         return False
 
     # Implement EpisodeRepository interface
@@ -298,20 +409,37 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         podcast = self.find_by_url(podcast_url)
         return podcast.episodes if podcast else []
 
-    def find_by_guid(self, podcast_url: str, episode_guid: str) -> Optional[Episode]:
+    def find_by_id(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
         """
-        Find specific episode by GUID.
+        Find episode by internal UUID.
+
+        Args:
+            episode_id: Internal UUID of the episode
+
+        Returns:
+            Tuple of (Podcast, Episode) if found, None otherwise
+        """
+        podcasts = self._read_podcasts()
+        for podcast in podcasts:
+            for episode in podcast.episodes:
+                if episode.id == episode_id:
+                    return (podcast, episode)
+        return None
+
+    def find_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
+        """
+        Find specific episode by external ID (from RSS feed).
 
         Args:
             podcast_url: RSS feed URL of the podcast
-            episode_guid: GUID of the episode
+            episode_external_id: External ID of the episode (publisher's GUID)
 
         Returns:
             Episode if found, None otherwise
         """
         episodes = self.find_by_podcast(podcast_url)
         for episode in episodes:
-            if episode.guid == episode_guid:
+            if episode.external_id == episode_external_id:
                 return episode
         return None
 

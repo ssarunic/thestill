@@ -194,7 +194,7 @@ class TestPodcastServiceContract:
             description="Test",
             pub_date=datetime.now(),
             audio_url="https://example.com/ep1.mp3",
-            guid="ep1",
+            external_id="ep1",
         )
         sample_podcast.episodes.append(episode)
         repository.save(sample_podcast)
@@ -212,7 +212,7 @@ class TestPodcastServiceContract:
         assert hasattr(ep, "pub_date")
         assert hasattr(ep, "audio_url")
         assert hasattr(ep, "duration")
-        assert hasattr(ep, "guid")
+        assert hasattr(ep, "external_id")
         assert hasattr(ep, "processed")
         assert hasattr(ep, "transcript_available")
         assert hasattr(ep, "summary_available")
@@ -223,7 +223,7 @@ class TestPodcastServiceContract:
         assert isinstance(ep.title, str)
         assert isinstance(ep.description, str)
         assert isinstance(ep.audio_url, str)
-        assert isinstance(ep.guid, str)
+        assert isinstance(ep.external_id, str)
         assert isinstance(ep.processed, bool)
         assert isinstance(ep.transcript_available, bool)
         assert isinstance(ep.summary_available, bool)
@@ -341,7 +341,7 @@ class TestRefreshServiceContract:
             Episode(
                 title="Episode 1",
                 description="Test",
-                guid="ep1",
+                external_id="ep1",
                 pub_date=datetime.now(),
                 audio_url="https://example.com/ep1.mp3",
             )
@@ -491,7 +491,7 @@ class TestServiceContractStability:
             "pub_date",
             "audio_url",
             "duration",
-            "guid",
+            "external_id",
             "processed",
             "transcript_available",
             "summary_available",

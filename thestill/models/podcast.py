@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class EpisodeState(str, Enum):
@@ -39,13 +40,24 @@ class EpisodeState(str, Enum):
 
 
 class Episode(BaseModel):
+    # Internal identifiers (auto-generated)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID
+    created_at: datetime = Field(default_factory=datetime.utcnow)  # When episode was first added to database
+
+    # External identifiers
+    external_id: str  # External ID from RSS feed (publisher's GUID)
+
+    # Episode metadata
     title: str
     description: str
     pub_date: Optional[datetime] = None
     audio_url: HttpUrl
     duration: Optional[str] = None
-    guid: str
+
+    # Processing status
     processed: bool = False
+
+    # File paths (filenames only, relative to storage directories)
     audio_path: Optional[str] = None  # Filename of the original downloaded audio file (in original_audio/)
     downsampled_audio_path: Optional[str] = None  # Filename of the downsampled WAV file (in downsampled_audio/)
     raw_transcript_path: Optional[str] = None  # Filename of the raw transcript JSON (Whisper output)
@@ -76,10 +88,21 @@ class Episode(BaseModel):
 
 
 class Podcast(BaseModel):
+    # Internal identifiers (auto-generated)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID
+    created_at: datetime = Field(default_factory=datetime.utcnow)  # When podcast was first added to database
+
+    # External identifiers
+    rss_url: HttpUrl  # RSS feed URL (external identifier)
+
+    # Podcast metadata
     title: str
     description: str
-    rss_url: HttpUrl
+
+    # Processing status
     last_processed: Optional[datetime] = None
+
+    # Episodes
     episodes: List[Episode] = []
 
 
@@ -118,7 +141,7 @@ class Quote(BaseModel):
 
 
 class ProcessedContent(BaseModel):
-    episode_guid: str
+    episode_external_id: str  # External episode ID (from RSS feed)
     cleaned_transcript: str
     summary: str
     quotes: List[Quote]
@@ -128,7 +151,7 @@ class ProcessedContent(BaseModel):
 
 
 class CleanedTranscript(BaseModel):
-    episode_guid: str
+    episode_external_id: str  # External episode ID (from RSS feed)
     episode_title: str
     podcast_title: str
     corrections: List[dict] = []
@@ -149,7 +172,7 @@ class TranscriptCleaningMetrics(BaseModel):
     - Trend analysis across episodes
     """
 
-    episode_guid: str
+    episode_external_id: str  # External episode ID (from RSS feed)
     episode_title: str
     podcast_title: str
 

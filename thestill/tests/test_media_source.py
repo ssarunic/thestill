@@ -115,7 +115,7 @@ class TestRSSMediaSource:
         mock_entry = {
             "title": "Episode 1",
             "description": "First episode",
-            "guid": "ep1",
+            "guid": "ep1",  # feedparser returns "guid" from RSS feed
             "published_parsed": struct_time((2025, 1, 10, 12, 0, 0, 0, 0, 0)),
             "itunes_duration": "60:00",
             "links": [{"type": "audio/mpeg", "href": "https://example.com/ep1.mp3"}],
@@ -135,7 +135,7 @@ class TestRSSMediaSource:
 
         assert len(episodes) == 1
         assert episodes[0].title == "Episode 1"
-        assert episodes[0].guid == "ep1"
+        assert episodes[0].external_id == "ep1"
         assert str(episodes[0].audio_url) == "https://example.com/ep1.mp3"
 
     def test_fetch_episodes_filters_processed(self):
@@ -146,7 +146,7 @@ class TestRSSMediaSource:
         existing_episode = Episode(
             title="Episode 1",
             audio_url="https://example.com/ep1.mp3",
-            guid="ep1",
+            external_id="ep1",
             pub_date=datetime(2025, 1, 10),
             description="First episode",
             processed=True,
@@ -156,7 +156,7 @@ class TestRSSMediaSource:
         mock_entry = {
             "title": "Episode 1",
             "description": "First episode",
-            "guid": "ep1",
+            "guid": "ep1",  # feedparser returns "guid" from RSS feed
             "published_parsed": struct_time((2025, 1, 10, 12, 0, 0, 0, 0, 0)),
             "links": [{"type": "audio/mpeg", "href": "https://example.com/ep1.mp3"}],
         }
@@ -187,7 +187,7 @@ class TestRSSMediaSource:
                 {
                     "title": f"Episode {i+1}",
                     "description": f"Episode {i+1} description",
-                    "guid": f"ep{i+1}",
+                    "guid": f"ep{i+1}",  # feedparser returns "guid" from RSS feed
                     "published_parsed": struct_time((2025, 1, i + 1, 12, 0, 0, 0, 0, 0)),
                     "links": [{"type": "audio/mpeg", "href": f"https://example.com/ep{i+1}.mp3"}],
                 }
@@ -233,7 +233,7 @@ class TestRSSMediaSource:
         episode = Episode(
             title="Episode 1",
             audio_url="https://example.com/ep1.mp3",
-            guid="ep1",
+            external_id="ep1",
             pub_date=datetime(2025, 1, 10),
             description="First episode",
         )
@@ -365,14 +365,14 @@ class TestYouTubeMediaSource:
             Episode(
                 title="Video 1",
                 audio_url="https://www.youtube.com/watch?v=abc123",
-                guid="abc123",
+                external_id="abc123",
                 pub_date=datetime(2025, 1, 10),
                 description="First video",
             ),
             Episode(
                 title="Video 2",
                 audio_url="https://www.youtube.com/watch?v=def456",
-                guid="def456",
+                external_id="def456",
                 pub_date=datetime(2025, 1, 9),
                 description="Second video",
             ),
@@ -398,7 +398,7 @@ class TestYouTubeMediaSource:
         existing_episode = Episode(
             title="Video 1",
             audio_url="https://www.youtube.com/watch?v=abc123",
-            guid="abc123",
+            external_id="abc123",
             pub_date=datetime(2025, 1, 10),
             description="First video",
             processed=True,
@@ -409,7 +409,7 @@ class TestYouTubeMediaSource:
             Episode(
                 title="Video 2",
                 audio_url="https://www.youtube.com/watch?v=def456",
-                guid="def456",
+                external_id="def456",
                 pub_date=datetime(2025, 1, 9),
                 description="Second video",
             ),
@@ -426,7 +426,7 @@ class TestYouTubeMediaSource:
 
         # Should only return new episode (Video 2)
         assert len(episodes) == 1
-        assert episodes[0].guid == "def456"
+        assert episodes[0].external_id == "def456"
 
     def test_fetch_episodes_respects_max_limit(self, temp_storage):
         """Test that max_episodes limit is respected for YouTube."""
@@ -438,7 +438,7 @@ class TestYouTubeMediaSource:
                 Episode(
                     title=f"Video {i+1}",
                     audio_url=f"https://www.youtube.com/watch?v=vid{i+1}",
-                    guid=f"vid{i+1}",
+                    external_id=f"vid{i+1}",
                     pub_date=datetime(2025, 1, i + 1),
                     description=f"Video {i+1} description",
                 )
@@ -463,7 +463,7 @@ class TestYouTubeMediaSource:
         episode = Episode(
             title="Video 1",
             audio_url="https://www.youtube.com/watch?v=abc123",
-            guid="abc123",
+            external_id="abc123",
             pub_date=datetime(2025, 1, 10),
             description="First video",
         )

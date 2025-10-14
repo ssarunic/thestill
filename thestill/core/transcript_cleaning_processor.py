@@ -77,7 +77,7 @@ class TranscriptCleaningProcessor:
         podcast_description: str = "",
         episode_title: str = "",
         episode_description: str = "",
-        episode_guid: str = "",
+        episode_external_id: str = "",
         output_path: Optional[str] = None,
         save_corrections: bool = True,
         save_metrics: bool = True,
@@ -91,7 +91,7 @@ class TranscriptCleaningProcessor:
             podcast_description: Description of the podcast
             episode_title: Title of the episode
             episode_description: Description of the episode
-            episode_guid: Unique identifier for the episode
+            episode_external_id: External identifier (from RSS feed) for the episode
             output_path: Optional path to save outputs
             save_corrections: Whether to save corrections list for debugging
             save_metrics: Whether to save performance metrics (default: True)
@@ -103,7 +103,7 @@ class TranscriptCleaningProcessor:
 
         # Initialize performance tracking
         metrics_data = {
-            "episode_guid": episode_guid,
+            "episode_external_id": episode_external_id,
             "episode_title": episode_title,
             "podcast_title": podcast_title,
             "llm_provider": self.provider.__class__.__name__,

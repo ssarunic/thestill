@@ -188,6 +188,47 @@ mypy thestill/
    - Integrated into Config and FeedManager
    - **Reduces errors** when directory structures change
 
+### Identifier System: Internal UUIDs vs External IDs
+
+**NEW (as of 2025-10-14)**: The system now uses both internal and external identifiers for stability and traceability:
+
+**Internal Identifiers (UUIDs)**:
+- Every `Podcast` and `Episode` has an auto-generated `id` field (UUID v4)
+- These are **internal, immutable identifiers** generated when records are first created
+- Format: `"id": "550e8400-e29b-41d4-a716-446655440000"`
+- Used for internal references and future database migrations
+- Auto-generated via Pydantic's `default_factory=lambda: str(uuid.uuid4())`
+
+**External Identifiers**:
+- `Podcast.rss_url`: The RSS feed URL (external identifier from publisher)
+- `Episode.external_id`: The GUID/ID from the RSS feed (replaces old `guid` field)
+- These come from external sources (RSS feeds, YouTube, etc.)
+- Can change if publishers modify their feeds (rare but possible)
+
+**Timestamps**:
+- `Podcast.created_at`: When the podcast was first added to the database
+- `Episode.created_at`: When the episode was first discovered and added
+- Auto-generated via `default_factory=datetime.utcnow`
+
+**Migration Support**:
+- Existing `feeds.json` files are **automatically migrated** on first load
+- Old `guid` fields are renamed to `external_id`
+- Missing `id` and `created_at` fields are auto-generated
+- A backup (`feeds.backup.json`) is created before migration
+- Migration is idempotent (safe to run multiple times)
+
+**Repository Methods**:
+- `find_by_id(podcast_id: str)`: Find by internal UUID
+- `find_by_index(index: int)`: Find by 1-based index (for CLI convenience)
+- `find_by_url(url: str)`: Find by RSS URL (external identifier)
+- `find_by_external_id(podcast_url, episode_external_id)`: Find episode by external ID
+
+**Why This Design?**:
+- **Stability**: Internal UUIDs never change, even if external RSS URLs or GUIDs change
+- **Traceability**: Timestamps track when records were added to the system
+- **Future-proof**: Enables database migration (SQLite/PostgreSQL) with stable foreign keys
+- **Backward compatible**: Automatic migration preserves all existing data
+
 ### Configuration System
 
 - Environment-based configuration with `.env` support

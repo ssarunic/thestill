@@ -54,7 +54,7 @@ class EpisodeWithIndex(BaseModel):
     pub_date: Optional[datetime] = None
     audio_url: str
     duration: Optional[str] = None
-    guid: str
+    external_id: str  # External ID from RSS feed (publisher's GUID)
     processed: bool = False
     transcript_available: bool = False
     summary_available: bool = False
@@ -265,10 +265,10 @@ class PodcastService:
             except ValueError:
                 pass  # Not a valid date, continue to GUID matching
 
-        # Otherwise, treat as GUID
+        # Otherwise, treat as external ID (GUID from RSS feed)
         for episode in podcast.episodes:
-            if episode.guid == episode_id:
-                logger.debug(f"Retrieved episode by GUID: {episode.title}")
+            if episode.external_id == episode_id:
+                logger.debug(f"Retrieved episode by external ID: {episode.title}")
                 return episode
 
         logger.warning(f"Episode not found: {episode_id}")
@@ -322,7 +322,7 @@ class PodcastService:
                     pub_date=episode.pub_date,
                     audio_url=str(episode.audio_url),
                     duration=episode.duration,
-                    guid=episode.guid,
+                    external_id=episode.external_id,
                     processed=episode.processed,
                     transcript_available=bool(
                         episode.clean_transcript_path

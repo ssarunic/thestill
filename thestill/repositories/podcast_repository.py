@@ -29,12 +29,25 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_id(self, podcast_id: int) -> Optional[Podcast]:
+    def find_by_id(self, podcast_id: str) -> Optional[Podcast]:
         """
-        Find podcast by 1-based index.
+        Find podcast by internal UUID.
 
         Args:
-            podcast_id: 1-based index (human-friendly ID)
+            podcast_id: Internal UUID of the podcast
+
+        Returns:
+            Podcast if found, None otherwise
+        """
+        pass
+
+    @abstractmethod
+    def find_by_index(self, index: int) -> Optional[Podcast]:
+        """
+        Find podcast by 1-based index (for CLI/user convenience).
+
+        Args:
+            index: 1-based index (human-friendly ID)
 
         Returns:
             Podcast if found, None otherwise
@@ -97,7 +110,7 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def update_episode(self, podcast_url: str, episode_guid: str, updates: dict) -> bool:
+    def update_episode(self, podcast_url: str, episode_external_id: str, updates: dict) -> bool:
         """
         Update specific episode fields.
 
@@ -106,7 +119,7 @@ class PodcastRepository(ABC):
 
         Args:
             podcast_url: URL of the podcast containing the episode
-            episode_guid: GUID of the episode to update
+            episode_external_id: External ID (from RSS feed) of the episode to update
             updates: Dictionary of field names and new values
 
         Returns:
@@ -144,13 +157,26 @@ class EpisodeRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_guid(self, podcast_url: str, episode_guid: str) -> Optional[Episode]:
+    def find_by_id(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
         """
-        Find specific episode by GUID.
+        Find episode by internal UUID.
+
+        Args:
+            episode_id: Internal UUID of the episode
+
+        Returns:
+            Tuple of (Podcast, Episode) if found, None otherwise
+        """
+        pass
+
+    @abstractmethod
+    def find_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
+        """
+        Find specific episode by external ID (from RSS feed).
 
         Args:
             podcast_url: RSS feed URL of the podcast
-            episode_guid: GUID of the episode
+            episode_external_id: External ID of the episode (publisher's GUID)
 
         Returns:
             Episode if found, None otherwise

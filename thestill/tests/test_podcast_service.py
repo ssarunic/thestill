@@ -48,7 +48,7 @@ def sample_podcasts():
                 Episode(
                     title="Episode 1",
                     audio_url="https://example.com/ep1.mp3",
-                    guid="ep1",
+                    external_id="ep1",
                     pub_date=datetime(2025, 1, 10),
                     description="First episode",
                     processed=True,
@@ -58,7 +58,7 @@ def sample_podcasts():
                 Episode(
                     title="Episode 2",
                     audio_url="https://example.com/ep2.mp3",
-                    guid="ep2",
+                    external_id="ep2",
                     pub_date=datetime(2025, 1, 5),
                     description="Second episode",
                 ),
@@ -72,7 +72,7 @@ def sample_podcasts():
                 Episode(
                     title="News Today",
                     audio_url="https://example.com/news1.mp3",
-                    guid="news1",
+                    external_id="news1",
                     pub_date=datetime(2025, 1, 15),
                     description="Today's news",
                 ),

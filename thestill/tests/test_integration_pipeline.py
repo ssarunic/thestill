@@ -77,7 +77,7 @@ def sample_rss_feed():
         {
             "title": "Episode 1",
             "description": "First episode",
-            "guid": "ep1",
+            "guid": "ep1",  # feedparser returns "guid" from RSS feed
             "published_parsed": datetime(2025, 1, 1).timetuple(),
             "itunes_duration": "30:00",
             "links": [{"type": "audio/mpeg", "href": "https://example.com/ep1.mp3"}],
@@ -86,7 +86,7 @@ def sample_rss_feed():
         {
             "title": "Episode 2",
             "description": "Second episode",
-            "guid": "ep2",
+            "guid": "ep2",  # feedparser returns "guid" from RSS feed
             "published_parsed": datetime(2025, 1, 2).timetuple(),
             "itunes_duration": "25:00",
             "links": [{"type": "audio/mpeg", "href": "https://example.com/ep2.mp3"}],
@@ -144,7 +144,7 @@ class TestPipelineAddAndRefresh:
         podcast = podcast_service.get_podcast(1)
         assert podcast is not None
         for episode in podcast.episodes:
-            feed_manager.mark_episode_processed(str(podcast.rss_url), episode.guid)
+            feed_manager.mark_episode_processed(str(podcast.rss_url), episode.external_id)
 
         # Second refresh (should find no new episodes since all are processed)
         result2 = refresh_service.refresh()
@@ -204,12 +204,12 @@ class TestPipelineDownload:
         assert Path(audio_path).exists()
 
         # Mark as downloaded
-        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].guid, audio_path)
+        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].external_id, audio_path)
 
         # Verify state changed
         updated_podcast = podcast_service.get_podcast(1)
         assert updated_podcast is not None
-        updated_episode = next(ep for ep in updated_podcast.episodes if ep.guid == episodes[0].guid)
+        updated_episode = next(ep for ep in updated_podcast.episodes if ep.external_id == episodes[0].external_id)
         assert updated_episode.state == EpisodeState.DOWNLOADED
         assert updated_episode.audio_path is not None
 
@@ -246,7 +246,7 @@ class TestPipelineDownsample:
 
         downloader = AudioDownloader(str(path_manager.original_audio_dir()))
         audio_path = downloader.download_episode(episodes[0], podcast.title)
-        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].guid, audio_path)
+        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].external_id, audio_path)
 
         # Get episodes to downsample
         episodes_to_downsample = feed_manager.get_episodes_to_downsample(str(temp_storage))
@@ -260,12 +260,12 @@ class TestPipelineDownsample:
         downsampled_path.write_text("fake downsampled audio")
 
         # Mark as downsampled
-        feed_manager.mark_episode_downsampled(str(podcast.rss_url), episodes[0].guid, str(downsampled_path))
+        feed_manager.mark_episode_downsampled(str(podcast.rss_url), episodes[0].external_id, str(downsampled_path))
 
         # Verify state changed
         updated_podcast = podcast_service.get_podcast(1)
         assert updated_podcast is not None
-        updated_episode = next(ep for ep in updated_podcast.episodes if ep.guid == episodes[0].guid)
+        updated_episode = next(ep for ep in updated_podcast.episodes if ep.external_id == episodes[0].external_id)
         assert updated_episode.state == EpisodeState.DOWNSAMPLED
 
 
@@ -292,14 +292,14 @@ class TestPipelineErrorRecovery:
         fake_path = str(Path(temp_storage) / "original_audio" / "fake_ep1.mp3")
         Path(fake_path).parent.mkdir(parents=True, exist_ok=True)
         Path(fake_path).write_text("fake audio")
-        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].guid, fake_path)
+        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].external_id, fake_path)
 
         # Get episodes to download (should only return the second episode)
         episodes_to_download = feed_manager.get_episodes_to_download(str(temp_storage))
         assert len(episodes_to_download) == 1
         _, remaining_episodes = episodes_to_download[0]
         assert len(remaining_episodes) == 1
-        assert remaining_episodes[0].guid == episodes[1].guid
+        assert remaining_episodes[0].external_id == episodes[1].external_id
 
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_missing_file_detected(self, mock_parse, podcast_service, feed_manager, sample_rss_feed, temp_storage):
@@ -316,7 +316,7 @@ class TestPipelineErrorRecovery:
 
         # Mark as downloaded but don't create file
         fake_path = str(Path(temp_storage) / "original_audio" / "nonexistent.mp3")
-        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.guid, fake_path)
+        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, fake_path)
 
         # Get episodes to download (should include this episode since file is missing)
         episodes_to_download = feed_manager.get_episodes_to_download(str(temp_storage))
@@ -363,22 +363,22 @@ class TestFullPipelineIntegration:
         # Step 3: Download
         downloader = AudioDownloader(str(path_manager.original_audio_dir()))
         audio_path = downloader.download_episode(episode, podcast.title)
-        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.guid, audio_path)
+        feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_path)
 
         podcast = podcast_service.get_podcast(1)
         assert podcast is not None
-        episode = next(ep for ep in podcast.episodes if ep.guid == episode.guid)
+        episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.DOWNLOADED
 
         # Step 4: Downsample (simulate)
         downsampled_filename = f"Test_Podcast_Episode_1_downsampled.wav"
         downsampled_path = path_manager.downsampled_audio_dir() / downsampled_filename
         downsampled_path.write_text("fake downsampled audio")
-        feed_manager.mark_episode_downsampled(str(podcast.rss_url), episode.guid, str(downsampled_path))
+        feed_manager.mark_episode_downsampled(str(podcast.rss_url), episode.external_id, str(downsampled_path))
 
         podcast = podcast_service.get_podcast(1)
         assert podcast is not None
-        episode = next(ep for ep in podcast.episodes if ep.guid == episode.guid)
+        episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.DOWNSAMPLED
 
         # Step 5: Transcribe (mocked - would use real transcriber in actual pipeline)
@@ -386,11 +386,13 @@ class TestFullPipelineIntegration:
         transcript_file = path_manager.raw_transcript_file(transcript_path)
         transcript_file.parent.mkdir(parents=True, exist_ok=True)
         transcript_file.write_text(json.dumps({"text": "Sample transcript"}))
-        feed_manager.mark_episode_processed(str(podcast.rss_url), episode.guid, raw_transcript_path=transcript_path)
+        feed_manager.mark_episode_processed(
+            str(podcast.rss_url), episode.external_id, raw_transcript_path=transcript_path
+        )
 
         podcast = podcast_service.get_podcast(1)
         assert podcast is not None
-        episode = next(ep for ep in podcast.episodes if ep.guid == episode.guid)
+        episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.TRANSCRIBED
 
         # Step 6: Clean (mocked - would use LLM in actual pipeline)
@@ -398,11 +400,11 @@ class TestFullPipelineIntegration:
         clean_file = path_manager.clean_transcript_file(clean_path)
         clean_file.parent.mkdir(parents=True, exist_ok=True)
         clean_file.write_text("# Cleaned Transcript\n\nSample cleaned content")
-        feed_manager.mark_episode_processed(str(podcast.rss_url), episode.guid, clean_transcript_path=clean_path)
+        feed_manager.mark_episode_processed(str(podcast.rss_url), episode.external_id, clean_transcript_path=clean_path)
 
         podcast = podcast_service.get_podcast(1)
         assert podcast is not None
-        episode = next(ep for ep in podcast.episodes if ep.guid == episode.guid)
+        episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.CLEANED
         assert episode.processed is True
 
@@ -452,4 +454,4 @@ class TestFullPipelineIntegration:
         assert podcast2_refreshed is not None
         assert len(podcast1_refreshed.episodes) == 1
         assert len(podcast2_refreshed.episodes) == 1
-        assert podcast1_refreshed.episodes[0].guid != podcast2_refreshed.episodes[0].guid
+        assert podcast1_refreshed.episodes[0].external_id != podcast2_refreshed.episodes[0].external_id

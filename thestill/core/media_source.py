@@ -207,10 +207,12 @@ class RSSMediaSource(MediaSource):
             episodes = []
             for entry in parsed_feed.entries:
                 episode_date = self._parse_date(entry.get("published_parsed"))
-                episode_guid = entry.get("guid", entry.get("id", str(episode_date)))
+                episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
                 # Skip already processed episodes
-                already_processed = any(ep.guid == episode_guid and ep.processed for ep in existing_episodes)
+                already_processed = any(
+                    ep.external_id == episode_external_id and ep.processed for ep in existing_episodes
+                )
                 if already_processed:
                     continue
 
@@ -232,11 +234,13 @@ class RSSMediaSource(MediaSource):
                             pub_date=episode_date,
                             audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                             duration=entry.get("itunes_duration"),
-                            guid=episode_guid,
+                            external_id=episode_external_id,
                         )
 
                         # Check if episode already exists (but not processed)
-                        existing_episode = next((ep for ep in existing_episodes if ep.guid == episode_guid), None)
+                        existing_episode = next(
+                            (ep for ep in existing_episodes if ep.external_id == episode_external_id), None
+                        )
                         if not existing_episode:
                             episodes.append(episode)
 
@@ -490,10 +494,14 @@ class YouTubeMediaSource(MediaSource):
             # Filter out already processed episodes
             new_episodes = []
             for episode in all_episodes:
-                already_processed = any(ep.guid == episode.guid and ep.processed for ep in existing_episodes)
+                already_processed = any(
+                    ep.external_id == episode.external_id and ep.processed for ep in existing_episodes
+                )
                 if not already_processed:
                     # Check if episode already exists (but not processed)
-                    existing_episode = next((ep for ep in existing_episodes if ep.guid == episode.guid), None)
+                    existing_episode = next(
+                        (ep for ep in existing_episodes if ep.external_id == episode.external_id), None
+                    )
                     if not existing_episode:
                         new_episodes.append(episode)
 

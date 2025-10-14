@@ -299,7 +299,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                     # Store just the filename
                     audio_filename = Path(audio_path).name
 
-                    feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.guid, audio_filename)
+                    feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_filename)
                     downloaded_count += 1
                     click.echo("✅ Downloaded successfully")
                 else:
@@ -431,7 +431,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                     # Store just the filename
                     downsampled_filename = Path(downsampled_path).name
 
-                    feed_manager.mark_episode_downsampled(str(podcast.rss_url), episode.guid, downsampled_filename)
+                    feed_manager.mark_episode_downsampled(
+                        str(podcast.rss_url), episode.external_id, downsampled_filename
+                    )
                     downsampled_count += 1
                     click.echo("✅ Downsampled successfully")
                 else:
@@ -558,7 +560,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     podcast_description=podcast.description,
                     episode_title=episode.title,
                     episode_description=episode.description,
-                    episode_guid=episode.guid,
+                    episode_external_id=episode.external_id,
                     output_path=str(cleaned_path),
                     save_corrections=True,
                     save_metrics=True,
@@ -567,7 +569,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                 if result:
                     # Create CleanedTranscript model and save
                     _ = CleanedTranscript(
-                        episode_guid=episode.guid,
+                        episode_external_id=episode.external_id,
                         episode_title=episode.title,
                         podcast_title=podcast.title,
                         corrections=result["corrections"],
@@ -584,7 +586,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     cleaned_md_filename = f"{episode_id}.md"
                     feed_manager.mark_episode_processed(
                         str(podcast.rss_url),
-                        episode.guid,
+                        episode.external_id,
                         raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
                         clean_transcript_path=cleaned_md_filename,  # Just the cleaned MD filename
                     )
@@ -904,7 +906,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
             # Filter to only the specific episode
             episodes_to_transcribe = [
-                (p, [ep for ep in eps if ep.guid == target_episode.guid]) for p, eps in episodes_to_transcribe
+                (p, [ep for ep in eps if ep.external_id == target_episode.external_id])
+                for p, eps in episodes_to_transcribe
             ]
             episodes_to_transcribe = [(p, eps) for p, eps in episodes_to_transcribe if eps]
 
@@ -1014,7 +1017,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 if transcript_data:
                     # Mark episode as having transcript
                     feed_manager.mark_episode_processed(
-                        str(podcast.rss_url), episode.guid, raw_transcript_path=output_filename
+                        str(podcast.rss_url), episode.external_id, raw_transcript_path=output_filename
                     )
                     transcribed_count += 1
                     click.echo("✅ Transcription complete!")

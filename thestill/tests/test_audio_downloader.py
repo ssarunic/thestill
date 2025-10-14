@@ -43,7 +43,7 @@ def sample_episode():
     return Episode(
         title="Test Episode 123",
         audio_url="https://example.com/audio/episode123.mp3",
-        guid="test-ep-123",
+        external_id="test-ep-123",
         pub_date=datetime(2025, 1, 15),
         description="A test episode",
     )
@@ -217,7 +217,7 @@ class TestDownloadEpisode:
         youtube_episode = Episode(
             title="YouTube Video",
             audio_url="https://www.youtube.com/watch?v=abc123",
-            guid="yt-abc123",
+            external_id="yt-abc123",
             pub_date=datetime(2025, 1, 15),
             description="YouTube video",
         )
@@ -249,7 +249,7 @@ class TestDownloadEpisode:
             episode = Episode(
                 title=f"Episode {ext}",
                 audio_url=f"https://example.com/audio/file{ext}",
-                guid=f"ep-{ext}",
+                external_id=f"ep-{ext}",
                 pub_date=datetime(2025, 1, 15),
                 description="Test",
             )
@@ -517,7 +517,7 @@ class TestEdgeCases:
         episode = Episode(
             title="Episode: Test / Part 1 <New>",
             audio_url="https://example.com/audio.mp3",
-            guid="special-ep",
+            external_id="special-ep",
             pub_date=datetime(2025, 1, 15),
             description="Test",
         )
@@ -548,7 +548,7 @@ class TestEdgeCases:
         episode = Episode(
             title="Test Episode",
             audio_url="https://example.com/audio.mp3",
-            guid="write-error-ep",
+            external_id="write-error-ep",
             pub_date=datetime(2025, 1, 15),
             description="Test",
         )

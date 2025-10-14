@@ -210,7 +210,7 @@ For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 - `thestill download [--podcast-id ID] [--max-episodes N] [--dry-run]` - Download audio files
 - `thestill downsample [--podcast-id ID] [--max-episodes N] [--dry-run]` - Convert to 16kHz WAV
 - `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N] [--dry-run]` - Transcribe audio
-- `thestill clean-transcript [--dry-run] [--max-episodes N]` - Clean with LLM
+- `thestill clean-transcript [--max-episodes N] [--dry-run]` - Clean with LLM
 
 ### System Management
 - `thestill status` - Display system status and episode statistics

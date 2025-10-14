@@ -78,13 +78,13 @@ class ProcessingLogger:
         """Log transcription completion"""
         self.logger.info(f"Transcription complete: {audio_file} in {processing_time:.1f}s")
 
-    def log_llm_processing_start(self, episode_guid: str):
+    def log_llm_processing_start(self, episode_external_id: str):
         """Log LLM processing start"""
-        self.logger.info(f"Starting LLM processing: {episode_guid}")
+        self.logger.info(f"Starting LLM processing: {episode_external_id}")
 
-    def log_llm_processing_complete(self, episode_guid: str, processing_time: float):
+    def log_llm_processing_complete(self, episode_external_id: str, processing_time: float):
         """Log LLM processing completion"""
-        self.logger.info(f"LLM processing complete: {episode_guid} in {processing_time:.1f}s")
+        self.logger.info(f"LLM processing complete: {episode_external_id} in {processing_time:.1f}s")
 
     def log_cost_estimate(self, episode_title: str, estimated_cost: float):
         """Log estimated processing cost"""
