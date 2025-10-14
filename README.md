@@ -11,24 +11,35 @@ An automated pipeline that converts podcasts into readable, summarized content t
 
 ## Overview
 
-thestill.ai solves the time-consuming nature of audio content consumption by:
-- Transcribing podcast episodes using OpenAI Whisper
-- Cleaning transcripts and detecting advertisements
-- Generating comprehensive summaries
-- Extracting notable quotes with analysis
-- Processing a 60-minute podcast in under 15 minutes
+thestill.ai is a production-ready podcast transcription and analysis pipeline that converts audio podcasts into clean, readable transcripts with speaker identification. Built with Python and designed for both local and cloud processing.
+
+**Key Capabilities:**
+- **Transcription**: OpenAI Whisper (local) or Google Cloud Speech-to-Text (cloud)
+- **Speaker Diarization**: Automatic speaker identification in multi-person conversations
+- **Transcript Cleaning**: LLM-powered correction of errors, removal of filler words and ads
+- **Multiple Sources**: RSS feeds, Apple Podcasts, YouTube channels/playlists
+- **Flexible LLM Backend**: OpenAI, Ollama (local), Google Gemini, or Anthropic Claude
+- **MCP Server**: Integrate with Claude Desktop and other MCP-compatible clients
+
+**Processing Pipeline:**
+```
+Refresh → Download → Downsample → Transcribe → Clean
+```
+Each step is atomic and can be run independently for horizontal scaling.
 
 ## Features
 
-- **Multiple Source Support**: Add podcasts from RSS feeds, Apple Podcasts, and YouTube playlists/channels
-- **Automated Processing**: Automatically detect and process new episodes
-- **High-Quality Transcription**: Uses OpenAI Whisper for accurate speech-to-text
-- **Flexible LLM Backend**: Choose between OpenAI, Ollama (local), Google Gemini, or Anthropic Claude
-- **AI-Powered Analysis**: Cleans transcripts, generates summaries, and extracts insights
-- **CLI Interface**: Simple command-line tool for easy automation
-- **MCP Server**: Expose functionality to Claude Desktop and other MCP-compatible clients
-- **Speaker Identification**: Distinguishes between different speakers in conversations
-- **Ad Detection**: Identifies and tags advertisement segments
+- **Multiple Podcast Sources**: RSS feeds, Apple Podcasts, YouTube channels/playlists
+- **Dual Transcription Modes**:
+  - Local Whisper with pyannote.audio diarization (free, private)
+  - Google Cloud Speech-to-Text with built-in diarization (fast, accurate)
+- **LLM-Powered Cleaning**: Fix transcription errors, remove filler words, identify speakers
+- **Multiple LLM Providers**: OpenAI GPT-4, Ollama (local), Google Gemini, Anthropic Claude
+- **Atomic Pipeline**: Each processing step is independent and idempotent
+- **CLI Interface**: Simple command-line tool with comprehensive options
+- **MCP Server**: Natural language interface via Claude Desktop
+- **Episode Management**: Configurable limits per podcast to keep data manageable
+- **Robust Error Handling**: Retry logic with exponential backoff, structured logging
 
 ## Quick Start
 
@@ -49,50 +60,110 @@ cp .env.example .env
 
 ### Configuration
 
-Create a `.env` file with your configuration. You can choose between OpenAI (cloud) or Ollama (local) for LLM processing.
+Create a `.env` file with your configuration. Choose from multiple LLM providers and transcription services.
 
-#### Option 1: Using OpenAI (Cloud)
+#### Transcription Configuration
 
+**Option 1: Local Whisper (Free, Private)**
+```env
+TRANSCRIPTION_PROVIDER=whisper
+WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
+ENABLE_DIARIZATION=true  # Optional: Enable speaker identification
+HUGGINGFACE_TOKEN=your_token  # Required for diarization
+```
+
+**Option 2: Google Cloud Speech-to-Text (Fast, Accurate)**
+```env
+TRANSCRIPTION_PROVIDER=google
+GOOGLE_APP_CREDENTIALS=/path/to/service-account-key.json
+GOOGLE_CLOUD_PROJECT_ID=your-project-id
+ENABLE_DIARIZATION=true  # Built-in, no additional setup needed
+```
+
+#### LLM Provider Configuration
+
+**Option 1: OpenAI (Cloud)**
 ```env
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o
 ```
 
-#### Option 2: Using Ollama (Local)
-
+**Option 2: Ollama (Local, Free)**
 ```env
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=gemma3:4b
 ```
 
-See the [Ollama Setup](#ollama-setup) section below for installation instructions.
+**Option 3: Google Gemini (Fast, Cost-Effective)**
+```env
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.0-flash-exp
+```
+
+**Option 4: Anthropic Claude (High Quality)**
+```env
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+```
+
+See [.env.example](.env.example) for all available configuration options.
 
 ### Basic Usage
 
+The processing pipeline consists of five atomic steps:
+
 ```bash
-# Add a podcast from various sources
+# 1. Add a podcast from various sources
 thestill add "https://example.com/podcast/rss"                    # RSS feed
 thestill add "https://podcasts.apple.com/us/podcast/id123456"    # Apple Podcasts
 thestill add "https://www.youtube.com/@channelname"              # YouTube channel
 thestill add "https://www.youtube.com/playlist?list=..."         # YouTube playlist
 
-# List tracked podcasts
-thestill list
+# 2. Refresh feeds to discover new episodes
+thestill refresh
+thestill refresh --podcast-id 1            # Refresh specific podcast
+thestill refresh --max-episodes 3          # Limit episodes per podcast
+thestill refresh --dry-run                 # Preview without changes
 
-# Process new episodes
-thestill process
+# 3. Download audio files
+thestill download
+thestill download --podcast-id 1           # Download from specific podcast
+thestill download --max-episodes 3         # Limit downloads
 
-# Check status
-thestill status
+# 4. Downsample audio (required for Whisper transcription)
+thestill downsample
+thestill downsample --podcast-id 1         # Downsample specific podcast
+
+# 5. Transcribe audio to text
+thestill transcribe
+thestill transcribe --podcast-id 1         # Transcribe specific podcast
+thestill transcribe --podcast-id 1 --episode-id latest  # Transcribe specific episode
+
+# 6. Clean transcripts with LLM (optional)
+thestill clean-transcript
+thestill clean-transcript --dry-run        # Preview without changes
+thestill clean-transcript --max-episodes 5 # Limit cleaning
+
+# Management commands
+thestill list                              # List tracked podcasts
+thestill status                            # Show system status and statistics
+thestill cleanup                           # Remove old files
 
 # Start MCP server (for Claude Desktop integration)
 thestill-mcp
-
-# Clean up old files
-thestill cleanup
 ```
+
+**Why Separate Steps?**
+
+Each step is atomic and idempotent, allowing you to:
+- Resume from failures without re-downloading/re-transcribing
+- Scale horizontally (e.g., multiple workers per step)
+- Mix local and cloud processing (Whisper + Google, OpenAI + Ollama)
+- Process episodes incrementally as they arrive
 
 ## MCP Server (Claude Desktop Integration)
 
@@ -126,15 +197,23 @@ thestill.ai includes an MCP (Model Context Protocol) server that lets you intera
 
 For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 
-## Commands
+## Commands Reference
 
-- `thestill add <url>` - Add a podcast from RSS feed, Apple Podcasts, or YouTube
+### Feed Management
+- `thestill add <url>` - Add a podcast from RSS, Apple Podcasts, or YouTube
 - `thestill remove <podcast_id>` - Remove a podcast by index or URL
 - `thestill list` - Show all tracked podcasts with indices
-- `thestill process` - Check for and process new episodes
-- `thestill process --dry-run` - Show what would be processed
-- `thestill status` - Display system status and statistics
-- `thestill cleanup` - Remove old audio files
+
+### Processing Pipeline
+- `thestill refresh [--podcast-id ID] [--max-episodes N] [--dry-run]` - Discover new episodes
+- `thestill download [--podcast-id ID] [--max-episodes N] [--dry-run]` - Download audio files
+- `thestill downsample [--podcast-id ID] [--max-episodes N] [--dry-run]` - Convert to 16kHz WAV
+- `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N]` - Transcribe audio
+- `thestill clean-transcript [--dry-run] [--max-episodes N]` - Clean with LLM
+
+### System Management
+- `thestill status` - Display system status and episode statistics
+- `thestill cleanup` - Remove old audio files (configurable retention)
 - `thestill-mcp` - Start MCP server for Claude Desktop integration
 
 ### Supported URL Types
@@ -143,54 +222,107 @@ For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 - **Apple Podcasts**: `https://podcasts.apple.com/...` or `https://itunes.apple.com/...`
 - **YouTube**: Channels (`@username`), playlists, or individual videos
 
+### Common Workflows
+
+**Process a single podcast end-to-end:**
+```bash
+thestill add "https://example.com/podcast/rss"
+thestill refresh --podcast-id 1
+thestill download --podcast-id 1
+thestill downsample --podcast-id 1
+thestill transcribe --podcast-id 1
+thestill clean-transcript  # Optional
+```
+
+**Process all new episodes from all podcasts:**
+```bash
+thestill refresh
+thestill download
+thestill downsample
+thestill transcribe
+```
+
+**Preview changes before committing:**
+```bash
+thestill refresh --dry-run
+thestill download --dry-run
+```
+
 ## Output Structure
 
 Processed content is saved in organized directories:
 
 ```
 data/
-├── audio/           # Downloaded podcast audio files
-├── transcripts/     # JSON files with full transcripts
-├── summaries/       # JSON files with processed content
-└── feeds.json       # Tracked podcast feeds
+├── original_audio/        # Downloaded audio files (MP3, M4A, etc.)
+├── downsampled_audio/     # 16kHz WAV files for transcription
+├── raw_transcripts/       # JSON transcripts with timestamps and speaker labels
+├── clean_transcripts/     # Cleaned Markdown transcripts (optional)
+├── summaries/             # Episode summaries (future use)
+└── feeds.json             # Podcast tracking database
 ```
 
-Each processed episode generates:
-- **Transcript**: Full text with timestamps and speaker identification
-- **Summary**: Comprehensive overview of main topics and insights
-- **Quotes**: 3-5 notable quotes with significance explanations
-- **Ad Detection**: Tagged advertisement segments
+### Episode States
+
+Episodes progress through states tracked in `feeds.json`:
+1. **discovered** - Found in RSS feed, has `audio_url`
+2. **downloaded** - Audio file downloaded, has `audio_path`
+3. **downsampled** - Converted to WAV, has `downsampled_audio_path`
+4. **transcribed** - Transcription complete, has `raw_transcript_path`
+5. **cleaned** - Transcript cleaned (optional), has `clean_transcript_path`
+
+### Transcript Format
+
+**Raw Transcript (JSON)**:
+```json
+{
+  "segments": [
+    {
+      "start": 15.2,
+      "end": 18.5,
+      "text": "Welcome to the podcast.",
+      "speaker": "SPEAKER_01"
+    }
+  ]
+}
+```
+
+**Cleaned Transcript (Markdown)**:
+```markdown
+[00:15] [Host] Welcome to the podcast.
+[00:18] [Guest] Thanks for having me on.
+```
 
 ## Configuration Options
 
-Environment variables you can customize:
+Key environment variables (see [.env.example](.env.example) for complete list):
 
+### Transcription
 ```env
-# LLM Provider (openai or ollama)
-LLM_PROVIDER=openai
+TRANSCRIPTION_PROVIDER=whisper     # whisper or google
+WHISPER_MODEL=base                 # tiny, base, small, medium, large
+ENABLE_DIARIZATION=true            # Enable speaker identification
+HUGGINGFACE_TOKEN=your_token       # Required for Whisper diarization
+```
 
-# OpenAI Configuration (when using LLM_PROVIDER=openai)
-OPENAI_API_KEY=your_api_key_here
+### LLM Providers
+```env
+LLM_PROVIDER=openai                # openai, ollama, gemini, anthropic
 OPENAI_MODEL=gpt-4o
+OLLAMA_MODEL=gemma3:4b
+GEMINI_MODEL=gemini-2.0-flash-exp
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+```
 
-# Ollama Configuration (when using LLM_PROVIDER=ollama)
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:4b  # or gemma3:27b, llama3.2, mistral, etc.
+### Episode Management
+```env
+MAX_EPISODES_PER_PODCAST=50        # Limit episodes per podcast (optional)
+CLEANUP_DAYS=30                    # Delete audio files after N days
+```
 
-# Storage paths
+### Storage
+```env
 STORAGE_PATH=./data
-AUDIO_PATH=./data/audio
-TRANSCRIPTS_PATH=./data/transcripts
-SUMMARIES_PATH=./data/summaries
-
-# Processing settings
-MAX_WORKERS=3
-CHUNK_DURATION_MINUTES=30
-CLEANUP_DAYS=30
-
-# Model settings
-TRANSCRIPTION_MODEL=whisper  # Options: whisper, parakeet
-WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 ```
 
 ## Ollama Setup
@@ -337,17 +469,216 @@ ollama pull llama3.2
 
 ## Development
 
+### Setup
+
 ```bash
-# Install in development mode
+# Clone the repository
+git clone <repository-url>
+cd thestill
+
+# Install with development dependencies
 pip install -e ".[dev]"
 
-# Run tests
-pytest
-
-# Code formatting
-black thestill/
-isort thestill/
+# Install pre-commit hooks
+pre-commit install
 ```
+
+### Quick Commands (using Makefile)
+
+```bash
+make help              # Show all available commands
+make install-dev       # Install with dev dependencies + pre-commit hooks
+make test              # Run tests with coverage report
+make test-fast         # Run tests without coverage (faster)
+make lint              # Run pylint + mypy
+make format            # Format code with black + isort
+make typecheck         # Run mypy type checking
+make check             # Run ALL checks (format + lint + typecheck + test)
+make clean             # Clean generated files (.pypy_cache, .coverage, etc.)
+```
+
+### Testing
+
+**Run Tests:**
+```bash
+# All tests with coverage
+pytest --cov=thestill --cov-report=html
+
+# Specific test file
+pytest tests/test_path_manager.py -v
+
+# Tests matching pattern
+pytest -k "test_download" -v
+
+# Fast run (no coverage)
+pytest -v
+```
+
+**Test Structure:**
+```
+tests/
+├── test_path_manager.py          # Utils layer (100% coverage)
+├── test_podcast_service.py       # Service layer (92% coverage)
+├── test_audio_downloader.py      # Core layer (99% coverage)
+├── test_feed_manager.py          # Core layer (26% coverage)
+├── test_media_source.py          # Core layer (strategy pattern)
+├── test_integration_pipeline.py  # End-to-end workflows
+└── test_service_contracts.py     # API stability tests
+```
+
+**Coverage Target**: 70%+ overall, 90%+ for core modules
+
+### Code Quality
+
+**Pre-commit Hooks** (run automatically on commit):
+- `black` - Code formatting
+- `isort` - Import sorting
+- `pylint` - Linting
+- `mypy` - Type checking
+- `pytest` - Run test suite
+
+**Manual Quality Checks:**
+```bash
+# Format code
+black thestill/ tests/
+isort thestill/ tests/
+
+# Run linters
+pylint thestill/
+mypy thestill/
+
+# Run all checks before pushing
+make check
+```
+
+### Type Hints
+
+This project maintains 100% type coverage for core and service layers:
+
+```python
+from typing import List, Optional
+
+def download_episode(
+    self,
+    episode: Episode,
+    podcast_title: str
+) -> Optional[str]:
+    """Download audio file for episode"""
+    pass
+```
+
+**Run Type Checking:**
+```bash
+mypy thestill/          # Check all modules
+make typecheck          # Using Makefile
+```
+
+### Architecture
+
+The project uses a **layered architecture** with dependency injection:
+
+```
+CLI Layer (cli.py)
+  ↓ (dependency injection)
+Service Layer (services/)
+  ├── PodcastService
+  ├── RefreshService
+  └── StatsService
+  ↓ (orchestration)
+Core Layer (core/)
+  ├── FeedManager (with transactions)
+  ├── MediaSource Strategy (RSS/YouTube)
+  ├── AudioDownloader (with retry)
+  └── Transcriber (Whisper/Google)
+  ↓ (persistence)
+Repository Layer (podcast_repository.py)
+  └── JsonPodcastRepository (→ future: PostgreSQL)
+  ↓ (data models)
+Model Layer (models/podcast.py)
+  └── Pydantic models with validation
+```
+
+**Key Design Patterns:**
+- **Repository Pattern**: Abstract data persistence for easy database migration
+- **Strategy Pattern**: MediaSource abstraction for multiple podcast sources
+- **Dependency Injection**: Services receive dependencies in constructor
+- **Context Manager**: Transaction support for batch operations
+- **Single Responsibility**: Each module has one clear purpose
+
+For detailed development guidelines, see [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md).
+
+## Contributing
+
+We welcome contributions! Please follow these guidelines:
+
+### Development Workflow
+
+1. **Fork and clone** the repository
+2. **Create a branch** for your feature: `git checkout -b feature/your-feature-name`
+3. **Install dev dependencies**: `make install-dev`
+4. **Make your changes** following the code guidelines
+5. **Run quality checks**: `make check`
+6. **Commit your changes**: Pre-commit hooks will run automatically
+7. **Push and create a pull request**
+
+### Code Standards
+
+- ✅ **Type hints**: All new code must include type hints
+- ✅ **Tests**: Aim for 80%+ coverage on new code
+- ✅ **Documentation**: Update docstrings and README as needed
+- ✅ **Small PRs**: Keep changes under 300 lines when possible
+- ✅ **Commit messages**: Use conventional commits format (e.g., `feat:`, `fix:`, `docs:`)
+
+### Testing Your Changes
+
+```bash
+# Run tests locally
+make test
+
+# Check code quality
+make lint
+make typecheck
+
+# Format code
+make format
+
+# Run everything
+make check
+```
+
+### Architecture Guidelines
+
+When adding new features:
+- Follow the **layered architecture** (CLI → Service → Core → Repository → Model)
+- Use **dependency injection** for testability
+- Keep **atomic operations** (single responsibility per function)
+- Add **error handling** with proper logging
+- Use **existing patterns** (Repository, Strategy, Context Manager)
+
+### Pull Request Checklist
+
+- [ ] Tests added/updated and passing
+- [ ] Type hints added to all new code
+- [ ] Documentation updated (docstrings, README, CLAUDE.md)
+- [ ] Code formatted with `black` and `isort`
+- [ ] Linters pass (`pylint`, `mypy`)
+- [ ] Pre-commit hooks pass
+- [ ] CHANGELOG.md updated (if applicable)
+
+### Refactoring Status
+
+This project recently completed a comprehensive refactoring (29/35 tasks complete, 82.9% progress). See [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) for details.
+
+**Current priorities:**
+- Increase test coverage from 41% to 70%+
+- Add GitHub Actions CI
+- Complete remaining polish tasks
+
+### Getting Help
+
+- **Issues**: Open an issue for bugs or feature requests
+- **Discussions**: Use GitHub Discussions for questions
+- **Documentation**: Check [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md) for detailed standards
 
 ## Future Roadmap (v2.0)
 
