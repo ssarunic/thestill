@@ -18,36 +18,24 @@ from pathlib import Path
 
 import click
 
-try:
-    from .core.audio_downloader import AudioDownloader
-    from .core.audio_preprocessor import AudioPreprocessor
-    from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
-    from .core.feed_manager import PodcastFeedManager
-    from .core.google_transcriber import GoogleCloudTranscriber
-    from .core.llm_provider import create_llm_provider
-    from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from .repositories.json_podcast_repository import JsonPodcastRepository
-    from .services import PodcastService, RefreshService, StatsService
-    from .utils.cli_formatter import CLIFormatter
-    from .utils.config import load_config
-    from .utils.logger import setup_logger
-    from .utils.path_manager import PathManager
-except ImportError:
-    from core.audio_downloader import AudioDownloader
-    from core.audio_preprocessor import AudioPreprocessor
-    from core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
-    from core.feed_manager import PodcastFeedManager
-    from core.google_transcriber import GoogleCloudTranscriber
-    from core.llm_provider import create_llm_provider
-    from core.post_processor import EnhancedPostProcessor, PostProcessorConfig
-    from core.transcriber import WhisperTranscriber, WhisperXTranscriber
-    from repositories.json_podcast_repository import JsonPodcastRepository
-    from services import PodcastService, RefreshService, StatsService
-    from utils.cli_formatter import CLIFormatter
-    from utils.config import load_config
-    from utils.logger import setup_logger
-    from utils.path_manager import PathManager
+# Import thestill modules using relative imports
+# This module can be executed in two ways:
+# 1. Package mode (recommended): `thestill` command (defined in pyproject.toml entry point)
+# 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
+from .core.audio_downloader import AudioDownloader
+from .core.audio_preprocessor import AudioPreprocessor
+from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
+from .core.feed_manager import PodcastFeedManager
+from .core.google_transcriber import GoogleCloudTranscriber
+from .core.llm_provider import create_llm_provider
+from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+from .repositories.json_podcast_repository import JsonPodcastRepository
+from .services import PodcastService, RefreshService, StatsService
+from .utils.cli_formatter import CLIFormatter
+from .utils.config import load_config
+from .utils.logger import setup_logger
+from .utils.path_manager import PathManager
 
 
 class CLIContext:
