@@ -78,6 +78,7 @@ class TranscriptCleaningProcessor:
         episode_title: str = "",
         episode_description: str = "",
         episode_external_id: str = "",
+        episode_id: str = "",
         output_path: Optional[str] = None,
         save_corrections: bool = True,
         save_metrics: bool = True,
@@ -92,6 +93,7 @@ class TranscriptCleaningProcessor:
             episode_title: Title of the episode
             episode_description: Description of the episode
             episode_external_id: External identifier (from RSS feed) for the episode
+            episode_id: Internal episode ID (UUID) for stable file naming
             output_path: Optional path to save outputs
             save_corrections: Whether to save corrections list for debugging
             save_metrics: Whether to save performance metrics (default: True)
@@ -124,7 +126,7 @@ class TranscriptCleaningProcessor:
 
             # Save formatted markdown to debug folder if requested
             if output_path and save_corrections:
-                self._save_phase_output(output_path, "original", formatted_markdown)
+                self._save_phase_output(output_path, "original", formatted_markdown, episode_id)
 
             # Phase 1: Analyze and create corrections list
             print("Phase 1: Analyzing transcript and identifying corrections...")
@@ -139,7 +141,7 @@ class TranscriptCleaningProcessor:
 
             # Save corrections to debug folder if requested
             if output_path and save_corrections:
-                self._save_phase_output(output_path, "corrections", corrections)
+                self._save_phase_output(output_path, "corrections", corrections, episode_id)
 
             # Phase 1.5: Apply corrections before speaker identification
             print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
@@ -150,7 +152,7 @@ class TranscriptCleaningProcessor:
 
             # Save corrected markdown to debug folder if requested
             if output_path and save_corrections:
-                self._save_phase_output(output_path, "corrected", corrected_markdown)
+                self._save_phase_output(output_path, "corrected", corrected_markdown, episode_id)
 
             # Phase 2: Identify speakers (using corrected transcript)
             print("Phase 2: Identifying speakers...")
@@ -164,7 +166,7 @@ class TranscriptCleaningProcessor:
 
             # Save speaker mapping to debug folder if requested
             if output_path and save_corrections:
-                self._save_phase_output(output_path, "speakers", speaker_mapping)
+                self._save_phase_output(output_path, "speakers", speaker_mapping, episode_id)
 
             # Phase 3: Generate final cleaned transcript
             print("Phase 3: Generating final cleaned transcript...")
@@ -196,7 +198,7 @@ class TranscriptCleaningProcessor:
 
             # Save outputs if path provided
             if output_path:
-                self._save_outputs(result, output_path, save_corrections, save_metrics)
+                self._save_outputs(result, output_path, save_corrections, save_metrics, episode_id)
 
             # Print performance summary
             print(f"Transcript cleaning completed in {processing_time:.1f} seconds")
@@ -642,23 +644,25 @@ Please produce the final cleaned Markdown transcript."""
         final_transcript = "\n\n".join(cleaned_chunks)
         return final_transcript, len(chunks)
 
-    def _save_phase_output(self, output_path: str, phase: str, data):
+    def _save_phase_output(self, output_path: str, phase: str, data, episode_id: str = ""):
         """
         Save output from a specific phase immediately after completion.
 
         Args:
-            output_path: Base output path (e.g., data/processed/{episode_id}.md)
-            phase: Phase name (corrections, corrected, speakers, cleaned)
+            output_path: Base output path (e.g., data/clean_transcripts/{episode_id}_cleaned.md)
+            phase: Phase name (original, corrections, corrected, speakers)
             data: Data to save (list, dict, or string)
+            episode_id: Internal episode ID (UUID) for stable file naming
         """
         output_path = Path(output_path)
 
-        # Create debug directory for intermediate files
+        # Create debug directory inside clean_transcripts for intermediate files
         debug_dir = output_path.parent / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get clean episode ID (remove any existing suffixes)
-        episode_id = output_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
+        # Use provided episode_id (internal UUID), or fallback to extracting from filename
+        if not episode_id:
+            episode_id = output_path.stem.replace("_cleaned", "").replace("_transcript", "")
 
         if phase == "original":
             # Save to debug directory: {episode_id}.original.md
@@ -726,23 +730,26 @@ Please produce the final cleaned Markdown transcript."""
 
         return "\n".join(filtered_lines)
 
-    def _save_outputs(self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True):
+    def _save_outputs(
+        self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True, episode_id: str = ""
+    ):
         """
         Save final outputs to standard locations.
 
         File structure:
-        - data/processed/{episode_id}.md - Final cleaned transcript (main output)
-        - data/processed/{episode_id}.no-ads.md - Transcript with ads removed
-        - data/processed/{episode_id}.metrics.json - Performance metrics
-        - data/processed/debug/{episode_id}.corrections.json - Debug: corrections list
-        - data/processed/debug/{episode_id}.speakers.json - Debug: speaker mapping
-        - data/processed/debug/{episode_id}.corrected.md - Debug: pre-speaker-formatting text
+        - data/clean_transcripts/{episode_id}.md - Final cleaned transcript (main output)
+        - data/clean_transcripts/{episode_id}.no-ads.md - Transcript with ads removed
+        - data/clean_transcripts/debug/{episode_id}.metrics.json - Performance metrics
+        - data/clean_transcripts/debug/{episode_id}.corrections.json - Debug: corrections list
+        - data/clean_transcripts/debug/{episode_id}.speakers.json - Debug: speaker mapping
+        - data/clean_transcripts/debug/{episode_id}.corrected.md - Debug: pre-speaker-formatting text
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Get clean episode ID (remove legacy suffixes)
-        episode_id = output_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
+        # Use provided episode_id (internal UUID), or fallback to extracting from filename
+        if not episode_id:
+            episode_id = output_path.stem.replace("_cleaned", "").replace("_transcript", "")
 
         # Save final cleaned markdown: {episode_id}.md
         final_path = output_path.parent / f"{episode_id}.md"
@@ -765,9 +772,11 @@ Please produce the final cleaned Markdown transcript."""
             f.write(no_ads_markdown)
         print(f"Ad-free transcript saved to: {no_ads_path}")
 
-        # Save performance metrics: {episode_id}.metrics.json
+        # Save performance metrics to debug folder: debug/{episode_id}.metrics.json
         if save_metrics and "metrics" in result:
-            metrics_path = output_path.parent / f"{episode_id}.metrics.json"
+            debug_dir = output_path.parent / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            metrics_path = debug_dir / f"{episode_id}.metrics.json"
             metrics_dict = result["metrics"].model_dump(mode="json")
             # Add computed properties
             metrics_dict["phase_breakdown_percent"] = result["metrics"].phase_breakdown_percent

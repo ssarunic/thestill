@@ -551,7 +551,8 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     transcript_data = json.load(f)
 
                 # Clean transcript with context
-                cleaned_filename = f"{transcript_path.stem}_cleaned"
+                # Use internal episode ID for filenames (stable, non-changing identifier)
+                cleaned_filename = f"{episode.id}_cleaned.md"
                 cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
 
                 result = cleaning_processor.clean_transcript(
@@ -561,6 +562,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     episode_title=episode.title,
                     episode_description=episode.description,
                     episode_external_id=episode.external_id,
+                    episode_id=episode.id,  # Pass internal UUID for file naming
                     output_path=str(cleaned_path),
                     save_corrections=True,
                     save_metrics=True,
@@ -580,15 +582,13 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     )
 
                     # Update feed manager to mark as processed
-                    # The TranscriptCleaningProcessor removes '_transcript_cleaned' and '_transcript' suffixes
-                    # So we need to match the actual filename it creates: {episode_id}.md
-                    episode_id = cleaned_path.stem.replace("_transcript_cleaned", "").replace("_transcript", "")
-                    cleaned_md_filename = f"{episode_id}.md"
+                    # Filename is based on internal episode ID: {episode.id}.md
+                    cleaned_md_filename = f"{episode.id}.md"
                     feed_manager.mark_episode_processed(
                         str(podcast.rss_url),
                         episode.external_id,
                         raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
-                        clean_transcript_path=cleaned_md_filename,  # Just the cleaned MD filename
+                        clean_transcript_path=cleaned_md_filename,  # {episode_id}.md
                     )
 
                     total_processed += 1
