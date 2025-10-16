@@ -30,7 +30,7 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider
 from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
 from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
-from .repositories.json_podcast_repository import JsonPodcastRepository
+from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
 from .utils.cli_formatter import CLIFormatter
 from .utils.config import load_config
@@ -77,7 +77,7 @@ def main(ctx, config):
         # Initialize all shared services once (dependency injection)
         storage_path = config_obj.storage_path  # Path object
         path_manager = PathManager(str(storage_path))
-        repository = JsonPodcastRepository(str(storage_path))
+        repository = SqlitePodcastRepository(db_path=config_obj.database_path)
         podcast_service = PodcastService(storage_path, repository, path_manager)
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(repository, path_manager)
