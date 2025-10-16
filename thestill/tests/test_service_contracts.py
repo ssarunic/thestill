@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from thestill.models.podcast import Episode, Podcast
-from thestill.repositories.json_podcast_repository import JsonPodcastRepository
+from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.services.podcast_service import EpisodeWithIndex, PodcastService, PodcastWithIndex
 from thestill.services.refresh_service import RefreshResult, RefreshService
 from thestill.services.stats_service import StatsService, SystemStats
@@ -48,8 +48,9 @@ def path_manager(temp_storage):
 
 @pytest.fixture
 def repository(temp_storage):
-    """Create JsonPodcastRepository."""
-    return JsonPodcastRepository(str(temp_storage))
+    """Create SqlitePodcastRepository."""
+    db_path = temp_storage / "test_podcasts.db"
+    return SqlitePodcastRepository(db_path=str(db_path))
 
 
 @pytest.fixture

@@ -25,7 +25,6 @@ from pydantic import BaseModel
 
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
-from ..repositories.json_podcast_repository import JsonPodcastRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
 

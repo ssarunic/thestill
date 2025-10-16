@@ -17,7 +17,7 @@ from thestill.core.audio_downloader import AudioDownloader
 from thestill.core.audio_preprocessor import AudioPreprocessor
 from thestill.core.feed_manager import PodcastFeedManager
 from thestill.models.podcast import Episode, EpisodeState, Podcast
-from thestill.repositories.json_podcast_repository import JsonPodcastRepository
+from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.services.podcast_service import PodcastService
 from thestill.services.refresh_service import RefreshService
 from thestill.utils.path_manager import PathManager
@@ -45,8 +45,9 @@ def path_manager(temp_storage):
 
 @pytest.fixture
 def repository(temp_storage):
-    """Create real JsonPodcastRepository for integration testing."""
-    return JsonPodcastRepository(str(temp_storage))
+    """Create real SqlitePodcastRepository for integration testing."""
+    db_path = temp_storage / "test_podcasts.db"
+    return SqlitePodcastRepository(db_path=str(db_path))
 
 
 @pytest.fixture
