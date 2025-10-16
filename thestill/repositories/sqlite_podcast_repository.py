@@ -195,7 +195,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     # PodcastRepository Interface Implementation
     # ============================================================================
 
-    def find_all(self) -> List[Podcast]:
+    def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:
             # Fetch all podcasts
@@ -214,8 +214,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             return podcasts
 
-    def find_by_id(self, podcast_id: str) -> Optional[Podcast]:
-        """Find podcast by UUID."""
+    def get(self, podcast_id: str) -> Optional[Podcast]:
+        """Get podcast by internal UUID (primary key)."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -227,16 +227,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
 
             row = cursor.fetchone()
-            print(f"DEBUG find_by_id: row = {row}, row is None? {row is None}")
             if row:
-                print(f"DEBUG find_by_id: Calling _row_to_podcast")
-                result = self._row_to_podcast(row, conn)
-                print(f"DEBUG find_by_id: result = {result}")
-                return result
-            print(f"DEBUG find_by_id: No row found, returning None")
+                return self._row_to_podcast(row, conn)
             return None
 
-    def find_by_url(self, url: str) -> Optional[Podcast]:
+    def get_by_url(self, url: str) -> Optional[Podcast]:
         """Find podcast by RSS URL."""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -253,7 +248,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 return self._row_to_podcast(row, conn)
             return None
 
-    def find_by_index(self, index: int) -> Optional[Podcast]:
+    def get_by_index(self, index: int) -> Optional[Podcast]:
         """Find podcast by 1-based index."""
         if index < 1:  # Invalid index (must be 1-based)
             return None
@@ -405,7 +400,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     # EpisodeRepository Interface Implementation
     # ============================================================================
 
-    def find_by_podcast(self, podcast_url: str) -> List[Episode]:
+    def get_episodes_by_podcast(self, podcast_url: str) -> List[Episode]:
         """Get all episodes for a podcast."""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -421,8 +416,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             return [self._row_to_episode(row) for row in cursor.fetchall()]
 
-    def find_by_id(self, episode_id: str) -> Optional[Tuple[Podcast, Episode]]:
-        """Find episode by UUID."""
+    def get_episode(self, episode_id: str) -> Optional[Tuple[Podcast, Episode]]:
+        """Get episode by internal UUID (primary key)."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -445,8 +440,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             episode = self._row_to_episode(row)
             return (podcast, episode)
 
-    def find_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
-        """Find episode by external ID."""
+    def get_episode_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
+        """Get specific episode by external ID (from RSS feed)."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -461,9 +456,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             row = cursor.fetchone()
             return self._row_to_episode(row) if row else None
 
-    def find_unprocessed(self, state: str) -> List[Tuple[Podcast, Episode]]:
+    def get_unprocessed_episodes(self, state: str) -> List[Tuple[Podcast, Episode]]:
         """
-        Find episodes in specific processing state.
+        Get episodes in specific processing state.
 
         Uses partial indexes for performance (10-100x faster than full scan).
         """

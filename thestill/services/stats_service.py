@@ -91,7 +91,7 @@ class StatsService:
         logger.debug("Gathering system statistics")
 
         # Get podcast data
-        podcasts = self.repository.find_all()
+        podcasts = self.repository.get_all()
         podcasts_tracked = len(podcasts)
 
         # Count episodes by state

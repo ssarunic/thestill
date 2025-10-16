@@ -19,9 +19,9 @@ class PodcastRepository(ABC):
     """
 
     @abstractmethod
-    def find_all(self) -> List[Podcast]:
+    def get_all(self) -> List[Podcast]:
         """
-        Retrieve all podcasts.
+        Get all podcasts.
 
         Returns:
             List of all podcasts, ordered by insertion (oldest first)
@@ -29,9 +29,9 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_id(self, podcast_id: str) -> Optional[Podcast]:
+    def get(self, podcast_id: str) -> Optional[Podcast]:
         """
-        Find podcast by internal UUID.
+        Get podcast by internal UUID (primary key).
 
         Args:
             podcast_id: Internal UUID of the podcast
@@ -42,9 +42,9 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_index(self, index: int) -> Optional[Podcast]:
+    def get_by_index(self, index: int) -> Optional[Podcast]:
         """
-        Find podcast by 1-based index (for CLI/user convenience).
+        Get podcast by 1-based index (for CLI/user convenience).
 
         Args:
             index: 1-based index (human-friendly ID)
@@ -55,9 +55,9 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_url(self, url: str) -> Optional[Podcast]:
+    def get_by_url(self, url: str) -> Optional[Podcast]:
         """
-        Find podcast by RSS URL.
+        Get podcast by RSS URL (unique external identifier).
 
         Args:
             url: RSS feed URL (unique identifier)
@@ -144,7 +144,7 @@ class EpisodeRepository(ABC):
     """
 
     @abstractmethod
-    def find_by_podcast(self, podcast_url: str) -> List[Episode]:
+    def get_episodes_by_podcast(self, podcast_url: str) -> List[Episode]:
         """
         Get all episodes for a podcast.
 
@@ -157,9 +157,9 @@ class EpisodeRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_id(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
+    def get_episode(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
         """
-        Find episode by internal UUID.
+        Get episode by internal UUID (primary key).
 
         Args:
             episode_id: Internal UUID of the episode
@@ -170,9 +170,9 @@ class EpisodeRepository(ABC):
         pass
 
     @abstractmethod
-    def find_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
+    def get_episode_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
         """
-        Find specific episode by external ID (from RSS feed).
+        Get specific episode by external ID (from RSS feed).
 
         Args:
             podcast_url: RSS feed URL of the podcast
@@ -184,11 +184,11 @@ class EpisodeRepository(ABC):
         pass
 
     @abstractmethod
-    def find_unprocessed(self, state: str) -> List[tuple[Podcast, Episode]]:
+    def get_unprocessed_episodes(self, state: str) -> List[tuple[Podcast, Episode]]:
         """
-        Find episodes in specific processing state.
+        Get episodes in specific processing state.
 
-        This method is used to find episodes that need processing at each
+        This method is used to get episodes that need processing at each
         stage of the pipeline (download, downsample, transcribe, clean).
 
         Args:
@@ -202,8 +202,8 @@ class EpisodeRepository(ABC):
             List of (Podcast, Episode) tuples matching the state
 
         Example:
-            # Find all episodes ready for download
-            episodes_to_download = repository.find_unprocessed('discovered')
+            # Get all episodes ready for download
+            episodes_to_download = repository.get_unprocessed_episodes('discovered')
             for podcast, episode in episodes_to_download:
                 download_audio(podcast, episode)
         """

@@ -93,7 +93,7 @@ class TestJsonPodcastRepositoryBasics:
 
     def test_find_all_empty(self, repository):
         """Should return empty list when no podcasts exist."""
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert podcasts == []
         assert isinstance(podcasts, list)
 
@@ -125,7 +125,7 @@ class TestPodcastCRUD:
         assert len(result.episodes) == 2
 
         # Verify persistence
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert len(podcasts) == 1
         assert podcasts[0].title == sample_podcast.title
 
@@ -134,7 +134,7 @@ class TestPodcastCRUD:
         repository.save(sample_podcast)
         repository.save(another_podcast)
 
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert len(podcasts) == 2
         assert podcasts[0].title == "Test Podcast"
         assert podcasts[1].title == "Another Podcast"
@@ -150,7 +150,7 @@ class TestPodcastCRUD:
         repository.save(sample_podcast)
 
         # Should have only one podcast
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert len(podcasts) == 1
         assert podcasts[0].title == "Updated Title"
         assert podcasts[0].description == "Updated description"
@@ -159,7 +159,7 @@ class TestPodcastCRUD:
         """Should find podcast by URL."""
         repository.save(sample_podcast)
 
-        found = repository.find_by_url(str(sample_podcast.rss_url))
+        found = repository.get_by_url(str(sample_podcast.rss_url))
 
         assert found is not None
         assert found.title == sample_podcast.title
@@ -167,7 +167,7 @@ class TestPodcastCRUD:
 
     def test_find_by_url_not_found(self, repository):
         """Should return None when URL not found."""
-        found = repository.find_by_url("https://nonexistent.com/feed.xml")
+        found = repository.get_by_url("https://nonexistent.com/feed.xml")
         assert found is None
 
     def test_find_by_index_success(self, repository, sample_podcast, another_podcast):
@@ -176,11 +176,11 @@ class TestPodcastCRUD:
         repository.save(another_podcast)
 
         # Test 1-based indexing
-        found_first = repository.find_by_index(1)
+        found_first = repository.get_by_index(1)
         assert found_first is not None
         assert found_first.title == "Test Podcast"
 
-        found_second = repository.find_by_index(2)
+        found_second = repository.get_by_index(2)
         assert found_second is not None
         assert found_second.title == "Another Podcast"
 
@@ -189,10 +189,10 @@ class TestPodcastCRUD:
         repository.save(sample_podcast)
 
         # Test various invalid IDs
-        assert repository.find_by_index(0) is None
-        assert repository.find_by_index(-1) is None
-        assert repository.find_by_index(999) is None
-        assert repository.find_by_index(2) is None  # Only 1 podcast exists
+        assert repository.get_by_index(0) is None
+        assert repository.get_by_index(-1) is None
+        assert repository.get_by_index(999) is None
+        assert repository.get_by_index(2) is None  # Only 1 podcast exists
 
     def test_exists_true(self, repository, sample_podcast):
         """Should return True when podcast exists."""
@@ -207,12 +207,12 @@ class TestPodcastCRUD:
     def test_delete_success(self, repository, sample_podcast):
         """Should delete podcast by URL."""
         repository.save(sample_podcast)
-        assert len(repository.find_all()) == 1
+        assert len(repository.get_all()) == 1
 
         result = repository.delete(str(sample_podcast.rss_url))
 
         assert result is True
-        assert len(repository.find_all()) == 0
+        assert len(repository.get_all()) == 0
 
     def test_delete_nonexistent(self, repository):
         """Should return False when deleting nonexistent podcast."""
@@ -226,7 +226,7 @@ class TestPodcastCRUD:
 
         repository.delete(str(sample_podcast.rss_url))
 
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert len(podcasts) == 1
         assert podcasts[0].title == "Another Podcast"
 
@@ -245,7 +245,7 @@ class TestEpisodeOperations:
         assert result is True
 
         # Verify update persisted
-        podcast = repository.find_by_url(str(sample_podcast.rss_url))
+        podcast = repository.get_by_url(str(sample_podcast.rss_url))
         episode = podcast.episodes[0]
         assert episode.audio_path == "/path/to/audio.mp3"
         # Other fields unchanged
@@ -269,7 +269,7 @@ class TestEpisodeOperations:
         assert result is True
 
         # Verify all updates persisted
-        podcast = repository.find_by_url(str(sample_podcast.rss_url))
+        podcast = repository.get_by_url(str(sample_podcast.rss_url))
         episode = podcast.episodes[1]
         assert episode.audio_path == "/path/to/audio2.mp3"
         assert episode.downsampled_audio_path == "/path/to/downsampled2.wav"
@@ -297,7 +297,7 @@ class TestEpisodeOperations:
         """Should return all episodes for a podcast."""
         repository.save(sample_podcast)
 
-        episodes = repository.find_by_podcast(str(sample_podcast.rss_url))
+        episodes = repository.get_episodes_by_podcast(str(sample_podcast.rss_url))
 
         assert len(episodes) == 2
         assert episodes[0].title == "Episode 1"
@@ -305,14 +305,14 @@ class TestEpisodeOperations:
 
     def test_find_by_podcast_not_found(self, repository):
         """Should return empty list when podcast not found."""
-        episodes = repository.find_by_podcast("https://nonexistent.com/feed.xml")
+        episodes = repository.get_episodes_by_podcast("https://nonexistent.com/feed.xml")
         assert episodes == []
 
     def test_find_by_external_id_success(self, repository, sample_podcast):
         """Should find episode by GUID."""
         repository.save(sample_podcast)
 
-        episode = repository.find_by_external_id(str(sample_podcast.rss_url), "ep1-guid")
+        episode = repository.get_episode_by_external_id(str(sample_podcast.rss_url), "ep1-guid")
 
         assert episode is not None
         assert episode.title == "Episode 1"
@@ -322,7 +322,7 @@ class TestEpisodeOperations:
         """Should return None when episode not found."""
         repository.save(sample_podcast)
 
-        episode = repository.find_by_external_id(str(sample_podcast.rss_url), "nonexistent-guid")
+        episode = repository.get_episode_by_external_id(str(sample_podcast.rss_url), "nonexistent-guid")
 
         assert episode is None
 
@@ -335,7 +335,7 @@ class TestUnprocessedEpisodes:
         # Episodes have audio_url but no audio_path (discovered state)
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("discovered")
+        results = repository.get_unprocessed_episodes("discovered")
 
         assert len(results) == 2
         podcast, episode = results[0]
@@ -348,7 +348,7 @@ class TestUnprocessedEpisodes:
         sample_podcast.episodes[0].audio_path = "/path/to/audio1.mp3"
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("downloaded")
+        results = repository.get_unprocessed_episodes("downloaded")
 
         assert len(results) == 1
         podcast, episode = results[0]
@@ -362,7 +362,7 @@ class TestUnprocessedEpisodes:
         sample_podcast.episodes[0].downsampled_audio_path = "/path/to/downsampled1.wav"
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("downsampled")
+        results = repository.get_unprocessed_episodes("downsampled")
 
         assert len(results) == 1
         podcast, episode = results[0]
@@ -378,7 +378,7 @@ class TestUnprocessedEpisodes:
         ep.raw_transcript_path = "/path/to/transcript1.json"
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("transcribed")
+        results = repository.get_unprocessed_episodes("transcribed")
 
         assert len(results) == 1
         podcast, episode = results[0]
@@ -390,7 +390,7 @@ class TestUnprocessedEpisodes:
         repository.save(sample_podcast)
         repository.save(another_podcast)
 
-        results = repository.find_unprocessed("discovered")
+        results = repository.get_unprocessed_episodes("discovered")
 
         # 2 episodes from sample_podcast + 1 from another_podcast
         assert len(results) == 3
@@ -399,7 +399,7 @@ class TestUnprocessedEpisodes:
         """Should return (Podcast, Episode) tuples."""
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("discovered")
+        results = repository.get_unprocessed_episodes("discovered")
 
         assert len(results) == 2
         for item in results:
@@ -420,7 +420,7 @@ class TestUnprocessedEpisodes:
         repository.save(sample_podcast)
 
         # No episodes should be in 'discovered' state
-        results = repository.find_unprocessed("discovered")
+        results = repository.get_unprocessed_episodes("discovered")
         assert results == []
 
 
@@ -435,7 +435,7 @@ class TestPersistence:
 
         # Load with second instance
         repo2 = JsonPodcastRepository(temp_storage)
-        podcasts = repo2.find_all()
+        podcasts = repo2.get_all()
 
         assert len(podcasts) == 1
         assert podcasts[0].title == sample_podcast.title
@@ -459,7 +459,7 @@ class TestPersistence:
             f.write("{ invalid json }")
 
         # Should return empty list, not raise exception
-        podcasts = repository.find_all()
+        podcasts = repository.get_all()
         assert podcasts == []
 
     def test_handles_missing_file(self, temp_storage):
@@ -469,7 +469,7 @@ class TestPersistence:
         repo.feeds_file.unlink()
 
         # Should return empty list
-        podcasts = repo.find_all()
+        podcasts = repo.get_all()
         assert podcasts == []
 
 
@@ -485,7 +485,7 @@ class TestEdgeCases:
         result = repository.save(podcast)
         assert result is not None
 
-        found = repository.find_by_url(str(podcast.rss_url))
+        found = repository.get_by_url(str(podcast.rss_url))
         assert found is not None
         assert len(found.episodes) == 0
 
@@ -502,7 +502,7 @@ class TestEdgeCases:
         """Should handle invalid state gracefully."""
         repository.save(sample_podcast)
 
-        results = repository.find_unprocessed("invalid-state")
+        results = repository.get_unprocessed_episodes("invalid-state")
         assert results == []
 
     def test_concurrent_reads(self, repository, sample_podcast):
@@ -512,7 +512,7 @@ class TestEdgeCases:
         # Simulate multiple concurrent reads
         results = []
         for _ in range(10):
-            podcasts = repository.find_all()
+            podcasts = repository.get_all()
             results.append(len(podcasts))
 
         # All reads should return same result

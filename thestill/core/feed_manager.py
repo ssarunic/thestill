@@ -119,7 +119,7 @@ class PodcastFeedManager:
             return self._transaction_podcasts[podcast_rss_url]
 
         # Load from repository and cache
-        podcast = self.repository.find_by_url(podcast_rss_url)
+        podcast = self.repository.get_by_url(podcast_rss_url)
         if podcast:
             self._transaction_podcasts[podcast_rss_url] = podcast
         return podcast
@@ -170,7 +170,7 @@ class PodcastFeedManager:
             List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
         """
         new_episodes = []
-        podcasts = self.repository.find_all()
+        podcasts = self.repository.get_all()
 
         for podcast in podcasts:
             try:
@@ -337,7 +337,7 @@ class PodcastFeedManager:
             # If episode not found in stored episodes, fetch it from RSS and add it
             if not success:
                 try:
-                    podcast = self.repository.find_by_url(podcast_rss_url)
+                    podcast = self.repository.get_by_url(podcast_rss_url)
                     if not podcast:
                         logger.error(f"Podcast not found: {podcast_rss_url}")
                         return
@@ -371,7 +371,7 @@ class PodcastFeedManager:
                     return
 
             # Update podcast last_processed timestamp
-            podcast = self.repository.find_by_url(podcast_rss_url)
+            podcast = self.repository.get_by_url(podcast_rss_url)
             if podcast:
                 podcast.last_processed = datetime.now()
                 self.repository.save(podcast)
@@ -388,7 +388,7 @@ class PodcastFeedManager:
             List of tuples containing (Podcast, List[Episode]) for episodes needing transcription
         """
         episodes_to_transcribe = []
-        podcasts = self.repository.find_all()
+        podcasts = self.repository.get_all()
 
         for podcast in podcasts:
             episodes = []
@@ -428,7 +428,7 @@ class PodcastFeedManager:
             List of tuples containing (Podcast, List[Episode]) for episodes needing download
         """
         episodes_to_download = []
-        podcasts = self.repository.find_all()
+        podcasts = self.repository.get_all()
 
         for podcast in podcasts:
             episodes = []
@@ -464,7 +464,7 @@ class PodcastFeedManager:
             List of tuples containing (Podcast, List[Episode]) for episodes needing downsampling
         """
         episodes_to_downsample = []
-        podcasts = self.repository.find_all()
+        podcasts = self.repository.get_all()
 
         for podcast in podcasts:
             episodes = []
@@ -495,7 +495,7 @@ class PodcastFeedManager:
 
     def list_podcasts(self) -> List[Podcast]:
         """Return list of all podcasts"""
-        return self.repository.find_all()
+        return self.repository.get_all()
 
     def _parse_date(self, date_tuple: Any) -> datetime:
         """

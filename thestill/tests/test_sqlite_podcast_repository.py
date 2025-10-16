@@ -69,7 +69,7 @@ def sample_episode():
 def test_save_and_find_podcast(temp_db, sample_podcast):
     """Test saving and retrieving podcast."""
     temp_db.save(sample_podcast)
-    found = temp_db.find_by_url("https://example.com/feed.xml")
+    found = temp_db.get_by_url("https://example.com/feed.xml")
 
     assert found is not None
     assert found.id == "550e8400-e29b-41d4-a716-446655440000"
@@ -88,12 +88,12 @@ def test_save_upsert_updates_existing(temp_db, sample_podcast):
     temp_db.save(sample_podcast)
 
     # Verify update
-    found = temp_db.find_by_url("https://example.com/feed.xml")
+    found = temp_db.get_by_url("https://example.com/feed.xml")
     assert found.title == "Updated Title"
     assert found.description == "Updated Description"
 
     # Verify only one podcast exists
-    all_podcasts = temp_db.find_all()
+    all_podcasts = temp_db.get_all()
     assert len(all_podcasts) == 1
 
 
@@ -102,7 +102,7 @@ def test_save_with_episodes(temp_db, sample_podcast, sample_episode):
     sample_podcast.episodes = [sample_episode]
     temp_db.save(sample_podcast)
 
-    found = temp_db.find_by_url("https://example.com/feed.xml")
+    found = temp_db.get_by_url("https://example.com/feed.xml")
     assert len(found.episodes) == 1
     assert found.episodes[0].title == "Test Episode"
     assert found.episodes[0].external_id == "episode-guid-789"
@@ -110,7 +110,7 @@ def test_save_with_episodes(temp_db, sample_podcast, sample_episode):
 
 def test_find_all_returns_empty_list_when_no_podcasts(temp_db):
     """Test find_all() returns empty list for new database."""
-    podcasts = temp_db.find_all()
+    podcasts = temp_db.get_all()
     assert podcasts == []
 
 
@@ -134,7 +134,7 @@ def test_find_all_returns_all_podcasts(temp_db):
     temp_db.save(podcast1)
     temp_db.save(podcast2)
 
-    all_podcasts = temp_db.find_all()
+    all_podcasts = temp_db.get_all()
     assert len(all_podcasts) == 2
     assert all_podcasts[0].title == "Podcast 1"
     assert all_podcasts[1].title == "Podcast 2"
@@ -146,10 +146,10 @@ def test_find_by_id(temp_db, sample_podcast):
     temp_db.save(sample_podcast)
 
     # Check what was actually saved
-    all_podcasts = temp_db.find_all()
+    all_podcasts = temp_db.get_all()
     print(f"All podcasts after save: {[(p.id, p.title) for p in all_podcasts]}")
 
-    found = temp_db.find_by_id("550e8400-e29b-41d4-a716-446655440000")
+    found = temp_db.get("550e8400-e29b-41d4-a716-446655440000")
     print(f"Found by ID: {found}")
 
     assert found is not None
@@ -157,14 +157,14 @@ def test_find_by_id(temp_db, sample_podcast):
 
 
 def test_find_by_id_returns_none_when_not_found(temp_db):
-    """Test find_by_id() returns None for non-existent podcast."""
-    found = temp_db.find_by_id("non-existent-id")
+    """Test get() returns None for non-existent podcast."""
+    found = temp_db.get("non-existent-id")
     assert found is None
 
 
 def test_find_by_url_returns_none_when_not_found(temp_db):
     """Test find_by_url() returns None for non-existent URL."""
-    found = temp_db.find_by_url("https://nonexistent.com/feed.xml")
+    found = temp_db.get_by_url("https://nonexistent.com/feed.xml")
     assert found is None
 
 
@@ -189,17 +189,17 @@ def test_find_by_index(temp_db):
     temp_db.save(podcast2)
 
     # Test 1-based indexing
-    assert temp_db.find_by_index(1).title == "Podcast 1"
-    assert temp_db.find_by_index(2).title == "Podcast 2"
+    assert temp_db.get_by_index(1).title == "Podcast 1"
+    assert temp_db.get_by_index(2).title == "Podcast 2"
 
 
 def test_find_by_index_returns_none_when_out_of_range(temp_db, sample_podcast):
     """Test find_by_index() returns None for invalid index."""
     temp_db.save(sample_podcast)
 
-    assert temp_db.find_by_index(0) is None
-    assert temp_db.find_by_index(2) is None
-    assert temp_db.find_by_index(999) is None
+    assert temp_db.get_by_index(0) is None
+    assert temp_db.get_by_index(2) is None
+    assert temp_db.get_by_index(999) is None
 
 
 def test_exists(temp_db, sample_podcast):
@@ -227,14 +227,14 @@ def test_delete_podcast_also_deletes_episodes(temp_db, sample_podcast, sample_ep
     temp_db.save(sample_podcast)
 
     # Verify episode exists
-    episodes = temp_db.find_by_podcast("https://example.com/feed.xml")
+    episodes = temp_db.get_episodes_by_podcast("https://example.com/feed.xml")
     assert len(episodes) == 1
 
     # Delete podcast
     temp_db.delete("https://example.com/feed.xml")
 
     # Verify episodes are gone
-    episodes = temp_db.find_by_podcast("https://example.com/feed.xml")
+    episodes = temp_db.get_episodes_by_podcast("https://example.com/feed.xml")
     assert len(episodes) == 0
 
 
@@ -256,7 +256,7 @@ def test_update_episode(temp_db, sample_podcast, sample_episode):
     assert result is True
 
     # Verify updates
-    episode = temp_db.find_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    episode = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
     assert episode.audio_path == "episode_audio.mp3"
     assert episode.duration == "00:12:00"
 
@@ -288,7 +288,7 @@ def test_updated_at_is_set_on_save(temp_db, sample_podcast):
     import time
 
     temp_db.save(sample_podcast)
-    first_save = temp_db.find_by_url("https://example.com/feed.xml")
+    first_save = temp_db.get_by_url("https://example.com/feed.xml")
 
     # Wait a bit to ensure timestamp difference
     time.sleep(0.1)
@@ -296,7 +296,7 @@ def test_updated_at_is_set_on_save(temp_db, sample_podcast):
     # Update and save again
     sample_podcast.title = "Updated Title"
     temp_db.save(sample_podcast)
-    second_save = temp_db.find_by_url("https://example.com/feed.xml")
+    second_save = temp_db.get_by_url("https://example.com/feed.xml")
 
     # Note: Pydantic model doesn't have updated_at field yet
     # This verifies the database column is set, even if not exposed in model
@@ -310,7 +310,7 @@ def test_updated_at_is_set_on_save(temp_db, sample_podcast):
 
 def test_find_by_podcast_returns_empty_for_nonexistent(temp_db):
     """Test find_by_podcast() returns empty list for non-existent podcast."""
-    episodes = temp_db.find_by_podcast("https://nonexistent.com/feed.xml")
+    episodes = temp_db.get_episodes_by_podcast("https://nonexistent.com/feed.xml")
     assert episodes == []
 
 
@@ -344,7 +344,7 @@ def test_find_by_podcast_returns_episodes_sorted_by_pub_date(temp_db, sample_pod
     sample_podcast.episodes = [episode1, episode2, episode3]
     temp_db.save(sample_podcast)
 
-    episodes = temp_db.find_by_podcast("https://example.com/feed.xml")
+    episodes = temp_db.get_episodes_by_podcast("https://example.com/feed.xml")
     assert len(episodes) == 3
     # Should be sorted by pub_date DESC
     assert episodes[0].title == "Episode 2"  # 2025-01-15
@@ -357,7 +357,7 @@ def test_find_episode_by_id(temp_db, sample_podcast, sample_episode):
     sample_podcast.episodes = [sample_episode]
     temp_db.save(sample_podcast)
 
-    result = temp_db.find_by_id("660e8400-e29b-41d4-a716-446655440001")
+    result = temp_db.get_episode("660e8400-e29b-41d4-a716-446655440001")
     assert result is not None
 
     podcast, episode = result
@@ -366,8 +366,8 @@ def test_find_episode_by_id(temp_db, sample_podcast, sample_episode):
 
 
 def test_find_episode_by_id_returns_none_for_nonexistent(temp_db):
-    """Test find_by_id() returns None for non-existent episode."""
-    result = temp_db.find_by_id("nonexistent-episode-id")
+    """Test get_episode() returns None for non-existent episode."""
+    result = temp_db.get_episode("nonexistent-episode-id")
     assert result is None
 
 
@@ -376,7 +376,7 @@ def test_find_by_external_id(temp_db, sample_podcast, sample_episode):
     sample_podcast.episodes = [sample_episode]
     temp_db.save(sample_podcast)
 
-    episode = temp_db.find_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    episode = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
     assert episode is not None
     assert episode.title == "Test Episode"
 
@@ -385,7 +385,7 @@ def test_find_by_external_id_returns_none_for_nonexistent(temp_db, sample_podcas
     """Test find_by_external_id() returns None for non-existent episode."""
     temp_db.save(sample_podcast)
 
-    episode = temp_db.find_by_external_id("https://example.com/feed.xml", "nonexistent-guid")
+    episode = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "nonexistent-guid")
     assert episode is None
 
 
@@ -411,7 +411,7 @@ def test_find_unprocessed_discovered_state(temp_db, sample_podcast):
     sample_podcast.episodes = [episode1, episode2]
     temp_db.save(sample_podcast)
 
-    results = temp_db.find_unprocessed(EpisodeState.DISCOVERED.value)
+    results = temp_db.get_unprocessed_episodes(EpisodeState.DISCOVERED.value)
     assert len(results) == 1
 
     podcast, episode = results[0]
@@ -451,7 +451,7 @@ def test_find_unprocessed_downloaded_state(temp_db, sample_podcast):
     sample_podcast.episodes = [episode1, episode2, episode3]
     temp_db.save(sample_podcast)
 
-    results = temp_db.find_unprocessed(EpisodeState.DOWNLOADED.value)
+    results = temp_db.get_unprocessed_episodes(EpisodeState.DOWNLOADED.value)
     assert len(results) == 1
 
     podcast, episode = results[0]
@@ -475,7 +475,7 @@ def test_find_unprocessed_downsampled_state(temp_db, sample_podcast):
     sample_podcast.episodes = [episode]
     temp_db.save(sample_podcast)
 
-    results = temp_db.find_unprocessed(EpisodeState.DOWNSAMPLED.value)
+    results = temp_db.get_unprocessed_episodes(EpisodeState.DOWNSAMPLED.value)
     assert len(results) == 1
     assert results[0][1].state == EpisodeState.DOWNSAMPLED
 
@@ -497,14 +497,14 @@ def test_find_unprocessed_transcribed_state(temp_db, sample_podcast):
     sample_podcast.episodes = [episode]
     temp_db.save(sample_podcast)
 
-    results = temp_db.find_unprocessed(EpisodeState.TRANSCRIBED.value)
+    results = temp_db.get_unprocessed_episodes(EpisodeState.TRANSCRIBED.value)
     assert len(results) == 1
     assert results[0][1].state == EpisodeState.TRANSCRIBED
 
 
 def test_find_unprocessed_returns_empty_for_unknown_state(temp_db):
     """Test find_unprocessed() returns empty list for unknown state."""
-    results = temp_db.find_unprocessed("invalid_state")
+    results = temp_db.get_unprocessed_episodes("invalid_state")
     assert results == []
 
 
@@ -526,10 +526,10 @@ def test_find_unprocessed_returns_empty_when_all_processed(temp_db, sample_podca
     temp_db.save(sample_podcast)
 
     # No episodes should match any unprocessed state
-    assert len(temp_db.find_unprocessed(EpisodeState.DISCOVERED.value)) == 0
-    assert len(temp_db.find_unprocessed(EpisodeState.DOWNLOADED.value)) == 0
-    assert len(temp_db.find_unprocessed(EpisodeState.DOWNSAMPLED.value)) == 0
-    assert len(temp_db.find_unprocessed(EpisodeState.TRANSCRIBED.value)) == 0
+    assert len(temp_db.get_unprocessed_episodes(EpisodeState.DISCOVERED.value)) == 0
+    assert len(temp_db.get_unprocessed_episodes(EpisodeState.DOWNLOADED.value)) == 0
+    assert len(temp_db.get_unprocessed_episodes(EpisodeState.DOWNSAMPLED.value)) == 0
+    assert len(temp_db.get_unprocessed_episodes(EpisodeState.TRANSCRIBED.value)) == 0
 
 
 # ============================================================================
@@ -559,7 +559,7 @@ def test_transaction_commits_all_or_nothing(temp_db):
     temp_db.save(podcast1)
     temp_db.save(podcast2)
 
-    all_podcasts = temp_db.find_all()
+    all_podcasts = temp_db.get_all()
     assert len(all_podcasts) == 2
 
 
@@ -569,7 +569,7 @@ def test_database_constraints_enforced(temp_db, sample_podcast):
 
     # Try to save different podcast with same URL
     duplicate = Podcast(
-        id="different-id",
+        id="770e8400-e29b-41d4-a716-446655440000",
         rss_url="https://example.com/feed.xml",  # Same URL
         title="Different Title",
         description="Different Description",
@@ -580,7 +580,7 @@ def test_database_constraints_enforced(temp_db, sample_podcast):
     temp_db.save(duplicate)
 
     # Verify only one podcast exists with updated title
-    all_podcasts = temp_db.find_all()
+    all_podcasts = temp_db.get_all()
     assert len(all_podcasts) == 1
     assert all_podcasts[0].title == "Different Title"
 
@@ -593,7 +593,7 @@ def test_database_constraints_enforced(temp_db, sample_podcast):
 def test_database_schema_created(temp_db):
     """Test that database schema is created on initialization."""
     # Verify tables exist by querying them
-    podcasts = temp_db.find_all()
+    podcasts = temp_db.get_all()
     assert isinstance(podcasts, list)
 
 

@@ -32,8 +32,8 @@ def mock_repository():
     mock_repo.exists = Mock(return_value=False)
     mock_repo.save = Mock(return_value=True)
     mock_repo.delete = Mock(return_value=True)
-    mock_repo.find_all = Mock(return_value=[])
-    mock_repo.find_by_url = Mock(return_value=None)
+    mock_repo.get_all = Mock(return_value=[])
+    mock_repo.get_by_url = Mock(return_value=None)
     mock_repo.update = Mock(return_value=True)
     return mock_repo
 
@@ -224,7 +224,7 @@ class TestListPodcasts:
 
     def test_list_podcasts_empty(self, feed_manager, mock_repository):
         """Should return empty list when no podcasts."""
-        mock_repository.find_all.return_value = []
+        mock_repository.get_all.return_value = []
 
         result = feed_manager.list_podcasts()
 
@@ -232,7 +232,7 @@ class TestListPodcasts:
 
     def test_list_podcasts_with_data(self, feed_manager, mock_repository, sample_podcasts):
         """Should return all podcasts."""
-        mock_repository.find_all.return_value = sample_podcasts
+        mock_repository.get_all.return_value = sample_podcasts
 
         result = feed_manager.list_podcasts()
 
@@ -253,7 +253,7 @@ class TestGetNewEpisodes:
             rss_url="https://youtube.com/channel/123",
             episodes=[],
         )
-        mock_repository.find_all.return_value = [youtube_podcast]
+        mock_repository.get_all.return_value = [youtube_podcast]
 
         # Setup media source to return YouTube episodes
         mock_source = Mock()
@@ -346,7 +346,7 @@ class TestEdgeCases:
     def test_get_new_episodes_malformed_feed(self, mock_parse, feed_manager, mock_repository):
         """Should skip podcasts with malformed feeds."""
         podcast = Podcast(title="Bad Feed", description="", rss_url="https://example.com/bad.xml", episodes=[])
-        mock_repository.find_all.return_value = [podcast]
+        mock_repository.get_all.return_value = [podcast]
 
         # Simulate parsing error
         mock_parse.side_effect = Exception("Parse error")
@@ -375,7 +375,7 @@ class TestTransactionContextManager:
         """Should defer repository saves until transaction completes."""
         # Setup: Mock repository to return a podcast
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Multiple updates within transaction
         with feed_manager.transaction():
@@ -402,7 +402,7 @@ class TestTransactionContextManager:
         """Should save each podcast only once even with multiple episode updates."""
         # Setup
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Multiple updates to different episodes
         with feed_manager.transaction():
@@ -425,7 +425,7 @@ class TestTransactionContextManager:
                 return podcast2
             return None
 
-        mock_repository.find_by_url.side_effect = find_by_url_side_effect
+        mock_repository.get_by_url.side_effect = find_by_url_side_effect
 
         # Execute
         with feed_manager.transaction():
@@ -439,7 +439,7 @@ class TestTransactionContextManager:
         """Should handle nested transactions (inner is no-op)."""
         # Setup
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Nested transaction
         with feed_manager.transaction():
@@ -459,7 +459,7 @@ class TestTransactionContextManager:
         """Should still persist changes if exception occurs in transaction."""
         # Setup
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Exception within transaction
         try:
@@ -476,7 +476,7 @@ class TestTransactionContextManager:
         """Should handle episode not found within transaction."""
         # Setup
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Update non-existent episode
         with feed_manager.transaction():
@@ -488,7 +488,7 @@ class TestTransactionContextManager:
     def test_transaction_podcast_not_found(self, feed_manager, mock_repository):
         """Should handle podcast not found within transaction."""
         # Setup
-        mock_repository.find_by_url.return_value = None
+        mock_repository.get_by_url.return_value = None
 
         # Execute: Update episode on non-existent podcast
         with feed_manager.transaction():
@@ -501,7 +501,7 @@ class TestTransactionContextManager:
         """Should cache podcast on first access and reuse for subsequent updates."""
         # Setup
         podcast = sample_podcasts[0]
-        mock_repository.find_by_url.return_value = podcast
+        mock_repository.get_by_url.return_value = podcast
 
         # Execute: Multiple updates within transaction
         with feed_manager.transaction():
@@ -509,7 +509,7 @@ class TestTransactionContextManager:
             feed_manager.mark_episode_downsampled(str(podcast.rss_url), "ep1", "audio_16k.wav")
 
         # Verify: Repository find_by_url called only once (cached)
-        assert mock_repository.find_by_url.call_count == 1
+        assert mock_repository.get_by_url.call_count == 1
 
     def test_without_transaction_uses_repository_directly(self, feed_manager, mock_repository):
         """Should use repository.update_episode when not in transaction."""

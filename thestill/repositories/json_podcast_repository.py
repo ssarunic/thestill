@@ -234,7 +234,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
     # Implement PodcastRepository interface
 
-    def find_all(self) -> List[Podcast]:
+    def get_all(self) -> List[Podcast]:
         """
         Retrieve all podcasts.
 
@@ -243,7 +243,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         """
         return self._read_podcasts()
 
-    def find_by_id(self, podcast_id: str) -> Optional[Podcast]:
+    def get(self, podcast_id: str) -> Optional[Podcast]:
         """
         Find podcast by internal UUID.
 
@@ -259,7 +259,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
                 return podcast
         return None
 
-    def find_by_index(self, index: int) -> Optional[Podcast]:
+    def get_by_index(self, index: int) -> Optional[Podcast]:
         """
         Find podcast by 1-based index (for CLI/user convenience).
 
@@ -274,7 +274,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
             return podcasts[index - 1]
         return None
 
-    def find_by_url(self, url: str) -> Optional[Podcast]:
+    def get_by_url(self, url: str) -> Optional[Podcast]:
         """
         Find podcast by RSS URL.
 
@@ -300,7 +300,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         Returns:
             True if podcast exists, False otherwise
         """
-        return self.find_by_url(url) is not None
+        return self.get_by_url(url) is not None
 
     def save(self, podcast: Podcast) -> Podcast:
         """
@@ -419,7 +419,7 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
 
     # Implement EpisodeRepository interface
 
-    def find_by_podcast(self, podcast_url: str) -> List[Episode]:
+    def get_episodes_by_podcast(self, podcast_url: str) -> List[Episode]:
         """
         Get all episodes for a podcast.
 
@@ -429,12 +429,12 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         Returns:
             List of episodes for the podcast, or empty list if podcast not found
         """
-        podcast = self.find_by_url(podcast_url)
+        podcast = self.get_by_url(podcast_url)
         return podcast.episodes if podcast else []
 
-    def find_by_id(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
+    def get_episode(self, episode_id: str) -> Optional[tuple[Podcast, Episode]]:
         """
-        Find episode by internal UUID.
+        Get episode by internal UUID (primary key).
 
         Args:
             episode_id: Internal UUID of the episode
@@ -449,9 +449,9 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
                     return (podcast, episode)
         return None
 
-    def find_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
+    def get_episode_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
         """
-        Find specific episode by external ID (from RSS feed).
+        Get specific episode by external ID (from RSS feed).
 
         Args:
             podcast_url: RSS feed URL of the podcast
@@ -460,17 +460,17 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
         Returns:
             Episode if found, None otherwise
         """
-        episodes = self.find_by_podcast(podcast_url)
+        episodes = self.get_episodes_by_podcast(podcast_url)
         for episode in episodes:
             if episode.external_id == episode_external_id:
                 return episode
         return None
 
-    def find_unprocessed(self, state: str) -> List[tuple[Podcast, Episode]]:
+    def get_unprocessed_episodes(self, state: str) -> List[tuple[Podcast, Episode]]:
         """
-        Find episodes in specific processing state.
+        Get episodes in specific processing state.
 
-        This method is used to find episodes that need processing at each
+        This method is used to get episodes that need processing at each
         stage of the pipeline (download, downsample, transcribe, clean).
 
         Args:
@@ -484,8 +484,8 @@ class JsonPodcastRepository(PodcastRepository, EpisodeRepository):
             List of (Podcast, Episode) tuples matching the state
 
         Example:
-            # Find all episodes ready for download
-            episodes_to_download = repository.find_unprocessed('discovered')
+            # Get all episodes ready for download
+            episodes_to_download = repository.get_unprocessed_episodes('discovered')
             for podcast, episode in episodes_to_download:
                 download_audio(podcast, episode)
         """
