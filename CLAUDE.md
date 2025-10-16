@@ -210,24 +210,25 @@ mypy thestill/
 - `Episode.created_at`: When the episode was first discovered and added
 - Auto-generated via `default_factory=datetime.utcnow`
 
-**Migration Support**:
-- Existing `feeds.json` files are **automatically migrated** on first load
-- Old `guid` fields are renamed to `external_id`
+**Migration from JSON to SQLite**:
+- Legacy `feeds.json` files can be migrated using `scripts/migrate_json_to_sqlite.py`
+- Migration script validates data integrity and creates backups
+- Supports dry-run mode to preview changes before committing
+- Old `guid` fields are renamed to `external_id` during migration
 - Missing `id` and `created_at` fields are auto-generated
-- A backup (`feeds.backup.json`) is created before migration
-- Migration is idempotent (safe to run multiple times)
 
 **Repository Methods**:
-- `find_by_id(podcast_id: str)`: Find by internal UUID
-- `find_by_index(index: int)`: Find by 1-based index (for CLI convenience)
-- `find_by_url(url: str)`: Find by RSS URL (external identifier)
-- `find_by_external_id(podcast_url, episode_external_id)`: Find episode by external ID
+- `get(podcast_id: str)`: Get podcast by internal UUID (primary key)
+- `get_by_index(index: int)`: Get podcast by 1-based index (for CLI convenience)
+- `get_by_url(url: str)`: Get podcast by RSS URL (external identifier)
+- `get_episode(episode_id: str)`: Get episode by internal UUID
+- `get_episode_by_external_id(podcast_url, episode_external_id)`: Get episode by external ID
 
 **Why This Design?**:
 - **Stability**: Internal UUIDs never change, even if external RSS URLs or GUIDs change
 - **Traceability**: Timestamps track when records were added to the system
-- **Future-proof**: Enables database migration (SQLite/PostgreSQL) with stable foreign keys
-- **Backward compatible**: Automatic migration preserves all existing data
+- **Performance**: SQLite with indexed queries (O(log n) vs O(n) for JSON scans)
+- **Backward compatible**: Migration script preserves all existing data
 
 ### Configuration System
 
@@ -239,7 +240,7 @@ mypy thestill/
 #### Episode Management
 
 **MAX_EPISODES_PER_PODCAST**: Limit the number of episodes tracked per podcast
-- **Purpose**: Prevents `feeds.json` from becoming unmanageable for podcasts with hundreds of episodes
+- **Purpose**: Prevents database from becoming unmanageable for podcasts with hundreds of episodes
 - **Behavior**:
   - Only the N most recent episodes (by `pub_date`) are kept per podcast
   - Already-processed episodes are never removed, even if total exceeds limit
@@ -264,9 +265,9 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - **Atomic operation**: Only fetches RSS feeds and discovers episodes
    - Checks all tracked podcast feeds for new episodes
    - Parses RSS/YouTube feeds and discovers new episodes
-   - Adds new episodes to `data/feeds.json` with `audio_url` set
+   - Adds new episodes to SQLite database with `audio_url` set
    - Updates podcast metadata (title, description, etc.)
-   - **Episode limiting**: Respects `MAX_EPISODES_PER_PODCAST` env var to keep feeds.json manageable
+   - **Episode limiting**: Respects `MAX_EPISODES_PER_PODCAST` env var to keep database manageable
      - If set, only tracks the N most recent episodes per podcast
      - Protects processed episodes from removal
      - Can be overridden with `--max-episodes` CLI flag
@@ -276,7 +277,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - **Atomic operation**: Only downloads audio
    - Finds all discovered episodes without `audio_path` set
    - Downloads original audio files to `data/original_audio/`
-   - Updates episode `audio_path` in `data/feeds.json`
+   - Updates episode `audio_path` in SQLite database
    - Skips already-downloaded episodes
    - **No side effects**: Does not fetch feeds or process audio
 
@@ -285,7 +286,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - Finds all downloaded episodes without downsampled versions
    - Converts to 16kHz, 16-bit, mono WAV format
    - Saves to `data/downsampled_audio/`
-   - Updates episode `downsampled_audio_path` in `data/feeds.json`
+   - Updates episode `downsampled_audio_path` in database
    - **Why?** pyannote.audio only supports WAV, not M4A/MP3
    - **No side effects**: Does not download or transcribe
 
@@ -296,7 +297,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - Uses downsampled WAV files for optimal Whisper and pyannote compatibility
    - Whisper/WhisperX transcribes to structured JSON with speaker labels
    - Saves to `data/raw_transcripts/`
-   - Updates episode `raw_transcript_path` in `data/feeds.json`
+   - Updates episode `raw_transcript_path` in database
    - **No side effects**: Does not download or clean
 
 5. **Cleaning** (`thestill clean-transcript`):
@@ -307,7 +308,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - Phase 3: LLM generates clean Markdown transcript
    - Saves cleaned Markdown to `data/clean_transcripts/`
    - Optionally saves corrections and speaker mapping for debugging
-   - Updates episode `clean_transcript_path` in `data/feeds.json`
+   - Updates episode `clean_transcript_path` in database
    - **No side effects**: Does not download or transcribe
 
 **Episode State Progression:**
@@ -343,12 +344,12 @@ thestill/
 └── cli.py            # Command-line interface
 
 data/                      # Generated data directory
+├── podcasts.db            # SQLite database (podcast/episode metadata and state)
 ├── original_audio/        # Original downloaded audio files (MP3, M4A, etc.)
 ├── downsampled_audio/     # Downsampled WAV files (16kHz, 16-bit, mono) for transcription
 ├── raw_transcripts/       # Raw Whisper JSON transcripts with speaker labels
 ├── clean_transcripts/     # Cleaned Markdown transcripts (corrected, formatted)
-├── summaries/             # Episode summaries (future use)
-└── feeds.json            # Podcast feed tracking with episode state
+└── summaries/             # Episode summaries (future use)
 ```
 
 ## Key Technologies
@@ -364,6 +365,14 @@ data/                      # Generated data directory
 - **Ollama**: Local LLM models for cost-effective processing
 - **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
 - **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
+
+### Data Storage
+- **SQLite**: Relational database for podcast/episode metadata
+  - O(log n) indexed queries vs O(n) linear JSON scans
+  - Row-level locking for concurrent operations
+  - ACID transactions with referential integrity
+  - Cache-friendly design (no triggers/cascades)
+  - WAL mode for better read concurrency
 
 ### Other Dependencies
 - **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
@@ -513,11 +522,11 @@ The project uses a **layered architecture** with dependency injection for better
 - **Transcriber**: Whisper/Google transcription with diarization
 - **MediaSource Strategy Pattern**: Abstracts RSS vs YouTube (easy to add Spotify, etc.)
 
-**4. Repository Layer** ([core/podcast_repository.py](thestill/core/podcast_repository.py)):
+**4. Repository Layer** ([repositories/](thestill/repositories/)):
 - Abstract interface for podcast/episode persistence
-- `JsonPodcastRepository`: Current JSON file implementation
-- Future: Easy migration to SQLite/PostgreSQL
-- Pattern: Repository pattern with CRUD operations
+- `SqlitePodcastRepository`: SQLite implementation with indexed queries
+- Cache-friendly design (explicit timestamps, no DB-level cascades)
+- Pattern: Repository pattern with CRUD operations and transaction support
 
 **5. Model Layer** ([models/podcast.py](thestill/models/podcast.py)):
 - Pydantic models for type safety and validation
@@ -534,8 +543,8 @@ CLI → Services → Core → Repository → Models
 **Key Design Patterns**:
 - **Dependency Injection**: Services receive dependencies in constructor
 - **Strategy Pattern**: MediaSource abstraction for multiple podcast sources
-- **Repository Pattern**: Abstract data persistence for future database migration
-- **Context Manager**: Transaction support for batch operations (FeedManager)
+- **Repository Pattern**: Abstract data persistence (SQLite with migration script from JSON)
+- **Context Manager**: Transaction support for batch operations (FeedManager, SqliteRepository)
 - **Single Responsibility**: Each class/function has one clear purpose
 
 ### Error Handling Patterns
@@ -707,12 +716,12 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 
 This project underwent a comprehensive refactoring from October 2024 to present, transforming from a monolithic script into a well-architected, testable system. See [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) for the complete plan.
 
-### Current Status (as of 2025-10-14)
+### Current Status (as of 2025-10-16)
 
-**Progress**: 29/35 tasks complete (82.9%)
-**Test Coverage**: 41.05% (↑128% from 18% baseline) → Target 70%
-**Tests Passing**: 269/269 (100%)
-**Time Invested**: 32.25 hours
+**Progress**: 35/35 tasks complete (100%) ✅
+**Test Coverage**: 41.05% (↑128% from 18% baseline)
+**Tests Passing**: 265/265 (100%)
+**Storage**: Migrated from JSON to SQLite
 
 ### Key Achievements
 
@@ -738,14 +747,21 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 - ✅ EpisodeState enum for type-safe state management
 - ✅ Comprehensive unit tests (AudioDownloader 99%, PathManager 100%, PodcastService 92%)
 
-**Week 4: Architecture & Polish** 🚧 (83% complete)
+**Week 4: Architecture & Polish** ✅ (100% complete)
 - ✅ MediaSource strategy pattern (RSS + YouTube abstraction, enables Spotify/SoundCloud)
 - ✅ FeedManager transaction context manager (batch operations)
 - ✅ PathManager require_file_exists helper (centralized validation)
 - ✅ Performance metrics tracking (TranscriptCleaningMetrics)
 - ✅ LLM provider display names (abstraction improvement)
-- 🚧 Documentation (in progress: R-030)
-- ⏳ Remaining: Makefile, GitHub Actions CI, minor polish tasks
+- ✅ Documentation updated
+
+**Week 5: SQLite Migration** ✅ (100% complete)
+- ✅ SQLite repository implementation (540 lines, 34 tests)
+- ✅ API refactoring (get vs find naming, method collision fix)
+- ✅ Migration script with dry-run and backup support
+- ✅ CLI integration (config, database_path setting)
+- ✅ Removed JSON repository (1000+ lines deleted)
+- ✅ All tests passing with SQLite (265/265)
 
 ### Architecture Improvements
 
@@ -775,7 +791,7 @@ Core Layer (core/)
   └── Transcriber (Whisper/Google)
   ↓ (persistence)
 Repository Layer (podcast_repository.py)
-  └── JsonPodcastRepository (→ future: PostgreSQL)
+  └── SqlitePodcastRepository (cache-friendly, indexed queries)
   ↓ (data models)
 Model Layer (models/podcast.py)
   └── Pydantic models with validation
@@ -783,9 +799,10 @@ Model Layer (models/podcast.py)
 
 ### Design Patterns Implemented
 
-1. **Repository Pattern** (R-006b): Abstract data persistence
-   - Easy migration from JSON → SQLite → PostgreSQL
-   - 56 unit tests, 100% coverage
+1. **Repository Pattern**: Abstract data persistence with SQLite
+   - Migrated from JSON to SQLite (O(log n) indexed queries)
+   - Migration script with validation and backup support
+   - 34 SQLite repository tests, 100% passing
 
 2. **Strategy Pattern** (R-029): Media source abstraction
    - Clean separation of RSS vs YouTube logic

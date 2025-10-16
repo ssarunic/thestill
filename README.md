@@ -19,6 +19,7 @@ thestill.ai is a production-ready podcast transcription and analysis pipeline th
 - **Transcript Cleaning**: LLM-powered correction of errors, removal of filler words and ads
 - **Multiple Sources**: RSS feeds, Apple Podcasts, YouTube channels/playlists
 - **Flexible LLM Backend**: OpenAI, Ollama (local), Google Gemini, or Anthropic Claude
+- **SQLite Storage**: Fast indexed queries with ACID transactions
 - **MCP Server**: Integrate with Claude Desktop and other MCP-compatible clients
 
 **Processing Pipeline:**
@@ -35,6 +36,7 @@ Each step is atomic and can be run independently for horizontal scaling.
   - Google Cloud Speech-to-Text with built-in diarization (fast, accurate)
 - **LLM-Powered Cleaning**: Fix transcription errors, remove filler words, identify speakers
 - **Multiple LLM Providers**: OpenAI GPT-4, Ollama (local), Google Gemini, Anthropic Claude
+- **SQLite Database**: Indexed queries (O(log n)), row-level locking, ACID transactions
 - **Atomic Pipeline**: Each processing step is independent and idempotent
 - **CLI Interface**: Simple command-line tool with comprehensive options
 - **MCP Server**: Natural language interface via Claude Desktop
