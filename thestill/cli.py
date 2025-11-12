@@ -188,11 +188,13 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
 
     click.echo(f"📡 Found {result.total_episodes} new episode(s)")
 
+    # Display episode names grouped by podcast
+    for podcast, episodes in result.episodes_by_podcast:
+        click.echo(f"\n📻 {podcast.title}")
+        for episode in episodes:
+            click.echo(f"  • {episode.title}")
+
     if dry_run:
-        for podcast, episodes in result.episodes_by_podcast:
-            click.echo(f"\n📻 {podcast.title}")
-            for episode in episodes:
-                click.echo(f"  • {episode.title}")
         click.echo("\n(Run without --dry-run to update feeds.json)")
         return
 
@@ -551,8 +553,11 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     transcript_data = json.load(f)
 
                 # Clean transcript with context
-                # Use internal episode ID for filenames (stable, non-changing identifier)
-                cleaned_filename = f"{episode.id}_cleaned.md"
+                # Generate filename matching pattern: Podcast_Episode_hash_cleaned.md
+                base_name = transcript_path.stem  # Remove .json extension
+                if base_name.endswith("_transcript"):
+                    base_name = base_name[: -len("_transcript")]  # Remove _transcript suffix
+                cleaned_filename = f"{base_name}_cleaned.md"
                 cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
 
                 result = cleaning_processor.clean_transcript(
@@ -582,13 +587,18 @@ def clean_transcript(ctx, dry_run, max_episodes):
                     )
 
                     # Update feed manager to mark as processed
-                    # Filename is based on internal episode ID: {episode.id}.md
-                    cleaned_md_filename = f"{episode.id}.md"
+                    # Generate clean transcript filename matching pattern:
+                    # Raw: Podcast_Episode_hash_transcript.json → Clean: Podcast_Episode_hash_cleaned.md
+                    base_name = transcript_path.stem  # Remove .json extension
+                    if base_name.endswith("_transcript"):
+                        base_name = base_name[: -len("_transcript")]  # Remove _transcript suffix
+                    cleaned_md_filename = f"{base_name}_cleaned.md"
+
                     feed_manager.mark_episode_processed(
                         str(podcast.rss_url),
                         episode.external_id,
                         raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
-                        clean_transcript_path=cleaned_md_filename,  # {episode_id}.md
+                        clean_transcript_path=cleaned_md_filename,  # Podcast_Episode_hash_cleaned.md
                     )
 
                     total_processed += 1
