@@ -75,8 +75,17 @@ class AudioDownloader:
             source_result = source.download_episode(episode, podcast_title, str(self.storage_path))
 
             # If source handled download (e.g., YouTube), return result
+            # Note: YouTube source will return None on failure, but we should NOT
+            # fall back to HTTP download for YouTube URLs as they require yt-dlp
             if source_result is not None:
                 return source_result
+
+            # Check if this is a YouTube URL - if so, don't try HTTP fallback
+            from .youtube_downloader import YouTubeDownloader
+
+            if YouTubeDownloader.is_youtube_url(str(episode.audio_url)):
+                logger.error(f"YouTube download failed for {episode.title}, no fallback available")
+                return None
 
             # Handle standard HTTP downloads (RSS feeds)
             safe_podcast_title = self._sanitize_filename(podcast_title)

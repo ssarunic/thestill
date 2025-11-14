@@ -649,10 +649,10 @@ Please produce the final cleaned Markdown transcript."""
         Save output from a specific phase immediately after completion.
 
         Args:
-            output_path: Base output path (e.g., data/clean_transcripts/{episode_id}_cleaned.md)
+            output_path: Base output path (e.g., data/clean_transcripts/Podcast_Episode_hash_cleaned.md)
             phase: Phase name (original, corrections, corrected, speakers)
             data: Data to save (list, dict, or string)
-            episode_id: Internal episode ID (UUID) for stable file naming
+            episode_id: Internal episode ID (UUID, unused but kept for API compatibility)
         """
         output_path = Path(output_path)
 
@@ -660,34 +660,33 @@ Please produce the final cleaned Markdown transcript."""
         debug_dir = output_path.parent / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use provided episode_id (internal UUID), or fallback to extracting from filename
-        if not episode_id:
-            episode_id = output_path.stem.replace("_cleaned", "").replace("_transcript", "")
+        # Extract base name from output_path: Podcast_Episode_hash_cleaned.md -> Podcast_Episode_hash
+        base_name = output_path.stem.replace("_cleaned", "")
 
         if phase == "original":
-            # Save to debug directory: {episode_id}.original.md
-            path = debug_dir / f"{episode_id}.original.md"
+            # Save to debug directory: {base_name}.original.md
+            path = debug_dir / f"{base_name}.original.md"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
             print(f"  → Original transcript saved to: {path}")
 
         elif phase == "corrections":
-            # Save to debug directory: {episode_id}.corrections.json
-            path = debug_dir / f"{episode_id}.corrections.json"
+            # Save to debug directory: {base_name}.corrections.json
+            path = debug_dir / f"{base_name}.corrections.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Corrections saved to: {path}")
 
         elif phase == "corrected":
-            # Save to debug directory: {episode_id}.corrected.md
-            path = debug_dir / f"{episode_id}.corrected.md"
+            # Save to debug directory: {base_name}.corrected.md
+            path = debug_dir / f"{base_name}.corrected.md"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
             print(f"  → Corrected transcript saved to: {path}")
 
         elif phase == "speakers":
-            # Save to debug directory: {episode_id}.speakers.json
-            path = debug_dir / f"{episode_id}.speakers.json"
+            # Save to debug directory: {base_name}.speakers.json
+            path = debug_dir / f"{base_name}.speakers.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             print(f"  → Speaker mapping saved to: {path}")
@@ -737,22 +736,29 @@ Please produce the final cleaned Markdown transcript."""
         Save final outputs to standard locations.
 
         File structure:
-        - data/clean_transcripts/{episode_id}.md - Final cleaned transcript (main output)
-        - data/clean_transcripts/{episode_id}.no-ads.md - Transcript with ads removed
-        - data/clean_transcripts/debug/{episode_id}.metrics.json - Performance metrics
-        - data/clean_transcripts/debug/{episode_id}.corrections.json - Debug: corrections list
-        - data/clean_transcripts/debug/{episode_id}.speakers.json - Debug: speaker mapping
-        - data/clean_transcripts/debug/{episode_id}.corrected.md - Debug: pre-speaker-formatting text
+        - data/clean_transcripts/{base_name}_cleaned.md - Final cleaned transcript (main output)
+        - data/clean_transcripts/{base_name}_cleaned.no-ads.md - Transcript with ads removed
+        - data/clean_transcripts/debug/{base_name}.metrics.json - Performance metrics
+        - data/clean_transcripts/debug/{base_name}.corrections.json - Debug: corrections list
+        - data/clean_transcripts/debug/{base_name}.speakers.json - Debug: speaker mapping
+        - data/clean_transcripts/debug/{base_name}.corrected.md - Debug: pre-speaker-formatting text
+
+        Args:
+            result: Cleaned transcript result dictionary
+            output_path: Full path to output file (e.g., Podcast_Episode_hash_cleaned.md)
+            save_corrections: Whether to save debug files
+            save_metrics: Whether to save performance metrics
+            episode_id: Internal episode UUID (used for debug files)
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Use provided episode_id (internal UUID), or fallback to extracting from filename
-        if not episode_id:
-            episode_id = output_path.stem.replace("_cleaned", "").replace("_transcript", "")
+        # Extract base name from output_path for debug files
+        # e.g., "Podcast_Episode_hash_cleaned.md" -> "Podcast_Episode_hash"
+        base_name = output_path.stem.replace("_cleaned", "")
 
-        # Save final cleaned markdown: {episode_id}.md
-        final_path = output_path.parent / f"{episode_id}.md"
+        # Save final cleaned markdown using the provided output_path
+        final_path = output_path
         with open(final_path, "w", encoding="utf-8") as f:
             # Add metadata header
             f.write(f"# {result['episode_title']}\n\n")
@@ -761,9 +767,9 @@ Please produce the final cleaned Markdown transcript."""
             f.write(result["cleaned_markdown"])
         print(f"Final transcript saved to: {final_path}")
 
-        # Save ad-free version: {episode_id}.no-ads.md
+        # Save ad-free version: {base_name}_cleaned.no-ads.md
         no_ads_markdown = self._remove_ads_from_markdown(result["cleaned_markdown"])
-        no_ads_path = output_path.parent / f"{episode_id}.no-ads.md"
+        no_ads_path = output_path.parent / f"{base_name}_cleaned.no-ads.md"
         with open(no_ads_path, "w", encoding="utf-8") as f:
             # Add metadata header
             f.write(f"# {result['episode_title']}\n\n")
@@ -772,11 +778,11 @@ Please produce the final cleaned Markdown transcript."""
             f.write(no_ads_markdown)
         print(f"Ad-free transcript saved to: {no_ads_path}")
 
-        # Save performance metrics to debug folder: debug/{episode_id}.metrics.json
+        # Save performance metrics to debug folder: debug/{base_name}.metrics.json
         if save_metrics and "metrics" in result:
             debug_dir = output_path.parent / "debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
-            metrics_path = debug_dir / f"{episode_id}.metrics.json"
+            metrics_path = debug_dir / f"{base_name}.metrics.json"
             metrics_dict = result["metrics"].model_dump(mode="json")
             # Add computed properties
             metrics_dict["phase_breakdown_percent"] = result["metrics"].phase_breakdown_percent

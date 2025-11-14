@@ -208,6 +208,13 @@ class PodcastFeedManager:
                 if episodes:
                     new_episodes.append((podcast, episodes))
 
+                    # Update last_processed to the most recent episode's pub_date
+                    # This ensures next refresh only considers episodes newer than what we've seen
+                    if podcast.episodes:
+                        most_recent_date = max((ep.pub_date for ep in podcast.episodes if ep.pub_date), default=None)
+                        if most_recent_date:
+                            podcast.last_processed = most_recent_date
+
                 # Save podcast with new episodes
                 self.repository.save(podcast)
 
