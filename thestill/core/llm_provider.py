@@ -17,12 +17,13 @@ Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, 
 """
 
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 import ollama
-from anthropic import Anthropic
+from anthropic import Anthropic, RateLimitError
 from openai import OpenAI
 
 
@@ -417,6 +418,8 @@ class AnthropicProvider(LLMProvider):
         """Internal method to create completions with optional continuation"""
         full_response = ""
         current_messages = messages.copy()
+        total_retry_count = 0  # Track total retries across all continuation attempts
+        max_total_retries = 10  # Global limit to prevent infinite rate limit loops
 
         for attempt in range(max_attempts):
             # Separate system messages from conversation messages
@@ -459,8 +462,40 @@ class AnthropicProvider(LLMProvider):
                 else:
                     params["system"] = json_instruction.strip()
 
-            # Make API request
-            response = self.client.messages.create(**params)
+            # Make API request with rate limit retry logic
+            max_retries = 3
+            for retry_attempt in range(max_retries):
+                try:
+                    response = self.client.messages.create(**params)
+                    break  # Success - exit retry loop
+                except RateLimitError as e:
+                    total_retry_count += 1
+
+                    # Check global retry limit to prevent infinite loops
+                    if total_retry_count > max_total_retries:
+                        print(f"❌ Rate limit retry failed after {total_retry_count} total retries across all attempts")
+                        raise
+
+                    if retry_attempt < max_retries - 1:
+                        # Parse retry-after header (in seconds)
+                        retry_after = 60  # Default to 60 seconds if header missing
+                        if hasattr(e, "response") and e.response and hasattr(e.response, "headers"):
+                            try:
+                                retry_after = int(e.response.headers.get("retry-after", 60))
+                            except (ValueError, TypeError):
+                                # If parsing fails, use default
+                                pass
+
+                        print(
+                            f"⚠️  Rate limit exceeded. Waiting {retry_after} seconds before retry (total retry {total_retry_count}/{max_total_retries}, current attempt {retry_attempt + 2}/{max_retries})..."
+                        )
+                        time.sleep(retry_after)
+                    else:
+                        # Max retries for this attempt exceeded, re-raise the error
+                        print(
+                            f"❌ Rate limit retry failed after {max_retries} attempts (total retries: {total_retry_count})"
+                        )
+                        raise
 
             # Extract text from current response
             current_text = ""
