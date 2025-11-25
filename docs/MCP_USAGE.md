@@ -333,6 +333,211 @@ Claude: "You're tracking 3 podcasts with a total of 550 episodes.
 }
 ```
 
+### 6. `get_transcript`
+
+Get the cleaned transcript for a specific episode.
+
+**Parameters:**
+- `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
+- `episode_id` (string, required): Episode index (1=latest), 'latest', date (YYYY-MM-DD), or GUID
+
+**Example Usage:**
+```
+User: "Show me the transcript of the latest episode from podcast 1"
+Claude: [calls get_transcript with podcast_id="1", episode_id="latest"]
+Claude: [Displays the full cleaned Markdown transcript]
+```
+
+**Response:** Returns the cleaned Markdown transcript content directly, or an error message if not available.
+
+---
+
+## Pipeline Tools
+
+The following tools allow you to process episodes through the transcription pipeline. The pipeline has 5 steps that must be run in order:
+
+1. **refresh_feeds** - Discover new episodes from RSS feeds
+2. **download_episodes** - Download audio files
+3. **downsample_audio** - Convert to 16kHz WAV format
+4. **transcribe_episodes** - Create raw transcripts
+5. **clean_transcripts** - Clean with LLM for readability
+
+Alternatively, use **process_episode** to run all steps for a single episode.
+
+### 7. `refresh_feeds`
+
+Refresh podcast feeds to discover new episodes. This is step 1 of the pipeline.
+
+**Parameters:**
+- `podcast_id` (string, optional): Podcast index or RSS URL to refresh only that podcast
+- `max_episodes` (integer, optional): Maximum episodes to discover per podcast
+
+**Example Usage:**
+```
+User: "Check for new podcast episodes"
+Claude: [calls refresh_feeds]
+Claude: "Discovered 5 new episodes across your podcasts:
+- The Rest is Politics: 2 new episodes
+- Lex Fridman: 1 new episode
+- Huberman Lab: 2 new episodes
+
+Next step: Run download_episodes to download the audio."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Discovered 5 new episode(s)",
+  "total_episodes": 5,
+  "episodes": [
+    {"podcast_title": "The Rest is Politics", "episode_title": "...", "pub_date": "..."}
+  ],
+  "next_step": "Run download_episodes to download the audio files"
+}
+```
+
+### 8. `download_episodes`
+
+Download audio files for discovered episodes. This is step 2 of the pipeline.
+
+**Parameters:**
+- `podcast_id` (string, optional): Podcast index or RSS URL to download only from that podcast
+- `max_episodes` (integer, optional, default=5): Maximum episodes to download
+
+**Example Usage:**
+```
+User: "Download the new episodes"
+Claude: [calls download_episodes]
+Claude: "Downloaded 3 episodes successfully. Next step: downsample the audio."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Downloaded 3 episode(s)",
+  "downloaded": [
+    {"podcast": "The Rest is Politics", "episode": "Episode Title"}
+  ],
+  "next_step": "Run downsample_audio to prepare for transcription"
+}
+```
+
+### 9. `downsample_audio`
+
+Downsample downloaded audio to 16kHz WAV format for transcription. This is step 3 of the pipeline.
+
+**Parameters:**
+- `podcast_id` (string, optional): Podcast index or RSS URL to downsample only from that podcast
+- `max_episodes` (integer, optional, default=5): Maximum episodes to downsample
+
+**Example Usage:**
+```
+User: "Prepare the audio for transcription"
+Claude: [calls downsample_audio]
+Claude: "Downsampled 3 episodes. Ready for transcription."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Downsampled 3 episode(s)",
+  "downsampled": [
+    {"podcast": "The Rest is Politics", "episode": "Episode Title"}
+  ],
+  "next_step": "Run transcribe_episodes to create transcripts"
+}
+```
+
+### 10. `transcribe_episodes`
+
+Transcribe downsampled audio to JSON transcripts. This is step 4 of the pipeline.
+
+**Parameters:**
+- `podcast_id` (string, optional): Podcast index or RSS URL to transcribe only from that podcast
+- `max_episodes` (integer, optional, default=1): Maximum episodes to transcribe (low default due to processing time)
+
+**Example Usage:**
+```
+User: "Transcribe the prepared episodes"
+Claude: [calls transcribe_episodes]
+Claude: "Transcribed 1 episode. The raw transcript is ready for cleaning."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Transcribed 1 episode(s)",
+  "transcribed": [
+    {"podcast": "The Rest is Politics", "episode": "Episode Title"}
+  ],
+  "next_step": "Run clean_transcripts for better readability"
+}
+```
+
+### 11. `clean_transcripts`
+
+Clean raw transcripts with LLM processing for better readability. This is step 5 (final) of the pipeline.
+
+**Parameters:**
+- `podcast_id` (string, optional): Podcast index or RSS URL to clean only from that podcast
+- `max_episodes` (integer, optional, default=1): Maximum episodes to clean (low default due to LLM costs)
+
+**Example Usage:**
+```
+User: "Clean up the transcripts"
+Claude: [calls clean_transcripts]
+Claude: "Cleaned 1 transcript with 45 corrections. Applied speaker identification."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Cleaned 1 transcript(s)",
+  "cleaned": [
+    {"podcast": "The Rest is Politics", "episode": "Episode Title", "corrections": 45, "speakers": 2}
+  ],
+  "complete": "Transcripts are now ready! Use get_transcript to read them."
+}
+```
+
+### 12. `process_episode`
+
+Run the full processing pipeline for a specific episode. Convenient for processing a single episode end-to-end.
+
+**Parameters:**
+- `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
+- `episode_id` (string, required): Episode index (1=latest), 'latest', date (YYYY-MM-DD), or GUID
+
+**Example Usage:**
+```
+User: "Process the latest episode from podcast 1"
+Claude: [calls process_episode with podcast_id="1", episode_id="latest"]
+Claude: "Fully processed episode 'Nigel Farage and Reform':
+- Downloaded audio
+- Downsampled to 16kHz
+- Transcribed with Whisper
+- Cleaned with LLM
+
+The transcript is now ready to read!"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Episode processed: Nigel Farage and Reform",
+  "podcast": "The Rest is Politics",
+  "episode": "Nigel Farage and Reform",
+  "steps_completed": ["download", "downsample", "transcribe", "clean"],
+  "transcript_ready": true
+}
+```
+
 ---
 
 ## Usage Examples
@@ -420,6 +625,59 @@ Episode 2 (Jan 13): Rory discussed Farage's influence on Conservative voters...
 Episode 3 (Jan 11): Both hosts debated whether Farage poses a genuine threat...
 ```
 
+### Example 5: Process New Episodes End-to-End
+
+```
+User: "Check for new episodes and process them"
+
+Claude: [calls refresh_feeds]
+Found 3 new episodes! Let me process the latest one for you.
+
+[calls process_episode with podcast_id="1", episode_id="latest"]
+Processing "Nigel Farage and Reform" from The Rest is Politics...
+
+✓ Step 1: Downloaded audio file (45 MB)
+✓ Step 2: Downsampled to 16kHz WAV
+✓ Step 3: Transcribed with speaker diarization
+✓ Step 4: Cleaned transcript with LLM
+
+The episode is fully processed! Would you like me to show you the transcript or summarize it?
+
+User: "Give me a quick summary"
+
+Claude: [calls get_transcript with podcast_id="1", episode_id="latest"]
+[Reads and summarizes the transcript]
+
+Here's a summary of today's episode...
+```
+
+### Example 6: Batch Process Multiple Episodes
+
+```
+User: "Process all unprocessed episodes from The Rest is Politics"
+
+Claude: Let me run through the pipeline for podcast 1.
+
+[calls refresh_feeds with podcast_id="1"]
+Discovered 5 new episodes.
+
+[calls download_episodes with podcast_id="1", max_episodes=5]
+Downloaded 5 episodes.
+
+[calls downsample_audio with podcast_id="1", max_episodes=5]
+Downsampled 5 episodes.
+
+[calls transcribe_episodes with podcast_id="1", max_episodes=5]
+Transcribed 5 episodes. (Note: This may take a while for long episodes)
+
+[calls clean_transcripts with podcast_id="1", max_episodes=5]
+Cleaned 5 transcripts.
+
+All 5 episodes are now fully processed! You can read any of them using:
+- "Show me the transcript for episode 1" (latest)
+- "Show me episode 2's transcript" (second latest)
+```
+
 ---
 
 ## Troubleshooting
@@ -449,9 +707,27 @@ Episode 3 (Jan 11): Both hosts debated whether Farage poses a genuine threat...
 
 ### "Episode not yet processed" for Transcripts
 
-- Episodes need to be transcribed first via CLI
-- Use CLI: `thestill transcribe /path/to/audio.mp3`
-- Then use CLI: `thestill process` to clean transcripts
+Episodes need to go through the full pipeline before transcripts are available. You can now do this directly via MCP tools:
+
+1. **Quick method:** Use `process_episode` to run the full pipeline for a single episode
+2. **Batch method:** Run each step separately:
+   - `refresh_feeds` → discover new episodes
+   - `download_episodes` → download audio
+   - `downsample_audio` → prepare for transcription
+   - `transcribe_episodes` → create raw transcript
+   - `clean_transcripts` → clean with LLM
+
+### Transcription Takes Too Long
+
+- Transcription is CPU/GPU intensive and can take 10-30 minutes per hour of audio
+- Use `max_episodes=1` (default) to process one episode at a time
+- Consider using Google Cloud Speech-to-Text for faster cloud-based transcription
+
+### LLM Cleaning Fails
+
+- Ensure your LLM provider is configured in `.env` (OpenAI, Anthropic, Gemini, or Ollama)
+- Check API key validity and rate limits
+- For Ollama, ensure the service is running locally
 
 ---
 
@@ -461,10 +737,12 @@ Episode 3 (Jan 11): Both hosts debated whether Farage poses a genuine threat...
    - ✅ "Show me the latest episode from podcast 1"
    - ✅ "What's new in the last 24 hours?"
    - ✅ "Add The Daily podcast"
+   - ✅ "Process the latest episode"
 
 2. **Reference by index for speed:**
    - ✅ "Transcript of episode 1.2" (podcast 1, episode 2)
    - ✅ "List episodes from podcast 3"
+   - ✅ "Process episode 1.1"
 
 3. **Use dates when relevant:**
    - ✅ "Show me the episode from January 15"
@@ -475,13 +753,19 @@ Episode 3 (Jan 11): Both hosts debated whether Farage poses a genuine threat...
    - ✅ "Compare viewpoints between podcast 1 and 2"
    - ✅ "Summarize this week's episodes"
 
+5. **Pipeline shortcuts:**
+   - ✅ "Check for new episodes and process the latest one"
+   - ✅ "Process all new episodes from podcast 1"
+   - ✅ "What's the status of my podcast processing?"
+
 ---
 
 ## Next Steps
 
 - **Add more podcasts:** Use the `add_podcast` tool
-- **Process episodes:** Use CLI to transcribe: `thestill transcribe audio.mp3`
-- **Clean transcripts:** Use CLI to process: `thestill process`
+- **Discover new episodes:** Use `refresh_feeds` to check for updates
+- **Process episodes:** Use `process_episode` for single episodes or run pipeline steps individually
+- **Read transcripts:** Use `get_transcript` to retrieve cleaned transcripts
 - **Explore transcripts:** Ask Claude to analyze, summarize, or compare!
 
 For more information, see:
