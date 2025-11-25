@@ -214,15 +214,53 @@ class GoogleCloudTranscriber:
             print("Starting long-running transcription (this may take several minutes)...")
             operation = self.speech_client.long_running_recognize(config=config, audio=audio)
 
-            # Wait for completion with progress updates
-            elapsed = 0
-            while not operation.done():
-                time.sleep(30)
-                elapsed += 30
-                print(f"Transcription in progress... ({elapsed}s elapsed)")
+            # Wait for completion with real progress tracking from metadata
+            last_progress = None  # Use None to allow showing 0% once
+            start_time = time.time()
 
+            while not operation.done():
+                # Get current progress metadata from long-running operation
+                metadata = operation.metadata
+                elapsed = time.time() - start_time
+
+                # Try to extract progress from metadata (Google's API is inconsistent about this)
+                progress = None
+
+                # Check multiple possible attribute names (API varies by version)
+                if metadata:
+                    # Try different attribute names
+                    if hasattr(metadata, "progress_percent"):
+                        progress = metadata.progress_percent
+                    elif hasattr(metadata, "progressPercent"):
+                        progress = metadata.progressPercent
+
+                    # Only show updates when progress actually changes
+                    if progress is not None and progress != last_progress:
+                        last_progress = progress
+
+                        if progress > 0:
+                            # Progress > 0 - show with ETA
+                            total_estimated = elapsed / (progress / 100.0)
+                            remaining = total_estimated - elapsed
+                            print(
+                                f"Progress: {progress}% "
+                                f"(elapsed: {self._format_time(elapsed)}, "
+                                f"est. remaining: {self._format_time(remaining)})"
+                            )
+                        else:
+                            # Progress = 0 - show once without ETA
+                            print(f"Progress: 0% (elapsed: {self._format_time(elapsed)})")
+                    # else: progress unchanged, silent polling (don't print anything)
+
+                time.sleep(15)  # Poll every 15 seconds for more responsive updates
+
+                # Timeout check with progress context
+                elapsed = time.time() - start_time
                 if elapsed > 3600:  # 1 hour timeout
-                    raise TimeoutError("Transcription timed out after 1 hour")
+                    progress_info = ""
+                    if metadata and hasattr(metadata, "progress_percent"):
+                        progress_info = f" (progress: {metadata.progress_percent}%)"
+                    raise TimeoutError(f"Transcription timed out after 1 hour{progress_info}")
 
             response = operation.result()
 
@@ -268,6 +306,27 @@ class GoogleCloudTranscriber:
             print(f"Diarization enabled (min={min_display}, max={max_display})")
 
         return config
+
+    def _format_time(self, seconds: float) -> str:
+        """
+        Format seconds into human-readable time string.
+
+        Examples:
+            45 seconds → "45s"
+            125 seconds → "2m 5s"
+            3725 seconds → "1h 2m 5s"
+        """
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{mins}m {secs}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}h {mins}m {secs}s"
 
     def _format_transcript(self, response: Any, processing_time: float, audio_path: str) -> Dict:
         """

@@ -894,7 +894,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
     click.echo("🔍 Looking for episodes to transcribe...")
 
-    # Get episodes that need transcription
+    # Get episodes that need transcription (sorted by pub_date, newest first)
     episodes_to_transcribe = feed_manager.get_downloaded_episodes(str(config.storage_path))
 
     if not episodes_to_transcribe:
@@ -908,9 +908,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
             ctx.exit(1)
 
-        episodes_to_transcribe = [
-            (p, eps) for p, eps in episodes_to_transcribe if str(p.rss_url) == str(podcast.rss_url)
-        ]
+        episodes_to_transcribe = [(p, ep) for p, ep in episodes_to_transcribe if str(p.rss_url) == str(podcast.rss_url)]
 
         if not episodes_to_transcribe:
             click.echo(f"✓ No episodes need transcription for podcast: {podcast.title}")
@@ -925,36 +923,31 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
             # Filter to only the specific episode
             episodes_to_transcribe = [
-                (p, [ep for ep in eps if ep.external_id == target_episode.external_id])
-                for p, eps in episodes_to_transcribe
+                (p, ep) for p, ep in episodes_to_transcribe if ep.external_id == target_episode.external_id
             ]
-            episodes_to_transcribe = [(p, eps) for p, eps in episodes_to_transcribe if eps]
 
             if not episodes_to_transcribe:
                 click.echo(f"✓ Episode already transcribed: {target_episode.title}")
                 return
 
-    # Apply max_episodes limit
+    # Apply max_episodes limit (simple slice on sorted list)
     if max_episodes:
-        total = 0
-        filtered = []
-        for podcast, episodes in episodes_to_transcribe:
-            remaining = max_episodes - total
-            if remaining <= 0:
-                break
-            filtered.append((podcast, episodes[:remaining]))
-            total += len(episodes[:remaining])
-        episodes_to_transcribe = filtered
+        episodes_to_transcribe = episodes_to_transcribe[:max_episodes]
 
     # Count total episodes
-    total_count = sum(len(eps) for _, eps in episodes_to_transcribe)
+    total_count = len(episodes_to_transcribe)
     click.echo(f"📝 Found {total_count} episode(s) to transcribe")
 
     if dry_run:
-        for podcast, episodes in episodes_to_transcribe:
-            click.echo(f"\n📻 {podcast.title}")
-            for episode in episodes:
-                click.echo(f"  • {episode.title}")
+        current_podcast = None
+        for podcast, episode in episodes_to_transcribe:
+            # Show podcast header when switching podcasts
+            if current_podcast != podcast.title:
+                click.echo(f"\n📻 {podcast.title}")
+                current_podcast = podcast.title
+            click.echo(
+                f"  • {episode.title} ({episode.pub_date.strftime('%Y-%m-%d') if episode.pub_date else 'no date'})"
+            )
         click.echo("\n(Run without --dry-run to actually transcribe)")
         return
 
@@ -962,15 +955,9 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     transcribed_count = 0
     start_time = time.time()
 
-    # Flatten episodes for progress bar
-    all_episodes = []
-    for podcast, episodes in episodes_to_transcribe:
-        for episode in episodes:
-            all_episodes.append((podcast, episode))
-
-    # Progress bar wrapper
+    # Progress bar wrapper (episodes already flat and sorted)
     with click.progressbar(
-        all_episodes,
+        episodes_to_transcribe,
         label="Transcribing",
         show_pos=True,  # Show "X/Y" counter
         show_eta=True,  # Show estimated time

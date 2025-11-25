@@ -357,7 +357,10 @@ class AnthropicProvider(LLMProvider):
     """Anthropic Claude API provider"""
 
     def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
-        self.client = Anthropic(api_key=api_key)
+        # Set a timeout to prevent infinite hangs (5 minutes for large responses)
+        # Set max_retries=0 to disable SDK's automatic retry - we handle retries manually
+        # This prevents the SDK from retrying rate limits immediately without waiting
+        self.client = Anthropic(api_key=api_key, timeout=300.0, max_retries=0)
         self.model = model
 
     def chat_completion(
@@ -486,15 +489,49 @@ class AnthropicProvider(LLMProvider):
                                 # If parsing fails, use default
                                 pass
 
+                        # Add extra buffer time to ensure rate limit window has reset
+                        buffer_time = 10  # Extra 10 seconds buffer
+                        total_wait = retry_after + buffer_time
+
                         print(
-                            f"⚠️  Rate limit exceeded. Waiting {retry_after} seconds before retry (total retry {total_retry_count}/{max_total_retries}, current attempt {retry_attempt + 2}/{max_retries})..."
+                            f"⚠️  Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) before retry (total retry {total_retry_count}/{max_total_retries}, current attempt {retry_attempt + 2}/{max_retries})..."
                         )
-                        time.sleep(retry_after)
+
+                        # Show progress during long waits (>10 seconds)
+                        if total_wait > 10:
+                            elapsed = 0
+                            while elapsed < total_wait:
+                                time.sleep(10)
+                                elapsed += 10
+                                remaining = max(0, total_wait - elapsed)
+                                if remaining > 0:
+                                    print(f"      ...{remaining}s remaining...")
+                        else:
+                            time.sleep(total_wait)
+
+                        print("      Retrying now...")
+                        continue  # Explicitly continue to next retry attempt
                     else:
                         # Max retries for this attempt exceeded, re-raise the error
                         print(
                             f"❌ Rate limit retry failed after {max_retries} attempts (total retries: {total_retry_count})"
                         )
+                        raise
+                except Exception as e:
+                    # Catch any other API errors (timeout, connection, etc.)
+                    total_retry_count += 1
+                    error_type = type(e).__name__
+                    print(f"⚠️  API error ({error_type}): {str(e)}")
+                    if retry_attempt < max_retries - 1:
+                        retry_after = 30  # Wait 30 seconds for other errors
+                        print(
+                            f"      Waiting {retry_after} seconds before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                        )
+                        time.sleep(retry_after)
+                        print("      Retrying now...")
+                        continue
+                    else:
+                        print(f"❌ API request failed after {max_retries} attempts")
                         raise
 
             # Extract text from current response
@@ -557,6 +594,139 @@ class AnthropicProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
         return f"Anthropic {self.model}"
+
+    def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_chunk: Optional[callable] = None,
+    ) -> str:
+        """
+        Generate a chat completion with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            response_format: Response format specification
+            on_chunk: Optional callback function(chunk_text) called for each chunk
+
+        Returns:
+            The complete generated text response
+        """
+        # Separate system messages from conversation messages
+        system_message = None
+        conversation_messages = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_message = content
+            elif role in ["user", "assistant"]:
+                conversation_messages.append({"role": role, "content": content})
+
+        # Build request parameters (stream() is a method, not a parameter)
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": conversation_messages,
+            "max_tokens": max_tokens or 4096,
+        }
+
+        # Add system message if present
+        if system_message:
+            params["system"] = system_message
+
+        # Add temperature if specified
+        if temperature is not None:
+            params["temperature"] = temperature
+
+        # Handle JSON response format
+        if response_format and response_format.get("type") == "json_object":
+            json_instruction = "\n\nIMPORTANT: You must respond with valid JSON only. Do not include any text before or after the JSON object."
+            if system_message:
+                params["system"] = system_message + json_instruction
+            else:
+                params["system"] = json_instruction.strip()
+
+        # Make streaming API request with rate limit retry logic
+        max_retries = 3
+        for retry_attempt in range(max_retries):
+            try:
+                full_response = ""
+                print(f"      Opening stream (attempt {retry_attempt + 1}/{max_retries})...")
+                # Use the stream() context manager method (not a parameter!)
+                with self.client.messages.stream(**params) as stream:
+                    print(f"      Stream opened, waiting for data...")
+                    chunk_count = 0
+                    for text in stream.text_stream:
+                        chunk_count += 1
+                        if chunk_count == 1:
+                            print(f"      Receiving data...")
+                        full_response += text
+                        if on_chunk:
+                            on_chunk(text)
+
+                return full_response
+
+            except RateLimitError as e:
+                if retry_attempt < max_retries - 1:
+                    # Parse retry-after header (in seconds)
+                    retry_after = 60  # Default to 60 seconds if header missing
+                    if hasattr(e, "response") and e.response and hasattr(e.response, "headers"):
+                        try:
+                            retry_after = int(e.response.headers.get("retry-after", 60))
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Add extra buffer time to ensure rate limit window has reset
+                    # Anthropic rate limits use token buckets that may need longer than retry-after
+                    buffer_time = 10  # Extra 10 seconds buffer
+                    total_wait = retry_after + buffer_time
+
+                    print(
+                        f"⚠️  Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                    )
+
+                    # Show progress during long waits (>10 seconds)
+                    if total_wait > 10:
+                        elapsed = 0
+                        while elapsed < total_wait:
+                            time.sleep(10)
+                            elapsed += 10
+                            remaining = max(0, total_wait - elapsed)
+                            if remaining > 0:
+                                print(f"      ...{remaining}s remaining...")
+                    else:
+                        time.sleep(total_wait)
+
+                    print("      Retrying now...")
+                    continue  # Explicitly continue to next retry attempt
+                else:
+                    print(f"❌ Rate limit retry failed after {max_retries} attempts")
+                    raise
+
+            except Exception as e:
+                # Catch any other API errors (timeout, connection, etc.)
+                error_type = type(e).__name__
+                print(f"⚠️  API error ({error_type}): {str(e)}")
+                if retry_attempt < max_retries - 1:
+                    retry_after = 30  # Wait 30 seconds for other errors
+                    print(
+                        f"      Waiting {retry_after} seconds before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                    )
+                    time.sleep(retry_after)
+                    print("      Retrying now...")
+                    continue
+                else:
+                    print(f"❌ API request failed after {max_retries} attempts")
+                    raise
+
+        # Should never reach here, but return empty string as fallback
+        return ""
 
 
 class GeminiProvider(LLMProvider):

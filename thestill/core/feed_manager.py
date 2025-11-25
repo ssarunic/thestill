@@ -384,21 +384,23 @@ class PodcastFeedManager:
                 self.repository.save(podcast)
                 logger.info(f"Marked episode as processed: {episode_external_id}")
 
-    def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, List[Episode]]]:
+    def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:
         """
         Get all episodes that have downsampled audio but need transcription.
+
+        Returns episodes sorted by publication date (newest first) across all podcasts,
+        enabling cross-podcast prioritization when using --max-episodes.
 
         Args:
             storage_path: Base storage path (unused, kept for compatibility)
 
         Returns:
-            List of tuples containing (Podcast, List[Episode]) for episodes needing transcription
+            List of (Podcast, Episode) tuples sorted by pub_date descending
         """
         episodes_to_transcribe = []
         podcasts = self.repository.get_all()
 
         for podcast in podcasts:
-            episodes = []
             for episode in podcast.episodes:
                 # Check if downsampled audio exists (required for transcription)
                 if not episode.downsampled_audio_path:
@@ -417,10 +419,10 @@ class PodcastFeedManager:
                         needs_transcription = True
 
                 if needs_transcription:
-                    episodes.append(episode)
+                    episodes_to_transcribe.append((podcast, episode))
 
-            if episodes:
-                episodes_to_transcribe.append((podcast, episodes))
+        # Sort by publication date (newest first) for cross-podcast prioritization
+        episodes_to_transcribe.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
 
         return episodes_to_transcribe
 

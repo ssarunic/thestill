@@ -395,12 +395,8 @@ Text to clean:
             cleaned_text = self._clean_chunk(chunk_text, entities, i, total_chunks)
             cleaned_chunks.append((cleaned_text, overlap_start, overlap_end))
 
-            # Small delay for cloud providers (local Ollama doesn't need this)
-            if i < total_chunks:
-                from .llm_provider import OllamaProvider
-
-                if not isinstance(self.provider, OllamaProvider):
-                    time.sleep(2)  # Small delay for API rate limits
+            # Note: No artificial delay needed - LLM providers (Anthropic, OpenAI, etc.)
+            # have built-in rate limit handling with automatic retry logic
 
         # Step 4: Stitch chunks together
         print("Stitching chunks together...")

@@ -358,12 +358,38 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
                 provider_max_tokens = 64000 if "claude" in self.provider.get_model_name().lower() else 65000
 
-                response = self.provider.chat_completion(
-                    messages=messages,
-                    temperature=0.1,
-                    max_tokens=provider_max_tokens,
-                    response_format={"type": "json_object"},
-                )
+                # Use streaming if available (Anthropic, OpenAI)
+                if hasattr(self.provider, "chat_completion_streaming"):
+                    print(f"    → Streaming from LLM ({len(chunk):,} chars input)...")
+
+                    # Track progress with streaming (silent for max speed)
+                    chars_received = [0]  # Use list to allow mutation in nested function
+
+                    def on_chunk(chunk_text: str):
+                        """Callback for streaming chunks - accumulate silently for max speed"""
+                        chars_received[0] += len(chunk_text)
+                        # No progress printing - console I/O slows down streaming significantly
+
+                    response = self.provider.chat_completion_streaming(
+                        messages=messages,
+                        temperature=0.1,
+                        max_tokens=provider_max_tokens,
+                        response_format={"type": "json_object"},
+                        on_chunk=on_chunk,
+                    )
+
+                    print(f"    ✓ Streaming complete ({chars_received[0]:,} chars received)")
+
+                else:
+                    # Fallback to non-streaming for providers that don't support it
+                    print(f"    → Sending to LLM ({len(chunk):,} chars input)...")
+                    response = self.provider.chat_completion(
+                        messages=messages,
+                        temperature=0.1,
+                        max_tokens=provider_max_tokens,
+                        response_format={"type": "json_object"},
+                    )
+                    print(f"    ✓ LLM responded")
 
                 # Parse JSON response
                 response = response.strip()
@@ -621,17 +647,42 @@ Please produce the final cleaned Markdown transcript."""
                 else:
                     provider_max_tokens = 32000
 
-                # Use continuation for providers that support it (Claude and OpenAI)
-                if hasattr(self.provider, "chat_completion_with_continuation") and (
+                # Use streaming if available for better UX
+                if hasattr(self.provider, "chat_completion_streaming"):
+                    print(f"    → Streaming cleaned transcript from LLM...")
+
+                    # Track progress with streaming (silent for max speed)
+                    chars_received = [0]
+
+                    def on_chunk(chunk_text: str):
+                        """Callback for streaming chunks - accumulate silently for max speed"""
+                        chars_received[0] += len(chunk_text)
+                        # No progress printing - console I/O slows down streaming significantly
+
+                    response = self.provider.chat_completion_streaming(
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=provider_max_tokens,
+                        on_chunk=on_chunk,
+                    )
+
+                    print(f"    ✓ Streaming complete ({chars_received[0]:,} chars received)")
+
+                # Use continuation for providers that support it (Claude and OpenAI) but not streaming
+                elif hasattr(self.provider, "chat_completion_with_continuation") and (
                     "claude" in model_name or "gpt" in model_name
                 ):
+                    print(f"    → Generating with continuation support...")
                     response = self.provider.chat_completion_with_continuation(
                         messages=messages, temperature=0.3, max_tokens=provider_max_tokens, max_attempts=3
                     )
+                    print(f"    ✓ Generation complete")
                 else:
+                    print(f"    → Generating cleaned transcript...")
                     response = self.provider.chat_completion(
                         messages=messages, temperature=0.3, max_tokens=provider_max_tokens
                     )
+                    print(f"    ✓ Generation complete")
 
                 cleaned_chunks.append(response.strip())
 

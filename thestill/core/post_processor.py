@@ -18,7 +18,6 @@ Produces cleaned Markdown transcripts with notable quotes and social snippets.
 """
 
 import json
-import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
@@ -50,6 +49,40 @@ MODEL_CONFIGS = {
     "gpt-4o-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
     "gpt-4-turbo-preview": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
+    # Anthropic Claude models (Tier 2 limits - most users, $40+ deposit)
+    # ITPM = Input Tokens Per Minute, using conservative 400K (10% below 450K limit for safety)
+    # Context window = 200K standard (1M available in beta with special header)
+    "claude-sonnet-4-5-20250929": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-sonnet-4-20250514": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-haiku-4-5-20251015": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-opus-4-20250514": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-opus-4-1-20250925": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    # Legacy Claude 3.x models (for backward compatibility)
+    "claude-3-5-sonnet-20241022": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-3-5-haiku-20241022": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-3-opus-20240229": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-3-sonnet-20240229": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
+    "claude-3-haiku-20240307": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+    ),
     # Ollama/Gemma 3 models (no rate limits for local inference)
     # Using very high tpm/rpm/tpd since there are no actual limits
     "gemma3:270m": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
@@ -161,22 +194,13 @@ Return three blocks:
         else:
             self.max_tokens = max_tokens
 
-        # Calculate delay between chunks based on provider type
-        # Ollama has no rate limits, so no delay needed
-        from .llm_provider import OllamaProvider
-
-        if isinstance(provider, OllamaProvider):
-            self.chunk_delay = 0
-        else:
-            # For cloud providers, respect TPM limits
-            self.chunk_delay = 60 if self.model_limits.tpm < 100000 else 10
+        # No artificial delays needed - LLM providers have built-in rate limit handling
+        # with automatic retry logic (see AnthropicProvider, OpenAIProvider, etc.)
+        self.chunk_delay = 0
 
         print(f"📊 Model: {model}")
         print(f"   TPM Limit: {self.model_limits.tpm:,} | Max chunk size: {self.max_tokens:,} tokens")
-        if self.chunk_delay > 0:
-            print(f"   Delay between chunks: {self.chunk_delay}s")
-        else:
-            print("   No delay between chunks (local inference)")
+        print("   No delay between chunks (rate limits handled automatically)")
 
     def _build_options_string(self, config: PostProcessorConfig) -> str:
         """Build the OPTIONS section for the prompt"""
@@ -371,10 +395,7 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
                 output_text = self._process_single_chunk(chunk, config, i, len(chunks))
                 chunk_outputs.append(output_text)
 
-                # Add delay between chunks to respect rate limits (only for cloud providers)
-                if i < len(chunks) and self.chunk_delay > 0:
-                    print(f"Waiting {self.chunk_delay}s before next chunk...")
-                    time.sleep(self.chunk_delay)
+                # Note: No delay needed - rate limits handled automatically by LLM provider
 
             # Combine results if multiple chunks
             final_output = self._combine_chunk_results(chunk_outputs)
