@@ -49,7 +49,7 @@ Each step is atomic and can be run independently for horizontal scaling.
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/ssarunic/thestill.git
 cd thestill
 
 # Install dependencies
@@ -476,7 +476,7 @@ ollama pull llama3.2
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/ssarunic/thestill.git
 cd thestill
 
 # Install with development dependencies
