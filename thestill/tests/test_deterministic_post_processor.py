@@ -302,3 +302,54 @@ class TestGenerateCleanedTranscript:
         assert "Second paragraph" in result
         # Inline bold preserved
         assert "**bold**" in result
+
+
+class TestValidateSpeakerMapping:
+    """Tests for degenerate speaker mapping detection."""
+
+    def test_valid_mapping_unchanged(self, processor: TranscriptCleaningProcessor) -> None:
+        """Valid mapping with different names should pass through unchanged."""
+        mapping = {"SPEAKER_00": "Scott Galloway", "SPEAKER_01": "Guest"}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == mapping
+
+    def test_empty_mapping_returns_empty(self, processor: TranscriptCleaningProcessor) -> None:
+        """Empty mapping should return empty dict."""
+        result = processor._validate_speaker_mapping({})
+        assert result == {}
+
+    def test_single_speaker_unchanged(self, processor: TranscriptCleaningProcessor) -> None:
+        """Single speaker mapping should pass through unchanged."""
+        mapping = {"SPEAKER_00": "Host"}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == mapping
+
+    def test_degenerate_all_same_name_returns_empty(self, processor: TranscriptCleaningProcessor) -> None:
+        """All speakers mapped to same name should return empty (degenerate)."""
+        mapping = {"SPEAKER_00": "Host", "SPEAKER_01": "Host", "SPEAKER_02": "Host"}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == {}
+
+    def test_degenerate_two_speakers_same_name(self, processor: TranscriptCleaningProcessor) -> None:
+        """Two speakers mapped to same name should return empty (degenerate)."""
+        mapping = {"SPEAKER_00": "Guest", "SPEAKER_01": "Guest"}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == {}
+
+    def test_filters_empty_names(self, processor: TranscriptCleaningProcessor) -> None:
+        """Empty or whitespace names should be filtered out."""
+        mapping = {"SPEAKER_00": "Host", "SPEAKER_01": "", "SPEAKER_02": "  "}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == {"SPEAKER_00": "Host"}
+
+    def test_strips_whitespace_from_names(self, processor: TranscriptCleaningProcessor) -> None:
+        """Names should be stripped of leading/trailing whitespace."""
+        mapping = {"SPEAKER_00": "  Scott Galloway  ", "SPEAKER_01": " Guest "}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == {"SPEAKER_00": "Scott Galloway", "SPEAKER_01": "Guest"}
+
+    def test_mixed_valid_and_empty_not_degenerate(self, processor: TranscriptCleaningProcessor) -> None:
+        """Mixed valid/empty names should not trigger degenerate detection."""
+        mapping = {"SPEAKER_00": "Host", "SPEAKER_01": "", "SPEAKER_02": "Guest"}
+        result = processor._validate_speaker_mapping(mapping)
+        assert result == {"SPEAKER_00": "Host", "SPEAKER_02": "Guest"}

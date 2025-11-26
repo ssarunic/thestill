@@ -652,16 +652,30 @@ Example:
   }
 }"""
 
-        # For speaker identification, use first and last chunk only (where introductions typically happen)
+        # For speaker identification, sample multiple windows for better coverage
+        # - First chunk: Often contains introductions
+        # - Middle chunk: May reveal speaker patterns not seen at start/end
+        # - Last chunk: Often contains sign-offs and name mentions
         chunks = self._chunk_transcript(transcript_text)
-        if len(chunks) > 2:
-            # Use first and last chunk
-            sample_text = chunks[0] + "\n\n[... middle content omitted ...]\n\n" + chunks[-1]
-            logger.debug(f"Using first and last chunk of {len(chunks)} chunks for speaker identification")
+        if len(chunks) >= 3:
+            # Use first, middle, and last chunk
+            middle_idx = len(chunks) // 2
+            sample_text = (
+                chunks[0]
+                + "\n\n[... content omitted ...]\n\n"
+                + chunks[middle_idx]
+                + "\n\n[... content omitted ...]\n\n"
+                + chunks[-1]
+            )
+            logger.debug(
+                f"Using first, middle (chunk {middle_idx + 1}), and last of {len(chunks)} chunks for speaker identification"
+            )
         elif len(chunks) == 2:
             sample_text = chunks[0] + "\n\n" + chunks[1]
+            logger.debug("Using both chunks for speaker identification")
         else:
             sample_text = transcript_text
+            logger.debug("Using full transcript for speaker identification (single chunk)")
 
         context_info = f"""PODCAST CONTEXT:
 Podcast: {podcast_title}
@@ -697,11 +711,51 @@ TRANSCRIPT:
                     response = response[start:end].strip()
 
             result = json.loads(response)
-            return result.get("speaker_mapping", {})
+            speaker_mapping = result.get("speaker_mapping", {})
+
+            # Validate speaker mapping - guard against degenerate mappings
+            speaker_mapping = self._validate_speaker_mapping(speaker_mapping)
+            return speaker_mapping
 
         except Exception as e:
             logger.error(f"Error identifying speakers: {e}")
             return {}
+
+    def _validate_speaker_mapping(self, speaker_mapping: Dict[str, str]) -> Dict[str, str]:
+        """
+        Validate and sanitize speaker mapping to prevent degenerate results.
+
+        Guards against:
+        - All speakers mapped to the same name (e.g., all "Host")
+        - Empty or whitespace-only names
+
+        Args:
+            speaker_mapping: Raw speaker mapping from LLM
+
+        Returns:
+            Validated speaker mapping (may be empty if degenerate)
+        """
+        if not speaker_mapping:
+            return {}
+
+        # Filter out empty/whitespace names
+        cleaned_mapping = {k: v.strip() for k, v in speaker_mapping.items() if v and v.strip()}
+
+        if len(cleaned_mapping) < 2:
+            # Single speaker or empty - nothing to validate
+            return cleaned_mapping
+
+        # Check for degenerate mapping: all speakers mapped to same name
+        unique_names = set(cleaned_mapping.values())
+        if len(unique_names) == 1:
+            single_name = next(iter(unique_names))
+            logger.warning(
+                f"Degenerate speaker mapping detected: all {len(cleaned_mapping)} speakers "
+                f"mapped to '{single_name}'. Returning empty mapping to preserve SPEAKER_XX labels."
+            )
+            return {}
+
+        return cleaned_mapping
 
     def _generate_cleaned_transcript(
         self, formatted_markdown: str, corrections: List[Dict], speaker_mapping: Dict[str, str], episode_title: str
