@@ -125,60 +125,130 @@ class TestApplySpeakerMapping:
 
 
 class TestApplyCorrections:
-    """Test correction application with word boundaries."""
+    """Test correction application with improved regex handling."""
 
     def test_word_boundary_prevents_partial_match(self, processor: TranscriptCleaningProcessor) -> None:
         """Ensure 'La' -> 'LA' doesn't affect 'Language'."""
         transcript = "**Language:** en\n\nI went to La."
         corrections = [{"type": "spelling", "original": "La", "corrected": "LA"}]
 
-        result, count = processor._apply_corrections(transcript, corrections)
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
 
         assert "**Language:**" in result  # Not modified
         assert "I went to LA." in result  # Correctly replaced
         assert count == 1
+        assert len(skipped) == 0
 
     def test_word_boundary_with_punctuation(self, processor: TranscriptCleaningProcessor) -> None:
         """Word boundaries should work with adjacent punctuation."""
         transcript = "Visit La. It's great."
         corrections = [{"type": "spelling", "original": "La", "corrected": "LA"}]
 
-        result, count = processor._apply_corrections(transcript, corrections)
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
 
         assert "Visit LA." in result
         assert count == 1
+        assert len(skipped) == 0
 
     def test_spelling_multiple_occurrences(self, processor: TranscriptCleaningProcessor) -> None:
         """Spelling corrections should replace all occurrences."""
         transcript = "I use OpenAi and OpenAi is great."
         corrections = [{"type": "spelling", "original": "OpenAi", "corrected": "OpenAI"}]
 
-        result, count = processor._apply_corrections(transcript, corrections)
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
 
         assert "OpenAi" not in result
         assert result.count("OpenAI") == 2
         # Count is 1 because we count corrections applied, not replacements
         assert count == 1
+        assert len(skipped) == 0
 
     def test_empty_corrections(self, processor: TranscriptCleaningProcessor) -> None:
         """Empty corrections list should return transcript unchanged."""
         transcript = "Hello world."
         corrections: list = []
 
-        result, count = processor._apply_corrections(transcript, corrections)
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
 
         assert result == transcript
         assert count == 0
+        assert len(skipped) == 0
 
     def test_skip_empty_original(self, processor: TranscriptCleaningProcessor) -> None:
-        """Corrections with empty original should be skipped."""
+        """Corrections with empty original should be skipped and tracked."""
         transcript = "Hello world."
         corrections = [{"type": "spelling", "original": "", "corrected": "test"}]
 
-        result, count = processor._apply_corrections(transcript, corrections)
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
 
         assert result == transcript
         assert count == 0
+        assert len(skipped) == 1
+        assert skipped[0]["skip_reason"] == "empty_original"
+
+    def test_correction_with_trailing_period(self, processor: TranscriptCleaningProcessor) -> None:
+        """Correction should apply even when followed by period (punctuation-adjacent)."""
+        transcript = "I met Altman. He was nice."
+        corrections = [{"type": "spelling", "original": "Altman", "corrected": "Altmann"}]
+
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
+
+        assert "Altmann." in result
+        assert count == 1
+        assert len(skipped) == 0
+
+    def test_correction_with_parentheses(self, processor: TranscriptCleaningProcessor) -> None:
+        """Correction should apply inside parentheses."""
+        transcript = "The company (OpenAi) is great."
+        corrections = [{"type": "spelling", "original": "OpenAi", "corrected": "OpenAI"}]
+
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
+
+        assert "(OpenAI)" in result
+        assert count == 1
+        assert len(skipped) == 0
+
+    def test_filler_case_insensitive(self, processor: TranscriptCleaningProcessor) -> None:
+        """Filler corrections should be case-insensitive."""
+        # Note: ", um," matches comma-space-um-comma pattern exactly
+        transcript = "So, Um, I think it works. And, Um, yeah."
+        corrections = [{"type": "filler", "original": ", um,", "corrected": ","}]
+
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
+
+        # Both ", Um," occurrences should be replaced (case-insensitive)
+        assert "So, I think" in result
+        assert "And, yeah" in result
+        assert count == 1  # Count is corrections applied (1), not replacements (2)
+        assert len(skipped) == 0
+
+    def test_filler_word_standalone(self, processor: TranscriptCleaningProcessor) -> None:
+        """Standalone filler words should be replaced case-insensitively."""
+        transcript = "I think Um we should go. Also um yeah."
+        corrections = [{"type": "filler", "original": " um ", "corrected": " "}]
+
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
+
+        # Both " Um " and " um " should be replaced
+        assert "I think we should" in result
+        assert "Also yeah" in result
+        assert count == 1
+        assert len(skipped) == 0
+
+    def test_skipped_corrections_tracked(self, processor: TranscriptCleaningProcessor) -> None:
+        """Corrections that don't match should be tracked in skipped list."""
+        transcript = "Hello world."
+        corrections = [
+            {"type": "spelling", "original": "foo", "corrected": "bar"},
+            {"type": "spelling", "original": "baz", "corrected": "qux"},
+        ]
+
+        result, count, skipped = processor._apply_corrections(transcript, corrections)
+
+        assert result == transcript
+        assert count == 0
+        assert len(skipped) == 2
+        assert all(s["skip_reason"] == "no_match" for s in skipped)
 
 
 class TestGenerateCleanedTranscript:

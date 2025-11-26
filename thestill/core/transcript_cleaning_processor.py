@@ -202,7 +202,9 @@ class TranscriptCleaningProcessor:
             # Phase 1.5: Apply corrections before speaker identification
             logger.info("Phase 1.5: Applying corrections to improve speaker name accuracy...")
             phase1_5_start = time.time()
-            corrected_markdown, applied_count = self._apply_corrections(formatted_markdown, corrections)
+            corrected_markdown, applied_count, skipped_corrections = self._apply_corrections(
+                formatted_markdown, corrections
+            )
             metrics_data["phase1_5_apply_duration_seconds"] = time.time() - phase1_5_start
             metrics_data["phase1_5_corrections_applied"] = applied_count
 
@@ -218,6 +220,10 @@ class TranscriptCleaningProcessor:
                     # Mark as degraded if not already failed
                     if metrics_data.get("run_status") == "success":
                         metrics_data["run_status"] = "degraded"
+
+            # Save skipped corrections for debugging if requested
+            if output_path and save_corrections and skipped_corrections:
+                self._save_phase_output(output_path, "skipped", skipped_corrections, episode_id)
 
             # Save corrected markdown to debug folder if requested
             if output_path and save_corrections:
@@ -506,7 +512,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
         logger.info(f"Found {len(all_corrections)} corrections across {chunks_processed} chunk(s)")
         return all_corrections, chunks_processed, chunks_failed
 
-    def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> tuple[str, int]:
+    def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> tuple[str, int, List[Dict]]:
         """
         Apply corrections from Phase 1 to the transcript text.
         This ensures speaker names are properly spelled before speaker identification.
@@ -516,7 +522,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
             corrections: List of correction objects from Phase 1
 
         Returns:
-            Tuple of (corrected transcript text, number of corrections applied)
+            Tuple of (corrected transcript text, number of corrections applied, skipped corrections)
         """
         corrected_text = transcript_text
 
@@ -525,24 +531,58 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
         sorted_corrections = sorted(corrections, key=lambda c: priority_order.get(c.get("type", ""), 99))
 
         applied_count = 0
+        skipped_corrections: List[Dict] = []
+
         for correction in sorted_corrections:
             original = correction.get("original", "")
             corrected = correction.get("corrected", "")
+            correction_type = correction.get("type", "")
 
             if not original:
+                skipped_corrections.append({**correction, "skip_reason": "empty_original"})
                 continue
 
-            # Use word boundaries to avoid partial matches
-            # This prevents "La" → "LA" from affecting "Language"
+            # Build regex pattern based on correction type
             escaped = re.escape(original)
-            pattern = rf"\b{escaped}\b"
-            new_text, count = re.subn(pattern, corrected, corrected_text)
+
+            # Determine if we need word boundary checks
+            # Only apply lookarounds when the pattern starts/ends with alphanumeric
+            # This prevents "La" from matching in "Language" while allowing punctuation-adjacent matches
+            starts_with_alpha = original[0].isalpha() if original else False
+            ends_with_alpha = original[-1].isalpha() if original else False
+
+            # Build pattern with appropriate boundaries
+            # (?<![A-Za-z]) = not preceded by a letter
+            # (?![A-Za-z]) = not followed by a letter
+            if starts_with_alpha and ends_with_alpha:
+                # Word-like pattern: use lookarounds on both sides
+                pattern = rf"(?<![A-Za-z]){escaped}(?![A-Za-z])"
+            elif starts_with_alpha:
+                # Starts with letter but ends with punctuation/space
+                pattern = rf"(?<![A-Za-z]){escaped}"
+            elif ends_with_alpha:
+                # Ends with letter but starts with punctuation/space
+                pattern = rf"{escaped}(?![A-Za-z])"
+            else:
+                # No alphanumeric boundaries (e.g., ", um," or punctuation-only)
+                pattern = escaped
+
+            # Use case-insensitive matching for fillers (um, uh, like, you know)
+            # Fillers can appear as "Um", "um", "UM" etc.
+            flags = re.IGNORECASE if correction_type == "filler" else 0
+
+            new_text, count = re.subn(pattern, corrected, corrected_text, flags=flags)
             if count > 0:
                 corrected_text = new_text
                 applied_count += 1
+            else:
+                skipped_corrections.append({**correction, "skip_reason": "no_match"})
+
+        if skipped_corrections:
+            logger.debug(f"Skipped {len(skipped_corrections)} corrections that didn't match transcript")
 
         logger.info(f"Applied {applied_count} corrections to transcript")
-        return corrected_text, applied_count
+        return corrected_text, applied_count, skipped_corrections
 
     def _apply_speaker_mapping(self, transcript: str, speaker_mapping: Dict[str, str]) -> str:
         """
@@ -692,7 +732,7 @@ TRANSCRIPT:
 
         Args:
             output_path: Base output path (e.g., data/clean_transcripts/Podcast_Episode_hash_cleaned.md)
-            phase: Phase name (original, corrections, corrected, speakers)
+            phase: Phase name (original, corrections, corrected, speakers, skipped)
             data: Data to save (list, dict, or string)
             episode_id: Internal episode ID (UUID, unused but kept for API compatibility)
         """
@@ -732,6 +772,13 @@ TRANSCRIPT:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.debug(f"Speaker mapping saved to: {path}")
+
+        elif phase == "skipped":
+            # Save to debug directory: {base_name}.skipped.json
+            path = debug_dir / f"{base_name}.skipped.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"Skipped corrections saved to: {path}")
 
     def _save_outputs(
         self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True, episode_id: str = ""
