@@ -186,12 +186,10 @@ class TranscriptCompactor:
                 lines.append(f"\n## {timestamp}\n")
                 current_section_time = start
 
-            # Detect special segments (ads, intro, outro)
+            # Detect special segments (intro, outro)
             segment_type = self._detect_segment_type(text, start, metadata.get("duration", 0))
 
-            if segment_type == "ad":
-                lines.append(f"**[AD] {speaker}:** {text}\n")
-            elif segment_type == "intro" and i < 5:  # Only mark intro in first few segments
+            if segment_type == "intro" and i < 5:  # Only mark intro in first few segments
                 lines.append(f"**[INTRO] {speaker}:** {text}\n")
             elif segment_type == "outro":
                 lines.append(f"**[OUTRO] {speaker}:** {text}\n")
@@ -261,27 +259,8 @@ class TranscriptCompactor:
             return f"{minutes}m"
 
     def _detect_segment_type(self, text: str, start_time: float, total_duration: float) -> str:
-        """Detect if segment is ad, intro, or outro based on content and timing"""
+        """Detect if segment is intro or outro based on content and timing"""
         text_lower = text.lower()
-
-        # Ad detection keywords
-        ad_keywords = [
-            "brought to you by",
-            "sponsor",
-            "discount code",
-            "promo code",
-            "visit our website",
-            "use code",
-            "special offer",
-            "sign up at",
-            "go to ",
-            ".com",
-            "get % off",
-            "subscribe at",
-        ]
-
-        if any(keyword in text_lower for keyword in ad_keywords):
-            return "ad"
 
         # Intro detection (first 2 minutes)
         if start_time < 120:

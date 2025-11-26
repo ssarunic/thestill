@@ -63,23 +63,19 @@ class LLMProcessor:
                     f"({compact_result['original_chars']} → {compact_result['markdown_chars']} chars)"
                 )
 
-            print("Step 1: Detecting advertisement segments...")
-            cleaned_result = self._clean_and_detect_ads(markdown_text)
+            print("Step 1: Generating summary...")
+            summary = self._generate_summary(markdown_text)
 
-            print("Step 2: Generating summary...")
-            summary = self._generate_summary(cleaned_result["cleaned_transcript"])
-
-            print("Step 3: Extracting quotes...")
-            quotes = self._extract_quotes(cleaned_result["cleaned_transcript"])
+            print("Step 2: Extracting quotes...")
+            quotes = self._extract_quotes(markdown_text)
 
             processing_time = time.time() - start_time
 
             processed_content = ProcessedContent(
                 episode_external_id=episode_external_id,
-                cleaned_transcript=cleaned_result["cleaned_transcript"],
+                cleaned_transcript=markdown_text,
                 summary=summary,
                 quotes=quotes,
-                ad_segments=cleaned_result["ad_segments"],
                 processing_time=processing_time,
                 created_at=datetime.now(),
             )
@@ -94,76 +90,6 @@ class LLMProcessor:
             print(f"Error processing transcript: {e}")
             return None
 
-    def _clean_and_detect_ads(self, transcript: str) -> Dict:
-        """Detect advertisement segments in transcript"""
-        prompt = """
-You are an advertisement detection specialist. Your task is to identify advertisement segments in this podcast transcript.
-
-Advertisement segments typically include:
-- Product endorsements or sponsorship mentions
-- Discount codes or special offers
-- "This episode is brought to you by..."
-- Clear promotional language
-
-IMPORTANT: Respond with valid JSON only. Return an object with:
-- "ad_segments": array of ad segments found, each with start_marker, end_marker, content, and type (one of: "sponsorship", "product_placement", "promotion")
-
-If no ads are found, return an empty array.
-
-Example:
-{
-  "ad_segments": [
-    {
-      "start_marker": "[00:15]",
-      "end_marker": "[00:45]",
-      "content": "This episode is brought to you by TechCorp. Use code PODCAST20 for 20% off.",
-      "type": "sponsorship"
-    }
-  ]
-}
-
-Here's the transcript to analyze:
-"""
-
-        try:
-            messages = [{"role": "system", "content": prompt}, {"role": "user", "content": transcript}]
-
-            content = self.provider.chat_completion(
-                messages=messages, temperature=0.1, max_tokens=4000, response_format={"type": "json_object"}
-            )
-
-            # Check for empty content
-            if not content:
-                print("Warning: Provider returned empty content")
-                return {"cleaned_transcript": transcript, "ad_segments": []}
-
-            content = content.strip()
-
-            # Try to extract JSON from the response if it's wrapped in code blocks
-            if "```json" in content:
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                if end != -1:
-                    content = content[start:end].strip()
-            elif "```" in content:
-                start = content.find("```") + 3
-                end = content.find("```", start)
-                if end != -1:
-                    content = content[start:end].strip()
-
-            result = json.loads(content)
-            # Add the original transcript as the "cleaned" version since we're not cleaning anymore
-            result["cleaned_transcript"] = transcript
-            return result
-
-        except json.JSONDecodeError as e:
-            print(f"Warning: Failed to parse LLM response as JSON: {e}")
-            print(f"Raw response: {content[:500] if content else '(empty)'}...")
-            return {"cleaned_transcript": transcript, "ad_segments": []}
-        except Exception as e:
-            print(f"Error in transcript cleaning: {e}")
-            return {"cleaned_transcript": transcript, "ad_segments": []}
-
     def _generate_summary(self, cleaned_transcript: str) -> str:
         """Generate comprehensive episode summary"""
         prompt = """
@@ -176,7 +102,6 @@ Your summary should:
 4. Mention any notable guests or experts featured
 5. Be well-structured and easy to read
 6. Be approximately 200-400 words
-7. Ignore any advertisement segments
 
 Focus on substance and insights that would help someone decide if they want to listen to the full episode.
 
@@ -209,7 +134,6 @@ Focus on quotes that:
 - Are memorable or thought-provoking
 - Represent important conclusions or perspectives
 - Could stand alone as valuable takeaways
-- Avoid advertisement content
 
 IMPORTANT: Respond with valid JSON only. Return an object with a "quotes" array, where each quote has:
 - "text": the quote text

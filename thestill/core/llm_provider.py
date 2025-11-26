@@ -79,9 +79,24 @@ class OpenAIProvider(LLMProvider):
     """OpenAI API provider"""
 
     # Models that don't support custom temperature and response_format
-    REASONING_MODELS = ["o1", "o1-preview", "o1-mini", "gpt-5", "gpt-5-mini", "gpt-5-turbo", "gpt-5-nano"]
+    # GPT-5.x series uses adaptive reasoning - set reasoning_effort='none' for non-reasoning behavior
+    REASONING_MODELS = [
+        "o1",
+        "o1-preview",
+        "o1-mini",
+        "o3",
+        "o4-mini",  # o-series reasoning models
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-turbo",
+        "gpt-5-nano",  # GPT-5.0 series
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex-max",  # GPT-5.1 series (Nov 2025)
+    ]
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+    def __init__(self, api_key: str, model: str = "gpt-5.1"):
         self.client = OpenAI(api_key=api_key)
         self.model = model
 
@@ -361,7 +376,7 @@ class AnthropicProvider(LLMProvider):
     # Default max output tokens for unknown models (conservative)
     DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5-20250929"):
         # Set a timeout to prevent infinite hangs (5 minutes for large responses)
         # Set max_retries=0 to disable SDK's automatic retry - we handle retries manually
         # This prevents the SDK from retrying rate limits immediately without waiting
@@ -836,7 +851,7 @@ class AnthropicProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     """Google Gemini API provider"""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-exp"):
+    def __init__(self, api_key: str, model: str = "gemini-3-pro-preview"):
         genai.configure(api_key=api_key)
         self.model = model
         self.client = genai.GenerativeModel(model)
@@ -995,13 +1010,13 @@ class GeminiProvider(LLMProvider):
 def create_llm_provider(
     provider_type: str,
     openai_api_key: str = "",
-    openai_model: str = "gpt-4o",
+    openai_model: str = "gpt-5.1",
     ollama_base_url: str = "http://localhost:11434",
     ollama_model: str = "gemma3:4b",
     gemini_api_key: str = "",
-    gemini_model: str = "gemini-2.0-flash-exp",
+    gemini_model: str = "gemini-3-pro-preview",
     anthropic_api_key: str = "",
-    anthropic_model: str = "claude-3-5-sonnet-20241022",
+    anthropic_model: str = "claude-sonnet-4-5-20250929",
 ) -> LLMProvider:
     """
     Factory function to create the appropriate LLM provider.

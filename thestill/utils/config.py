@@ -66,17 +66,17 @@ class Config(BaseModel):
     llm_provider: str = "openai"  # openai, ollama, gemini, or anthropic
 
     # OpenAI Configuration
-    openai_model: str = "gpt-4o"
+    openai_model: str = "gpt-5.1"
 
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
 
     # Gemini Configuration
-    gemini_model: str = "gemini-2.0-flash-exp"
+    gemini_model: str = "gemini-3-pro-preview"
 
     # Anthropic Configuration
-    anthropic_model: str = "claude-3-5-sonnet-20241022"
+    anthropic_model: str = "claude-sonnet-4-5-20250929"
 
     # Transcript Cleaning Configuration
     enable_transcript_cleaning: bool = False  # Enable LLM-based transcript cleaning
@@ -172,11 +172,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "min_speakers": int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None,
         "max_speakers": int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None,
         "llm_provider": llm_provider,
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-5.1"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
-        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
-        "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),
+        "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
         "enable_transcript_cleaning": os.getenv("ENABLE_TRANSCRIPT_CLEANING", "false").lower() == "true",
         "cleaning_provider": os.getenv("CLEANING_PROVIDER", "ollama"),
         "cleaning_model": os.getenv("CLEANING_MODEL", "gemma3:4b"),

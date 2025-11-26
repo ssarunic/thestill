@@ -23,7 +23,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..models.podcast import TranscriptCleaningMetrics
 from ..utils.exceptions import TranscriptCleaningError
@@ -154,6 +154,8 @@ class TranscriptCleaningProcessor:
         """
         start_time = time.time()
 
+        prompt_logs: Optional[List[Dict[str, Any]]] = [] if output_path and save_corrections else None
+
         # Initialize performance tracking
         metrics_data = {
             "episode_external_id": episode_external_id,
@@ -183,7 +185,12 @@ class TranscriptCleaningProcessor:
             logger.info("Phase 1: Analyzing transcript and identifying corrections...")
             phase1_start = time.time()
             corrections, phase1_chunks_ok, phase1_chunks_failed = self._analyze_and_correct(
-                formatted_markdown, podcast_title, podcast_description, episode_title, episode_description
+                formatted_markdown,
+                podcast_title,
+                podcast_description,
+                episode_title,
+                episode_description,
+                prompt_logs=prompt_logs,
             )
             metrics_data["phase1_analysis_duration_seconds"] = time.time() - phase1_start
             metrics_data["phase1_corrections_found"] = len(corrections)
@@ -233,7 +240,12 @@ class TranscriptCleaningProcessor:
             logger.info("Phase 2: Identifying speakers...")
             phase2_start = time.time()
             speaker_mapping = self._identify_speakers(
-                corrected_markdown, podcast_title, podcast_description, episode_title, episode_description
+                corrected_markdown,
+                podcast_title,
+                podcast_description,
+                episode_title,
+                episode_description,
+                prompt_logs=prompt_logs,
             )
             metrics_data["phase2_speaker_duration_seconds"] = time.time() - phase2_start
             metrics_data["phase2_speakers_identified"] = len(speaker_mapping)
@@ -273,6 +285,8 @@ class TranscriptCleaningProcessor:
 
             # Save outputs if path provided
             if output_path:
+                if save_corrections and prompt_logs:
+                    self._save_prompts(output_path, prompt_logs, episode_id)
                 self._save_outputs(result, output_path, save_corrections, save_metrics, episode_id)
 
             # Print performance summary
@@ -329,6 +343,7 @@ class TranscriptCleaningProcessor:
         podcast_description: str,
         episode_title: str,
         episode_description: str,
+        prompt_logs: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[Dict], int, int]:
         """
         Phase 1: Analyze transcript and identify all corrections needed.
@@ -431,6 +446,18 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
 
                 # Get max_tokens from MODEL_CONFIGS for the specific model
                 provider_max_tokens = get_max_output_tokens(self.provider.get_model_name())
+
+                if prompt_logs is not None:
+                    prompt_logs.append(
+                        {
+                            "phase": "analysis",
+                            "chunk": i + 1,
+                            "total_chunks": len(chunks),
+                            "messages": messages,
+                            "temperature": 0.1,
+                            "max_tokens": provider_max_tokens,
+                        }
+                    )
 
                 # Use streaming if available (Anthropic, OpenAI)
                 if hasattr(self.provider, "chat_completion_streaming"):
@@ -619,6 +646,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
         podcast_description: str,
         episode_title: str,
         episode_description: str,
+        prompt_logs: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, str]:
         """Phase 2: Identify who the speakers are"""
 
@@ -689,6 +717,17 @@ TRANSCRIPT:
 
         try:
             messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": context_info}]
+
+            if prompt_logs is not None:
+                prompt_logs.append(
+                    {
+                        "phase": "speaker_identification",
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": 2000,
+                        "sampled_chunks": len(chunks),
+                    }
+                )
 
             response = self.provider.chat_completion(
                 messages=messages,
@@ -834,6 +873,106 @@ TRANSCRIPT:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.debug(f"Skipped corrections saved to: {path}")
 
+    def _save_prompts(self, output_path: str, prompts: List[Dict[str, Any]], episode_id: str = ""):
+        """
+        Save the exact prompts sent to the LLM during cleaning as separate .md files for easier debugging.
+
+        Each prompt is saved as a separate markdown file with clear formatting:
+        - debug/prompts/{base_name}.prompt_1_analysis_chunk1.md
+        - debug/prompts/{base_name}.prompt_2_analysis_chunk2.md
+        - debug/prompts/{base_name}.prompt_3_speaker_identification.md
+
+        Args:
+            output_path: Base output path (e.g., data/clean_transcripts/Podcast_Episode_hash_cleaned.md)
+            prompts: List of prompt records captured during processing
+            episode_id: Internal episode ID (unused, kept for API compatibility)
+        """
+        if not prompts:
+            return
+
+        output_path = Path(output_path)
+        prompts_dir = output_path.parent / "debug" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+
+        base_name = output_path.stem.replace("_cleaned", "")
+
+        for idx, prompt_record in enumerate(prompts, start=1):
+            phase = prompt_record.get("phase", "unknown")
+            chunk = prompt_record.get("chunk")
+            total_chunks = prompt_record.get("total_chunks")
+
+            # Build descriptive filename
+            if chunk and total_chunks:
+                filename = f"{base_name}.prompt_{idx}_{phase}_chunk{chunk}of{total_chunks}.md"
+            else:
+                filename = f"{base_name}.prompt_{idx}_{phase}.md"
+
+            path = prompts_dir / filename
+
+            # Format prompt as readable markdown
+            md_content = self._format_prompt_as_markdown(prompt_record, idx)
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(md_content)
+
+        logger.debug(f"Saved {len(prompts)} prompts to: {prompts_dir}")
+
+    def _format_prompt_as_markdown(self, prompt_record: Dict[str, Any], idx: int) -> str:
+        """
+        Format a prompt record as readable markdown for debugging.
+
+        Args:
+            prompt_record: Dict containing phase, messages, temperature, max_tokens, etc.
+            idx: Prompt index (1-based)
+
+        Returns:
+            Formatted markdown string
+        """
+        lines = []
+
+        # Header with metadata
+        phase = prompt_record.get("phase", "unknown")
+        chunk = prompt_record.get("chunk")
+        total_chunks = prompt_record.get("total_chunks")
+        temperature = prompt_record.get("temperature", "N/A")
+        max_tokens = prompt_record.get("max_tokens", "N/A")
+
+        lines.append(f"# Prompt {idx}: {phase.replace('_', ' ').title()}")
+        lines.append("")
+
+        if chunk and total_chunks:
+            lines.append(f"**Chunk:** {chunk} of {total_chunks}")
+        lines.append(f"**Temperature:** {temperature}")
+        lines.append(f"**Max Tokens:** {max_tokens}")
+
+        # Add any extra metadata
+        extra_keys = [
+            k
+            for k in prompt_record.keys()
+            if k not in ("phase", "chunk", "total_chunks", "messages", "temperature", "max_tokens")
+        ]
+        for key in extra_keys:
+            lines.append(f"**{key.replace('_', ' ').title()}:** {prompt_record[key]}")
+
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        # Messages
+        messages = prompt_record.get("messages", [])
+        for msg in messages:
+            role = msg.get("role", "unknown").upper()
+            content = msg.get("content", "")
+
+            lines.append(f"## {role}")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def _save_outputs(
         self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True, episode_id: str = ""
     ):
@@ -846,6 +985,7 @@ TRANSCRIPT:
         - data/clean_transcripts/debug/{base_name}.corrections.json - Debug: corrections list
         - data/clean_transcripts/debug/{base_name}.speakers.json - Debug: speaker mapping
         - data/clean_transcripts/debug/{base_name}.corrected.md - Debug: pre-speaker-formatting text
+        - data/clean_transcripts/debug/prompts/{base_name}.prompt_*.md - Debug: individual prompts as markdown
 
         Args:
             result: Cleaned transcript result dictionary

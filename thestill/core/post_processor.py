@@ -39,8 +39,23 @@ class ModelLimits(NamedTuple):
 # Sources:
 # - OpenAI: https://platform.openai.com/docs/models
 # - Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
+# - Google: https://ai.google.dev/gemini-api/docs/models
 MODEL_CONFIGS = {
-    # OpenAI models (max_output_tokens: GPT-4o series = 16384)
+    # OpenAI GPT-5.1 series (November 2025) - adaptive reasoning models
+    # Uses reasoning_effort parameter ('none', 'low', 'medium', 'high')
+    "gpt-5.1": ModelLimits(
+        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-5.1-codex": ModelLimits(
+        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-5.1-codex-mini": ModelLimits(
+        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-5.1-codex-max": ModelLimits(
+        tpm=500000, rpm=500, tpd=5000000, context_window=1000000, max_output_tokens=32768, supports_temperature=False
+    ),
+    # OpenAI GPT-5.0 series
     "gpt-5": ModelLimits(
         tpm=500000, rpm=500, tpd=1500000, context_window=128000, max_output_tokens=16384, supports_temperature=False
     ),
@@ -50,6 +65,7 @@ MODEL_CONFIGS = {
     "gpt-5-nano": ModelLimits(
         tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
     ),
+    # OpenAI GPT-4.1 series
     "gpt-4.1": ModelLimits(
         tpm=30000, rpm=500, tpd=900000, context_window=128000, max_output_tokens=16384, supports_temperature=True
     ),
@@ -59,12 +75,14 @@ MODEL_CONFIGS = {
     "gpt-4.1-nano": ModelLimits(
         tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
     ),
+    # OpenAI o-series reasoning models
     "o3": ModelLimits(
-        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=False
     ),
     "o4-mini": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
     ),
+    # OpenAI GPT-4o series (legacy)
     "gpt-4o": ModelLimits(
         tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=True
     ),
@@ -77,16 +95,20 @@ MODEL_CONFIGS = {
     "gpt-4-turbo-preview": ModelLimits(
         tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=4096, supports_temperature=True
     ),
-    # Anthropic Claude 4.x models (Tier 2 limits - most users, $40+ deposit)
-    # Claude Sonnet 4.5: 64K output tokens, Claude 4.x: 8K output tokens
-    # Context window = 200K standard (1M available in beta with special header)
+    # Anthropic Claude Opus 4.5 (November 2025) - best for coding, agents, computer use
+    # 200K input, 64K output tokens, uses effort parameter (low/medium/high)
+    "claude-opus-4-5-20251101": ModelLimits(
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=64000, supports_temperature=True
+    ),
+    # Anthropic Claude 4.5 series
     "claude-sonnet-4-5-20250929": ModelLimits(
         tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=64000, supports_temperature=True
     ),
-    "claude-sonnet-4-20250514": ModelLimits(
+    "claude-haiku-4-5-20251015": ModelLimits(
         tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
-    "claude-haiku-4-5-20251015": ModelLimits(
+    # Anthropic Claude 4.x models
+    "claude-sonnet-4-20250514": ModelLimits(
         tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-opus-4-20250514": ModelLimits(
@@ -110,6 +132,28 @@ MODEL_CONFIGS = {
     ),
     "claude-3-haiku-20240307": ModelLimits(
         tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
+    ),
+    # Google Gemini 3 (November 2025) - 1M context, 65K output
+    # Uses thinking_level parameter for reasoning depth
+    "gemini-3-pro-preview": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+    ),
+    # Google Gemini 2.5 series (stable)
+    "gemini-2.5-pro": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+    ),
+    "gemini-2.5-flash": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+    ),
+    "gemini-2.5-flash-lite": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+    ),
+    # Google Gemini 2.0 series (legacy)
+    "gemini-2.0-flash-exp": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=8192, supports_temperature=True
+    ),
+    "gemini-2.0-flash": ModelLimits(
+        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=8192, supports_temperature=True
     ),
     # Ollama/Gemma 3 models (no rate limits for local inference)
     # Using very high tpm/rpm/tpd since there are no actual limits
@@ -142,7 +186,6 @@ class PostProcessorConfig:
         audio_base_url: str = "",
         speaker_map: Optional[Dict[str, str]] = None,
         filler_words: Optional[List[str]] = None,
-        ad_detect_patterns: Optional[List[str]] = None,
         table_layout_for_snappy_sections: bool = True,
     ):
         self.add_timestamps = add_timestamps
@@ -164,7 +207,6 @@ class PostProcessorConfig:
             "okay",
             "yeah",
         ]
-        self.ad_detect_patterns = ad_detect_patterns or []
         self.table_layout_for_snappy_sections = table_layout_for_snappy_sections
 
 
@@ -174,7 +216,7 @@ class EnhancedPostProcessor:
     SYSTEM_PROMPT = """You are a transcript post-processor. Write in British English. Use simple, conversational sentences. Do not use the em dash character.
 
 Goal
-Given a podcast transcript in JSON, produce a clean, readable Markdown article of the episode with ads marked, intro and outro separated, obvious transcription errors fixed, noise words removed, section-level timestamps if requested, highlight notable quotes, and generate ready-to-use social media snippets.
+Given a podcast transcript in JSON, produce a clean, readable Markdown article of the episode with intro and outro separated, obvious transcription errors fixed, noise words removed, section-level timestamps if requested, highlight notable quotes, and generate ready-to-use social media snippets.
 
 Input format
 You will receive one JSON object. It may have either text as a single string or segments as a list of timecoded chunks.
@@ -183,7 +225,7 @@ Processing rules
 1. Normalise speakers using SPEAKER_MAP and bold their names.
 2. Remove FILLER_WORDS when they don't carry meaning.
 3. Add punctuation and correct obvious grammar slips.
-4. Detect and label [AD], [INTRO], [OUTRO].
+4. Detect and label [INTRO], [OUTRO].
 5. Add section headings and optional timestamps.
 6. Keep the conversational tone.
 7. Use British English spelling.
@@ -192,10 +234,9 @@ Processing rules
 Outputs
 Return three blocks:
 1. # Cleaned transcript (Markdown)
-   • Ads marked with [AD]
    • Intro/outro clearly separated
    • Headings with timestamps if enabled
-   • Paragraph format for long dialogue; table layout for snappy ads if enabled
+   • Paragraph format for long dialogue
 2. # Notable quotes
    • 5–8 of the best quotes, in blockquote format (>) with attribution
 3. # Suggested social snippets
@@ -254,9 +295,6 @@ AUDIO_BASE_URL={config.audio_base_url}
 TABLE_LAYOUT_FOR_SNAPPY_SECTIONS={str(config.table_layout_for_snappy_sections).lower()}
 SPEAKER_MAP = {speaker_map_str}
 FILLER_WORDS = {filler_words_str}"""
-
-        if config.ad_detect_patterns:
-            options += f"\nAD_DETECT_PATTERNS = {json.dumps(config.ad_detect_patterns)}"
 
         return options
 
