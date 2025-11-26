@@ -96,4 +96,25 @@ class ThestillError(Exception):
         return f"ThestillError(message={self.message!r})"
 
 
-__all__ = ["ThestillError"]
+class TranscriptCleaningError(ThestillError):
+    """
+    Exception raised when transcript cleaning fails or is severely degraded.
+
+    This is raised when:
+    - More than 50% of chunks fail to process in Phase 1
+    - LLM responses are consistently malformed
+    - Critical processing steps cannot complete
+
+    Example:
+        raise TranscriptCleaningError(
+            "Phase 1 failed: 3/4 chunks failed to process",
+            chunks_failed=3,
+            chunks_total=4,
+            episode_id="abc123"
+        )
+    """
+
+    pass
+
+
+__all__ = ["ThestillError", "TranscriptCleaningError"]

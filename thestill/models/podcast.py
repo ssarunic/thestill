@@ -146,7 +146,6 @@ class ProcessedContent(BaseModel):
     cleaned_transcript: str
     summary: str
     quotes: List[Quote]
-    ad_segments: List[dict] = []
     processing_time: float
     created_at: datetime
 
@@ -182,12 +181,19 @@ class TranscriptCleaningMetrics(BaseModel):
     total_transcript_chars: int
     total_chunks_processed: int
 
+    # Run status: "success", "degraded", or "failed"
+    # - success: All chunks processed, corrections applied as expected
+    # - degraded: Some chunks failed or low correction success rate
+    # - failed: Critical failure (should not normally be saved)
+    run_status: str = "success"
+
     # Phase 0: Formatting
     phase0_format_duration_seconds: float
 
     # Phase 1: Corrections analysis
     phase1_analysis_duration_seconds: float
     phase1_chunks_processed: int
+    phase1_chunks_failed: int = 0  # Chunks that failed to process (JSON errors, etc.)
     phase1_corrections_found: int
     phase1_llm_calls: int
 
@@ -233,6 +239,30 @@ class TranscriptCleaningMetrics(BaseModel):
         }
 
     @property
+    def corrections_success_rate(self) -> float:
+        """
+        Percentage of corrections that were successfully applied.
+
+        Returns 1.0 (100%) if no corrections were found (nothing to apply).
+        """
+        if self.phase1_corrections_found == 0:
+            return 1.0
+        return self.phase1_5_corrections_applied / self.phase1_corrections_found
+
+    @property
+    def corrections_skipped(self) -> int:
+        """Number of corrections that failed to apply (found - applied)."""
+        return max(0, self.phase1_corrections_found - self.phase1_5_corrections_applied)
+
+    @property
+    def phase1_failure_rate(self) -> float:
+        """Percentage of chunks that failed in Phase 1."""
+        total = self.phase1_chunks_processed + self.phase1_chunks_failed
+        if total == 0:
+            return 0.0
+        return self.phase1_chunks_failed / total
+
+    @property
     def efficiency_metrics(self) -> dict:
         """Derived efficiency metrics"""
         return {
@@ -249,4 +279,6 @@ class TranscriptCleaningMetrics(BaseModel):
                 if self.total_transcript_chars > 0
                 else 0
             ),
+            "corrections_success_rate": round(self.corrections_success_rate * 100, 1),
+            "phase1_failure_rate": round(self.phase1_failure_rate * 100, 1),
         }

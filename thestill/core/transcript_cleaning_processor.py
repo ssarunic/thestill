@@ -19,14 +19,23 @@ Acts as a copywriter to fix spelling, grammar, remove filler words, and identify
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..models.podcast import TranscriptCleaningMetrics
+from ..utils.exceptions import TranscriptCleaningError
 
 logger = logging.getLogger(__name__)
+
+# Threshold for failing the run (if more than this % of chunks fail)
+PHASE1_FAILURE_THRESHOLD = 0.5  # 50%
+
+# Threshold for warning about low correction success rate
+CORRECTION_SUCCESS_WARNING_THRESHOLD = 0.5  # 50%
+CORRECTION_SUCCESS_MIN_CORRECTIONS = 5  # Only warn if at least this many corrections found
 from .llm_provider import LLMProvider
 from .post_processor import MODEL_CONFIGS
 from .transcript_formatter import TranscriptFormatter
@@ -173,13 +182,18 @@ class TranscriptCleaningProcessor:
             # Phase 1: Analyze and create corrections list
             logger.info("Phase 1: Analyzing transcript and identifying corrections...")
             phase1_start = time.time()
-            corrections, phase1_chunks = self._analyze_and_correct(
+            corrections, phase1_chunks_ok, phase1_chunks_failed = self._analyze_and_correct(
                 formatted_markdown, podcast_title, podcast_description, episode_title, episode_description
             )
             metrics_data["phase1_analysis_duration_seconds"] = time.time() - phase1_start
             metrics_data["phase1_corrections_found"] = len(corrections)
-            metrics_data["phase1_chunks_processed"] = phase1_chunks
-            metrics_data["phase1_llm_calls"] = phase1_chunks
+            metrics_data["phase1_chunks_processed"] = phase1_chunks_ok
+            metrics_data["phase1_chunks_failed"] = phase1_chunks_failed
+            metrics_data["phase1_llm_calls"] = phase1_chunks_ok + phase1_chunks_failed  # Count all attempts
+
+            # Track degraded status if any chunks failed
+            if phase1_chunks_failed > 0:
+                metrics_data["run_status"] = "degraded"
 
             # Save corrections to debug folder if requested
             if output_path and save_corrections:
@@ -191,6 +205,19 @@ class TranscriptCleaningProcessor:
             corrected_markdown, applied_count = self._apply_corrections(formatted_markdown, corrections)
             metrics_data["phase1_5_apply_duration_seconds"] = time.time() - phase1_5_start
             metrics_data["phase1_5_corrections_applied"] = applied_count
+
+            # Check correction success rate and warn if low
+            if len(corrections) >= CORRECTION_SUCCESS_MIN_CORRECTIONS:
+                success_rate = applied_count / len(corrections)
+                if success_rate < CORRECTION_SUCCESS_WARNING_THRESHOLD:
+                    logger.warning(
+                        f"Low correction success rate: {applied_count}/{len(corrections)} "
+                        f"({success_rate:.0%}) corrections applied. "
+                        f"Some corrections may not have matched the transcript text."
+                    )
+                    # Mark as degraded if not already failed
+                    if metrics_data.get("run_status") == "success":
+                        metrics_data["run_status"] = "degraded"
 
             # Save corrected markdown to debug folder if requested
             if output_path and save_corrections:
@@ -210,19 +237,19 @@ class TranscriptCleaningProcessor:
             if output_path and save_corrections:
                 self._save_phase_output(output_path, "speakers", speaker_mapping, episode_id)
 
-            # Phase 3: Generate final cleaned transcript
+            # Phase 3: Generate final cleaned transcript (deterministic - no LLM)
             logger.info("Phase 3: Generating final cleaned transcript...")
             phase3_start = time.time()
             cleaned_markdown, phase3_chunks = self._generate_cleaned_transcript(
-                formatted_markdown, corrections, speaker_mapping, episode_title
+                corrected_markdown, corrections, speaker_mapping, episode_title
             )
             metrics_data["phase3_generation_duration_seconds"] = time.time() - phase3_start
             metrics_data["phase3_chunks_processed"] = phase3_chunks
-            metrics_data["phase3_llm_calls"] = phase3_chunks
+            metrics_data["phase3_llm_calls"] = 0  # No LLM calls - deterministic processing
 
             processing_time = time.time() - start_time
             metrics_data["total_duration_seconds"] = processing_time
-            metrics_data["total_chunks_processed"] = phase1_chunks + phase3_chunks
+            metrics_data["total_chunks_processed"] = phase1_chunks_ok + phase3_chunks
             metrics_data["timestamp"] = datetime.now()
 
             # Create metrics model
@@ -296,12 +323,15 @@ class TranscriptCleaningProcessor:
         podcast_description: str,
         episode_title: str,
         episode_description: str,
-    ) -> tuple[List[Dict], int]:
+    ) -> tuple[List[Dict], int, int]:
         """
         Phase 1: Analyze transcript and identify all corrections needed.
 
         Returns:
-            Tuple of (corrections list, number of chunks processed)
+            Tuple of (corrections list, chunks processed successfully, chunks failed)
+
+        Raises:
+            TranscriptCleaningError: If more than PHASE1_FAILURE_THRESHOLD of chunks fail
         """
 
         # Markdown is already clean and ready for LLM
@@ -314,7 +344,6 @@ Your task is to analyze the transcript and identify ALL corrections needed for:
 2. Grammar mistakes
 3. Filler words to remove (um, uh, like, you know, etc.) - only when they don't add meaning
 4. Punctuation improvements
-5. Advertisement segments to mark
 
 Context will help you make better corrections:
 - Use the podcast/episode titles and descriptions to understand the domain
@@ -332,7 +361,7 @@ JSON Schema:
       "items": {
         "type": "object",
         "properties": {
-          "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation", "ad_segment"]},
+          "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation"]},
           "original": {"type": "string"},
           "corrected": {"type": "string"}
         },
@@ -365,11 +394,6 @@ Example output (respond in exactly this format):
       "type": "grammar",
       "original": "they was going",
       "corrected": "they were going"
-    },
-    {
-      "type": "ad_segment",
-      "original": "This episode is brought to you by ExpressVPN",
-      "corrected": "[AD]"
     }
   ]
 }
@@ -379,6 +403,8 @@ If no corrections are needed, return: {"corrections": []}"""
         # Split transcript into chunks if needed
         chunks = self._chunk_transcript(transcript_text)
         all_corrections = []
+        chunks_processed = 0
+        chunks_failed = 0
 
         for i, chunk in enumerate(chunks):
             chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
@@ -449,13 +475,36 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 result = json.loads(response)
                 chunk_corrections = result.get("corrections", [])
                 all_corrections.extend(chunk_corrections)
+                chunks_processed += 1
 
+            except json.JSONDecodeError as e:
+                chunks_failed += 1
+                logger.error(f"JSON parsing error in chunk {i+1}/{len(chunks)}: {e}")
+                logger.debug(f"Malformed response (first 500 chars): {response[:500] if response else 'empty'}")
             except Exception as e:
-                logger.error(f"Error analyzing chunk {i+1}: {e}")
-                continue
+                chunks_failed += 1
+                logger.error(f"Error analyzing chunk {i+1}/{len(chunks)}: {e}")
 
-        logger.info(f"Found {len(all_corrections)} corrections across {len(chunks)} chunk(s)")
-        return all_corrections, len(chunks)
+        # Check failure rate and raise if too many chunks failed
+        total_chunks = len(chunks)
+        if total_chunks > 0:
+            failure_rate = chunks_failed / total_chunks
+            if failure_rate > PHASE1_FAILURE_THRESHOLD:
+                raise TranscriptCleaningError(
+                    f"Phase 1 failed: {chunks_failed}/{total_chunks} chunks failed to process "
+                    f"({failure_rate:.0%} failure rate exceeds {PHASE1_FAILURE_THRESHOLD:.0%} threshold)",
+                    chunks_failed=chunks_failed,
+                    chunks_total=total_chunks,
+                    failure_rate=failure_rate,
+                )
+            elif chunks_failed > 0:
+                logger.warning(
+                    f"Phase 1 degraded: {chunks_failed}/{total_chunks} chunks failed "
+                    f"({failure_rate:.0%} failure rate)"
+                )
+
+        logger.info(f"Found {len(all_corrections)} corrections across {chunks_processed} chunk(s)")
+        return all_corrections, chunks_processed, chunks_failed
 
     def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> tuple[str, int]:
         """
@@ -471,8 +520,8 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
         """
         corrected_text = transcript_text
 
-        # Sort corrections by type priority (spelling first, then grammar, then fillers)
-        priority_order = {"spelling": 1, "grammar": 2, "punctuation": 3, "filler": 4, "ad_segment": 5}
+        # Sort corrections by type priority - spelling first for proper names
+        priority_order = {"spelling": 1, "grammar": 2, "punctuation": 3, "filler": 4}
         sorted_corrections = sorted(corrections, key=lambda c: priority_order.get(c.get("type", ""), 99))
 
         applied_count = 0
@@ -483,14 +532,45 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
             if not original:
                 continue
 
-            # Apply the correction (simple string replacement)
-            # For more sophisticated replacement, we could use regex with word boundaries
-            if original in corrected_text:
-                corrected_text = corrected_text.replace(original, corrected)
+            # Use word boundaries to avoid partial matches
+            # This prevents "La" → "LA" from affecting "Language"
+            escaped = re.escape(original)
+            pattern = rf"\b{escaped}\b"
+            new_text, count = re.subn(pattern, corrected, corrected_text)
+            if count > 0:
+                corrected_text = new_text
                 applied_count += 1
 
         logger.info(f"Applied {applied_count} corrections to transcript")
         return corrected_text, applied_count
+
+    def _apply_speaker_mapping(self, transcript: str, speaker_mapping: Dict[str, str]) -> str:
+        """
+        Replace speaker placeholders with actual names.
+
+        Args:
+            transcript: Markdown transcript with `**SPEAKER_XX:**` placeholders
+            speaker_mapping: Dict like {"SPEAKER_00": "Scott Galloway", ...}
+
+        Returns:
+            Transcript with speaker names replaced
+        """
+        if not transcript:
+            return ""
+
+        if not speaker_mapping:
+            return transcript
+
+        result = transcript
+        for placeholder, real_name in speaker_mapping.items():
+            if not real_name:
+                continue
+            escaped_placeholder = re.escape(placeholder)
+            pattern = rf"\*\*{escaped_placeholder}:\*\*"
+            replacement = f"**{real_name}:**"
+            result = re.sub(pattern, replacement, result)
+
+        return result
 
     def _identify_speakers(
         self,
@@ -587,152 +667,24 @@ TRANSCRIPT:
         self, formatted_markdown: str, corrections: List[Dict], speaker_mapping: Dict[str, str], episode_title: str
     ) -> tuple[str, int]:
         """
-        Phase 3: Generate final cleaned markdown transcript.
+        Phase 3: Generate final cleaned transcript using deterministic operations.
+
+        Replaces speaker placeholders with real names.
+        Corrections have already been applied in Phase 1.5.
+
+        Args:
+            formatted_markdown: Transcript with corrections applied (from Phase 1.5)
+            corrections: Original corrections list (unused, kept for API compatibility)
+            speaker_mapping: Speaker ID to name mapping from Phase 2
+            episode_title: Episode title (unused, kept for API compatibility)
 
         Returns:
-            Tuple of (cleaned transcript, number of chunks processed)
+            Tuple of (cleaned transcript, chunks processed - always 0 for deterministic)
         """
+        # Apply speaker name replacements
+        result = self._apply_speaker_mapping(formatted_markdown, speaker_mapping)
 
-        transcript_text = formatted_markdown
-
-        # Build corrections summary for the LLM
-        corrections_summary = "\n".join(
-            [
-                f"- {c['type']}: '{c['original']}' → '{c['corrected']}'"
-                for c in corrections[:100]  # Increased limit since we removed 'reason' field
-            ]
-        )
-
-        speaker_mapping_str = json.dumps(speaker_mapping, indent=2)
-
-        system_prompt = """You are an expert copywriter specialising in podcast transcripts.
-
-Your task is to produce a final, clean, readable Markdown transcript.
-
-Apply these transformations:
-1. Apply all spelling, grammar, and punctuation corrections provided
-2. Remove filler words as indicated
-3. Replace speaker labels (SPEAKER_00, SPEAKER_01, etc.) with real names from the mapping
-4. Mark advertisement segments inline with [AD] tag
-5. Format as readable Markdown with proper paragraphs
-6. Use British English spelling
-7. Add section breaks for topic changes
-8. Maintain conversational tone
-
-STRICT FORMATTING RULES:
-1. Each speaker turn MUST start on a new line with format: **Speaker Name:** followed by their dialogue
-2. Do NOT use additional formatting like > blockquotes or bullet points for dialogue
-3. Speaker name MUST be in bold using **Name:** format (not _Name:_ or other variations)
-4. Separate different speaker turns with a single blank line
-5. Group consecutive statements by the same speaker into a single paragraph
-6. Use ## Heading for major topic changes (use sparingly, only for clear topic shifts)
-7. Advertisement segments MUST be inline: **[AD]** followed by the ad content or summary (on the same paragraph, NOT as a separate heading)
-8. Do NOT add metadata, timestamps, or editorial comments - only the spoken content
-9. Do NOT add a title or episode name at the top - start directly with the dialogue
-
-EXAMPLE OUTPUT FORMAT:
-
-## Introduction
-
-**[AD]** I'm Preet Bharara and this week Biden's top diplomat joins me on my podcast Stay Tuned with Preet. We discuss the US proposal that's been widely heralded as a possible end to the war in Gaza and why peace in the region has proven so elusive. The episode is out now. Search and follow Stay Tuned with Preet wherever you get your podcasts.
-
-**Scott Galloway:** Welcome to Office Hours of Prof G. This is the part of the show where we answer your questions about business, big tech, entrepreneurship, and whatever else is on your mind. If you'd like to submit a question for next time, you can send a voice recording to officehours@profgmedia.com. Again, that's officehours@profgmedia.com. Or post a question on the Scott Galloway subreddit, and we just might feature you on our next episode.
-
-**Rory Stewart:** Welcome back to The Rest Is Politics. I'm Rory Stewart, and I'm here with Alastair Campbell.
-
-**Alastair Campbell:** Thanks, Rory. Today we're going to discuss the latest developments in British politics, particularly the upcoming general election and what it means for the Conservative Party.
-
-**Rory Stewart:** Absolutely. Before we dive in, I think it's worth noting that the polls have been showing some really interesting trends over the past few weeks.
-
-## General Election Discussion
-
-**Alastair Campbell:** The key thing to understand is that Labour's lead has been remarkably stable. We're seeing about a 20-point gap, which is extraordinary by historical standards.
-
-**Rory Stewart:** I agree. When I was in Parliament, even a 10-point lead would have been considered massive.
-
-**[AD]** This episode is brought to you by ExpressVPN. Protect your online privacy with military-grade encryption.
-
-**Rory Stewart:** Right, let's get back to the election. What do you think about the regional variations we're seeing?
-
-Focus on making it read smoothly while staying accurate to what was said. Output ONLY the formatted transcript with no preamble or postamble."""
-
-        # Process in chunks if needed
-        chunks = self._chunk_transcript(transcript_text)
-        cleaned_chunks = []
-
-        for i, chunk in enumerate(chunks):
-            chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
-            logger.info(f"Generating cleaned transcript{chunk_info}...")
-
-            user_message = f"""EPISODE: {episode_title}
-
-SPEAKER MAPPING:
-{speaker_mapping_str}
-
-CORRECTIONS TO APPLY:
-{corrections_summary}
-
-ORIGINAL TRANSCRIPT{chunk_info}:
-{chunk}
-
-Please produce the final cleaned Markdown transcript."""
-
-            try:
-                messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
-
-                # Get max_tokens from MODEL_CONFIGS for the specific model
-                # Use half the max to leave room for the response (input + output share the budget)
-                model_max = get_max_output_tokens(self.provider.get_model_name())
-                provider_max_tokens = min(model_max, 32000)  # Cap at 32K for reasonable response times
-
-                # Use streaming if available for better UX
-                if hasattr(self.provider, "chat_completion_streaming"):
-                    logger.debug("Streaming cleaned transcript from LLM...")
-
-                    # Track progress with streaming (silent for max speed)
-                    chars_received = [0]
-
-                    def on_chunk(chunk_text: str):
-                        """Callback for streaming chunks - accumulate silently for max speed"""
-                        chars_received[0] += len(chunk_text)
-                        # No progress printing - console I/O slows down streaming significantly
-
-                    response = self.provider.chat_completion_streaming(
-                        messages=messages,
-                        temperature=0.3,
-                        max_tokens=provider_max_tokens,
-                        on_chunk=on_chunk,
-                    )
-
-                    logger.debug(f"Streaming complete ({chars_received[0]:,} chars received)")
-
-                # Use continuation for providers that support it (Claude and OpenAI) but not streaming
-                elif hasattr(self.provider, "chat_completion_with_continuation") and (
-                    "claude" in self.provider.get_model_name().lower()
-                    or "gpt" in self.provider.get_model_name().lower()
-                ):
-                    logger.debug("Generating with continuation support...")
-                    response = self.provider.chat_completion_with_continuation(
-                        messages=messages, temperature=0.3, max_tokens=provider_max_tokens, max_attempts=3
-                    )
-                    logger.debug("Generation complete")
-                else:
-                    logger.debug("Generating cleaned transcript...")
-                    response = self.provider.chat_completion(
-                        messages=messages, temperature=0.3, max_tokens=provider_max_tokens
-                    )
-                    logger.debug("Generation complete")
-
-                cleaned_chunks.append(response.strip())
-
-            except Exception as e:
-                logger.error(f"Error generating chunk {i+1}: {e}")
-                # Fallback to original chunk
-                cleaned_chunks.append(chunk)
-
-        # Combine chunks with proper spacing
-        final_transcript = "\n\n".join(cleaned_chunks)
-        return final_transcript, len(chunks)
+        return result, 0  # 0 chunks processed (no LLM chunking needed)
 
     def _save_phase_output(self, output_path: str, phase: str, data, episode_id: str = ""):
         """
@@ -781,44 +733,6 @@ Please produce the final cleaned Markdown transcript."""
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.debug(f"Speaker mapping saved to: {path}")
 
-    def _remove_ads_from_markdown(self, markdown_text: str) -> str:
-        """
-        Remove advertisement paragraphs from markdown text using simple text filtering.
-
-        Args:
-            markdown_text: Cleaned markdown transcript
-
-        Returns:
-            Markdown text with ad paragraphs removed
-        """
-        lines = markdown_text.split("\n")
-        filtered_lines = []
-        skip_next_blank = False
-
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-
-            # Check if line starts with **[AD]** or **[ADVERTISEMENT]**
-            if line.strip().startswith("**[AD]**") or line.strip().startswith("**[ADVERTISEMENT]**"):
-                # Skip this line
-                skip_next_blank = True
-                i += 1
-                continue
-
-            # Skip blank lines immediately after an ad
-            if skip_next_blank and line.strip() == "":
-                skip_next_blank = False
-                i += 1
-                continue
-
-            # Keep all other lines
-            filtered_lines.append(line)
-            skip_next_blank = False
-            i += 1
-
-        return "\n".join(filtered_lines)
-
     def _save_outputs(
         self, result: Dict, output_path: str, save_corrections: bool, save_metrics: bool = True, episode_id: str = ""
     ):
@@ -827,7 +741,6 @@ Please produce the final cleaned Markdown transcript."""
 
         File structure:
         - data/clean_transcripts/{base_name}_cleaned.md - Final cleaned transcript (main output)
-        - data/clean_transcripts/{base_name}_cleaned.no-ads.md - Transcript with ads removed
         - data/clean_transcripts/debug/{base_name}.metrics.json - Performance metrics
         - data/clean_transcripts/debug/{base_name}.corrections.json - Debug: corrections list
         - data/clean_transcripts/debug/{base_name}.speakers.json - Debug: speaker mapping
@@ -848,25 +761,11 @@ Please produce the final cleaned Markdown transcript."""
         base_name = output_path.stem.replace("_cleaned", "")
 
         # Save final cleaned markdown using the provided output_path
+        # Note: cleaned_markdown already contains header from TranscriptFormatter
         final_path = output_path
         with open(final_path, "w", encoding="utf-8") as f:
-            # Add metadata header
-            f.write(f"# {result['episode_title']}\n\n")
-            f.write(f"**Podcast:** {result['podcast_title']}\n\n")
-            f.write("---\n\n")
             f.write(result["cleaned_markdown"])
         logger.info(f"Final transcript saved to: {final_path}")
-
-        # Save ad-free version: {base_name}_cleaned.no-ads.md
-        no_ads_markdown = self._remove_ads_from_markdown(result["cleaned_markdown"])
-        no_ads_path = output_path.parent / f"{base_name}_cleaned.no-ads.md"
-        with open(no_ads_path, "w", encoding="utf-8") as f:
-            # Add metadata header
-            f.write(f"# {result['episode_title']}\n\n")
-            f.write(f"**Podcast:** {result['podcast_title']}\n\n")
-            f.write("---\n\n")
-            f.write(no_ads_markdown)
-        logger.info(f"Ad-free transcript saved to: {no_ads_path}")
 
         # Save performance metrics to debug folder: debug/{base_name}.metrics.json
         if save_metrics and "metrics" in result:
