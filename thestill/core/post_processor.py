@@ -25,71 +25,110 @@ from .llm_provider import LLMProvider
 
 
 class ModelLimits(NamedTuple):
-    """Rate limits for OpenAI models"""
+    """Rate limits and constraints for LLM models"""
 
     tpm: int  # Tokens per minute
     rpm: int  # Requests per minute
     tpd: int  # Tokens per day
-    context_window: int  # Maximum context window size
+    context_window: int  # Maximum context window size (input)
+    max_output_tokens: int = 4096  # Maximum output tokens the model can generate
     supports_temperature: bool = True  # Whether model supports custom temperature
 
 
-# Model rate limits and context windows
+# Model rate limits, context windows, and output token limits
+# Sources:
+# - OpenAI: https://platform.openai.com/docs/models
+# - Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
 MODEL_CONFIGS = {
-    # OpenAI models
-    "gpt-5": ModelLimits(tpm=500000, rpm=500, tpd=1500000, context_window=128000, supports_temperature=False),
-    "gpt-5-mini": ModelLimits(tpm=500000, rpm=500, tpd=5000000, context_window=128000, supports_temperature=False),
-    "gpt-5-nano": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=False),
-    "gpt-4.1": ModelLimits(tpm=30000, rpm=500, tpd=900000, context_window=128000, supports_temperature=True),
-    "gpt-4.1-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
-    "gpt-4.1-nano": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
-    "o3": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
-    "o4-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
-    "gpt-4o": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
-    "gpt-4o-mini": ModelLimits(tpm=200000, rpm=500, tpd=2000000, context_window=128000, supports_temperature=True),
-    "gpt-4-turbo": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
-    "gpt-4-turbo-preview": ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000, supports_temperature=True),
-    # Anthropic Claude models (Tier 2 limits - most users, $40+ deposit)
-    # ITPM = Input Tokens Per Minute, using conservative 400K (10% below 450K limit for safety)
+    # OpenAI models (max_output_tokens: GPT-4o series = 16384)
+    "gpt-5": ModelLimits(
+        tpm=500000, rpm=500, tpd=1500000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-5-mini": ModelLimits(
+        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-5-nano": ModelLimits(
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+    ),
+    "gpt-4.1": ModelLimits(
+        tpm=30000, rpm=500, tpd=900000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "gpt-4.1-mini": ModelLimits(
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "gpt-4.1-nano": ModelLimits(
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "o3": ModelLimits(
+        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "o4-mini": ModelLimits(
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "gpt-4o": ModelLimits(
+        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "gpt-4o-mini": ModelLimits(
+        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+    ),
+    "gpt-4-turbo": ModelLimits(
+        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=4096, supports_temperature=True
+    ),
+    "gpt-4-turbo-preview": ModelLimits(
+        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=4096, supports_temperature=True
+    ),
+    # Anthropic Claude 4.x models (Tier 2 limits - most users, $40+ deposit)
+    # Claude Sonnet 4.5: 64K output tokens, Claude 4.x: 8K output tokens
     # Context window = 200K standard (1M available in beta with special header)
     "claude-sonnet-4-5-20250929": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=64000, supports_temperature=True
     ),
     "claude-sonnet-4-20250514": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-haiku-4-5-20251015": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-opus-4-20250514": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-opus-4-1-20250925": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
-    # Legacy Claude 3.x models (for backward compatibility)
+    # Legacy Claude 3.x models (max_output_tokens: 8192 for 3.5 series, 4096 for 3.x)
     "claude-3-5-sonnet-20241022": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-3-5-haiku-20241022": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
     ),
     "claude-3-opus-20240229": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
     ),
     "claude-3-sonnet-20240229": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
     ),
     "claude-3-haiku-20240307": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, supports_temperature=True
+        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
     ),
     # Ollama/Gemma 3 models (no rate limits for local inference)
     # Using very high tpm/rpm/tpd since there are no actual limits
-    "gemma3:270m": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
-    "gemma3:1b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, supports_temperature=True),
-    "gemma3:4b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
-    "gemma3:12b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
-    "gemma3:27b": ModelLimits(tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, supports_temperature=True),
+    # max_output_tokens is model-dependent but typically limited by context_window
+    "gemma3:270m": ModelLimits(
+        tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, max_output_tokens=8192, supports_temperature=True
+    ),
+    "gemma3:1b": ModelLimits(
+        tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, max_output_tokens=8192, supports_temperature=True
+    ),
+    "gemma3:4b": ModelLimits(
+        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+    ),
+    "gemma3:12b": ModelLimits(
+        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+    ),
+    "gemma3:27b": ModelLimits(
+        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+    ),
 }
 
 

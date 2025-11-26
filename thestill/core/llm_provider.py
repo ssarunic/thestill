@@ -16,15 +16,17 @@
 Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, and Anthropic.
 """
 
-import json
+import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 import ollama
-from anthropic import Anthropic, RateLimitError
+from anthropic import Anthropic, APIStatusError, BadRequestError, RateLimitError
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(ABC):
@@ -171,8 +173,8 @@ class OpenAIProvider(LLMProvider):
 
             # Log token usage if available
             if hasattr(response, "usage") and response.usage:
-                print(
-                    f"  Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}"
+                logger.debug(
+                    f"Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}"
                 )
 
             # Check finish_reason
@@ -180,7 +182,7 @@ class OpenAIProvider(LLMProvider):
 
             if finish_reason == "length":  # Equivalent to max_tokens
                 if enable_continuation and attempt < max_attempts - 1:
-                    print(f"  Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
@@ -188,17 +190,17 @@ class OpenAIProvider(LLMProvider):
                     ]
                     continue
                 else:
-                    print(
-                        f"⚠️  Warning: OpenAI response truncated due to max_tokens limit (limit: {max_tokens or 'default'})"
+                    logger.warning(
+                        f"OpenAI response truncated due to max_tokens limit (limit: {max_tokens or 'default'})"
                     )
                     if not enable_continuation:
-                        print(f"   Consider using smaller chunks or chat_completion_with_continuation()")
+                        logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
                     break
             elif finish_reason == "stop":
                 # Normal completion
                 break
             elif finish_reason == "content_filter":
-                print(f"⚠️  Warning: OpenAI content filter triggered")
+                logger.warning("OpenAI content filter triggered")
                 break
             else:
                 # Other finish reasons (function_call, tool_calls, etc.)
@@ -226,7 +228,7 @@ class OpenAIProvider(LLMProvider):
             )
             return True
         except Exception as e:
-            print(f"OpenAI health check failed: {e}")
+            logger.error(f"OpenAI health check failed: {e}")
             return False
 
     def get_model_name(self) -> str:
@@ -287,15 +289,15 @@ class OllamaProvider(LLMProvider):
 
             # Log token counts if available
             if "prompt_eval_count" in response and "eval_count" in response:
-                print(
-                    f"  Token usage - Input: {response.get('prompt_eval_count', 0)}, Output: {response.get('eval_count', 0)}"
+                logger.debug(
+                    f"Token usage - Input: {response.get('prompt_eval_count', 0)}, Output: {response.get('eval_count', 0)}"
                 )
 
             # Check if response was truncated (hit max_tokens limit)
             if max_tokens and "eval_count" in response:
                 if response["eval_count"] >= max_tokens:
-                    print(f"⚠️  Warning: Ollama response may be truncated (reached max_tokens: {max_tokens})")
-                    print(f"   Consider increasing max_tokens or using smaller chunks")
+                    logger.warning(f"Ollama response may be truncated (reached max_tokens: {max_tokens})")
+                    logger.info("Consider increasing max_tokens or using smaller chunks")
 
             return response_text
         except Exception as e:
@@ -333,15 +335,15 @@ class OllamaProvider(LLMProvider):
             model_available = any(self.model == name or self.model == name.split(":")[0] for name in model_names)
 
             if not model_available:
-                print(f"⚠️  Model '{self.model}' not found in Ollama.")
-                print(f"   Available models: {', '.join(model_names)}")
-                print(f"   Run: ollama pull {self.model}")
+                logger.warning(f"Model '{self.model}' not found in Ollama.")
+                logger.info(f"Available models: {', '.join(model_names)}")
+                logger.info(f"Run: ollama pull {self.model}")
                 return False
 
             return True
         except Exception as e:
-            print(f"❌ Cannot connect to Ollama: {e}")
-            print("   Make sure Ollama is running: ollama serve")
+            logger.error(f"Cannot connect to Ollama: {e}")
+            logger.info("Make sure Ollama is running: ollama serve")
             return False
 
     def get_model_name(self) -> str:
@@ -356,12 +358,57 @@ class OllamaProvider(LLMProvider):
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude API provider"""
 
+    # Default max output tokens for unknown models (conservative)
+    DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
     def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
         # Set a timeout to prevent infinite hangs (5 minutes for large responses)
         # Set max_retries=0 to disable SDK's automatic retry - we handle retries manually
         # This prevents the SDK from retrying rate limits immediately without waiting
         self.client = Anthropic(api_key=api_key, timeout=300.0, max_retries=0)
         self.model = model
+
+    def _get_max_output_tokens(self) -> int:
+        """
+        Get the maximum output tokens for the current model.
+
+        Uses MODEL_CONFIGS from post_processor.py as the source of truth.
+        Falls back to DEFAULT_MAX_OUTPUT_TOKENS for unknown models.
+        """
+        # Import here to avoid circular imports
+        from .post_processor import MODEL_CONFIGS
+
+        # Check for exact match first
+        if self.model in MODEL_CONFIGS:
+            return MODEL_CONFIGS[self.model].max_output_tokens
+
+        # Check for partial match (model names often have date suffixes)
+        for model_name, limits in MODEL_CONFIGS.items():
+            if self.model.startswith(model_name.rsplit("-", 1)[0]):
+                return limits.max_output_tokens
+
+        return self.DEFAULT_MAX_OUTPUT_TOKENS
+
+    def _validate_max_tokens(self, requested_max_tokens: int) -> int:
+        """
+        Validate and potentially cap max_tokens to model limit.
+
+        Args:
+            requested_max_tokens: The requested max_tokens value
+
+        Returns:
+            The validated max_tokens value (may be capped)
+        """
+        model_limit = self._get_max_output_tokens()
+
+        if requested_max_tokens > model_limit:
+            logger.warning(
+                f"Requested max_tokens ({requested_max_tokens}) exceeds model limit "
+                f"({model_limit}) for {self.model}. Capping to {model_limit}."
+            )
+            return model_limit
+
+        return requested_max_tokens
 
     def chat_completion(
         self,
@@ -439,11 +486,14 @@ class AnthropicProvider(LLMProvider):
                 elif role in ["user", "assistant"]:
                     conversation_messages.append({"role": role, "content": content})
 
+            # Validate and cap max_tokens to model limit
+            effective_max_tokens = self._validate_max_tokens(max_tokens or 4096)
+
             # Build request parameters
             params: Dict[str, Any] = {
                 "model": self.model,
                 "messages": conversation_messages,
-                "max_tokens": max_tokens or 4096,  # Anthropic requires max_tokens
+                "max_tokens": effective_max_tokens,
                 "timeout": 600.0,  # 10 minute timeout for long requests
             }
 
@@ -476,7 +526,9 @@ class AnthropicProvider(LLMProvider):
 
                     # Check global retry limit to prevent infinite loops
                     if total_retry_count > max_total_retries:
-                        print(f"❌ Rate limit retry failed after {total_retry_count} total retries across all attempts")
+                        logger.error(
+                            f"Rate limit retry failed after {total_retry_count} total retries across all attempts"
+                        )
                         raise
 
                     if retry_attempt < max_retries - 1:
@@ -493,8 +545,10 @@ class AnthropicProvider(LLMProvider):
                         buffer_time = 10  # Extra 10 seconds buffer
                         total_wait = retry_after + buffer_time
 
-                        print(
-                            f"⚠️  Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) before retry (total retry {total_retry_count}/{max_total_retries}, current attempt {retry_attempt + 2}/{max_retries})..."
+                        logger.warning(
+                            f"Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) "
+                            f"before retry (total retry {total_retry_count}/{max_total_retries}, "
+                            f"current attempt {retry_attempt + 2}/{max_retries})..."
                         )
 
                         # Show progress during long waits (>10 seconds)
@@ -505,34 +559,58 @@ class AnthropicProvider(LLMProvider):
                                 elapsed += 10
                                 remaining = max(0, total_wait - elapsed)
                                 if remaining > 0:
-                                    print(f"      ...{remaining}s remaining...")
+                                    logger.debug(f"...{remaining}s remaining...")
                         else:
                             time.sleep(total_wait)
 
-                        print("      Retrying now...")
+                        logger.info("Retrying now...")
                         continue  # Explicitly continue to next retry attempt
                     else:
                         # Max retries for this attempt exceeded, re-raise the error
-                        print(
-                            f"❌ Rate limit retry failed after {max_retries} attempts (total retries: {total_retry_count})"
+                        logger.error(
+                            f"Rate limit retry failed after {max_retries} attempts (total retries: {total_retry_count})"
                         )
                         raise
+                except BadRequestError as e:
+                    # Permanent error - invalid request parameters (e.g., max_tokens invalid)
+                    # Do NOT retry - fail fast with clear error message
+                    logger.error(f"BadRequest error (not retrying): {e}")
+                    raise ValueError(
+                        f"Invalid Anthropic API request: {e}. "
+                        f"This may be due to invalid parameters for model {self.model}."
+                    ) from e
+
+                except APIStatusError as e:
+                    # Server errors (500, 529 overloaded) are transient - retry
+                    # Client errors (400, 401, 403, 404) should not be retried
+                    if e.status_code in (500, 529):
+                        total_retry_count += 1
+                        logger.warning(f"Server error {e.status_code}, will retry: {e}")
+                        if retry_attempt < max_retries - 1:
+                            retry_after = 30
+                            logger.info(
+                                f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})"
+                            )
+                            time.sleep(retry_after)
+                            continue
+                        logger.error(f"Server error retry failed after {max_retries} attempts")
+                        raise
+                    # Other API status errors (4xx) - fail fast
+                    logger.error(f"API error (status {e.status_code}): {e}")
+                    raise
+
                 except Exception as e:
-                    # Catch any other API errors (timeout, connection, etc.)
+                    # Connection errors, timeouts - these are transient, retry
                     total_retry_count += 1
                     error_type = type(e).__name__
-                    print(f"⚠️  API error ({error_type}): {str(e)}")
+                    logger.warning(f"Connection error ({error_type}): {e}")
                     if retry_attempt < max_retries - 1:
-                        retry_after = 30  # Wait 30 seconds for other errors
-                        print(
-                            f"      Waiting {retry_after} seconds before retry (attempt {retry_attempt + 2}/{max_retries})..."
-                        )
+                        retry_after = 30  # Wait 30 seconds for connection errors
+                        logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
                         time.sleep(retry_after)
-                        print("      Retrying now...")
                         continue
-                    else:
-                        print(f"❌ API request failed after {max_retries} attempts")
-                        raise
+                    logger.error(f"Connection error retry failed after {max_retries} attempts")
+                    raise
 
             # Extract text from current response
             current_text = ""
@@ -543,14 +621,16 @@ class AnthropicProvider(LLMProvider):
 
             # Log token usage if available
             if hasattr(response, "usage"):
-                print(f"  Token usage - Input: {response.usage.input_tokens}, Output: {response.usage.output_tokens}")
+                logger.debug(
+                    f"Token usage - Input: {response.usage.input_tokens}, Output: {response.usage.output_tokens}"
+                )
 
             # Check stop_reason for handling different completion scenarios
             stop_reason = getattr(response, "stop_reason", None)
 
             if stop_reason == "max_tokens":
                 if enable_continuation and attempt < max_attempts - 1:
-                    print(f"  Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
@@ -558,11 +638,11 @@ class AnthropicProvider(LLMProvider):
                     ]
                     continue
                 else:
-                    print(
-                        f"⚠️  Warning: Anthropic response truncated due to max_tokens limit (limit: {max_tokens or 4096})"
+                    logger.warning(
+                        f"Anthropic response truncated due to max_tokens limit (limit: {max_tokens or 4096})"
                     )
                     if not enable_continuation:
-                        print(f"   Consider using smaller chunks or chat_completion_with_continuation()")
+                        logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
                     break
             elif stop_reason == "end_turn":
                 # Normal completion
@@ -584,7 +664,7 @@ class AnthropicProvider(LLMProvider):
             self.client.messages.create(model=self.model, messages=[{"role": "user", "content": "test"}], max_tokens=1)
             return True
         except Exception as e:
-            print(f"Anthropic health check failed: {e}")
+            logger.error(f"Anthropic health check failed: {e}")
             return False
 
     def get_model_name(self) -> str:
@@ -629,11 +709,14 @@ class AnthropicProvider(LLMProvider):
             elif role in ["user", "assistant"]:
                 conversation_messages.append({"role": role, "content": content})
 
+        # Validate and cap max_tokens to model limit
+        effective_max_tokens = self._validate_max_tokens(max_tokens or 4096)
+
         # Build request parameters (stream() is a method, not a parameter)
         params: Dict[str, Any] = {
             "model": self.model,
             "messages": conversation_messages,
-            "max_tokens": max_tokens or 4096,
+            "max_tokens": effective_max_tokens,
         }
 
         # Add system message if present
@@ -657,15 +740,15 @@ class AnthropicProvider(LLMProvider):
         for retry_attempt in range(max_retries):
             try:
                 full_response = ""
-                print(f"      Opening stream (attempt {retry_attempt + 1}/{max_retries})...")
+                logger.debug(f"Opening stream (attempt {retry_attempt + 1}/{max_retries})...")
                 # Use the stream() context manager method (not a parameter!)
                 with self.client.messages.stream(**params) as stream:
-                    print(f"      Stream opened, waiting for data...")
+                    logger.debug("Stream opened, waiting for data...")
                     chunk_count = 0
                     for text in stream.text_stream:
                         chunk_count += 1
                         if chunk_count == 1:
-                            print(f"      Receiving data...")
+                            logger.debug("Receiving data...")
                         full_response += text
                         if on_chunk:
                             on_chunk(text)
@@ -687,8 +770,9 @@ class AnthropicProvider(LLMProvider):
                     buffer_time = 10  # Extra 10 seconds buffer
                     total_wait = retry_after + buffer_time
 
-                    print(
-                        f"⚠️  Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                    logger.warning(
+                        f"Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) "
+                        f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
                     )
 
                     # Show progress during long waits (>10 seconds)
@@ -699,31 +783,51 @@ class AnthropicProvider(LLMProvider):
                             elapsed += 10
                             remaining = max(0, total_wait - elapsed)
                             if remaining > 0:
-                                print(f"      ...{remaining}s remaining...")
+                                logger.debug(f"...{remaining}s remaining...")
                     else:
                         time.sleep(total_wait)
 
-                    print("      Retrying now...")
+                    logger.info("Retrying now...")
                     continue  # Explicitly continue to next retry attempt
                 else:
-                    print(f"❌ Rate limit retry failed after {max_retries} attempts")
+                    logger.error(f"Rate limit retry failed after {max_retries} attempts")
                     raise
 
-            except Exception as e:
-                # Catch any other API errors (timeout, connection, etc.)
-                error_type = type(e).__name__
-                print(f"⚠️  API error ({error_type}): {str(e)}")
-                if retry_attempt < max_retries - 1:
-                    retry_after = 30  # Wait 30 seconds for other errors
-                    print(
-                        f"      Waiting {retry_after} seconds before retry (attempt {retry_attempt + 2}/{max_retries})..."
-                    )
-                    time.sleep(retry_after)
-                    print("      Retrying now...")
-                    continue
-                else:
-                    print(f"❌ API request failed after {max_retries} attempts")
+            except BadRequestError as e:
+                # Permanent error - invalid request parameters
+                # Do NOT retry - fail fast with clear error message
+                logger.error(f"BadRequest error in streaming (not retrying): {e}")
+                raise ValueError(
+                    f"Invalid Anthropic API request: {e}. "
+                    f"This may be due to invalid parameters for model {self.model}."
+                ) from e
+
+            except APIStatusError as e:
+                # Server errors (500, 529 overloaded) are transient - retry
+                if e.status_code in (500, 529):
+                    logger.warning(f"Server error {e.status_code} in streaming, will retry: {e}")
+                    if retry_attempt < max_retries - 1:
+                        retry_after = 30
+                        logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    logger.error(f"Server error retry failed after {max_retries} attempts")
                     raise
+                # Other API status errors (4xx) - fail fast
+                logger.error(f"API error in streaming (status {e.status_code}): {e}")
+                raise
+
+            except Exception as e:
+                # Connection errors, timeouts - these are transient, retry
+                error_type = type(e).__name__
+                logger.warning(f"Connection error in streaming ({error_type}): {e}")
+                if retry_attempt < max_retries - 1:
+                    retry_after = 30  # Wait 30 seconds for connection errors
+                    logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
+                    time.sleep(retry_after)
+                    continue
+                logger.error(f"Connection error retry failed after {max_retries} attempts")
+                raise
 
         # Should never reach here, but return empty string as fallback
         return ""
@@ -805,10 +909,12 @@ class GeminiProvider(LLMProvider):
                 char_count = len(response_text)
                 # Rough estimate: 1 token ≈ 4 characters
                 estimated_tokens = char_count // 4
-                print(f"⚠️  Warning: Gemini response truncated due to max_tokens limit")
-                print(f"   Limit: {max_tokens if max_tokens else 'default (8192)'} tokens")
-                print(f"   Generated: ~{estimated_tokens} tokens ({char_count} characters)")
-                print(f"   Consider using smaller chunks or increasing max_tokens")
+                logger.warning(
+                    f"Gemini response truncated due to max_tokens limit. "
+                    f"Limit: {max_tokens if max_tokens else 'default (8192)'} tokens, "
+                    f"Generated: ~{estimated_tokens} tokens ({char_count} characters)"
+                )
+                logger.info("Consider using smaller chunks or increasing max_tokens")
                 return response_text
 
             raise RuntimeError(
@@ -823,7 +929,7 @@ class GeminiProvider(LLMProvider):
         elif finish_reason == 4:  # RECITATION
             # We already extracted text above, return it if available
             if response_text:
-                print(f"⚠️  Warning: Gemini flagged potential recitation but returned content")
+                logger.warning("Gemini flagged potential recitation but returned content")
                 return response_text
             raise RuntimeError(
                 "Gemini blocked response due to potential recitation (copyrighted content). "
@@ -832,7 +938,7 @@ class GeminiProvider(LLMProvider):
         else:
             # For any other finish reason, try to return text if we have it
             if response_text:
-                print(f"⚠️  Warning: Gemini finished with reason {finish_reason} but returned content")
+                logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
                 return response_text
             raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
 
@@ -874,7 +980,7 @@ class GeminiProvider(LLMProvider):
             )
             return True
         except Exception as e:
-            print(f"Gemini health check failed: {e}")
+            logger.error(f"Gemini health check failed: {e}")
             return False
 
     def get_model_name(self) -> str:

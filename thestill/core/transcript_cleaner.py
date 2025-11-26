@@ -15,13 +15,23 @@
 """
 Transcript cleaner with overlapping chunking for handling long texts.
 Uses small LLM models to fix spelling, remove filler words, and improve readability.
+
+.. deprecated::
+    This module is deprecated. Use :class:`TranscriptCleaningProcessor` from
+    :mod:`thestill.core.transcript_cleaning_processor` instead, which provides
+    a more robust three-phase cleaning pipeline with better speaker identification
+    and correction tracking.
 """
 
 import json
+import logging
 import re
 import time
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     import tiktoken
@@ -38,7 +48,7 @@ try:
     try:
         nltk.data.find("tokenizers/punkt")
     except LookupError:
-        print("Downloading NLTK punkt tokenizer...")
+        logger.info("Downloading NLTK punkt tokenizer...")
         nltk.download("punkt", quiet=True)
 except ImportError:
     NLTK_AVAILABLE = False
@@ -147,10 +157,21 @@ Text to clean:
         """
         Initialize transcript cleaner.
 
+        .. deprecated::
+            Use :class:`TranscriptCleaningProcessor` instead.
+
         Args:
             provider: LLMProvider instance (OpenAI or Ollama)
             config: Cleaning configuration options
         """
+        warnings.warn(
+            "TranscriptCleaner is deprecated. Use TranscriptCleaningProcessor from "
+            "thestill.core.transcript_cleaning_processor instead, which provides "
+            "a more robust three-phase cleaning pipeline.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         self.provider = provider
         self.config = config or TranscriptCleanerConfig()
         self.model_name = provider.get_model_name()
@@ -159,13 +180,13 @@ Text to clean:
         if TIKTOKEN_AVAILABLE and "gpt" in self.model_name.lower():
             try:
                 self.tokenizer = tiktoken.encoding_for_model(self.model_name)
-                print(f"Using tiktoken for {self.model_name}")
+                logger.debug(f"Using tiktoken for {self.model_name}")
             except KeyError:
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
-                print(f"Using cl100k_base encoding (model {self.model_name} not found)")
+                logger.debug(f"Using cl100k_base encoding (model {self.model_name} not found)")
         else:
             self.tokenizer = None
-            print("Using character-based token estimation (~4 chars per token)")
+            logger.debug("Using character-based token estimation (~4 chars per token)")
 
     def _count_tokens(self, text: str) -> int:
         """Count tokens in text"""
@@ -180,7 +201,7 @@ Text to clean:
             try:
                 return nltk.sent_tokenize(text)
             except Exception as e:
-                print(f"Warning: NLTK sentence tokenization failed: {e}")
+                logger.warning(f"NLTK sentence tokenization failed: {e}")
 
         # Fallback: simple regex-based splitting
         sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -191,7 +212,7 @@ Text to clean:
         First pass: Extract entities for consistent cleaning.
         Uses only first portion of text if too long.
         """
-        print("Extracting entities for consistency...")
+        logger.info("Extracting entities for consistency...")
 
         # Use only first ~10K tokens for entity extraction
         max_extraction_tokens = 10000
@@ -225,11 +246,11 @@ Text to clean:
             result = json.loads(response)
             entities = result.get("entities", [])
 
-            print(f"Extracted {len(entities)} entities")
+            logger.info(f"Extracted {len(entities)} entities")
             return entities
 
         except Exception as e:
-            print(f"Warning: Entity extraction failed: {e}")
+            logger.warning(f"Entity extraction failed: {e}")
             return []
 
     def _create_overlapping_chunks(self, text: str) -> List[Tuple[str, int, int]]:
@@ -325,7 +346,7 @@ Text to clean:
             return response.strip()
 
         except Exception as e:
-            print(f"Error cleaning chunk {chunk_num}/{total_chunks}: {e}")
+            logger.error(f"Error cleaning chunk {chunk_num}/{total_chunks}: {e}")
             # Return original on error
             return chunk_text
 
@@ -371,8 +392,8 @@ Text to clean:
 
         # Count tokens in original
         original_tokens = self._count_tokens(text)
-        print(f"\nCleaning transcript with {self.model_name}...")
-        print(f"Original length: {len(text):,} chars, ~{original_tokens:,} tokens")
+        logger.info(f"Cleaning transcript with {self.model_name}...")
+        logger.info(f"Original length: {len(text):,} chars, ~{original_tokens:,} tokens")
 
         # Step 1: Extract entities (optional)
         entities = []
@@ -380,17 +401,17 @@ Text to clean:
             entities = self._extract_entities(text)
 
         # Step 2: Create overlapping chunks
-        print("Creating overlapping chunks...")
+        logger.info("Creating overlapping chunks...")
         chunk_tuples = self._create_overlapping_chunks(text)
         total_chunks = len(chunk_tuples)
 
-        print(f"Split into {total_chunks} chunk(s) with {int(self.config.overlap_pct * 100)}% overlap")
+        logger.info(f"Split into {total_chunks} chunk(s) with {int(self.config.overlap_pct * 100)}% overlap")
 
         # Step 3: Clean each chunk
         cleaned_chunks = []
         for i, (chunk_text, overlap_start, overlap_end) in enumerate(chunk_tuples, 1):
             chunk_tokens = self._count_tokens(chunk_text)
-            print(f"Processing chunk {i}/{total_chunks} (~{chunk_tokens:,} tokens)...")
+            logger.info(f"Processing chunk {i}/{total_chunks} (~{chunk_tokens:,} tokens)...")
 
             cleaned_text = self._clean_chunk(chunk_text, entities, i, total_chunks)
             cleaned_chunks.append((cleaned_text, overlap_start, overlap_end))
@@ -399,15 +420,15 @@ Text to clean:
             # have built-in rate limit handling with automatic retry logic
 
         # Step 4: Stitch chunks together
-        print("Stitching chunks together...")
+        logger.info("Stitching chunks together...")
         final_text = self._stitch_chunks(cleaned_chunks)
 
         processing_time = time.time() - start_time
         final_tokens = self._count_tokens(final_text)
 
-        print(f"\nCleaning completed in {processing_time:.1f}s")
-        print(f"Final length: {len(final_text):,} chars, ~{final_tokens:,} tokens")
-        print(f"Token change: {((final_tokens - original_tokens) / original_tokens * 100):+.1f}%")
+        logger.info(f"Cleaning completed in {processing_time:.1f}s")
+        logger.info(f"Final length: {len(final_text):,} chars, ~{final_tokens:,} tokens")
+        logger.info(f"Token change: {((final_tokens - original_tokens) / original_tokens * 100):+.1f}%")
 
         result = {
             "cleaned_text": final_text,
@@ -446,5 +467,5 @@ Text to clean:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-        print(f"Cleaned transcript saved to {text_path}")
-        print(f"Metadata saved to {json_path}")
+        logger.info(f"Cleaned transcript saved to {text_path}")
+        logger.info(f"Metadata saved to {json_path}")

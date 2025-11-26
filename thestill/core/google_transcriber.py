@@ -332,6 +332,13 @@ class GoogleCloudTranscriber:
         """
         Format Google Cloud response to match Whisper transcript structure.
 
+        IMPORTANT: When diarization is enabled, Google Cloud Speech returns:
+        - Multiple interim results with partial transcriptions (no speaker tags)
+        - A FINAL result containing ALL words with speaker assignments
+
+        We only process the LAST result when diarization is enabled to avoid
+        duplicating content (the interim results would duplicate the final one).
+
         Output format:
         {
             "audio_file": str,
@@ -368,7 +375,14 @@ class GoogleCloudTranscriber:
 
         segment_id = 0
 
-        for result in response.results:
+        # When diarization is enabled, the last result contains ALL words with speaker
+        # assignments. Processing all results would duplicate the transcript.
+        if self.enable_diarization and response.results:
+            results_to_process = [response.results[-1]]
+        else:
+            results_to_process = response.results
+
+        for result in results_to_process:
             alternative = result.alternatives[0]
 
             # Check if we have word-level diarization

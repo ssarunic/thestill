@@ -18,14 +18,56 @@ Acts as a copywriter to fix spelling, grammar, remove filler words, and identify
 """
 
 import json
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..models.podcast import TranscriptCleaningMetrics
+
+logger = logging.getLogger(__name__)
 from .llm_provider import LLMProvider
+from .post_processor import MODEL_CONFIGS
 from .transcript_formatter import TranscriptFormatter
+
+# Default max output tokens for unknown models (conservative)
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+
+def get_max_output_tokens(model_name: str) -> int:
+    """
+    Get the maximum output tokens for a model from MODEL_CONFIGS.
+
+    Args:
+        model_name: The model name (e.g., "claude-3-5-sonnet-20241022")
+
+    Returns:
+        The max_output_tokens for the model, or DEFAULT_MAX_OUTPUT_TOKENS if unknown
+    """
+    # Check for exact match first
+    if model_name in MODEL_CONFIGS:
+        return MODEL_CONFIGS[model_name].max_output_tokens
+
+    # Check for partial match (model names often have date suffixes)
+    model_lower = model_name.lower()
+    for config_name, limits in MODEL_CONFIGS.items():
+        # Match by prefix (e.g., "claude-3-5-sonnet" matches "claude-3-5-sonnet-20241022")
+        if model_name.startswith(config_name.rsplit("-", 1)[0]):
+            return limits.max_output_tokens
+        # Also check if config name starts with model name prefix
+        if config_name.startswith(model_name.rsplit("-", 1)[0]):
+            return limits.max_output_tokens
+
+    # Fallback for common provider patterns
+    if "gemini" in model_lower:
+        return 8192  # Gemini default
+    elif "gpt-4" in model_lower:
+        return 16384  # GPT-4o default
+    elif "claude" in model_lower:
+        return 8192  # Claude 3.x default (conservative)
+
+    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class TranscriptCleaningProcessor:
@@ -53,22 +95,22 @@ class TranscriptCleaningProcessor:
             if "gemini" in model_name:
                 # Gemini 2.0 Flash: 1M input tokens context
                 self.chunk_size = 900000
-                print(f"  Auto-set chunk size: 900K chars for Gemini (1M token context)")
+                logger.debug("Auto-set chunk size: 900K chars for Gemini (1M token context)")
             elif "claude" in model_name:
                 # Claude 3.5 Sonnet: 200K token context
                 self.chunk_size = 180000
-                print(f"  Auto-set chunk size: 180K chars for Claude (200K token context)")
+                logger.debug("Auto-set chunk size: 180K chars for Claude (200K token context)")
             elif "gpt-4" in model_name or "gpt-5" in model_name:
                 # GPT-4/GPT-4o: 128K token context
                 self.chunk_size = 100000
-                print(f"  Auto-set chunk size: 100K chars for GPT-4 (128K token context)")
+                logger.debug("Auto-set chunk size: 100K chars for GPT-4 (128K token context)")
             else:
                 # Conservative default for Ollama and other models
                 self.chunk_size = 30000
-                print(f"  Auto-set chunk size: 30K chars (conservative default)")
+                logger.debug("Auto-set chunk size: 30K chars (conservative default)")
         else:
             self.chunk_size = chunk_size
-            print(f"  Using custom chunk size: {chunk_size} chars")
+            logger.debug(f"Using custom chunk size: {chunk_size} chars")
 
     def clean_transcript(
         self,
@@ -118,7 +160,7 @@ class TranscriptCleaningProcessor:
 
         try:
             # Phase 0: Format JSON to clean Markdown (efficient for LLM)
-            print("Phase 0: Formatting transcript to clean Markdown...")
+            logger.info("Phase 0: Formatting transcript to clean Markdown...")
             phase0_start = time.time()
             formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
             metrics_data["phase0_format_duration_seconds"] = time.time() - phase0_start
@@ -129,7 +171,7 @@ class TranscriptCleaningProcessor:
                 self._save_phase_output(output_path, "original", formatted_markdown, episode_id)
 
             # Phase 1: Analyze and create corrections list
-            print("Phase 1: Analyzing transcript and identifying corrections...")
+            logger.info("Phase 1: Analyzing transcript and identifying corrections...")
             phase1_start = time.time()
             corrections, phase1_chunks = self._analyze_and_correct(
                 formatted_markdown, podcast_title, podcast_description, episode_title, episode_description
@@ -144,7 +186,7 @@ class TranscriptCleaningProcessor:
                 self._save_phase_output(output_path, "corrections", corrections, episode_id)
 
             # Phase 1.5: Apply corrections before speaker identification
-            print("Phase 1.5: Applying corrections to improve speaker name accuracy...")
+            logger.info("Phase 1.5: Applying corrections to improve speaker name accuracy...")
             phase1_5_start = time.time()
             corrected_markdown, applied_count = self._apply_corrections(formatted_markdown, corrections)
             metrics_data["phase1_5_apply_duration_seconds"] = time.time() - phase1_5_start
@@ -155,7 +197,7 @@ class TranscriptCleaningProcessor:
                 self._save_phase_output(output_path, "corrected", corrected_markdown, episode_id)
 
             # Phase 2: Identify speakers (using corrected transcript)
-            print("Phase 2: Identifying speakers...")
+            logger.info("Phase 2: Identifying speakers...")
             phase2_start = time.time()
             speaker_mapping = self._identify_speakers(
                 corrected_markdown, podcast_title, podcast_description, episode_title, episode_description
@@ -169,7 +211,7 @@ class TranscriptCleaningProcessor:
                 self._save_phase_output(output_path, "speakers", speaker_mapping, episode_id)
 
             # Phase 3: Generate final cleaned transcript
-            print("Phase 3: Generating final cleaned transcript...")
+            logger.info("Phase 3: Generating final cleaned transcript...")
             phase3_start = time.time()
             cleaned_markdown, phase3_chunks = self._generate_cleaned_transcript(
                 formatted_markdown, corrections, speaker_mapping, episode_title
@@ -201,14 +243,14 @@ class TranscriptCleaningProcessor:
                 self._save_outputs(result, output_path, save_corrections, save_metrics, episode_id)
 
             # Print performance summary
-            print(f"Transcript cleaning completed in {processing_time:.1f} seconds")
-            print(
-                f"  Performance: {metrics.efficiency_metrics['chars_per_second']:.0f} chars/sec, {metrics.total_llm_calls} LLM calls"
+            logger.info(f"Transcript cleaning completed in {processing_time:.1f} seconds")
+            logger.info(
+                f"Performance: {metrics.efficiency_metrics['chars_per_second']:.0f} chars/sec, {metrics.total_llm_calls} LLM calls"
             )
             return result
 
         except Exception as e:
-            print(f"Error cleaning transcript: {e}")
+            logger.error(f"Error cleaning transcript: {e}")
             raise
 
     def _chunk_transcript(self, text: str) -> List[str]:
@@ -340,7 +382,7 @@ If no corrections are needed, return: {"corrections": []}"""
 
         for i, chunk in enumerate(chunks):
             chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
-            print(f"  Processing{chunk_info}...")
+            logger.info(f"Processing{chunk_info}...")
 
             context_info = f"""PODCAST CONTEXT:
 Podcast: {podcast_title}
@@ -355,12 +397,12 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
             try:
                 messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": context_info}]
 
-                # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
-                provider_max_tokens = 64000 if "claude" in self.provider.get_model_name().lower() else 65000
+                # Get max_tokens from MODEL_CONFIGS for the specific model
+                provider_max_tokens = get_max_output_tokens(self.provider.get_model_name())
 
                 # Use streaming if available (Anthropic, OpenAI)
                 if hasattr(self.provider, "chat_completion_streaming"):
-                    print(f"    → Streaming from LLM ({len(chunk):,} chars input)...")
+                    logger.debug(f"Streaming from LLM ({len(chunk):,} chars input)...")
 
                     # Track progress with streaming (silent for max speed)
                     chars_received = [0]  # Use list to allow mutation in nested function
@@ -378,18 +420,18 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                         on_chunk=on_chunk,
                     )
 
-                    print(f"    ✓ Streaming complete ({chars_received[0]:,} chars received)")
+                    logger.debug(f"Streaming complete ({chars_received[0]:,} chars received)")
 
                 else:
                     # Fallback to non-streaming for providers that don't support it
-                    print(f"    → Sending to LLM ({len(chunk):,} chars input)...")
+                    logger.debug(f"Sending to LLM ({len(chunk):,} chars input)...")
                     response = self.provider.chat_completion(
                         messages=messages,
                         temperature=0.1,
                         max_tokens=provider_max_tokens,
                         response_format={"type": "json_object"},
                     )
-                    print(f"    ✓ LLM responded")
+                    logger.debug("LLM responded")
 
                 # Parse JSON response
                 response = response.strip()
@@ -409,10 +451,10 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 all_corrections.extend(chunk_corrections)
 
             except Exception as e:
-                print(f"  Error analyzing chunk {i+1}: {e}")
+                logger.error(f"Error analyzing chunk {i+1}: {e}")
                 continue
 
-        print(f"  Found {len(all_corrections)} corrections across {len(chunks)} chunk(s)")
+        logger.info(f"Found {len(all_corrections)} corrections across {len(chunks)} chunk(s)")
         return all_corrections, len(chunks)
 
     def _apply_corrections(self, transcript_text: str, corrections: List[Dict]) -> tuple[str, int]:
@@ -447,7 +489,7 @@ TRANSCRIPT TO ANALYZE{chunk_info}:
                 corrected_text = corrected_text.replace(original, corrected)
                 applied_count += 1
 
-        print(f"  Applied {applied_count} corrections to transcript")
+        logger.info(f"Applied {applied_count} corrections to transcript")
         return corrected_text, applied_count
 
     def _identify_speakers(
@@ -495,7 +537,7 @@ Example:
         if len(chunks) > 2:
             # Use first and last chunk
             sample_text = chunks[0] + "\n\n[... middle content omitted ...]\n\n" + chunks[-1]
-            print(f"  Using first and last chunk of {len(chunks)} chunks for speaker identification")
+            logger.debug(f"Using first and last chunk of {len(chunks)} chunks for speaker identification")
         elif len(chunks) == 2:
             sample_text = chunks[0] + "\n\n" + chunks[1]
         else:
@@ -538,7 +580,7 @@ TRANSCRIPT:
             return result.get("speaker_mapping", {})
 
         except Exception as e:
-            print(f"Error identifying speakers: {e}")
+            logger.error(f"Error identifying speakers: {e}")
             return {}
 
     def _generate_cleaned_transcript(
@@ -620,7 +662,7 @@ Focus on making it read smoothly while staying accurate to what was said. Output
 
         for i, chunk in enumerate(chunks):
             chunk_info = f" (chunk {i+1}/{len(chunks)})" if len(chunks) > 1 else ""
-            print(f"  Generating cleaned transcript{chunk_info}...")
+            logger.info(f"Generating cleaned transcript{chunk_info}...")
 
             user_message = f"""EPISODE: {episode_title}
 
@@ -638,18 +680,14 @@ Please produce the final cleaned Markdown transcript."""
             try:
                 messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
 
-                # Set max_tokens based on provider - Claude Sonnet 4.5 max is 64K, Gemini 2.5 is 65K
-                model_name = self.provider.get_model_name().lower()
-                if "claude" in model_name:
-                    provider_max_tokens = 32000
-                elif "gpt" in model_name:
-                    provider_max_tokens = 16000  # GPT-4o max output is 16K tokens
-                else:
-                    provider_max_tokens = 32000
+                # Get max_tokens from MODEL_CONFIGS for the specific model
+                # Use half the max to leave room for the response (input + output share the budget)
+                model_max = get_max_output_tokens(self.provider.get_model_name())
+                provider_max_tokens = min(model_max, 32000)  # Cap at 32K for reasonable response times
 
                 # Use streaming if available for better UX
                 if hasattr(self.provider, "chat_completion_streaming"):
-                    print(f"    → Streaming cleaned transcript from LLM...")
+                    logger.debug("Streaming cleaned transcript from LLM...")
 
                     # Track progress with streaming (silent for max speed)
                     chars_received = [0]
@@ -666,28 +704,29 @@ Please produce the final cleaned Markdown transcript."""
                         on_chunk=on_chunk,
                     )
 
-                    print(f"    ✓ Streaming complete ({chars_received[0]:,} chars received)")
+                    logger.debug(f"Streaming complete ({chars_received[0]:,} chars received)")
 
                 # Use continuation for providers that support it (Claude and OpenAI) but not streaming
                 elif hasattr(self.provider, "chat_completion_with_continuation") and (
-                    "claude" in model_name or "gpt" in model_name
+                    "claude" in self.provider.get_model_name().lower()
+                    or "gpt" in self.provider.get_model_name().lower()
                 ):
-                    print(f"    → Generating with continuation support...")
+                    logger.debug("Generating with continuation support...")
                     response = self.provider.chat_completion_with_continuation(
                         messages=messages, temperature=0.3, max_tokens=provider_max_tokens, max_attempts=3
                     )
-                    print(f"    ✓ Generation complete")
+                    logger.debug("Generation complete")
                 else:
-                    print(f"    → Generating cleaned transcript...")
+                    logger.debug("Generating cleaned transcript...")
                     response = self.provider.chat_completion(
                         messages=messages, temperature=0.3, max_tokens=provider_max_tokens
                     )
-                    print(f"    ✓ Generation complete")
+                    logger.debug("Generation complete")
 
                 cleaned_chunks.append(response.strip())
 
             except Exception as e:
-                print(f"  Error generating chunk {i+1}: {e}")
+                logger.error(f"Error generating chunk {i+1}: {e}")
                 # Fallback to original chunk
                 cleaned_chunks.append(chunk)
 
@@ -719,28 +758,28 @@ Please produce the final cleaned Markdown transcript."""
             path = debug_dir / f"{base_name}.original.md"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
-            print(f"  → Original transcript saved to: {path}")
+            logger.debug(f"Original transcript saved to: {path}")
 
         elif phase == "corrections":
             # Save to debug directory: {base_name}.corrections.json
             path = debug_dir / f"{base_name}.corrections.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"  → Corrections saved to: {path}")
+            logger.debug(f"Corrections saved to: {path}")
 
         elif phase == "corrected":
             # Save to debug directory: {base_name}.corrected.md
             path = debug_dir / f"{base_name}.corrected.md"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(data)
-            print(f"  → Corrected transcript saved to: {path}")
+            logger.debug(f"Corrected transcript saved to: {path}")
 
         elif phase == "speakers":
             # Save to debug directory: {base_name}.speakers.json
             path = debug_dir / f"{base_name}.speakers.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"  → Speaker mapping saved to: {path}")
+            logger.debug(f"Speaker mapping saved to: {path}")
 
     def _remove_ads_from_markdown(self, markdown_text: str) -> str:
         """
@@ -816,7 +855,7 @@ Please produce the final cleaned Markdown transcript."""
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")
             f.write("---\n\n")
             f.write(result["cleaned_markdown"])
-        print(f"Final transcript saved to: {final_path}")
+        logger.info(f"Final transcript saved to: {final_path}")
 
         # Save ad-free version: {base_name}_cleaned.no-ads.md
         no_ads_markdown = self._remove_ads_from_markdown(result["cleaned_markdown"])
@@ -827,7 +866,7 @@ Please produce the final cleaned Markdown transcript."""
             f.write(f"**Podcast:** {result['podcast_title']}\n\n")
             f.write("---\n\n")
             f.write(no_ads_markdown)
-        print(f"Ad-free transcript saved to: {no_ads_path}")
+        logger.info(f"Ad-free transcript saved to: {no_ads_path}")
 
         # Save performance metrics to debug folder: debug/{base_name}.metrics.json
         if save_metrics and "metrics" in result:
@@ -840,4 +879,4 @@ Please produce the final cleaned Markdown transcript."""
             metrics_dict["efficiency_metrics"] = result["metrics"].efficiency_metrics
             with open(metrics_path, "w", encoding="utf-8") as f:
                 json.dump(metrics_dict, f, indent=2, ensure_ascii=False, default=str)
-            print(f"Performance metrics saved to: {metrics_path}")
+            logger.debug(f"Performance metrics saved to: {metrics_path}")
