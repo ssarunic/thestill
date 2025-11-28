@@ -453,27 +453,28 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
     click.echo(f"✓ {downsampled_count} episode(s) downsampled in {total_time:.1f} seconds")
 
 
-@main.command()
-@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed without actually processing")
-@click.option("--max-episodes", "-m", default=5, help="Maximum episodes to process per podcast")
+@main.command("clean-transcript")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed")
+@click.option("--max-episodes", "-m", default=5, help="Maximum episodes to process")
+@click.option("--force", "-f", is_flag=True, help="Re-process even if clean transcript exists")
+@click.option("--stream", "-s", is_flag=True, help="Stream LLM output in real-time")
 @click.pass_context
-def clean_transcript(ctx, dry_run, max_episodes):
-    """Clean existing transcripts with LLM post-processing"""
+def clean_transcript(ctx, dry_run, max_episodes, force, stream):
+    """Clean transcripts using facts-based two-pass approach"""
     if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
     import json
-    from datetime import datetime
 
+    from .core.llm_provider import create_llm_provider
     from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
-    from .models.podcast import CleanedTranscript
 
-    # Use shared services from context
     config = ctx.obj.config
+    path_manager = ctx.obj.path_manager
     feed_manager = ctx.obj.feed_manager
 
-    # Create LLM provider based on configuration
+    # Create LLM provider
     try:
         llm_provider = create_llm_provider(
             provider_type=config.llm_provider,
@@ -493,7 +494,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
     cleaning_processor = TranscriptCleaningProcessor(llm_provider)
 
-    # Find all transcripts that haven't been cleaned yet
+    # Find transcripts to clean
     click.echo("🔍 Looking for transcripts to clean...")
 
     podcasts = feed_manager.list_podcasts()
@@ -501,117 +502,97 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
     for podcast in podcasts:
         for episode in podcast.episodes:
-            # Safety: Check if transcript file actually exists (not just path is set)
             if episode.raw_transcript_path:
-                transcript_path = config.path_manager.raw_transcript_file(episode.raw_transcript_path)
+                transcript_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
                 if not transcript_path.exists():
-                    continue  # Skip if transcript file doesn't exist
+                    continue
 
-                # Check if clean transcript file exists (not just if path is set)
-                clean_transcript_exists = False
-                if episode.clean_transcript_path:
-                    clean_transcript_path = config.path_manager.clean_transcript_file(episode.clean_transcript_path)
-                    clean_transcript_exists = clean_transcript_path.exists()
+                # Check if already cleaned (unless force)
+                if not force and episode.clean_transcript_path:
+                    clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
+                    if clean_path.exists():
+                        continue
 
-                # Only process if raw transcript exists but clean transcript doesn't
-                if not clean_transcript_exists:
-                    transcripts_to_clean.append((podcast, episode, transcript_path))
+                transcripts_to_clean.append((podcast, episode, transcript_path))
 
     if not transcripts_to_clean:
         click.echo("✓ No transcripts found to clean")
         return
 
-    total_transcripts = min(len(transcripts_to_clean), max_episodes) if max_episodes else len(transcripts_to_clean)
+    total_transcripts = min(len(transcripts_to_clean), max_episodes)
     click.echo(f"📄 Found {len(transcripts_to_clean)} transcripts. Processing {total_transcripts} episodes")
 
     if dry_run:
         for podcast, episode, _ in transcripts_to_clean[:max_episodes]:
             click.echo(f"  • {podcast.title}: {episode.title}")
-        click.echo("\n(Run without --dry-run to actually process)")
+        click.echo("\n(Run without --dry-run to process)")
         return
 
     total_processed = 0
     start_time = time.time()
 
-    # Progress bar wrapper
-    with click.progressbar(
-        transcripts_to_clean[:max_episodes],
-        label="Cleaning",
-        show_pos=True,  # Show "X/Y" counter
-        show_eta=True,  # Show estimated time
-        file=sys.stderr,  # Use stderr (consistent with logging)
-        item_show_func=lambda x: None,  # Disable default item display
-    ) as bar:
-        for podcast, episode, transcript_path in bar:
-            click.echo(f"\n📻 {podcast.title}")
-            click.echo(f"🎧 {episode.title}")
-            click.echo("─" * 50)
+    # Create streaming callback if enabled (defined once, outside loop)
+    stream_callback = None
+    if stream:
 
-            try:
-                # Load transcript
-                with open(transcript_path, "r", encoding="utf-8") as f:
-                    transcript_data = json.load(f)
+        def stream_callback(chunk: str) -> None:
+            """Print LLM output chunks in real-time."""
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
 
-                # Clean transcript with context
-                # Generate filename matching pattern: Podcast_Episode_hash_cleaned.md
-                base_name = transcript_path.stem  # Remove .json extension
-                if base_name.endswith("_transcript"):
-                    base_name = base_name[: -len("_transcript")]  # Remove _transcript suffix
-                cleaned_filename = f"{base_name}_cleaned.md"
-                cleaned_path = config.path_manager.clean_transcripts_dir() / cleaned_filename
+    for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
+        click.echo(f"\n📻 {podcast.title}")
+        click.echo(f"🎧 {episode.title}")
+        click.echo("─" * 50)
 
-                result = cleaning_processor.clean_transcript(
-                    transcript_data=transcript_data,
-                    podcast_title=podcast.title,
-                    podcast_description=podcast.description,
-                    episode_title=episode.title,
-                    episode_description=episode.description,
-                    episode_external_id=episode.external_id,
-                    episode_id=episode.id,  # Pass internal UUID for file naming
-                    output_path=str(cleaned_path),
-                    save_corrections=True,
-                    save_metrics=True,
+        try:
+            # Load transcript
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                transcript_data = json.load(f)
+
+            # Generate output path
+            base_name = transcript_path.stem
+            if base_name.endswith("_transcript"):
+                base_name = base_name[: -len("_transcript")]
+            cleaned_filename = f"{base_name}_cleaned.md"
+            cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
+
+            # Clean transcript
+            result = cleaning_processor.clean_transcript(
+                transcript_data=transcript_data,
+                podcast_title=podcast.title,
+                podcast_description=podcast.description,
+                episode_title=episode.title,
+                episode_description=episode.description,
+                episode_id=episode.id,
+                output_path=str(cleaned_path),
+                path_manager=path_manager,
+                on_stream_chunk=stream_callback,
+            )
+
+            # Add newline after streaming completes
+            if stream:
+                click.echo("")  # End the streamed output with newline
+
+            if result:
+                # Update feed manager
+                feed_manager.mark_episode_processed(
+                    str(podcast.rss_url),
+                    episode.external_id,
+                    raw_transcript_path=transcript_path.name,
+                    clean_transcript_path=cleaned_filename,
                 )
 
-                if result:
-                    # Create CleanedTranscript model and save
-                    _ = CleanedTranscript(
-                        episode_external_id=episode.external_id,
-                        episode_title=episode.title,
-                        podcast_title=podcast.title,
-                        corrections=result["corrections"],
-                        speaker_mapping=result["speaker_mapping"],
-                        cleaned_markdown=result["cleaned_markdown"],
-                        processing_time=result["processing_time"],
-                        created_at=datetime.now(),
-                    )
+                total_processed += 1
+                click.echo("✅ Transcript cleaned successfully!")
+                click.echo(f"👥 Speakers: {len(result['episode_facts'].speaker_mapping)}")
 
-                    # Update feed manager to mark as processed
-                    # Generate clean transcript filename matching pattern:
-                    # Raw: Podcast_Episode_hash_transcript.json → Clean: Podcast_Episode_hash_cleaned.md
-                    base_name = transcript_path.stem  # Remove .json extension
-                    if base_name.endswith("_transcript"):
-                        base_name = base_name[: -len("_transcript")]  # Remove _transcript suffix
-                    cleaned_md_filename = f"{base_name}_cleaned.md"
+        except Exception as e:
+            click.echo(f"❌ Error: {e}")
+            import traceback
 
-                    feed_manager.mark_episode_processed(
-                        str(podcast.rss_url),
-                        episode.external_id,
-                        raw_transcript_path=transcript_path.name,  # Just the raw transcript filename
-                        clean_transcript_path=cleaned_md_filename,  # Podcast_Episode_hash_cleaned.md
-                    )
-
-                    total_processed += 1
-                    click.echo("✅ Transcript cleaned successfully!")
-                    click.echo(f"🔧 Corrections applied: {len(result['corrections'])}")
-                    click.echo(f"👥 Speakers identified: {len(result['speaker_mapping'])}")
-
-            except Exception as e:
-                click.echo(f"❌ Error cleaning transcript: {e}")
-                import traceback
-
-                traceback.print_exc()
-                continue
+            traceback.print_exc()
+            continue
 
     total_time = time.time() - start_time
     click.echo("\n🎉 Processing complete!")
@@ -619,7 +600,7 @@ def clean_transcript(ctx, dry_run, max_episodes):
 
 
 # ============================================================================
-# Facts management commands (for transcript cleaning v2)
+# Facts management commands (for transcript cleaning)
 # ============================================================================
 
 
@@ -771,7 +752,7 @@ def facts_edit(ctx, podcast_id, episode_id):
 
     if not file_path.exists():
         click.echo(f"❌ Facts file not found: {file_path}")
-        click.echo("   Run clean-transcript-v2 first to generate facts.")
+        click.echo("   Run clean-transcript first to generate facts.")
         ctx.exit(1)
 
     click.echo(f"Opening {file_path} with {editor}...")
@@ -906,153 +887,6 @@ def facts_extract(ctx, podcast_id, episode_id, force):
     click.echo(f"   Speakers identified: {len(episode_facts.speaker_mapping)}")
     click.echo(f"   Guests: {len(episode_facts.guests)}")
     click.echo(f"   Topics: {len(episode_facts.topics_keywords)}")
-
-
-@main.command("clean-transcript-v2")
-@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed")
-@click.option("--max-episodes", "-m", default=5, help="Maximum episodes to process")
-@click.option("--force", "-f", is_flag=True, help="Re-process even if clean transcript exists")
-@click.option("--stream", "-s", is_flag=True, help="Stream LLM output in real-time")
-@click.pass_context
-def clean_transcript_v2(ctx, dry_run, max_episodes, force, stream):
-    """Clean transcripts using facts-based v2 approach"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
-    import json
-
-    from .core.llm_provider import create_llm_provider
-    from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
-
-    config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    feed_manager = ctx.obj.feed_manager
-
-    # Create LLM provider
-    try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-        )
-        click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
-    except Exception as e:
-        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
-        ctx.exit(1)
-
-    cleaning_processor = TranscriptCleaningProcessor(llm_provider)
-
-    # Find transcripts to clean
-    click.echo("🔍 Looking for transcripts to clean...")
-
-    podcasts = feed_manager.list_podcasts()
-    transcripts_to_clean = []
-
-    for podcast in podcasts:
-        for episode in podcast.episodes:
-            if episode.raw_transcript_path:
-                transcript_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
-                if not transcript_path.exists():
-                    continue
-
-                # Check if already cleaned (unless force)
-                if not force and episode.clean_transcript_path:
-                    clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
-                    if clean_path.exists():
-                        continue
-
-                transcripts_to_clean.append((podcast, episode, transcript_path))
-
-    if not transcripts_to_clean:
-        click.echo("✓ No transcripts found to clean")
-        return
-
-    total_transcripts = min(len(transcripts_to_clean), max_episodes)
-    click.echo(f"📄 Found {len(transcripts_to_clean)} transcripts. Processing {total_transcripts} episodes")
-
-    if dry_run:
-        for podcast, episode, _ in transcripts_to_clean[:max_episodes]:
-            click.echo(f"  • {podcast.title}: {episode.title}")
-        click.echo("\n(Run without --dry-run to process)")
-        return
-
-    total_processed = 0
-    start_time = time.time()
-
-    for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
-        click.echo(f"\n📻 {podcast.title}")
-        click.echo(f"🎧 {episode.title}")
-        click.echo("─" * 50)
-
-        try:
-            # Load transcript
-            with open(transcript_path, "r", encoding="utf-8") as f:
-                transcript_data = json.load(f)
-
-            # Generate output path
-            base_name = transcript_path.stem
-            if base_name.endswith("_transcript"):
-                base_name = base_name[: -len("_transcript")]
-            cleaned_filename = f"{base_name}_cleaned.md"
-            cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
-
-            # Create streaming callback if enabled
-            stream_callback = None
-            if stream:
-                import sys
-
-                def stream_callback(chunk: str) -> None:
-                    """Print LLM output chunks in real-time."""
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
-
-            # Clean using v2 approach
-            result = cleaning_processor.clean_transcript_v2(
-                transcript_data=transcript_data,
-                podcast_title=podcast.title,
-                podcast_description=podcast.description,
-                episode_title=episode.title,
-                episode_description=episode.description,
-                episode_id=episode.id,
-                output_path=str(cleaned_path),
-                path_manager=path_manager,
-                on_stream_chunk=stream_callback,
-            )
-
-            # Add newline after streaming completes
-            if stream:
-                click.echo("")  # End the streamed output with newline
-
-            if result:
-                # Update feed manager
-                feed_manager.mark_episode_processed(
-                    str(podcast.rss_url),
-                    episode.external_id,
-                    raw_transcript_path=transcript_path.name,
-                    clean_transcript_path=cleaned_filename,
-                )
-
-                total_processed += 1
-                click.echo("✅ Transcript cleaned successfully!")
-                click.echo(f"👥 Speakers: {len(result['episode_facts'].speaker_mapping)}")
-
-        except Exception as e:
-            click.echo(f"❌ Error: {e}")
-            import traceback
-
-            traceback.print_exc()
-            continue
-
-    total_time = time.time() - start_time
-    click.echo("\n🎉 Processing complete!")
-    click.echo(f"✓ {total_processed} transcripts cleaned in {total_time:.1f} seconds")
 
 
 @main.command()

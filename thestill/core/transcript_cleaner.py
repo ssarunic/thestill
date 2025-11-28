@@ -13,459 +13,449 @@
 # limitations under the License.
 
 """
-Transcript cleaner with overlapping chunking for handling long texts.
-Uses small LLM models to fix spelling, remove filler words, and improve readability.
+Transcript cleaner - Pass 2 of the two-pass transcript cleaning pipeline.
 
-.. deprecated::
-    This module is deprecated. Use :class:`TranscriptCleaningProcessor` from
-    :mod:`thestill.core.transcript_cleaning_processor` instead, which provides
-    a more robust three-phase cleaning pipeline with better speaker identification
-    and correction tracking.
+Takes pre-formatted markdown transcript with speaker mapping from Pass 1 (facts extraction) and:
+1. Stage 2a: Deterministically substitutes speaker names (no LLM)
+2. Stage 2b: Uses LLM to clean spelling, grammar, detect ads, format output
+
+Input: Pre-formatted markdown (from TranscriptFormatter), NOT raw JSON.
+This significantly reduces token usage since markdown is much smaller than JSON.
 """
 
-import json
 import logging
 import re
-import time
-import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
+
+from thestill.core.llm_provider import LLMProvider
+from thestill.models.facts import EpisodeFacts, PodcastFacts
 
 logger = logging.getLogger(__name__)
 
-try:
-    import tiktoken
+# Import model configs for dynamic max_tokens lookup
+from thestill.core.post_processor import MODEL_CONFIGS
 
-    TIKTOKEN_AVAILABLE = True
-except ImportError:
-    TIKTOKEN_AVAILABLE = False
+# Type alias for prompt save callback
+PromptSaveCallback = Callable[[Dict[str, Any]], None]
 
-try:
-    import nltk
+# Type alias for streaming chunk callback
+StreamingCallback = Callable[[str], None]
 
-    NLTK_AVAILABLE = True
-    # Try to use punkt tokenizer, download if needed
-    try:
-        nltk.data.find("tokenizers/punkt")
-    except LookupError:
-        logger.info("Downloading NLTK punkt tokenizer...")
-        nltk.download("punkt", quiet=True)
-except ImportError:
-    NLTK_AVAILABLE = False
-
-from .llm_provider import LLMProvider
+# Default max output tokens for unknown models (conservative)
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 
 
-class TranscriptCleanerConfig:
-    """Configuration for transcript cleaning"""
+def get_max_output_tokens(model_name: str) -> int:
+    """
+    Get the maximum output tokens for a model from MODEL_CONFIGS.
 
-    def __init__(
-        self,
-        chunk_size: int = 20000,  # tokens
-        overlap_pct: float = 0.15,  # 15% overlap
-        extract_entities: bool = True,  # First pass for entity extraction
-        remove_filler_words: bool = True,
-        fix_spelling: bool = True,
-        fix_grammar: bool = True,
-        preserve_timestamps: bool = True,
-        filler_words: Optional[List[str]] = None,
-    ):
-        self.chunk_size = chunk_size
-        self.overlap_pct = overlap_pct
-        self.extract_entities = extract_entities
-        self.remove_filler_words = remove_filler_words
-        self.fix_spelling = fix_spelling
-        self.fix_grammar = fix_grammar
-        self.preserve_timestamps = preserve_timestamps
-        self.filler_words = filler_words or [
-            "um",
-            "uh",
-            "ah",
-            "hmm",
-            "mmm",
-            "er",
-            "erm",
-            "like",
-            "you know",
-            "sort of",
-            "kind of",
-            "I mean",
-            "right",
-            "okay",
-            "yeah",
-        ]
+    Args:
+        model_name: The model name (e.g., "claude-sonnet-4-5-20250929")
+
+    Returns:
+        The max_output_tokens for the model, or DEFAULT_MAX_OUTPUT_TOKENS if unknown
+    """
+    # Check for exact match first
+    if model_name in MODEL_CONFIGS:
+        return MODEL_CONFIGS[model_name].max_output_tokens
+
+    # Check for partial match (model names often have date suffixes)
+    for config_name, limits in MODEL_CONFIGS.items():
+        # Match by prefix (e.g., "claude-sonnet-4-5" matches "claude-sonnet-4-5-20250929")
+        if model_name.startswith(config_name.rsplit("-", 1)[0]):
+            return limits.max_output_tokens
+        if config_name.startswith(model_name.rsplit("-", 1)[0]):
+            return limits.max_output_tokens
+
+    # Fallback for common provider patterns
+    model_lower = model_name.lower()
+    if "gemini" in model_lower:
+        return 65536  # Gemini 2.x default
+    elif "gpt-4" in model_lower:
+        return 16384  # GPT-4o default
+    elif "claude" in model_lower:
+        return 64000  # Claude 4.x default
+
+    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class TranscriptCleaner:
     """
-    Clean transcripts using overlapping chunking strategy.
-    Handles long texts that exceed model context windows.
+    Two-stage transcript cleaner for Pass 2.
+
+    Stage 2a: Deterministic speaker substitution (on pre-formatted markdown)
+    Stage 2b: LLM-based cleanup (spelling, grammar, ads, formatting)
+
+    Input: Pre-formatted markdown from TranscriptFormatter, NOT raw JSON.
     """
 
-    ENTITY_EXTRACTION_PROMPT = """You are an entity extraction specialist for podcast transcripts.
-
-Your task: Extract all important entities from this transcript for consistency in cleaning.
-
-Extract:
-1. **Names**: People, hosts, guests (e.g., "Dr. Sarah Johnson", "Elon Musk")
-2. **Companies/Organizations**: (e.g., "OpenAI", "NASA", "MIT")
-3. **Acronyms**: (e.g., "AI", "CEO", "FOMO", "LLM")
-4. **Technical terms**: Field-specific jargon (e.g., "blockchain", "quantum computing")
-5. **Products/Brands**: (e.g., "ChatGPT", "Tesla Model S")
-
-For each entity provide:
-- "term": The correct spelling/format
-- "type": One of: name, company, acronym, technical_term, product
-- "context": Brief context if needed for disambiguation
-
-IMPORTANT: Return ONLY valid JSON. Format:
-{
-  "entities": [
-    {"term": "Dr. Sarah Johnson", "type": "name", "context": "AI researcher"},
-    {"term": "OpenAI", "type": "company", "context": "AI research lab"},
-    {"term": "LLM", "type": "acronym", "context": "Large Language Model"}
-  ]
-}
-
-Transcript excerpt:
-"""
-
-    CLEANING_PROMPT = """You are a transcript cleaning specialist. Fix this transcript section while maintaining ALL content.
-
-Your tasks:
-1. Fix spelling errors and obvious transcription mistakes
-2. Remove filler words: {filler_words}
-3. Fix grammar while keeping conversational tone
-4. Use the entity glossary below for consistent spelling
-5. Keep ALL timestamps in [MM:SS] or [HH:MM:SS] format
-6. Do NOT summarize or remove content
-7. Do NOT add information not in the original
-
-ENTITY GLOSSARY (use these exact spellings):
-{entities_json}
-
-Instructions:
-- Output ONLY the cleaned text
-- Preserve paragraph structure
-- Keep the natural flow of conversation
-- Fix obvious errors but don't over-edit
-
-Text to clean:
-"""
-
-    def __init__(self, provider: LLMProvider, config: Optional[TranscriptCleanerConfig] = None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        chunk_size: int = 100000,
+        on_stream_chunk: Optional[StreamingCallback] = None,
+    ):
         """
         Initialize transcript cleaner.
 
-        .. deprecated::
-            Use :class:`TranscriptCleaningProcessor` instead.
+        Args:
+            provider: LLM provider for cleanup
+            chunk_size: Maximum characters per chunk for LLM processing
+            on_stream_chunk: Optional callback for streaming output chunks
+        """
+        self.provider = provider
+        self.chunk_size = chunk_size
+        self.on_stream_chunk = on_stream_chunk
+
+    def clean_transcript(
+        self,
+        formatted_markdown: str,
+        podcast_facts: Optional[PodcastFacts],
+        episode_facts: EpisodeFacts,
+        episode_title: str = "",
+        on_prompt_ready: Optional[PromptSaveCallback] = None,
+    ) -> str:
+        """
+        Clean transcript using facts from Pass 1.
 
         Args:
-            provider: LLMProvider instance (OpenAI or Ollama)
-            config: Cleaning configuration options
+            formatted_markdown: Pre-formatted markdown from TranscriptFormatter
+            podcast_facts: Podcast-level facts (hosts, keywords, etc.)
+            episode_facts: Episode-specific facts (speaker mapping, guests, etc.)
+            episode_title: Title for the output header
+            on_prompt_ready: Optional callback invoked BEFORE each LLM call with prompt data
+
+        Returns:
+            Cleaned Markdown transcript
         """
-        warnings.warn(
-            "TranscriptCleaner is deprecated. Use TranscriptCleaningProcessor from "
-            "thestill.core.transcript_cleaning_processor instead, which provides "
-            "a more robust three-phase cleaning pipeline.",
-            DeprecationWarning,
-            stacklevel=2,
+        # Stage 2a: Apply speaker substitution (deterministic)
+        logger.info("Stage 2a: Applying speaker mapping...")
+        markdown_with_speakers = self._apply_speaker_mapping(formatted_markdown, episode_facts)
+
+        # Stage 2b: LLM cleanup
+        logger.info("Stage 2b: Cleaning transcript with LLM...")
+        cleaned_transcript = self._llm_cleanup(
+            formatted_transcript=markdown_with_speakers,
+            podcast_facts=podcast_facts,
+            episode_facts=episode_facts,
+            episode_title=episode_title,
+            on_prompt_ready=on_prompt_ready,
         )
 
-        self.provider = provider
-        self.config = config or TranscriptCleanerConfig()
-        self.model_name = provider.get_model_name()
+        return cleaned_transcript
 
-        # Initialize tokenizer
-        if TIKTOKEN_AVAILABLE and "gpt" in self.model_name.lower():
-            try:
-                self.tokenizer = tiktoken.encoding_for_model(self.model_name)
-                logger.debug(f"Using tiktoken for {self.model_name}")
-            except KeyError:
-                self.tokenizer = tiktoken.get_encoding("cl100k_base")
-                logger.debug(f"Using cl100k_base encoding (model {self.model_name} not found)")
-        else:
-            self.tokenizer = None
-            logger.debug("Using character-based token estimation (~4 chars per token)")
-
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text"""
-        if self.tokenizer:
-            return len(self.tokenizer.encode(text))
-        # Rough estimation: 1 token ≈ 4 characters
-        return len(text) // 4
-
-    def _split_into_sentences(self, text: str) -> List[str]:
-        """Split text into sentences"""
-        if NLTK_AVAILABLE:
-            try:
-                return nltk.sent_tokenize(text)
-            except Exception as e:
-                logger.warning(f"NLTK sentence tokenization failed: {e}")
-
-        # Fallback: simple regex-based splitting
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        return [s.strip() for s in sentences if s.strip()]
-
-    def _extract_entities(self, text: str) -> List[Dict]:
+    def _apply_speaker_mapping(
+        self,
+        formatted_markdown: str,
+        episode_facts: EpisodeFacts,
+    ) -> str:
         """
-        First pass: Extract entities for consistent cleaning.
-        Uses only first portion of text if too long.
+        Stage 2a: Apply speaker mapping to pre-formatted markdown.
+
+        Replaces SPEAKER_XX placeholders with actual names from episode_facts.
+
+        Args:
+            formatted_markdown: Pre-formatted markdown with SPEAKER_XX placeholders
+            episode_facts: Episode facts with speaker_mapping
+
+        Returns:
+            Markdown with speaker names substituted
         """
-        logger.info("Extracting entities for consistency...")
+        if not formatted_markdown:
+            return ""
 
-        # Use only first ~10K tokens for entity extraction
-        max_extraction_tokens = 10000
-        tokens = self._count_tokens(text)
+        result = formatted_markdown
+        mapping = episode_facts.speaker_mapping
 
-        if tokens > max_extraction_tokens:
-            # Estimate characters to keep
-            chars_to_keep = max_extraction_tokens * 4
-            text_excerpt = text[:chars_to_keep] + "\n\n[... transcript continues ...]"
+        for speaker_id, speaker_name in mapping.items():
+            if not speaker_name:
+                continue
+
+            # Remove role suffix for cleaner output (e.g., "Scott Galloway (Host)" -> "Scott Galloway")
+            # Keep role in facts file, but not in transcript
+            clean_name = speaker_name
+            if " (" in clean_name and clean_name.endswith(")"):
+                clean_name = clean_name.rsplit(" (", 1)[0]
+
+            # Replace **SPEAKER_XX:** with **Name:**
+            # Pattern matches the format from TranscriptFormatter: `[HH:MM:SS]` **SPEAKER_XX:** text
+            pattern = rf"\*\*{re.escape(speaker_id)}:\*\*"
+            replacement = f"**{clean_name}:**"
+            result = re.sub(pattern, replacement, result)
+
+        return result
+
+    def _llm_cleanup(
+        self,
+        formatted_transcript: str,
+        podcast_facts: Optional[PodcastFacts],
+        episode_facts: EpisodeFacts,
+        episode_title: str,
+        on_prompt_ready: Optional[PromptSaveCallback] = None,
+    ) -> str:
+        """
+        Stage 2b: Use LLM to clean the transcript.
+
+        Handles:
+        - Spelling and grammar correction (British English)
+        - Proper noun fixing using keywords from facts
+        - Filler word removal
+        - Ad break detection and marking
+        - Final formatting
+        """
+        # Build prompts
+        system_prompt = self._build_cleanup_system_prompt()
+        user_prompt = self._build_cleanup_user_prompt(
+            formatted_transcript=formatted_transcript,
+            podcast_facts=podcast_facts,
+            episode_facts=episode_facts,
+            episode_title=episode_title,
+        )
+
+        # Handle chunking for large transcripts
+        if len(formatted_transcript) > self.chunk_size:
+            return self._process_chunks(
+                formatted_transcript=formatted_transcript,
+                system_prompt=system_prompt,
+                podcast_facts=podcast_facts,
+                episode_facts=episode_facts,
+                episode_title=episode_title,
+                on_prompt_ready=on_prompt_ready,
+            )
+
+        # Get max tokens for this model
+        max_tokens = get_max_output_tokens(self.provider.get_model_name())
+        logger.debug(f"Using max_tokens={max_tokens} for model {self.provider.get_model_name()}")
+
+        # Prepare messages
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # Save prompt BEFORE LLM call
+        if on_prompt_ready is not None:
+            on_prompt_ready(
+                {
+                    "phase": "v2_cleanup",
+                    "messages": messages,
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                    "input_chars": len(formatted_transcript),
+                }
+            )
+
+        # Single-chunk processing - use streaming if callback provided and supported
+        # Temperature 0 for deterministic timestamp handling
+        if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
+            response = self.provider.chat_completion_streaming(
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens,
+                on_chunk=self.on_stream_chunk,
+            )
         else:
-            text_excerpt = text
+            response = self.provider.chat_completion(
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens,
+            )
 
-        try:
+        return response.strip()
+
+    def _process_chunks(
+        self,
+        formatted_transcript: str,
+        system_prompt: str,
+        podcast_facts: Optional[PodcastFacts],
+        episode_facts: EpisodeFacts,
+        episode_title: str,
+        on_prompt_ready: Optional[PromptSaveCallback] = None,
+    ) -> str:
+        """Process large transcripts in chunks."""
+        chunks = self._split_into_chunks(formatted_transcript)
+        cleaned_chunks = []
+
+        # Get max tokens for this model
+        max_tokens = get_max_output_tokens(self.provider.get_model_name())
+
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Processing chunk {i + 1}/{len(chunks)}...")
+
+            user_prompt = self._build_cleanup_user_prompt(
+                formatted_transcript=chunk,
+                podcast_facts=podcast_facts,
+                episode_facts=episode_facts,
+                episode_title=f"{episode_title} (Part {i + 1}/{len(chunks)})" if episode_title else "",
+            )
+
+            # Prepare messages
             messages = [
-                {"role": "system", "content": self.ENTITY_EXTRACTION_PROMPT},
-                {"role": "user", "content": text_excerpt},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ]
 
-            response = self.provider.chat_completion(
-                messages=messages, temperature=0.1, max_tokens=2000, response_format={"type": "json_object"}
-            )
+            # Save prompt BEFORE LLM call
+            if on_prompt_ready is not None:
+                on_prompt_ready(
+                    {
+                        "phase": "v2_cleanup",
+                        "chunk": i + 1,
+                        "total_chunks": len(chunks),
+                        "messages": messages,
+                        "temperature": 0,
+                        "max_tokens": max_tokens,
+                        "input_chars": len(chunk),
+                    }
+                )
 
-            # Parse JSON response
-            response = response.strip()
-            if "```json" in response:
-                start = response.find("```json") + 7
-                end = response.find("```", start)
-                if end != -1:
-                    response = response[start:end].strip()
+            # Use streaming if callback provided and supported
+            # Temperature 0 for deterministic timestamp handling
+            if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
+                response = self.provider.chat_completion_streaming(
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=max_tokens,
+                    on_chunk=self.on_stream_chunk,
+                )
+            else:
+                response = self.provider.chat_completion(
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=max_tokens,
+                )
 
-            result = json.loads(response)
-            entities = result.get("entities", [])
+            cleaned_chunks.append(response.strip())
 
-            logger.info(f"Extracted {len(entities)} entities")
-            return entities
+        # Combine chunks
+        return "\n\n".join(cleaned_chunks)
 
-        except Exception as e:
-            logger.warning(f"Entity extraction failed: {e}")
-            return []
-
-    def _create_overlapping_chunks(self, text: str) -> List[Tuple[str, int, int]]:
-        """
-        Split text into overlapping chunks.
-
-        Returns:
-            List of (chunk_text, overlap_start_chars, overlap_end_chars) tuples
-            overlap_start_chars: where overlap begins in this chunk (0 for first chunk)
-            overlap_end_chars: where overlap ends (0 for last chunk)
-        """
-        sentences = self._split_into_sentences(text)
-        if not sentences:
-            return [(text, 0, 0)]
-
+    def _split_into_chunks(self, text: str) -> List[str]:
+        """Split transcript into chunks at paragraph boundaries."""
+        paragraphs = text.split("\n\n")
         chunks = []
-        current_chunk_sentences = []
-        current_tokens = 0
-        overlap_size = int(self.config.chunk_size * self.config.overlap_pct)
+        current_chunk = []
+        current_size = 0
 
-        # Track overlap sentences for next chunk
-        overlap_sentences = []
+        for para in paragraphs:
+            para_size = len(para) + 2  # +2 for \n\n
 
-        for sentence in sentences:
-            sentence_tokens = self._count_tokens(sentence)
-
-            # Check if adding this sentence exceeds chunk size
-            if current_tokens + sentence_tokens > self.config.chunk_size and current_chunk_sentences:
-                # Save current chunk
-                chunk_text = " ".join(current_chunk_sentences)
-
-                # Calculate overlap boundaries
-                # For first chunk, no overlap at start
-                overlap_start = 0 if not chunks else len(" ".join(overlap_sentences)) + 1
-
-                # Calculate overlap for next chunk
-                overlap_tokens = 0
-                next_overlap_sentences = []
-                for sent in reversed(current_chunk_sentences):
-                    sent_tokens = self._count_tokens(sent)
-                    if overlap_tokens + sent_tokens <= overlap_size:
-                        next_overlap_sentences.insert(0, sent)
-                        overlap_tokens += sent_tokens
-                    else:
-                        break
-
-                overlap_end = len(" ".join(next_overlap_sentences)) if next_overlap_sentences else 0
-
-                chunks.append((chunk_text, overlap_start, overlap_end))
-
-                # Start new chunk with overlap from previous
-                overlap_sentences = next_overlap_sentences.copy()
-                current_chunk_sentences = next_overlap_sentences + [sentence]
-                current_tokens = overlap_tokens + sentence_tokens
+            if current_size + para_size > self.chunk_size and current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = [para]
+                current_size = para_size
             else:
-                current_chunk_sentences.append(sentence)
-                current_tokens += sentence_tokens
+                current_chunk.append(para)
+                current_size += para_size
 
-        # Add final chunk
-        if current_chunk_sentences:
-            chunk_text = " ".join(current_chunk_sentences)
-            overlap_start = 0 if not chunks else len(" ".join(overlap_sentences)) + 1
-            chunks.append((chunk_text, overlap_start, 0))  # No overlap at end
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
 
-        return chunks if chunks else [(text, 0, 0)]
+        return chunks
 
-    def _clean_chunk(self, chunk_text: str, entities: List[Dict], chunk_num: int, total_chunks: int) -> str:
-        """Clean a single chunk using LLM"""
-        # Build entity glossary string
-        if entities:
-            entities_json = json.dumps(entities, indent=2)
-        else:
-            entities_json = "[]"
+    def _build_cleanup_system_prompt(self) -> str:
+        """Build system prompt for transcript cleanup."""
+        return """You are an expert podcast editor and proofreader. Your goal is to polish a transcript into a readable Markdown document.
 
-        # Build filler words list
-        filler_words_str = ", ".join(self.config.filler_words)
+The transcript has already been formatted with speaker names and timestamps. Your tasks:
 
-        # Build prompt
-        system_prompt = self.CLEANING_PROMPT.format(filler_words=filler_words_str, entities_json=entities_json)
+1. AD & CLIP MANAGEMENT:
+   - **Ads:** Identify sponsor reads and product promotions. Replace ad content with:
+     > **[TIMESTAMP] [AD BREAK]** - Sponsor Name
+   - **Aggressive Ad Detection:** If content is clearly a sponsor read (e.g., "Support for the show comes from...", "promo code", "visit [sponsor].com"), mark it as an [AD BREAK] even if the speaker label says it's the Host or Guest. Diarization labels on ads are often wrong.
+   - **Clips/Soundbites:** If a voice labelled "Ad Narrator" or similar is playing a news clip, movie quote, cold open, or transition soundbite (NOT a sponsor read), label the speaker as **[Clip]** or **[Soundbite]** instead.
 
-        # Add chunk info for multi-chunk processing
-        user_message = chunk_text
-        if total_chunks > 1:
-            user_message = f"[CHUNK {chunk_num}/{total_chunks}]\n\n{chunk_text}"
+2. STRICT TIMESTAMP BINDING (CRITICAL):
+   - You MUST use the EXACT timestamp provided in the source text.
+   - DO NOT calculate, estimate, or shift timestamps.
+   - DO NOT invent timestamps or adjust for ad duration.
+   - If you merge two segments, use the timestamp of the FIRST segment.
+   - Copy timestamps character-for-character from the input.
 
-        try:
-            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
+3. ENTITY & PHONETIC REPAIR:
+   - Fix proper nouns using the Keywords list provided (includes common mishearings)
+   - **Credits Check:** At episode end, map "research team" / "production team" names to the provided facts lists. Common phonetic errors:
+     - "dashed line" → "Dashiell Lewin"
+     - Names read quickly at the end are often mangled - check the facts carefully
+   - If a word sounds like a name but doesn't match any known entity, flag it with [?] rather than guessing
 
-            response = self.provider.chat_completion(
-                messages=messages, temperature=0.2, max_tokens=int(self.config.chunk_size * 1.2)  # Allow some expansion
-            )
+4. EDITING:
+   - Fix spelling and grammar while PRESERVING the speakers' original voice and style
+   - Convert all spelling to British English (e.g., 'labour', 'programme', 'realise', 'colour')
+   - Remove filler words (um, uh, like, you know) ONLY if they disrupt readability
+   - Keep the banter and personality natural - don't over-edit
 
-            return response.strip()
+5. FORMATTING:
+   - Output strictly in Markdown
+   - Preserve the format: **[MM:SS] Speaker Name:** Text of the segment...
+   - Add a blank line between each speaker turn
+   - You may merge very short consecutive segments from the same speaker (using FIRST timestamp)
 
-        except Exception as e:
-            logger.error(f"Error cleaning chunk {chunk_num}/{total_chunks}: {e}")
-            # Return original on error
-            return chunk_text
+IMPORTANT:
+- Do NOT add any preamble or explanation
+- Do NOT wrap output in code blocks
+- Output ONLY the cleaned transcript
+- Maintain the exact speaker names provided (already substituted)"""
 
-    def _stitch_chunks(self, cleaned_chunks: List[Tuple[str, int, int]]) -> str:
+    def _build_cleanup_user_prompt(
+        self,
+        formatted_transcript: str,
+        podcast_facts: Optional[PodcastFacts],
+        episode_facts: EpisodeFacts,
+        episode_title: str,
+    ) -> str:
+        """Build user prompt for transcript cleanup."""
+        lines = []
+
+        # Add podcast facts context
+        if podcast_facts:
+            lines.append("PODCAST FACTS:")
+            if podcast_facts.hosts:
+                lines.append(f"Hosts: {', '.join(podcast_facts.hosts)}")
+            if podcast_facts.production_team:
+                lines.append(f"Production Team (for credits): {', '.join(podcast_facts.production_team)}")
+            if podcast_facts.recurring_roles:
+                lines.append(f"Recurring Roles: {', '.join(podcast_facts.recurring_roles)}")
+            if podcast_facts.sponsors:
+                lines.append(f"Known Sponsors: {', '.join(podcast_facts.sponsors)}")
+            if podcast_facts.keywords:
+                lines.append(f"Keywords & Mishearings: {', '.join(podcast_facts.keywords)}")
+            if podcast_facts.style_notes:
+                lines.append(f"Style: {', '.join(podcast_facts.style_notes)}")
+            lines.append("")
+
+        # Add episode facts context
+        lines.append("EPISODE FACTS:")
+        if episode_facts.guests:
+            lines.append(f"Guests: {', '.join(episode_facts.guests)}")
+        if episode_facts.topics_keywords:
+            lines.append(f"Topics: {', '.join(episode_facts.topics_keywords)}")
+        if episode_facts.ad_sponsors:
+            lines.append(f"Ad Sponsors: {', '.join(episode_facts.ad_sponsors)}")
+        lines.append("")
+
+        # Add transcript
+        lines.append("TRANSCRIPT TO CLEAN:")
+        lines.append(formatted_transcript)
+
+        return "\n".join(lines)
+
+    def clean_transcript_deterministic_only(
+        self,
+        formatted_markdown: str,
+        episode_facts: EpisodeFacts,
+    ) -> str:
         """
-        Stitch cleaned chunks together, removing overlapping portions.
+        Clean transcript using only deterministic steps (no LLM).
+
+        Useful for testing or when LLM is unavailable.
 
         Args:
-            cleaned_chunks: List of (cleaned_text, overlap_start_chars, overlap_end_chars)
-        """
-        if len(cleaned_chunks) == 1:
-            return cleaned_chunks[0][0]
-
-        # Start with first chunk (keep everything)
-        result = cleaned_chunks[0][0]
-
-        # For subsequent chunks, remove the overlapping start portion
-        for i in range(1, len(cleaned_chunks)):
-            cleaned_text, overlap_start, _ = cleaned_chunks[i]
-
-            # Skip the overlapping portion at the beginning
-            if overlap_start > 0 and overlap_start < len(cleaned_text):
-                unique_portion = cleaned_text[overlap_start:].lstrip()
-                result += " " + unique_portion
-            else:
-                # If we can't find overlap, just append with space
-                result += " " + cleaned_text
-
-        return result
-
-    def clean_transcript(self, text: str, output_path: Optional[str] = None) -> Dict:
-        """
-        Clean transcript using overlapping chunking strategy.
-
-        Args:
-            text: Raw transcript text to clean
-            output_path: Optional path to save cleaned transcript
+            formatted_markdown: Pre-formatted markdown from TranscriptFormatter
+            episode_facts: Episode facts with speaker mapping
 
         Returns:
-            Dict with keys: cleaned_text, entities, processing_time, chunks_processed
+            Markdown with speaker names substituted (no LLM cleanup)
         """
-        start_time = time.time()
-
-        # Count tokens in original
-        original_tokens = self._count_tokens(text)
-        logger.info(f"Cleaning transcript with {self.model_name}...")
-        logger.info(f"Original length: {len(text):,} chars, ~{original_tokens:,} tokens")
-
-        # Step 1: Extract entities (optional)
-        entities = []
-        if self.config.extract_entities:
-            entities = self._extract_entities(text)
-
-        # Step 2: Create overlapping chunks
-        logger.info("Creating overlapping chunks...")
-        chunk_tuples = self._create_overlapping_chunks(text)
-        total_chunks = len(chunk_tuples)
-
-        logger.info(f"Split into {total_chunks} chunk(s) with {int(self.config.overlap_pct * 100)}% overlap")
-
-        # Step 3: Clean each chunk
-        cleaned_chunks = []
-        for i, (chunk_text, overlap_start, overlap_end) in enumerate(chunk_tuples, 1):
-            chunk_tokens = self._count_tokens(chunk_text)
-            logger.info(f"Processing chunk {i}/{total_chunks} (~{chunk_tokens:,} tokens)...")
-
-            cleaned_text = self._clean_chunk(chunk_text, entities, i, total_chunks)
-            cleaned_chunks.append((cleaned_text, overlap_start, overlap_end))
-
-            # Note: No artificial delay needed - LLM providers (Anthropic, OpenAI, etc.)
-            # have built-in rate limit handling with automatic retry logic
-
-        # Step 4: Stitch chunks together
-        logger.info("Stitching chunks together...")
-        final_text = self._stitch_chunks(cleaned_chunks)
-
-        processing_time = time.time() - start_time
-        final_tokens = self._count_tokens(final_text)
-
-        logger.info(f"Cleaning completed in {processing_time:.1f}s")
-        logger.info(f"Final length: {len(final_text):,} chars, ~{final_tokens:,} tokens")
-        logger.info(f"Token change: {((final_tokens - original_tokens) / original_tokens * 100):+.1f}%")
-
-        result = {
-            "cleaned_text": final_text,
-            "entities": entities,
-            "processing_time": processing_time,
-            "chunks_processed": total_chunks,
-            "original_tokens": original_tokens,
-            "final_tokens": final_tokens,
-        }
-
-        # Save if output path provided
-        if output_path:
-            self._save_cleaned_transcript(result, output_path)
-
-        return result
-
-    def _save_cleaned_transcript(self, result: Dict, output_path: str):
-        """Save cleaned transcript to file"""
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Save as text file
-        text_path = output_path.with_suffix(".txt")
-        with open(text_path, "w", encoding="utf-8") as f:
-            f.write(result["cleaned_text"])
-
-        # Save metadata as JSON
-        json_path = output_path.with_suffix(".json")
-        metadata = {
-            "entities": result["entities"],
-            "processing_time": result["processing_time"],
-            "chunks_processed": result["chunks_processed"],
-            "original_tokens": result["original_tokens"],
-            "final_tokens": result["final_tokens"],
-        }
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-        logger.info(f"Cleaned transcript saved to {text_path}")
-        logger.info(f"Metadata saved to {json_path}")
+        return self._apply_speaker_mapping(formatted_markdown, episode_facts)
