@@ -46,17 +46,30 @@ def test_prompts_are_saved_with_debug_files(tmp_path, mock_llm_provider_with_def
     assert prompts_dir.exists(), f"Prompts directory should exist at {prompts_dir}"
 
     prompt_files = list(prompts_dir.glob("*.md"))
-    assert len(prompt_files) >= 2, f"Expected at least 2 prompt files, got {len(prompt_files)}"
+    # With diarization validation enabled (default), we expect 3 prompts:
+    # 1. diarization_validation, 2. analysis, 3. speaker_identification
+    assert len(prompt_files) >= 3, f"Expected at least 3 prompt files, got {len(prompt_files)}"
 
-    # Check that we have analysis and speaker_identification prompts
+    # Check that we have all expected prompts
     filenames = [f.name for f in prompt_files]
+    has_diarization = any("diarization" in name for name in filenames)
     has_analysis = any("analysis" in name for name in filenames)
     has_speaker = any("speaker_identification" in name for name in filenames)
 
+    assert has_diarization, f"Expected diarization_validation prompt file, found: {filenames}"
     assert has_analysis, f"Expected analysis prompt file, found: {filenames}"
     assert has_speaker, f"Expected speaker_identification prompt file, found: {filenames}"
 
-    # Verify content format of one of the prompt files
+    # Verify content format of the diarization validation prompt
+    diarization_file = next(f for f in prompt_files if "diarization" in f.name)
+    diarization_content = diarization_file.read_text(encoding="utf-8")
+
+    assert "# Prompt" in diarization_content, "Diarization prompt should have markdown header"
+    assert "## SYSTEM" in diarization_content, "Diarization prompt should have SYSTEM section"
+    assert "## USER" in diarization_content, "Diarization prompt should have USER section"
+    assert "diarization" in diarization_content.lower(), "Diarization prompt should mention diarization"
+
+    # Verify content format of the analysis prompt
     analysis_file = next(f for f in prompt_files if "analysis" in f.name)
     content = analysis_file.read_text(encoding="utf-8")
 

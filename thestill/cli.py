@@ -618,6 +618,443 @@ def clean_transcript(ctx, dry_run, max_episodes):
     click.echo(f"✓ {total_processed} transcripts cleaned in {total_time:.1f} seconds")
 
 
+# ============================================================================
+# Facts management commands (for transcript cleaning v2)
+# ============================================================================
+
+
+@main.group()
+@click.pass_context
+def facts(ctx):
+    """Manage podcast and episode facts for transcript cleaning"""
+    pass
+
+
+@facts.command("list")
+@click.pass_context
+def facts_list(ctx):
+    """List all facts files"""
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    path_manager = ctx.obj.path_manager
+
+    # List podcast facts
+    podcast_facts_dir = path_manager.podcast_facts_dir()
+    episode_facts_dir = path_manager.episode_facts_dir()
+
+    click.echo(CLIFormatter.format_header("Facts Files"))
+
+    # Podcast facts
+    click.echo("\n📻 Podcast Facts:")
+    if podcast_facts_dir.exists():
+        podcast_files = list(podcast_facts_dir.glob("*.facts.md"))
+        if podcast_files:
+            for f in sorted(podcast_files):
+                click.echo(f"  • {f.name}")
+        else:
+            click.echo("  (no podcast facts files)")
+    else:
+        click.echo("  (directory not created)")
+
+    # Episode facts
+    click.echo("\n🎧 Episode Facts:")
+    if episode_facts_dir.exists():
+        episode_files = list(episode_facts_dir.glob("*.facts.md"))
+        if episode_files:
+            click.echo(f"  {len(episode_files)} episode facts files")
+            # Show first 10
+            for f in sorted(episode_files)[:10]:
+                click.echo(f"  • {f.name}")
+            if len(episode_files) > 10:
+                click.echo(f"  ... and {len(episode_files) - 10} more")
+        else:
+            click.echo("  (no episode facts files)")
+    else:
+        click.echo("  (directory not created)")
+
+
+@facts.command("show")
+@click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
+@click.option("--episode-id", "-e", help="Episode UUID")
+@click.pass_context
+def facts_show(ctx, podcast_id, episode_id):
+    """Show facts for a podcast or episode"""
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    from .core.facts_manager import FactsManager, slugify
+
+    path_manager = ctx.obj.path_manager
+    repository = ctx.obj.repository
+    facts_manager = FactsManager(path_manager)
+
+    if episode_id:
+        # Show episode facts
+        episode_facts = facts_manager.load_episode_facts(episode_id)
+        if episode_facts:
+            click.echo(CLIFormatter.format_header(f"Episode Facts: {episode_facts.episode_title}"))
+            click.echo(facts_manager.get_episode_facts_markdown(episode_id))
+        else:
+            click.echo(f"❌ No facts file found for episode: {episode_id}")
+            ctx.exit(1)
+
+    elif podcast_id:
+        # Get podcast
+        podcast = None
+        if podcast_id.isdigit():
+            podcast = repository.get_by_index(int(podcast_id))
+        elif podcast_id.startswith("http"):
+            podcast = repository.get_by_url(podcast_id)
+
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}")
+            ctx.exit(1)
+
+        podcast_slug = slugify(podcast.title)
+        podcast_facts = facts_manager.load_podcast_facts(podcast_slug)
+
+        if podcast_facts:
+            click.echo(CLIFormatter.format_header(f"Podcast Facts: {podcast_facts.podcast_title}"))
+            click.echo(facts_manager.get_podcast_facts_markdown(podcast_slug))
+        else:
+            click.echo(f"❌ No facts file found for podcast: {podcast.title}")
+            click.echo(f"   Expected file: {facts_manager.get_podcast_facts_path(podcast_slug)}")
+            ctx.exit(1)
+    else:
+        click.echo("❌ Please specify --podcast-id or --episode-id")
+        ctx.exit(1)
+
+
+@facts.command("edit")
+@click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
+@click.option("--episode-id", "-e", help="Episode UUID")
+@click.pass_context
+def facts_edit(ctx, podcast_id, episode_id):
+    """Open facts file in $EDITOR"""
+    import os
+    import subprocess
+
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    from .core.facts_manager import FactsManager, slugify
+
+    path_manager = ctx.obj.path_manager
+    repository = ctx.obj.repository
+    facts_manager = FactsManager(path_manager)
+
+    editor = os.environ.get("EDITOR", "nano")
+    file_path = None
+
+    if episode_id:
+        file_path = facts_manager.get_episode_facts_path(episode_id)
+    elif podcast_id:
+        podcast = None
+        if podcast_id.isdigit():
+            podcast = repository.get_by_index(int(podcast_id))
+        elif podcast_id.startswith("http"):
+            podcast = repository.get_by_url(podcast_id)
+
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}")
+            ctx.exit(1)
+
+        podcast_slug = slugify(podcast.title)
+        file_path = facts_manager.get_podcast_facts_path(podcast_slug)
+    else:
+        click.echo("❌ Please specify --podcast-id or --episode-id")
+        ctx.exit(1)
+
+    if not file_path.exists():
+        click.echo(f"❌ Facts file not found: {file_path}")
+        click.echo("   Run clean-transcript-v2 first to generate facts.")
+        ctx.exit(1)
+
+    click.echo(f"Opening {file_path} with {editor}...")
+    subprocess.run([editor, str(file_path)])
+
+
+@facts.command("extract")
+@click.option("--podcast-id", "-p", required=True, help="Podcast ID (index or URL)")
+@click.option("--episode-id", "-e", help="Episode UUID (or 'latest')")
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing facts")
+@click.pass_context
+def facts_extract(ctx, podcast_id, episode_id, force):
+    """Extract facts from a transcript"""
+    import json
+
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    from .core.facts_extractor import FactsExtractor
+    from .core.facts_manager import FactsManager, slugify
+    from .core.llm_provider import create_llm_provider
+
+    config = ctx.obj.config
+    path_manager = ctx.obj.path_manager
+    repository = ctx.obj.repository
+    facts_manager = FactsManager(path_manager)
+
+    # Get podcast
+    podcast = None
+    if podcast_id.isdigit():
+        podcast = repository.get_by_index(int(podcast_id))
+    elif podcast_id.startswith("http"):
+        podcast = repository.get_by_url(podcast_id)
+
+    if not podcast:
+        click.echo(f"❌ Podcast not found: {podcast_id}")
+        ctx.exit(1)
+
+    # Get episode
+    episode = None
+    if episode_id == "latest":
+        # Find most recent episode with transcript
+        for ep in sorted(podcast.episodes, key=lambda e: e.pub_date or e.created_at, reverse=True):
+            if ep.raw_transcript_path:
+                episode = ep
+                break
+    elif episode_id:
+        episode = repository.get_episode(episode_id)
+    else:
+        # Find first episode with transcript
+        for ep in podcast.episodes:
+            if ep.raw_transcript_path:
+                episode = ep
+                break
+
+    if not episode:
+        click.echo(f"❌ No episode with transcript found")
+        ctx.exit(1)
+
+    # Check existing facts
+    podcast_slug = slugify(podcast.title)
+    if not force:
+        if facts_manager.load_episode_facts(episode.id):
+            click.echo(f"❌ Episode facts already exist. Use --force to overwrite.")
+            ctx.exit(1)
+
+    # Load transcript
+    transcript_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
+    if not transcript_path.exists():
+        click.echo(f"❌ Transcript file not found: {transcript_path}")
+        ctx.exit(1)
+
+    with open(transcript_path, "r", encoding="utf-8") as f:
+        transcript_data = json.load(f)
+
+    # Create LLM provider
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model,
+        )
+        click.echo(f"✓ Using {config.llm_provider.upper()} provider")
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
+    # Extract facts
+    click.echo(f"📻 {podcast.title}")
+    click.echo(f"🎧 {episode.title}")
+    click.echo("─" * 50)
+
+    facts_extractor = FactsExtractor(llm_provider)
+
+    # Load existing podcast facts (for context)
+    podcast_facts = facts_manager.load_podcast_facts(podcast_slug)
+
+    click.echo("Extracting episode facts...")
+    episode_facts = facts_extractor.extract_episode_facts(
+        transcript_data=transcript_data,
+        podcast_title=podcast.title,
+        podcast_description=podcast.description,
+        episode_title=episode.title,
+        episode_description=episode.description,
+        podcast_facts=podcast_facts,
+    )
+
+    # Save episode facts
+    facts_manager.save_episode_facts(episode.id, episode_facts)
+    click.echo(f"✓ Saved episode facts: {facts_manager.get_episode_facts_path(episode.id)}")
+
+    # Extract podcast facts if not present
+    if not podcast_facts:
+        click.echo("Extracting podcast facts (first episode)...")
+        podcast_facts = facts_extractor.extract_initial_podcast_facts(
+            transcript_data=transcript_data,
+            podcast_title=podcast.title,
+            podcast_description=podcast.description,
+            episode_facts=episode_facts,
+        )
+        facts_manager.save_podcast_facts(podcast_slug, podcast_facts)
+        click.echo(f"✓ Saved podcast facts: {facts_manager.get_podcast_facts_path(podcast_slug)}")
+
+    click.echo("\n✅ Facts extraction complete!")
+    click.echo(f"   Speakers identified: {len(episode_facts.speaker_mapping)}")
+    click.echo(f"   Guests: {len(episode_facts.guests)}")
+    click.echo(f"   Topics: {len(episode_facts.topics_keywords)}")
+
+
+@main.command("clean-transcript-v2")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed")
+@click.option("--max-episodes", "-m", default=5, help="Maximum episodes to process")
+@click.option("--force", "-f", is_flag=True, help="Re-process even if clean transcript exists")
+@click.option("--stream", "-s", is_flag=True, help="Stream LLM output in real-time")
+@click.pass_context
+def clean_transcript_v2(ctx, dry_run, max_episodes, force, stream):
+    """Clean transcripts using facts-based v2 approach"""
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    import json
+
+    from .core.llm_provider import create_llm_provider
+    from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
+
+    config = ctx.obj.config
+    path_manager = ctx.obj.path_manager
+    feed_manager = ctx.obj.feed_manager
+
+    # Create LLM provider
+    try:
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model,
+        )
+        click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        ctx.exit(1)
+
+    cleaning_processor = TranscriptCleaningProcessor(llm_provider)
+
+    # Find transcripts to clean
+    click.echo("🔍 Looking for transcripts to clean...")
+
+    podcasts = feed_manager.list_podcasts()
+    transcripts_to_clean = []
+
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            if episode.raw_transcript_path:
+                transcript_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
+                if not transcript_path.exists():
+                    continue
+
+                # Check if already cleaned (unless force)
+                if not force and episode.clean_transcript_path:
+                    clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
+                    if clean_path.exists():
+                        continue
+
+                transcripts_to_clean.append((podcast, episode, transcript_path))
+
+    if not transcripts_to_clean:
+        click.echo("✓ No transcripts found to clean")
+        return
+
+    total_transcripts = min(len(transcripts_to_clean), max_episodes)
+    click.echo(f"📄 Found {len(transcripts_to_clean)} transcripts. Processing {total_transcripts} episodes")
+
+    if dry_run:
+        for podcast, episode, _ in transcripts_to_clean[:max_episodes]:
+            click.echo(f"  • {podcast.title}: {episode.title}")
+        click.echo("\n(Run without --dry-run to process)")
+        return
+
+    total_processed = 0
+    start_time = time.time()
+
+    for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
+        click.echo(f"\n📻 {podcast.title}")
+        click.echo(f"🎧 {episode.title}")
+        click.echo("─" * 50)
+
+        try:
+            # Load transcript
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                transcript_data = json.load(f)
+
+            # Generate output path
+            base_name = transcript_path.stem
+            if base_name.endswith("_transcript"):
+                base_name = base_name[: -len("_transcript")]
+            cleaned_filename = f"{base_name}_cleaned.md"
+            cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
+
+            # Create streaming callback if enabled
+            stream_callback = None
+            if stream:
+                import sys
+
+                def stream_callback(chunk: str) -> None:
+                    """Print LLM output chunks in real-time."""
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
+
+            # Clean using v2 approach
+            result = cleaning_processor.clean_transcript_v2(
+                transcript_data=transcript_data,
+                podcast_title=podcast.title,
+                podcast_description=podcast.description,
+                episode_title=episode.title,
+                episode_description=episode.description,
+                episode_id=episode.id,
+                output_path=str(cleaned_path),
+                path_manager=path_manager,
+                on_stream_chunk=stream_callback,
+            )
+
+            # Add newline after streaming completes
+            if stream:
+                click.echo("")  # End the streamed output with newline
+
+            if result:
+                # Update feed manager
+                feed_manager.mark_episode_processed(
+                    str(podcast.rss_url),
+                    episode.external_id,
+                    raw_transcript_path=transcript_path.name,
+                    clean_transcript_path=cleaned_filename,
+                )
+
+                total_processed += 1
+                click.echo("✅ Transcript cleaned successfully!")
+                click.echo(f"👥 Speakers: {len(result['episode_facts'].speaker_mapping)}")
+
+        except Exception as e:
+            click.echo(f"❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            continue
+
+    total_time = time.time() - start_time
+    click.echo("\n🎉 Processing complete!")
+    click.echo(f"✓ {total_processed} transcripts cleaned in {total_time:.1f} seconds")
+
+
 @main.command()
 @click.pass_context
 def status(ctx):

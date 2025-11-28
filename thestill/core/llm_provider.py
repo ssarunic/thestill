@@ -254,6 +254,60 @@ class OpenAIProvider(LLMProvider):
         """Get human-readable model name for display"""
         return f"OpenAI {self.model}"
 
+    def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_chunk: Optional[callable] = None,
+    ) -> str:
+        """
+        Generate a chat completion with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            response_format: Response format specification
+            on_chunk: Optional callback function(chunk_text) called for each chunk
+
+        Returns:
+            The complete generated text response
+        """
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+
+        is_reasoning_model = self._is_reasoning_model()
+
+        # Only add temperature if supported (reasoning models don't support it)
+        if temperature is not None and not is_reasoning_model:
+            params["temperature"] = temperature
+
+        # Add max_tokens if specified
+        if max_tokens is not None:
+            params["max_completion_tokens"] = max_tokens
+
+        # Only add response_format for non-reasoning models
+        if response_format is not None and not is_reasoning_model:
+            params["response_format"] = response_format
+
+        full_response = ""
+        stream = self.client.chat.completions.create(**params)
+
+        for chunk in stream:
+            if chunk.choices and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    full_response += delta.content
+                    if on_chunk:
+                        on_chunk(delta.content)
+
+        return full_response
+
 
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider using official SDK"""
@@ -368,6 +422,63 @@ class OllamaProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
         return f"Ollama {self.model}"
+
+    def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_chunk: Optional[callable] = None,
+    ) -> str:
+        """
+        Generate a chat completion with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            response_format: Response format specification
+            on_chunk: Optional callback function(chunk_text) called for each chunk
+
+        Returns:
+            The complete generated text response
+        """
+        # Convert chat messages to a single prompt for generate API
+        prompt = self._messages_to_prompt(messages)
+
+        # Build options dict
+        options = {}
+        if temperature is not None:
+            options["temperature"] = temperature
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+
+        # Increase context window to prevent truncation
+        if "num_ctx" not in options:
+            options["num_ctx"] = 32768
+
+        try:
+            full_response = ""
+            # Use streaming generate API
+            stream = self.client.generate(
+                model=self.model,
+                prompt=prompt,
+                stream=True,
+                format="json" if response_format and response_format.get("type") == "json_object" else None,
+                options=options if options else None,
+            )
+
+            for chunk in stream:
+                chunk_text = chunk.get("response", "")
+                if chunk_text:
+                    full_response += chunk_text
+                    if on_chunk:
+                        on_chunk(chunk_text)
+
+            return full_response
+        except Exception as e:
+            raise RuntimeError(f"Ollama streaming API request failed: {e}")
 
 
 class AnthropicProvider(LLMProvider):
@@ -587,9 +698,18 @@ class AnthropicProvider(LLMProvider):
                         )
                         raise
                 except BadRequestError as e:
-                    # Permanent error - invalid request parameters (e.g., max_tokens invalid)
-                    # Do NOT retry - fail fast with clear error message
+                    # Permanent error - do NOT retry - fail fast with clear error message
+                    error_str = str(e)
                     logger.error(f"BadRequest error (not retrying): {e}")
+
+                    # Check for billing/credit balance errors
+                    if "credit balance" in error_str.lower() or "billing" in error_str.lower():
+                        raise ValueError(
+                            f"Anthropic API billing error: {e}. "
+                            f"Please check your account balance at https://console.anthropic.com/settings/billing"
+                        ) from e
+
+                    # Other bad request errors (invalid parameters, etc.)
                     raise ValueError(
                         f"Invalid Anthropic API request: {e}. "
                         f"This may be due to invalid parameters for model {self.model}."
@@ -1005,6 +1125,66 @@ class GeminiProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
         return f"Google {self.model}"
+
+    def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_chunk: Optional[callable] = None,
+    ) -> str:
+        """
+        Generate a chat completion with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            response_format: Response format specification
+            on_chunk: Optional callback function(chunk_text) called for each chunk
+
+        Returns:
+            The complete generated text response
+        """
+        # Convert OpenAI-style messages to Gemini format
+        gemini_messages = self._convert_messages(messages)
+
+        # Build generation config
+        generation_config = {}
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if max_tokens is not None:
+            generation_config["max_output_tokens"] = max_tokens
+
+        # Handle JSON response format
+        if response_format and response_format.get("type") == "json_object":
+            generation_config["response_mime_type"] = "application/json"
+
+        # Configure safety settings to be less restrictive for transcript processing
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
+        # Generate streaming response
+        full_response = ""
+        response = self.client.generate_content(
+            gemini_messages,
+            generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
+            safety_settings=safety_settings,
+            stream=True,
+        )
+
+        for chunk in response:
+            if chunk.text:
+                full_response += chunk.text
+                if on_chunk:
+                    on_chunk(chunk.text)
+
+        return full_response
 
 
 def create_llm_provider(

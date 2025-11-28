@@ -65,6 +65,8 @@ class PathManager:
         self._clean_transcripts = "clean_transcripts"
         self._summaries = "summaries"
         self._evaluations = "evaluations"
+        self._podcast_facts = "podcast_facts"
+        self._episode_facts = "episode_facts"
         self._feeds_file = "feeds.json"
 
     # Directory path methods
@@ -92,6 +94,14 @@ class PathManager:
     def evaluations_dir(self) -> Path:
         """Get path to evaluations directory"""
         return self.storage_path / self._evaluations
+
+    def podcast_facts_dir(self) -> Path:
+        """Get path to podcast facts directory"""
+        return self.storage_path / self._podcast_facts
+
+    def episode_facts_dir(self) -> Path:
+        """Get path to episode facts directory"""
+        return self.storage_path / self._episode_facts
 
     # File path methods
 
@@ -167,6 +177,30 @@ class PathManager:
         """
         return self.evaluations_dir() / filename
 
+    def podcast_facts_file(self, podcast_slug: str) -> Path:
+        """
+        Get full path to a podcast facts file.
+
+        Args:
+            podcast_slug: Slugified podcast title
+
+        Returns:
+            Full path to the facts file in podcast_facts directory
+        """
+        return self.podcast_facts_dir() / f"{podcast_slug}.facts.md"
+
+    def episode_facts_file(self, episode_id: str) -> Path:
+        """
+        Get full path to an episode facts file.
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            Full path to the facts file in episode_facts directory
+        """
+        return self.episode_facts_dir() / f"{episode_id}.facts.md"
+
     def feeds_file(self) -> Path:
         """
         Get full path to the feeds.json metadata file.
@@ -188,6 +222,8 @@ class PathManager:
             self.clean_transcripts_dir(),
             self.summaries_dir(),
             self.evaluations_dir(),
+            self.podcast_facts_dir(),
+            self.episode_facts_dir(),
         ]
 
         for directory in directories:
@@ -199,7 +235,8 @@ class PathManager:
 
         Args:
             directory_type: Type of directory ('original_audio', 'downsampled_audio',
-                           'raw_transcripts', 'clean_transcripts', 'summaries', 'evaluations')
+                           'raw_transcripts', 'clean_transcripts', 'summaries', 'evaluations',
+                           'podcast_facts', 'episode_facts')
             filename: Optional filename to check within the directory
 
         Returns:
@@ -212,6 +249,8 @@ class PathManager:
             "clean_transcripts": self.clean_transcripts_dir(),
             "summaries": self.summaries_dir(),
             "evaluations": self.evaluations_dir(),
+            "podcast_facts": self.podcast_facts_dir(),
+            "episode_facts": self.episode_facts_dir(),
         }
 
         if directory_type not in dir_map:
@@ -242,6 +281,8 @@ class PathManager:
             "clean_transcripts": self.clean_transcript_file,
             "summaries": self.summary_file,
             "evaluations": self.evaluation_file,
+            "podcast_facts": self.podcast_facts_file,
+            "episode_facts": self.episode_facts_file,
         }
 
         if directory_type not in file_map:

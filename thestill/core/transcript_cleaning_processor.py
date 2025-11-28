@@ -36,6 +36,9 @@ PHASE1_FAILURE_THRESHOLD = 0.5  # 50%
 # Threshold for warning about low correction success rate
 CORRECTION_SUCCESS_WARNING_THRESHOLD = 0.5  # 50%
 CORRECTION_SUCCESS_MIN_CORRECTIONS = 5  # Only warn if at least this many corrections found
+
+# Diarization validation settings
+DIARIZATION_VALIDATION_ENABLED_DEFAULT = True  # Enable by default
 from .llm_provider import LLMProvider
 from .post_processor import MODEL_CONFIGS
 from .transcript_formatter import TranscriptFormatter
@@ -82,7 +85,12 @@ def get_max_output_tokens(model_name: str) -> int:
 class TranscriptCleaningProcessor:
     """LLM-based transcript cleaner with copywriting focus"""
 
-    def __init__(self, provider: LLMProvider, chunk_size: Optional[int] = None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        chunk_size: Optional[int] = None,
+        validate_diarization: bool = DIARIZATION_VALIDATION_ENABLED_DEFAULT,
+    ):
         """
         Initialize transcript cleaning processor with an LLM provider.
 
@@ -94,9 +102,15 @@ class TranscriptCleaningProcessor:
                        - Claude 3.5 Sonnet: 180K chars (~45K tokens from 200K context)
                        - GPT-4/GPT-4o: 100K chars (~25K tokens from 128K context)
                        - Ollama/Other: 30K chars (conservative default)
+            validate_diarization: Whether to run LLM-based diarization validation (default: True)
+                                 This detects and fixes speaker assignment errors like:
+                                 - Ad segments mixed with host speech
+                                 - Speaker identity drift
+                                 - Multiple people assigned same speaker ID
         """
         self.provider = provider
         self.formatter = TranscriptFormatter()
+        self.validate_diarization = validate_diarization
 
         # Auto-set chunk_size based on provider if not specified
         if chunk_size is None:
@@ -170,6 +184,25 @@ class TranscriptCleaningProcessor:
         }
 
         try:
+            # Phase 0.5: Validate and fix diarization errors (on raw JSON)
+            if self.validate_diarization:
+                logger.info("Phase 0.5: Validating speaker diarization...")
+                phase0_5_start = time.time()
+                transcript_data, diarization_fixes = self._validate_and_fix_diarization(
+                    transcript_data,
+                    podcast_title,
+                    podcast_description,
+                    episode_title,
+                    episode_description,
+                    prompt_logs=prompt_logs,
+                )
+                metrics_data["phase0_5_diarization_duration_seconds"] = time.time() - phase0_5_start
+                metrics_data["phase0_5_diarization_fixes"] = len(diarization_fixes)
+
+                # Save diarization fixes to debug folder if requested
+                if output_path and save_corrections and diarization_fixes:
+                    self._save_phase_output(output_path, "diarization_fixes", diarization_fixes, episode_id)
+
             # Phase 0: Format JSON to clean Markdown (efficient for LLM)
             logger.info("Phase 0: Formatting transcript to clean Markdown...")
             phase0_start = time.time()
@@ -300,6 +333,139 @@ class TranscriptCleaningProcessor:
             logger.error(f"Error cleaning transcript: {e}")
             raise
 
+    def clean_transcript_v2(
+        self,
+        transcript_data: Dict,
+        podcast_title: str = "",
+        podcast_description: str = "",
+        episode_title: str = "",
+        episode_description: str = "",
+        episode_id: str = "",
+        output_path: Optional[str] = None,
+        path_manager: Optional[Any] = None,
+        save_prompts: bool = True,
+        on_stream_chunk: Optional[callable] = None,
+    ) -> Dict:
+        """
+        Clean transcript using the two-pass facts-based approach (v2).
+
+        This method uses:
+        - Pass 1: Facts extraction (speaker mapping, guests, keywords, ad sponsors)
+        - Pass 2: Transcript cleanup using extracted facts
+
+        Facts are stored as human-editable Markdown files:
+        - Podcast facts: data/podcast_facts/{slug}.facts.md
+        - Episode facts: data/episode_facts/{episode_id}.facts.md
+
+        Args:
+            transcript_data: Raw transcript JSON from transcriber
+            podcast_title: Title of the podcast
+            podcast_description: Description of the podcast
+            episode_title: Title of the episode
+            episode_description: Description of the episode
+            episode_id: Internal episode ID (UUID) for facts file naming
+            output_path: Optional path to save final cleaned transcript
+            path_manager: PathManager instance for facts file paths (required)
+            save_prompts: Whether to save prompts to debug folder (default: True)
+            on_stream_chunk: Optional callback for streaming LLM output chunks
+
+        Returns:
+            Dict with keys: cleaned_markdown, podcast_facts, episode_facts, processing_time
+        """
+        import time
+        from pathlib import Path
+
+        from thestill.core.facts_extractor import FactsExtractor
+        from thestill.core.facts_manager import FactsManager, slugify
+        from thestill.core.transcript_cleaner_v2 import TranscriptCleanerV2
+
+        if path_manager is None:
+            raise ValueError("path_manager is required for clean_transcript_v2")
+
+        start_time = time.time()
+
+        # Create prompt save callback if saving is enabled
+        prompt_save_callback = None
+        if output_path and save_prompts:
+            prompt_save_callback = self._create_prompt_save_callback(output_path)
+
+        # Initialize components
+        facts_manager = FactsManager(path_manager)
+        facts_extractor = FactsExtractor(self.provider, chunk_size=self.chunk_size)
+        transcript_cleaner = TranscriptCleanerV2(
+            self.provider,
+            chunk_size=self.chunk_size,
+            on_stream_chunk=on_stream_chunk,
+        )
+
+        # Get podcast slug for facts lookup
+        podcast_slug = slugify(podcast_title) if podcast_title else "unknown-podcast"
+
+        # Load existing facts
+        podcast_facts = facts_manager.load_podcast_facts(podcast_slug)
+        episode_facts = facts_manager.load_episode_facts(episode_id) if episode_id else None
+
+        # Pass 1: Extract facts if not already present
+        if not episode_facts:
+            logger.info("Pass 1: Extracting episode facts...")
+            episode_facts = facts_extractor.extract_episode_facts(
+                transcript_data=transcript_data,
+                podcast_title=podcast_title,
+                podcast_description=podcast_description,
+                episode_title=episode_title,
+                episode_description=episode_description,
+                podcast_facts=podcast_facts,
+            )
+            # Save episode facts
+            if episode_id:
+                facts_manager.save_episode_facts(episode_id, episode_facts)
+                logger.info(f"Saved episode facts: {facts_manager.get_episode_facts_path(episode_id)}")
+
+        # Initialize podcast facts if first episode
+        if not podcast_facts:
+            logger.info("Pass 1: Extracting initial podcast facts...")
+            podcast_facts = facts_extractor.extract_initial_podcast_facts(
+                transcript_data=transcript_data,
+                podcast_title=podcast_title,
+                podcast_description=podcast_description,
+                episode_facts=episode_facts,
+            )
+            # Save podcast facts
+            facts_manager.save_podcast_facts(podcast_slug, podcast_facts)
+            logger.info(f"Saved podcast facts: {facts_manager.get_podcast_facts_path(podcast_slug)}")
+
+        # Format JSON to markdown (much smaller than raw JSON for LLM)
+        logger.info("Formatting transcript JSON to markdown...")
+        formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
+
+        # Pass 2: Clean transcript using facts
+        logger.info("Pass 2: Cleaning transcript with facts context...")
+        cleaned_markdown = transcript_cleaner.clean_transcript(
+            formatted_markdown=formatted_markdown,
+            podcast_facts=podcast_facts,
+            episode_facts=episode_facts,
+            episode_title=episode_title,
+            on_prompt_ready=prompt_save_callback,
+        )
+
+        processing_time = time.time() - start_time
+
+        # Save output if path provided
+        if output_path:
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(cleaned_markdown, encoding="utf-8")
+            logger.info(f"Saved cleaned transcript: {output_path}")
+
+        logger.info(f"Transcript cleaning (v2) completed in {processing_time:.1f} seconds")
+
+        return {
+            "cleaned_markdown": cleaned_markdown,
+            "podcast_facts": podcast_facts,
+            "episode_facts": episode_facts,
+            "processing_time": processing_time,
+        }
+
     def _chunk_transcript(self, text: str) -> List[str]:
         """
         Split transcript into chunks that fit within LLM context limits.
@@ -336,6 +502,246 @@ class TranscriptCleaningProcessor:
 
         return chunks
 
+    def _validate_and_fix_diarization(
+        self,
+        transcript_data: Dict,
+        podcast_title: str,
+        podcast_description: str,
+        episode_title: str,
+        episode_description: str,
+        prompt_logs: Optional[List[Dict[str, Any]]] = None,
+    ) -> tuple[Dict, List[Dict]]:
+        """
+        Phase 0.5: Validate and fix speaker diarization errors using LLM.
+
+        This phase detects and corrects common diarization problems:
+        1. Ad segments incorrectly assigned to host speakers
+        2. Speaker identity drift (same person split across multiple IDs)
+        3. Speaker merging (different people assigned same speaker ID)
+
+        The LLM analyzes segment content to identify which segments are ads vs main content,
+        and suggests speaker reassignments based on content patterns.
+
+        Args:
+            transcript_data: Raw transcript JSON with segments
+            podcast_title: Title of the podcast
+            podcast_description: Description of the podcast
+            episode_title: Title of the episode
+            episode_description: Description of the episode
+            prompt_logs: Optional list to capture prompts for debugging
+
+        Returns:
+            Tuple of (corrected transcript_data, list of fixes applied)
+        """
+        segments = transcript_data.get("segments", [])
+        if not segments:
+            return transcript_data, []
+
+        # Build a summary of segments for the LLM
+        segment_summary = self._build_segment_summary_for_diarization(segments)
+
+        system_prompt = """You are an expert at analyzing podcast transcripts to detect speaker diarization errors.
+
+Your task is to analyze the transcript segments and identify diarization problems:
+
+1. **Ad segments**: Identify segments that are clearly advertisements (sponsor reads, product promotions).
+   - Look for phrases like "support for the show comes from", "brought to you by", product names/URLs
+   - Ads should be assigned to a separate speaker (e.g., "AD_NARRATOR") unless read by the host
+
+2. **Speaker identity drift**: Detect when the same person appears under multiple speaker IDs
+   - The host's voice shouldn't suddenly become a different speaker mid-sentence
+   - Look for content continuity that suggests same person
+
+3. **Speaker merging**: Detect when different people are incorrectly assigned the same speaker ID
+   - A guest expert shouldn't share a speaker ID with an ad narrator
+   - Look for dramatic content shifts within the same speaker
+
+4. **CRITICAL: Mid-sentence speaker misattribution**: Detect when a response or continuation is wrongly attributed
+   - When someone says "I'm gonna do you the service of..." or similar response phrases, check if it makes sense for the current speaker
+   - Look for conversational turn-taking cues: "Yeah", "Right", "No", "So", "Well" at the start of a segment
+   - If the segment sounds like a response to the previous speaker, it may be misattributed
+   - Pay attention to context: if Host A asks a question, the answer is likely from Host B or Guest, not Host A continuing
+   - Short interjections ("Right", "Exactly", "Yeah") are often misattributed to the previous speaker
+
+IMPORTANT: Respond with valid JSON only.
+
+JSON Schema:
+{
+  "analysis": {
+    "ad_segments": [
+      {"segment_indices": [0, 1, 2], "reason": "Sponsor read for Blueair", "suggested_speaker": "AD_NARRATOR"}
+    ],
+    "speaker_drift": [
+      {"from_speaker": "SPEAKER_01", "to_speaker": "SPEAKER_03", "segment_index": 33, "reason": "Same guest continues speaking"}
+    ],
+    "speaker_merge": [
+      {"speaker": "SPEAKER_03", "issue": "Contains both ad narrator and guest Michael Cembalest", "fix": "Split at segment 33"}
+    ],
+    "misattributed_responses": [
+      {"segment_index": 15, "issue": "Response 'I'm gonna do you the service...' wrongly attributed to SPEAKER_01 who just asked a question", "suggested_speaker": "SPEAKER_04"}
+    ]
+  },
+  "fixes": [
+    {"segment_index": 0, "old_speaker": "SPEAKER_01", "new_speaker": "AD_NARRATOR", "reason": "Blueair ad read"},
+    {"segment_index": 15, "old_speaker": "SPEAKER_01", "new_speaker": "SPEAKER_04", "reason": "Response to question should be different speaker"},
+    {"segment_index": 33, "old_speaker": "SPEAKER_03", "new_speaker": "GUEST_MICHAEL_CEMBALEST", "reason": "Guest interview begins"}
+  ]
+}
+
+If no fixes are needed, return: {"analysis": {}, "fixes": []}"""
+
+        context_info = f"""PODCAST CONTEXT:
+Podcast: {podcast_title}
+About: {podcast_description}
+
+Episode: {episode_title}
+Description: {episode_description}
+
+TRANSCRIPT SEGMENTS TO ANALYZE:
+{segment_summary}
+
+Analyze the segments above and identify any diarization errors that need fixing."""
+
+        try:
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": context_info}]
+
+            if prompt_logs is not None:
+                prompt_logs.append(
+                    {
+                        "phase": "diarization_validation",
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": 4000,
+                        "segments_analyzed": len(segments),
+                    }
+                )
+
+            response = self.provider.chat_completion(
+                messages=messages,
+                temperature=0.1,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
+            )
+
+            # Parse JSON response
+            response = response.strip()
+            if "```json" in response:
+                start = response.find("```json") + 7
+                end = response.find("```", start)
+                if end != -1:
+                    response = response[start:end].strip()
+            elif "```" in response:
+                start = response.find("```") + 3
+                end = response.find("```", start)
+                if end != -1:
+                    response = response[start:end].strip()
+
+            result = json.loads(response)
+            fixes = result.get("fixes", [])
+
+            if not fixes:
+                logger.info("Diarization validation: No fixes needed")
+                return transcript_data, []
+
+            # Apply fixes to transcript_data
+            corrected_data = self._apply_diarization_fixes(transcript_data, fixes)
+            logger.info(f"Diarization validation: Applied {len(fixes)} speaker reassignments")
+
+            return corrected_data, fixes
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Diarization validation JSON error: {e}. Skipping fixes.")
+            return transcript_data, []
+        except Exception as e:
+            logger.warning(f"Diarization validation error: {e}. Skipping fixes.")
+            return transcript_data, []
+
+    def _build_segment_summary_for_diarization(self, segments: List[Dict], max_segments: int = 100) -> str:
+        """
+        Build a condensed summary of segments for diarization analysis.
+
+        For long transcripts, we sample strategically:
+        - First 20 segments (usually contains ads)
+        - Middle 20 segments (main content)
+        - Last 20 segments (often contains ads/outro)
+        - Any segments with speaker changes
+
+        Args:
+            segments: List of transcript segments
+            max_segments: Maximum segments to include in summary
+
+        Returns:
+            Formatted string summary of segments
+        """
+        if len(segments) <= max_segments:
+            selected_indices = list(range(len(segments)))
+        else:
+            # Strategic sampling
+            selected_indices = set()
+
+            # First 25 segments (ads often at start)
+            selected_indices.update(range(min(25, len(segments))))
+
+            # Last 25 segments (ads often at end)
+            selected_indices.update(range(max(0, len(segments) - 25), len(segments)))
+
+            # Middle section
+            mid = len(segments) // 2
+            selected_indices.update(range(max(0, mid - 12), min(len(segments), mid + 13)))
+
+            # Speaker change points (important for detecting drift)
+            prev_speaker = None
+            for i, seg in enumerate(segments):
+                speaker = seg.get("speaker")
+                if speaker != prev_speaker:
+                    selected_indices.add(i)
+                    if i > 0:
+                        selected_indices.add(i - 1)
+                    if i < len(segments) - 1:
+                        selected_indices.add(i + 1)
+                prev_speaker = speaker
+
+            selected_indices = sorted(selected_indices)[:max_segments]
+
+        lines = []
+        for i in selected_indices:
+            seg = segments[i]
+            speaker = seg.get("speaker", "UNKNOWN")
+            start = seg.get("start", 0)
+            text = seg.get("text", "")[:150]  # Truncate long text
+            if len(seg.get("text", "")) > 150:
+                text += "..."
+            lines.append(f"[{i}] t={start:.0f}s {speaker}: {text}")
+
+        return "\n".join(lines)
+
+    def _apply_diarization_fixes(self, transcript_data: Dict, fixes: List[Dict]) -> Dict:
+        """
+        Apply diarization fixes to transcript data.
+
+        Args:
+            transcript_data: Original transcript data
+            fixes: List of fixes from LLM analysis
+
+        Returns:
+            Corrected transcript data (deep copy with fixes applied)
+        """
+        import copy
+
+        corrected = copy.deepcopy(transcript_data)
+        segments = corrected.get("segments", [])
+
+        for fix in fixes:
+            segment_index = fix.get("segment_index")
+            new_speaker = fix.get("new_speaker")
+
+            if segment_index is not None and new_speaker and 0 <= segment_index < len(segments):
+                old_speaker = segments[segment_index].get("speaker")
+                segments[segment_index]["speaker"] = new_speaker
+                logger.debug(f"Fixed segment {segment_index}: {old_speaker} -> {new_speaker}")
+
+        return corrected
+
     def _analyze_and_correct(
         self,
         formatted_markdown: str,
@@ -365,11 +771,19 @@ Your task is to analyze the transcript and identify ALL corrections needed for:
 2. Grammar mistakes
 3. Filler words to remove (um, uh, like, you know, etc.) - only when they don't add meaning
 4. Punctuation improvements
+5. **CRITICAL: Homophone and mishearing errors** - Speech-to-text often produces wrong words that sound similar:
+   - "know" vs "No" (especially at sentence starts or as responses)
+   - "clear" when someone says a name like "Claire" or "Clare"
+   - "there/their/they're", "your/you're", "its/it's"
+   - Common names misheard as regular words (e.g., "mark" → "Marc", "will" → "Will")
+   - Pay special attention when context suggests a person's name (e.g., "Thanks, clear" → "Thanks, Claire")
 
 Context will help you make better corrections:
 - Use the podcast/episode titles and descriptions to understand the domain
 - Technical podcasts may have jargon that looks wrong but is correct
 - Names of people, companies, products should be spelled correctly based on context
+- **Production staff**: Podcasts often mention producers, editors, and crew by first name
+- **Common podcast roles**: "Senior Producer", "Executive Producer", "Editor" - if these roles are mentioned, the word before is likely a person's name
 
 CRITICAL: You MUST respond with ONLY valid JSON in the exact format shown below. Do not include any explanatory text before or after the JSON.
 
@@ -382,7 +796,7 @@ JSON Schema:
       "items": {
         "type": "object",
         "properties": {
-          "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation"]},
+          "type": {"type": "string", "enum": ["spelling", "grammar", "filler", "punctuation", "homophone"]},
           "original": {"type": "string"},
           "corrected": {"type": "string"}
         },
@@ -405,6 +819,16 @@ Example output (respond in exactly this format):
       "type": "spelling",
       "original": "Alister Campbell",
       "corrected": "Alastair Campbell"
+    },
+    {
+      "type": "homophone",
+      "original": "know?",
+      "corrected": "No?"
+    },
+    {
+      "type": "homophone",
+      "original": "clear is the Senior Producer",
+      "corrected": "Claire is the Senior Producer"
     },
     {
       "type": "filler",
@@ -873,6 +1297,13 @@ TRANSCRIPT:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logger.debug(f"Skipped corrections saved to: {path}")
 
+        elif phase == "diarization_fixes":
+            # Save to debug directory: {base_name}.diarization_fixes.json
+            path = debug_dir / f"{base_name}.diarization_fixes.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"Diarization fixes saved to: {path}")
+
     def _save_prompts(self, output_path: str, prompts: List[Dict[str, Any]], episode_id: str = ""):
         """
         Save the exact prompts sent to the LLM during cleaning as separate .md files for easier debugging.
@@ -916,6 +1347,53 @@ TRANSCRIPT:
                 f.write(md_content)
 
         logger.debug(f"Saved {len(prompts)} prompts to: {prompts_dir}")
+
+    def _create_prompt_save_callback(self, output_path: str):
+        """
+        Create a callback function that saves prompts immediately when called.
+
+        This is used by v2 cleaner to save prompts BEFORE each LLM call,
+        ensuring prompts are preserved even if the LLM call fails.
+
+        Args:
+            output_path: Base output path for determining debug directory
+
+        Returns:
+            Callback function that takes a prompt_record dict and saves it to disk
+        """
+        output_path_obj = Path(output_path)
+        prompts_dir = output_path_obj.parent / "debug" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        base_name = output_path_obj.stem.replace("_cleaned", "")
+
+        # Use a mutable container to track prompt count across calls
+        prompt_counter = [0]
+
+        def save_prompt(prompt_record: Dict[str, Any]) -> None:
+            """Save a single prompt record immediately."""
+            prompt_counter[0] += 1
+            idx = prompt_counter[0]
+
+            phase = prompt_record.get("phase", "unknown")
+            chunk = prompt_record.get("chunk")
+            total_chunks = prompt_record.get("total_chunks")
+
+            # Build descriptive filename
+            if chunk and total_chunks:
+                filename = f"{base_name}.prompt_{idx}_{phase}_chunk{chunk}of{total_chunks}.md"
+            else:
+                filename = f"{base_name}.prompt_{idx}_{phase}.md"
+
+            path = prompts_dir / filename
+
+            # Format and save immediately
+            md_content = self._format_prompt_as_markdown(prompt_record, idx)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(md_content)
+
+            logger.debug(f"Saved prompt to: {path}")
+
+        return save_prompt
 
     def _format_prompt_as_markdown(self, prompt_record: Dict[str, Any], idx: int) -> str:
         """
