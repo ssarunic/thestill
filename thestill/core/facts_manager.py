@@ -198,6 +198,12 @@ class FactsManager:
                 lines.append(f"- {role}")
             lines.append("")
 
+        if facts.production_team:
+            lines.append("## Production Team")
+            for member in facts.production_team:
+                lines.append(f"- {member}")
+            lines.append("")
+
         if facts.known_guests:
             lines.append("## Known Guests")
             for guest in facts.known_guests:
@@ -266,6 +272,7 @@ class FactsManager:
             podcast_title=title,
             hosts=sections.get("hosts", []),
             recurring_roles=sections.get("recurring roles", []),
+            production_team=sections.get("production team", []),
             known_guests=sections.get("known guests", []),
             sponsors=sections.get("sponsors/advertisers", []),
             keywords=sections.get("keywords & proper nouns", []),

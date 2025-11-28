@@ -240,24 +240,25 @@ class TranscriptCleanerV2:
                 {
                     "phase": "v2_cleanup",
                     "messages": messages,
-                    "temperature": 0.1,
+                    "temperature": 0,
                     "max_tokens": max_tokens,
                     "input_chars": len(formatted_transcript),
                 }
             )
 
         # Single-chunk processing - use streaming if callback provided and supported
+        # Temperature 0 for deterministic timestamp handling
         if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
             response = self.provider.chat_completion_streaming(
                 messages=messages,
-                temperature=0.1,
+                temperature=0,
                 max_tokens=max_tokens,
                 on_chunk=self.on_stream_chunk,
             )
         else:
             response = self.provider.chat_completion(
                 messages=messages,
-                temperature=0.1,
+                temperature=0,
                 max_tokens=max_tokens,
             )
 
@@ -303,24 +304,25 @@ class TranscriptCleanerV2:
                         "chunk": i + 1,
                         "total_chunks": len(chunks),
                         "messages": messages,
-                        "temperature": 0.1,
+                        "temperature": 0,
                         "max_tokens": max_tokens,
                         "input_chars": len(chunk),
                     }
                 )
 
             # Use streaming if callback provided and supported
+            # Temperature 0 for deterministic timestamp handling
             if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
                 response = self.provider.chat_completion_streaming(
                     messages=messages,
-                    temperature=0.1,
+                    temperature=0,
                     max_tokens=max_tokens,
                     on_chunk=self.on_stream_chunk,
                 )
             else:
                 response = self.provider.chat_completion(
                     messages=messages,
-                    temperature=0.1,
+                    temperature=0,
                     max_tokens=max_tokens,
                 )
 
@@ -358,24 +360,37 @@ class TranscriptCleanerV2:
 
 The transcript has already been formatted with speaker names and timestamps. Your tasks:
 
-1. AD DETECTION:
-   - Identify commercial segments (sponsor reads, product promotions)
-   - Replace ad content with: > **[TIMESTAMP] [AD BREAK]** - Sponsor Name
-   - Keep the timestamp from the start of the ad segment
+1. AD & CLIP MANAGEMENT:
+   - **Ads:** Identify sponsor reads and product promotions. Replace ad content with:
+     > **[TIMESTAMP] [AD BREAK]** - Sponsor Name
+   - **Aggressive Ad Detection:** If content is clearly a sponsor read (e.g., "Support for the show comes from...", "promo code", "visit [sponsor].com"), mark it as an [AD BREAK] even if the speaker label says it's the Host or Guest. Diarization labels on ads are often wrong.
+   - **Clips/Soundbites:** If a voice labelled "Ad Narrator" or similar is playing a news clip, movie quote, cold open, or transition soundbite (NOT a sponsor read), label the speaker as **[Clip]** or **[Soundbite]** instead.
 
-2. EDITING & CORRECTION:
-   - Fix spelling and grammar while PRESERVING the speakers' original style
-   - Do NOT change between American/British English - keep the original variant
+2. STRICT TIMESTAMP BINDING (CRITICAL):
+   - You MUST use the EXACT timestamp provided in the source text.
+   - DO NOT calculate, estimate, or shift timestamps.
+   - DO NOT invent timestamps or adjust for ad duration.
+   - If you merge two segments, use the timestamp of the FIRST segment.
+   - Copy timestamps character-for-character from the input.
+
+3. ENTITY & PHONETIC REPAIR:
    - Fix proper nouns using the Keywords list provided (includes common mishearings)
-   - Remove filler words (um, uh, like, you know) if they disrupt readability
+   - **Credits Check:** At episode end, map "research team" / "production team" names to the provided facts lists. Common phonetic errors:
+     - "dashed line" → "Dashiell Lewin"
+     - Names read quickly at the end are often mangled - check the facts carefully
+   - If a word sounds like a name but doesn't match any known entity, flag it with [?] rather than guessing
+
+4. EDITING:
+   - Fix spelling and grammar while PRESERVING the speakers' original voice and style
+   - Convert all spelling to British English (e.g., 'labour', 'programme', 'realise', 'colour')
+   - Remove filler words (um, uh, like, you know) ONLY if they disrupt readability
    - Keep the banter and personality natural - don't over-edit
 
-3. FORMATTING:
+5. FORMATTING:
    - Output strictly in Markdown
-   - Preserve the format: **[MM:SS] Speaker Name** Text of the segment...
+   - Preserve the format: **[MM:SS] Speaker Name:** Text of the segment...
    - Add a blank line between each speaker turn
-   - PRESERVE timestamps exactly as given (do not modify them)
-   - You may merge very short consecutive segments from the same speaker
+   - You may merge very short consecutive segments from the same speaker (using FIRST timestamp)
 
 IMPORTANT:
 - Do NOT add any preamble or explanation
@@ -398,6 +413,10 @@ IMPORTANT:
             lines.append("PODCAST FACTS:")
             if podcast_facts.hosts:
                 lines.append(f"Hosts: {', '.join(podcast_facts.hosts)}")
+            if podcast_facts.production_team:
+                lines.append(f"Production Team (for credits): {', '.join(podcast_facts.production_team)}")
+            if podcast_facts.recurring_roles:
+                lines.append(f"Recurring Roles: {', '.join(podcast_facts.recurring_roles)}")
             if podcast_facts.sponsors:
                 lines.append(f"Known Sponsors: {', '.join(podcast_facts.sponsors)}")
             if podcast_facts.keywords:

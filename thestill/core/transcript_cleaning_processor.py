@@ -357,6 +357,11 @@ class TranscriptCleaningProcessor:
         - Podcast facts: data/podcast_facts/{slug}.facts.md
         - Episode facts: data/episode_facts/{episode_id}.facts.md
 
+        Debug artifacts (when output_path provided):
+        - data/clean_transcripts/debug/{base_name}.original.md - Formatted transcript before LLM cleaning
+        - data/clean_transcripts/debug/{base_name}.speakers.json - Speaker mapping from episode facts
+        - data/clean_transcripts/debug/prompts/{base_name}.prompt_*.md - LLM prompts (if save_prompts=True)
+
         Args:
             transcript_data: Raw transcript JSON from transcriber
             podcast_title: Title of the podcast
@@ -437,6 +442,15 @@ class TranscriptCleaningProcessor:
         # Format JSON to markdown (much smaller than raw JSON for LLM)
         logger.info("Formatting transcript JSON to markdown...")
         formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
+
+        # Save debug artifacts if output_path provided
+        if output_path:
+            # Save original formatted markdown (before LLM cleaning)
+            self._save_phase_output(output_path, "original", formatted_markdown, episode_id)
+
+            # Save speaker mapping from episode facts
+            if episode_facts and episode_facts.speaker_mapping:
+                self._save_phase_output(output_path, "speakers", episode_facts.speaker_mapping, episode_id)
 
         # Pass 2: Clean transcript using facts
         logger.info("Pass 2: Cleaning transcript with facts context...")

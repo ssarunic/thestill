@@ -36,6 +36,7 @@ class PodcastFacts(BaseModel):
     podcast_title: str
     hosts: List[str] = Field(default_factory=list)  # "Name - Description"
     recurring_roles: List[str] = Field(default_factory=list)  # "Ad Narrator - Reads sponsor segments"
+    production_team: List[str] = Field(default_factory=list)  # "Dashiell Lewin - Research", "Becca Kinsel - Producer"
     known_guests: List[str] = Field(default_factory=list)  # "Name - Description"
     sponsors: List[str] = Field(default_factory=list)  # Sponsor/advertiser names
     keywords: List[str] = Field(default_factory=list)  # "Term (note about mishearing)"
