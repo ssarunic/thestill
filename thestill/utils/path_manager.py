@@ -67,6 +67,7 @@ class PathManager:
         self._evaluations = "evaluations"
         self._podcast_facts = "podcast_facts"
         self._episode_facts = "episode_facts"
+        self._debug_feeds = "debug_feeds"
         self._feeds_file = "feeds.json"
 
     # Directory path methods
@@ -102,6 +103,10 @@ class PathManager:
     def episode_facts_dir(self) -> Path:
         """Get path to episode facts directory"""
         return self.storage_path / self._episode_facts
+
+    def debug_feeds_dir(self) -> Path:
+        """Get path to debug feeds directory (stores last downloaded RSS for each podcast)"""
+        return self.storage_path / self._debug_feeds
 
     # File path methods
 
@@ -201,6 +206,21 @@ class PathManager:
         """
         return self.episode_facts_dir() / f"{episode_id}.facts.md"
 
+    def debug_feed_file(self, podcast_slug: str) -> Path:
+        """
+        Get full path to a debug RSS feed file.
+
+        Stores the last downloaded RSS XML for debugging purposes.
+        Overwrites previous version on each refresh.
+
+        Args:
+            podcast_slug: Slugified podcast title
+
+        Returns:
+            Full path to the RSS file in debug_feeds directory
+        """
+        return self.debug_feeds_dir() / f"{podcast_slug}.xml"
+
     def feeds_file(self) -> Path:
         """
         Get full path to the feeds.json metadata file.
@@ -224,6 +244,7 @@ class PathManager:
             self.evaluations_dir(),
             self.podcast_facts_dir(),
             self.episode_facts_dir(),
+            self.debug_feeds_dir(),
         ]
 
         for directory in directories:

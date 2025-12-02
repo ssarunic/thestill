@@ -23,6 +23,7 @@ import feedparser
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
+from .facts_manager import slugify
 from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,10 @@ class PodcastFeedManager:
         self.path_manager: PathManager = path_manager
         self.storage_path: Path = Path(path_manager.storage_path)
         self.storage_path.mkdir(exist_ok=True)
-        self.media_source_factory: MediaSourceFactory = MediaSourceFactory(str(self.path_manager.original_audio_dir()))
+        self.media_source_factory: MediaSourceFactory = MediaSourceFactory(
+            str(self.path_manager.original_audio_dir()),
+            path_manager=path_manager,
+        )
         self._in_transaction: bool = False
         self._transaction_podcasts: Dict[str, Podcast] = {}
 
@@ -176,12 +180,22 @@ class PodcastFeedManager:
             try:
                 # Detect source type and fetch episodes
                 source = self.media_source_factory.detect_source(str(podcast.rss_url))
-                episodes = source.fetch_episodes(
-                    url=str(podcast.rss_url),
-                    existing_episodes=podcast.episodes,
-                    last_processed=podcast.last_processed,
-                    max_episodes=max_episodes_per_podcast,
-                )
+
+                # Build fetch arguments - include podcast_slug for RSS sources (debug RSS saving)
+                fetch_kwargs: Dict[str, Any] = {
+                    "url": str(podcast.rss_url),
+                    "existing_episodes": podcast.episodes,
+                    "last_processed": podcast.last_processed,
+                    "max_episodes": max_episodes_per_podcast,
+                }
+
+                # Add podcast_slug for RSS sources to enable debug RSS saving
+                from .media_source import RSSMediaSource
+
+                if isinstance(source, RSSMediaSource):
+                    fetch_kwargs["podcast_slug"] = slugify(podcast.title)
+
+                episodes = source.fetch_episodes(**fetch_kwargs)
 
                 # Add new episodes to podcast
                 for episode in episodes:

@@ -101,11 +101,20 @@ def sample_rss_feed():
 class TestPipelineAddAndRefresh:
     """Test the add podcast and refresh workflow."""
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_add_podcast_and_discover_episodes(self, mock_parse, podcast_service, refresh_service, sample_rss_feed):
+    def test_add_podcast_and_discover_episodes(
+        self, mock_parse, mock_requests_get, podcast_service, refresh_service, sample_rss_feed
+    ):
         """Test adding a podcast and discovering episodes."""
         # Mock feedparser to return sample feed
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+        mock_requests_get.return_value = mock_response
 
         # Step 1: Add podcast
         podcast = podcast_service.add_podcast("https://example.com/feed.xml")
@@ -129,10 +138,19 @@ class TestPipelineAddAndRefresh:
         assert episodes[1].title == "Episode 2"
         assert episodes[0].state == EpisodeState.DISCOVERED
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_refresh_idempotency(self, mock_parse, refresh_service, podcast_service, feed_manager, sample_rss_feed):
+    def test_refresh_idempotency(
+        self, mock_parse, mock_requests_get, refresh_service, podcast_service, feed_manager, sample_rss_feed
+    ):
         """Test that refreshing twice doesn't duplicate episodes."""
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+        mock_requests_get.return_value = mock_response
 
         # Add podcast
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -151,10 +169,19 @@ class TestPipelineAddAndRefresh:
         result2 = refresh_service.refresh()
         assert result2.total_episodes == 0
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_refresh_with_max_episodes_limit(self, mock_parse, refresh_service, podcast_service, sample_rss_feed):
+    def test_refresh_with_max_episodes_limit(
+        self, mock_parse, mock_requests_get, refresh_service, podcast_service, sample_rss_feed
+    ):
         """Test that max_episodes limit is respected."""
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+        mock_requests_get.return_value = mock_response
 
         # Add podcast
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -171,21 +198,36 @@ class TestPipelineAddAndRefresh:
 class TestPipelineDownload:
     """Test the download workflow."""
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_episode_workflow(
-        self, mock_get, mock_parse, podcast_service, feed_manager, path_manager, sample_rss_feed, temp_storage
+        self,
+        mock_download_get,
+        mock_parse,
+        mock_rss_get,
+        podcast_service,
+        feed_manager,
+        path_manager,
+        sample_rss_feed,
+        temp_storage,
     ):
         """Test downloading episode audio files."""
         # Mock feedparser
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
 
         # Mock HTTP download
         mock_response = Mock()
         mock_response.headers = {"content-length": "1024"}
         mock_response.iter_content = Mock(return_value=[b"fake audio data"])
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
+        mock_download_get.return_value = mock_response
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -218,12 +260,14 @@ class TestPipelineDownload:
 class TestPipelineDownsample:
     """Test the downsample workflow."""
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
     @patch("thestill.core.audio_downloader.requests.get")
     def test_downsample_workflow(
         self,
-        mock_get,
+        mock_download_get,
         mock_parse,
+        mock_rss_get,
         podcast_service,
         feed_manager,
         path_manager,
@@ -233,11 +277,18 @@ class TestPipelineDownsample:
         """Test downsampling audio files."""
         # Setup: Add podcast and mock download
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
+
         mock_response = Mock()
         mock_response.headers = {"content-length": "1024"}
         mock_response.iter_content = Mock(return_value=[b"fake audio data"])
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
+        mock_download_get.return_value = mock_response
 
         # Add, refresh, and download
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -273,12 +324,19 @@ class TestPipelineDownsample:
 class TestPipelineErrorRecovery:
     """Test error recovery and resume scenarios."""
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_resume_after_failed_download(
-        self, mock_parse, podcast_service, feed_manager, sample_rss_feed, temp_storage
+        self, mock_parse, mock_rss_get, podcast_service, feed_manager, sample_rss_feed, temp_storage
     ):
         """Test that pipeline can resume after a failed download."""
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -302,10 +360,19 @@ class TestPipelineErrorRecovery:
         assert len(remaining_episodes) == 1
         assert remaining_episodes[0].external_id == episodes[1].external_id
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_missing_file_detected(self, mock_parse, podcast_service, feed_manager, sample_rss_feed, temp_storage):
+    def test_missing_file_detected(
+        self, mock_parse, mock_rss_get, podcast_service, feed_manager, sample_rss_feed, temp_storage
+    ):
         """Test that missing files are detected and episode is re-queued."""
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
@@ -329,12 +396,14 @@ class TestPipelineErrorRecovery:
 class TestFullPipelineIntegration:
     """Test complete end-to-end pipeline integration."""
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
     @patch("thestill.core.audio_downloader.requests.get")
     def test_full_pipeline_states(
         self,
-        mock_get,
+        mock_download_get,
         mock_parse,
+        mock_rss_get,
         podcast_service,
         feed_manager,
         path_manager,
@@ -344,11 +413,18 @@ class TestFullPipelineIntegration:
         """Test that episode progresses through all states correctly."""
         # Setup mocks
         mock_parse.return_value = sample_rss_feed
+
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
+
         mock_response = Mock()
         mock_response.headers = {"content-length": "1024"}
         mock_response.iter_content = Mock(return_value=[b"fake audio data"])
         mock_response.raise_for_status = Mock()
-        mock_get.return_value = mock_response
+        mock_download_get.return_value = mock_response
 
         # Step 1: Add podcast
         podcast = podcast_service.add_podcast("https://example.com/feed.xml")
@@ -408,9 +484,18 @@ class TestFullPipelineIntegration:
         episode = next(ep for ep in podcast.episodes if ep.external_id == episode.external_id)
         assert episode.state == EpisodeState.CLEANED
 
+    @patch("thestill.core.media_source.requests.get")
     @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_multiple_podcasts_isolation(self, mock_parse, podcast_service, feed_manager, sample_rss_feed):
+    def test_multiple_podcasts_isolation(
+        self, mock_parse, mock_rss_get, podcast_service, feed_manager, sample_rss_feed
+    ):
         """Test that multiple podcasts are processed independently."""
+        # Mock requests.get for RSS fetching
+        mock_rss_response = MagicMock()
+        mock_rss_response.text = "<rss>fake content</rss>"
+        mock_rss_response.raise_for_status = MagicMock()
+        mock_rss_get.return_value = mock_rss_response
+
         # Create two different RSS feeds
         feed1 = Mock()
         feed1.feed = {"title": "Podcast 1", "description": "First podcast"}

@@ -125,13 +125,19 @@ class TestRSSMediaSource:
         mock_feed.bozo = False
         mock_feed.entries = [mock_entry]
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            episodes = source.fetch_episodes(
-                url="https://example.com/feed.xml",
-                existing_episodes=[],
-                last_processed=None,
-                max_episodes=None,
-            )
+        # Mock requests.get to return fake RSS content, and feedparser to parse it
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("feedparser.parse", return_value=mock_feed):
+                episodes = source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[],
+                    last_processed=None,
+                    max_episodes=None,
+                )
 
         assert len(episodes) == 1
         assert episodes[0].title == "Episode 1"
@@ -165,13 +171,19 @@ class TestRSSMediaSource:
         mock_feed.bozo = False
         mock_feed.entries = [mock_entry]
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            episodes = source.fetch_episodes(
-                url="https://example.com/feed.xml",
-                existing_episodes=[existing_episode],
-                last_processed=datetime(2025, 1, 5),
-                max_episodes=None,
-            )
+        # Mock requests.get to return fake RSS content
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("feedparser.parse", return_value=mock_feed):
+                episodes = source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[existing_episode],
+                    last_processed=datetime(2025, 1, 5),
+                    max_episodes=None,
+                )
 
         # Should be empty since episode is already processed
         assert len(episodes) == 0
@@ -197,13 +209,19 @@ class TestRSSMediaSource:
         mock_feed.bozo = False
         mock_feed.entries = mock_entries
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            episodes = source.fetch_episodes(
-                url="https://example.com/feed.xml",
-                existing_episodes=[],
-                last_processed=None,
-                max_episodes=3,
-            )
+        # Mock requests.get to return fake RSS content
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("feedparser.parse", return_value=mock_feed):
+                episodes = source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[],
+                    last_processed=None,
+                    max_episodes=3,
+                )
 
         # Should only return 3 most recent episodes
         assert len(episodes) == 3
@@ -215,13 +233,19 @@ class TestRSSMediaSource:
         mock_feed = MagicMock()
         mock_feed.bozo = True  # Malformed feed
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            episodes = source.fetch_episodes(
-                url="https://example.com/feed.xml",
-                existing_episodes=[],
-                last_processed=None,
-                max_episodes=None,
-            )
+        # Mock requests.get to return fake RSS content
+        mock_response = MagicMock()
+        mock_response.text = "<rss>invalid content</rss>"
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("feedparser.parse", return_value=mock_feed):
+                episodes = source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[],
+                    last_processed=None,
+                    max_episodes=None,
+                )
 
         # Should return empty list for invalid feed
         assert len(episodes) == 0

@@ -33,12 +33,17 @@ import re
 import urllib.request
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import feedparser
+import requests
 
 from ..models.podcast import Episode
 from .youtube_downloader import YouTubeDownloader
+
+if TYPE_CHECKING:
+    from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +126,18 @@ class RSSMediaSource(MediaSource):
     - Standard RSS podcast feeds
     - Apple Podcasts URLs (resolved to RSS via iTunes API)
     - Feedparser-based episode extraction
+    - Saving raw RSS content for debugging (optional)
     """
+
+    def __init__(self, path_manager: Optional["PathManager"] = None) -> None:
+        """
+        Initialize RSS media source.
+
+        Args:
+            path_manager: Optional path manager for saving debug RSS files.
+                         If provided, raw RSS content will be saved during fetch_episodes.
+        """
+        self.path_manager = path_manager
 
     def is_valid_url(self, url: str) -> bool:
         """
@@ -185,6 +201,7 @@ class RSSMediaSource(MediaSource):
         existing_episodes: List[Episode],
         last_processed: Optional[datetime] = None,
         max_episodes: Optional[int] = None,
+        podcast_slug: Optional[str] = None,
     ) -> List[Episode]:
         """
         Fetch new episodes from RSS feed.
@@ -194,12 +211,20 @@ class RSSMediaSource(MediaSource):
             existing_episodes: List of episodes already tracked
             last_processed: Timestamp of last processed episode (for incremental fetch)
             max_episodes: Optional limit on number of episodes to return
+            podcast_slug: Optional podcast slug for saving debug RSS file
 
         Returns:
             List of new Episode objects from the feed
         """
         try:
-            parsed_feed = feedparser.parse(url)
+            # Fetch raw RSS content and optionally save for debugging
+            rss_content = self._fetch_rss_content(url, podcast_slug)
+            if rss_content is None:
+                logger.warning(f"Failed to fetch RSS feed: {url}")
+                return []
+
+            # Parse the fetched content
+            parsed_feed = feedparser.parse(rss_content)
             if parsed_feed.bozo:
                 logger.warning(f"Invalid RSS feed during episode fetch: {url}")
                 return []
@@ -265,6 +290,55 @@ class RSSMediaSource(MediaSource):
         # RSS episodes are downloaded via standard HTTP by AudioDownloader
         # This method returns None to signal that behavior
         return None
+
+    def _fetch_rss_content(self, url: str, podcast_slug: Optional[str] = None) -> Optional[str]:
+        """
+        Fetch RSS content from URL and optionally save for debugging.
+
+        Args:
+            url: RSS feed URL
+            podcast_slug: Optional podcast slug for saving debug file
+
+        Returns:
+            RSS content as string, or None if fetch fails
+        """
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            rss_content = response.text
+
+            # Save debug RSS file if path_manager and podcast_slug are provided
+            if self.path_manager and podcast_slug:
+                self._save_debug_rss(podcast_slug, rss_content)
+
+            return rss_content
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching RSS feed {url}: {e}")
+            return None
+
+    def _save_debug_rss(self, podcast_slug: str, content: str) -> None:
+        """
+        Save RSS content to debug file for troubleshooting.
+
+        Overwrites previous version on each refresh.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            content: Raw RSS XML content
+        """
+        try:
+            if not self.path_manager:
+                return
+
+            debug_file = self.path_manager.debug_feed_file(podcast_slug)
+            debug_file.parent.mkdir(parents=True, exist_ok=True)
+            debug_file.write_text(content, encoding="utf-8")
+            logger.debug(f"Saved debug RSS feed: {debug_file}")
+
+        except Exception as e:
+            # Don't fail the refresh if debug save fails
+            logger.warning(f"Failed to save debug RSS feed for {podcast_slug}: {e}")
 
     def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
         """
@@ -520,17 +594,19 @@ class MediaSourceFactory:
     the appropriate MediaSource implementation.
     """
 
-    def __init__(self, storage_path: str):
+    def __init__(self, storage_path: str, path_manager: Optional["PathManager"] = None):
         """
         Initialize media source factory.
 
         Args:
             storage_path: Directory for storing downloaded audio files
+            path_manager: Optional path manager for debug RSS saving
         """
         self.storage_path = storage_path
+        self.path_manager = path_manager
         # Initialize sources
         self._youtube_source = YouTubeMediaSource(storage_path)
-        self._rss_source = RSSMediaSource()
+        self._rss_source = RSSMediaSource(path_manager)
 
     def detect_source(self, url: str) -> MediaSource:
         """
