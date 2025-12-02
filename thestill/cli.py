@@ -1315,11 +1315,17 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
 
 @main.command()
-@click.argument("transcript_path", type=click.Path(exists=True))
+@click.argument("transcript_path", type=click.Path(exists=True), required=False)
 @click.option("--output", "-o", help="Output path (defaults to data/summaries/<filename>_summary.md)")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be summarized")
+@click.option("--max-episodes", "-m", default=1, help="Maximum episodes to summarize")
+@click.option("--force", "-f", is_flag=True, help="Re-summarize even if summary exists")
 @click.pass_context
-def summarize(ctx, transcript_path, output):
-    """Summarize a cleaned transcript with comprehensive analysis.
+def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
+    """Summarize cleaned transcripts with comprehensive analysis.
+
+    If TRANSCRIPT_PATH is provided, summarizes that specific file.
+    Otherwise, finds the next cleaned transcript(s) without a summary.
 
     Produces executive summary, notable quotes, content angles, social snippets,
     resource check, and critical analysis.
@@ -1330,18 +1336,7 @@ def summarize(ctx, transcript_path, output):
 
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
-
-    # Load transcript (expects cleaned markdown transcript)
-    transcript_path_obj = Path(transcript_path)
-    with open(transcript_path_obj, "r", encoding="utf-8") as f:
-        transcript_text = f.read()
-
-    # Determine output path
-    if output:
-        output_path = Path(output)
-    else:
-        # Default to data/summaries/<filename>_summary.md
-        output_path = path_manager.summary_file(f"{transcript_path_obj.stem}_summary.md")
+    feed_manager = ctx.obj.feed_manager
 
     # Create LLM provider
     try:
@@ -1360,17 +1355,104 @@ def summarize(ctx, transcript_path, output):
         click.echo(f"Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    # Summarize
     summarizer = TranscriptSummarizer(llm_provider)
-    click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
 
-    try:
-        summarizer.summarize(transcript_text, output_path)
-        click.echo("Summarization complete!")
-        click.echo(f"Output saved to: {output_path}")
-    except Exception as e:
-        click.echo(f"Error during summarization: {e}", err=True)
-        ctx.exit(1)
+    # If transcript_path provided, summarize that specific file
+    if transcript_path:
+        transcript_path_obj = Path(transcript_path)
+        with open(transcript_path_obj, "r", encoding="utf-8") as f:
+            transcript_text = f.read()
+
+        if output:
+            output_path = Path(output)
+        else:
+            output_path = path_manager.summary_file(f"{transcript_path_obj.stem}_summary.md")
+
+        click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
+        try:
+            summarizer.summarize(transcript_text, output_path)
+            click.echo("Summarization complete!")
+            click.echo(f"Output saved to: {output_path}")
+        except Exception as e:
+            click.echo(f"Error during summarization: {e}", err=True)
+            ctx.exit(1)
+        return
+
+    # Find cleaned transcripts to summarize
+    click.echo("🔍 Looking for cleaned transcripts to summarize...")
+
+    podcasts = feed_manager.list_podcasts()
+    transcripts_to_summarize = []
+
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            if episode.clean_transcript_path:
+                clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
+                if not clean_path.exists():
+                    continue
+
+                # Check if already summarized (unless force)
+                if not force and episode.summary_path:
+                    summary_path = path_manager.summary_file(episode.summary_path)
+                    if summary_path.exists():
+                        continue
+
+                transcripts_to_summarize.append((podcast, episode, clean_path))
+
+    if not transcripts_to_summarize:
+        click.echo("✓ No cleaned transcripts found to summarize")
+        return
+
+    total_transcripts = min(len(transcripts_to_summarize), max_episodes)
+    click.echo(f"📄 Found {len(transcripts_to_summarize)} transcripts. Processing {total_transcripts} episodes")
+
+    if dry_run:
+        for podcast, episode, _ in transcripts_to_summarize[:max_episodes]:
+            click.echo(f"  • {podcast.title}: {episode.title}")
+        click.echo("\n(Run without --dry-run to process)")
+        return
+
+    total_processed = 0
+    start_time = time.time()
+
+    for podcast, episode, clean_path in transcripts_to_summarize[:max_episodes]:
+        click.echo(f"\n📻 {podcast.title}")
+        click.echo(f"🎧 {episode.title}")
+        click.echo("─" * 50)
+
+        try:
+            with open(clean_path, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+
+            # Generate output path
+            base_name = clean_path.stem
+            if base_name.endswith("_cleaned"):
+                base_name = base_name[: -len("_cleaned")]
+            summary_filename = f"{base_name}_summary.md"
+            output_path = path_manager.summaries_dir() / summary_filename
+
+            click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
+            summarizer.summarize(transcript_text, output_path)
+
+            # Update feed manager
+            feed_manager.mark_episode_processed(
+                str(podcast.rss_url),
+                episode.external_id,
+                summary_path=summary_filename,
+            )
+
+            click.echo(f"✓ Saved: {output_path}")
+            total_processed += 1
+
+        except Exception as e:
+            click.echo(f"❌ Error summarizing: {e}", err=True)
+            import traceback
+
+            traceback.print_exc()
+
+    total_time = time.time() - start_time
+    click.echo("\n🎉 Summarization complete!")
+    click.echo(f"✓ {total_processed} episode(s) summarized in {total_time:.1f} seconds")
 
 
 @main.command()
