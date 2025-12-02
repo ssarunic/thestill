@@ -13,13 +13,12 @@
 # limitations under the License.
 
 """
-Enhanced post-processor for podcast transcripts using LLM.
-Produces cleaned Markdown transcripts with notable quotes and social snippets.
+Transcript summarizer for podcast transcripts using LLM.
+Produces comprehensive analysis with executive summary, quotes, content angles, and social snippets.
 """
 
-import json
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional
 
 from .llm_provider import LLMProvider
 
@@ -176,82 +175,50 @@ MODEL_CONFIGS = {
 }
 
 
-class PostProcessorConfig:
-    """Configuration for post-processing options"""
+class TranscriptSummarizer:
+    """LLM-based summarizer for podcast transcripts"""
 
-    def __init__(
-        self,
-        add_timestamps: bool = True,
-        make_audio_links: bool = False,
-        audio_base_url: str = "",
-        speaker_map: Optional[Dict[str, str]] = None,
-        filler_words: Optional[List[str]] = None,
-        table_layout_for_snappy_sections: bool = True,
-    ):
-        self.add_timestamps = add_timestamps
-        self.make_audio_links = make_audio_links
-        self.audio_base_url = audio_base_url
-        self.speaker_map = speaker_map or {}
-        self.filler_words = filler_words or [
-            "ah",
-            "uh",
-            "um",
-            "erm",
-            "mmm",
-            "like",
-            "you know",
-            "sort of",
-            "kind of",
-            "I mean",
-            "right",
-            "okay",
-            "yeah",
-        ]
-        self.table_layout_for_snappy_sections = table_layout_for_snappy_sections
+    SYSTEM_PROMPT = """You are a sharp, no-nonsense research assistant. You are not a corporate consultant; you are a smart friend giving me the "too long; didn't read" version.
 
+**Style Guide:**
+* **Tone:** Conversational, friendly, and direct. Use British English.
+* **Sentence Structure:** Simple and short. Avoid academic jargon (e.g., don't use words like "multifaceted," "underscores," or "necessitating").
+* **Brevity:** Get to the point immediately.
+* **Formatting:** NO PREAMBLE. Do not say "Here is the analysis." Start directly with the first header.
+* **Citations:** Every claim must have a timestamp [MM:SS] so I can find it.
 
-class EnhancedPostProcessor:
-    """Enhanced LLM-based post-processor for podcast transcripts"""
+## 1. The Gist
+* **What is this?** A 2-sentence summary of the episode.
+* **The Big 3-5 Takeaways:** Short bullet points on what actually matters. (Cite [MM:SS])
+* **The Drama:** Were there arguments? Friction? Or just awkward corporate PR? Be specific. (Cite [MM:SS])
 
-    SYSTEM_PROMPT = """You are a transcript post-processor. Write in British English. Use simple, conversational sentences. Do not use the em dash character.
+## 2. Best Quotes
+* Pick 5-7 quotes that actually land.
+* **Format:** "Quote text..." - Speaker [MM:SS]
 
-Goal
-Given a podcast transcript in JSON, produce a clean, readable Markdown article of the episode with intro and outro separated, obvious transcription errors fixed, noise words removed, section-level timestamps if requested, highlight notable quotes, and generate ready-to-use social media snippets.
+## 3. Blog Ideas
+* Give me 3 angles I could write about.
+* **Title:** Catchy, not academic.
+* **The Angle:** Why should I care? (1 sentence).
+* **Main Points:** 3 rapid-fire bullets.
+* **Source:** Where in the audio did this come from? [MM:SS]
 
-Input format
-You will receive one JSON object. It may have either text as a single string or segments as a list of timecoded chunks.
+## 4. Social Snippets
+* 3 posts for LinkedIn/X.
+* Make them sound human, not like a bot.
 
-Processing rules
-1. Normalise speakers using SPEAKER_MAP and bold their names.
-2. Remove FILLER_WORDS when they don't carry meaning.
-3. Add punctuation and correct obvious grammar slips.
-4. Detect and label [INTRO], [OUTRO].
-5. Add section headings and optional timestamps.
-6. Keep the conversational tone.
-7. Use British English spelling.
-8. For notable quotes and snippets, focus on the guest but include hosts if they say something impactful.
+## 5. Resource List
+* Bullet list of books, tools, or people mentioned. Include timestamps [MM:SS].
 
-Outputs
-Return three blocks:
-1. # Cleaned transcript (Markdown)
-   • Intro/outro clearly separated
-   • Headings with timestamps if enabled
-   • Paragraph format for long dialogue
-2. # Notable quotes
-   • 5–8 of the best quotes, in blockquote format (>) with attribution
-3. # Suggested social snippets
-   • 5–7 short posts
-   • Half styled for Twitter/X (≤280 characters)
-   • Half styled for LinkedIn (1–3 sentences, more context allowed)
-   • Use relevant hashtags
-   • Add audio link if AUDIO_BASE_URL is provided"""
+## 6. The "BS" Test
+* Did anything sound weak, circular, or overly hyped? Call it out."""
 
     def __init__(self, provider: LLMProvider, max_tokens: Optional[int] = None):
         """
-        Initialize enhanced post-processor with an LLM provider.
+        Initialize transcript summarizer with an LLM provider.
 
         Args:
-            provider: LLMProvider instance (OpenAI or Ollama)
+            provider: LLMProvider instance (OpenAI, Anthropic, Gemini, or Ollama)
             max_tokens: Maximum tokens per chunk (optional, auto-calculated if not provided)
         """
         self.provider = provider
@@ -260,7 +227,7 @@ Return three blocks:
         # Get model limits and calculate optimal chunk size
         self.model_limits = MODEL_CONFIGS.get(model)
         if self.model_limits is None:
-            print(f"⚠️  Warning: Model '{model}' not in config table. Using conservative defaults.")
+            print(f"Warning: Model '{model}' not in config table. Using conservative defaults.")
             self.model_limits = ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000)
 
         # Calculate max tokens per chunk if not provided
@@ -274,124 +241,53 @@ Return three blocks:
         else:
             self.max_tokens = max_tokens
 
-        # No artificial delays needed - LLM providers have built-in rate limit handling
-        # with automatic retry logic (see AnthropicProvider, OpenAIProvider, etc.)
-        self.chunk_delay = 0
-
-        print(f"📊 Model: {model}")
+        print(f"Model: {model}")
         print(f"   TPM Limit: {self.model_limits.tpm:,} | Max chunk size: {self.max_tokens:,} tokens")
-        print("   No delay between chunks (rate limits handled automatically)")
-
-    def _build_options_string(self, config: PostProcessorConfig) -> str:
-        """Build the OPTIONS section for the prompt"""
-        speaker_map_str = json.dumps(config.speaker_map, indent=2)
-        filler_words_str = json.dumps(config.filler_words)
-
-        options = f"""OPTIONS TO SET BEFORE THE JSON
-
-ADD_TIMESTAMPS={str(config.add_timestamps).lower()}
-MAKE_AUDIO_LINKS={str(config.make_audio_links).lower()}
-AUDIO_BASE_URL={config.audio_base_url}
-TABLE_LAYOUT_FOR_SNAPPY_SECTIONS={str(config.table_layout_for_snappy_sections).lower()}
-SPEAKER_MAP = {speaker_map_str}
-FILLER_WORDS = {filler_words_str}"""
-
-        return options
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough token estimation: ~4 chars per token"""
         return len(text) // 4
 
-    def _chunk_transcript(self, transcript_data: Dict, config: PostProcessorConfig) -> List[Dict]:
+    def _chunk_transcript(self, transcript_text: str) -> List[str]:
         """Split large transcripts into processable chunks"""
-        # Check if we have segments (timestamped) or plain text
-        if "segments" in transcript_data:
-            return self._chunk_by_segments(transcript_data, config)
-        return self._chunk_by_text(transcript_data, config)
-
-    def _chunk_by_segments(self, transcript_data: Dict, config: PostProcessorConfig) -> List[Dict]:
-        """Chunk transcript by segments for timestamped data"""
-        segments = transcript_data.get("segments", [])
-        if not segments:
-            return [transcript_data]
-
-        chunks = []
-        current_chunk = {"text": transcript_data.get("text", ""), "segments": []}
-        current_tokens = 0
-        options_str = self._build_options_string(config)
-        overhead_tokens = self._estimate_tokens(options_str + self.SYSTEM_PROMPT)
-
-        for segment in segments:
-            segment_json = json.dumps(segment)
-            segment_tokens = self._estimate_tokens(segment_json)
-
-            if current_tokens + segment_tokens + overhead_tokens > self.max_tokens and current_chunk["segments"]:
-                # Save current chunk and start new one
-                chunks.append(current_chunk.copy())
-                current_chunk = {"text": "", "segments": []}
-                current_tokens = 0
-
-            current_chunk["segments"].append(segment)
-            current_tokens += segment_tokens
-
-        # Add final chunk
-        if current_chunk["segments"]:
-            chunks.append(current_chunk)
-
-        if len(chunks) > 1:
-            return chunks
-        return [transcript_data]
-
-    def _chunk_by_text(self, transcript_data: Dict, config: PostProcessorConfig) -> List[Dict]:
-        """Chunk transcript by text for non-timestamped data"""
-        text = transcript_data.get("text", "")
-        options_str = self._build_options_string(config)
-        overhead_tokens = self._estimate_tokens(options_str + self.SYSTEM_PROMPT)
-
-        # Calculate available tokens for text
+        overhead_tokens = self._estimate_tokens(self.SYSTEM_PROMPT)
         available_tokens = self.max_tokens - overhead_tokens
         max_chars = available_tokens * 4  # Rough estimation
 
-        if len(text) <= max_chars:
-            return [transcript_data]
+        if len(transcript_text) <= max_chars:
+            return [transcript_text]
 
         # Split by paragraphs/sentences
         chunks = []
-        sentences = text.split(". ")
+        sentences = transcript_text.split(". ")
         current_chunk_text = ""
 
         for sentence in sentences:
             if len(current_chunk_text) + len(sentence) > max_chars and current_chunk_text:
-                chunks.append({"text": current_chunk_text.strip()})
+                chunks.append(current_chunk_text.strip())
                 current_chunk_text = sentence + ". "
             else:
                 current_chunk_text += sentence + ". "
 
         if current_chunk_text:
-            chunks.append({"text": current_chunk_text.strip()})
+            chunks.append(current_chunk_text.strip())
 
         return chunks
 
-    def _process_single_chunk(
-        self, chunk_data: Dict, config: PostProcessorConfig, chunk_num: int, total_chunks: int
-    ) -> str:
+    def _process_single_chunk(self, chunk_text: str, chunk_num: int, total_chunks: int) -> str:
         """Process a single transcript chunk"""
-        options_str = self._build_options_string(config)
-        transcript_json = json.dumps(chunk_data, indent=2)
-
-        user_message = f"""{options_str}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-JSON TRANSCRIPT STARTS BELOW THIS LINE"""
+        user_message = "TRANSCRIPT:\n\n"
 
         if total_chunks > 1:
-            user_message += f"\n\n[CHUNK {chunk_num}/{total_chunks}]\n"
+            user_message += f"[CHUNK {chunk_num}/{total_chunks}]\n\n"
 
-        user_message += f"\n{transcript_json}"
+        user_message += chunk_text
 
         try:
-            messages = [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": user_message}]
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ]
 
             # Use temperature if model supports it
             temperature = 0.3 if self.model_limits.supports_temperature else None
@@ -403,64 +299,26 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
             print(f"Error processing chunk {chunk_num}/{total_chunks}: {e}")
             raise
 
-    def _combine_chunk_results(self, chunk_outputs: List[str]) -> str:
-        """Combine multiple chunk outputs into a single coherent result"""
-        if len(chunk_outputs) == 1:
-            return chunk_outputs[0]
-
-        # Parse each chunk
-        all_transcripts = []
-        all_quotes = []
-        all_snippets = []
-
-        for output in chunk_outputs:
-            parsed = self._parse_output(output)
-            if parsed["cleaned_transcript"]:
-                all_transcripts.append(parsed["cleaned_transcript"])
-            if parsed["notable_quotes"]:
-                all_quotes.append(parsed["notable_quotes"])
-            if parsed["social_snippets"]:
-                all_snippets.append(parsed["social_snippets"])
-
-        # Combine into single markdown document
-        combined = "# Cleaned transcript\n\n"
-        combined += "\n\n".join(all_transcripts)
-        combined += "\n\n# Notable quotes\n\n"
-        combined += "\n\n".join(all_quotes)
-        combined += "\n\n# Suggested social snippets\n\n"
-        combined += "\n\n".join(all_snippets)
-
-        return combined
-
-    def process_transcript(
-        self, transcript_data: Dict, config: Optional[PostProcessorConfig] = None, output_path: Optional[str] = None
-    ) -> Dict:
+    def summarize(self, transcript_text: str, output_path: Optional[Path] = None) -> str:
         """
-        Process a transcript with enhanced LLM post-processing.
-        Automatically chunks large transcripts to avoid rate limits.
+        Summarize a transcript with comprehensive analysis.
 
         Args:
-            transcript_data: The raw transcript JSON from transcriber
-            config: Post-processing configuration options
-            output_path: Optional path to save the processed output
+            transcript_text: The transcript text (from cleaned transcript markdown)
+            output_path: Optional path to save the summary markdown
 
         Returns:
-            Dict with keys: cleaned_transcript, notable_quotes, social_snippets
+            The summary as markdown text
         """
-        if config is None:
-            config = PostProcessorConfig()
+        estimated_tokens = self._estimate_tokens(transcript_text)
 
-        # Estimate tokens and chunk if necessary
-        transcript_json = json.dumps(transcript_data)
-        estimated_tokens = self._estimate_tokens(transcript_json)
-
-        print(f"Processing transcript with {self.provider.get_model_name()}...")
+        print(f"Summarizing transcript with {self.provider.get_model_name()}...")
         print(f"Estimated tokens: ~{estimated_tokens:,}")
 
-        chunks = self._chunk_transcript(transcript_data, config)
+        chunks = self._chunk_transcript(transcript_text)
 
         if len(chunks) > 1:
-            print(f"⚠️  Large transcript detected. Splitting into {len(chunks)} chunks...")
+            print(f"Large transcript detected. Splitting into {len(chunks)} chunks...")
 
         try:
             chunk_outputs = []
@@ -469,86 +327,25 @@ JSON TRANSCRIPT STARTS BELOW THIS LINE"""
                 if len(chunks) > 1:
                     print(f"Processing chunk {i}/{len(chunks)}...")
 
-                output_text = self._process_single_chunk(chunk, config, i, len(chunks))
+                output_text = self._process_single_chunk(chunk, i, len(chunks))
                 chunk_outputs.append(output_text)
 
-                # Note: No delay needed - rate limits handled automatically by LLM provider
-
             # Combine results if multiple chunks
-            final_output = self._combine_chunk_results(chunk_outputs)
-
-            # Parse the three sections from the output
-            result = self._parse_output(final_output)
+            if len(chunk_outputs) == 1:
+                final_output = chunk_outputs[0]
+            else:
+                final_output = "\n\n---\n\n".join(chunk_outputs)
 
             # Save if output path provided
             if output_path:
-                self._save_processed_output(result, output_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(final_output)
+                print(f"Summary saved to {output_path}")
 
-            print("Post-processing completed successfully")
-            return result
+            print("Summarization completed successfully")
+            return final_output
 
         except Exception as e:
-            print(f"Error during post-processing: {e}")
+            print(f"Error during summarization: {e}")
             raise
-
-    def _parse_output(self, output_text: str) -> Dict:
-        """Parse the LLM output into structured sections"""
-        sections = {"cleaned_transcript": "", "notable_quotes": "", "social_snippets": "", "full_output": output_text}
-
-        # Simple section splitting based on markdown headers
-        lines = output_text.split("\n")
-        current_section = None
-        current_content = []
-
-        for line in lines:
-            lower_line = line.lower().strip()
-
-            if lower_line.startswith("# cleaned transcript"):
-                if current_section:
-                    sections[current_section] = "\n".join(current_content).strip()
-                current_section = "cleaned_transcript"
-                current_content = []
-            elif lower_line.startswith("# notable quotes"):
-                if current_section:
-                    sections[current_section] = "\n".join(current_content).strip()
-                current_section = "notable_quotes"
-                current_content = []
-            elif lower_line.startswith("# suggested social snippets") or lower_line.startswith("# social snippets"):
-                if current_section:
-                    sections[current_section] = "\n".join(current_content).strip()
-                current_section = "social_snippets"
-                current_content = []
-            else:
-                current_content.append(line)
-
-        # Don't forget the last section
-        if current_section:
-            sections[current_section] = "\n".join(current_content).strip()
-
-        return sections
-
-    def _save_processed_output(self, result: Dict, output_path: str):
-        """Save the processed output to files"""
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Save full output as markdown
-        full_md_path = output_path.with_suffix(".md")
-        with open(full_md_path, "w", encoding="utf-8") as f:
-            f.write(result["full_output"])
-
-        # Save structured JSON
-        json_path = output_path.with_suffix(".json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "cleaned_transcript": result["cleaned_transcript"],
-                    "notable_quotes": result["notable_quotes"],
-                    "social_snippets": result["social_snippets"],
-                },
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-
-        print(f"Processed output saved to {full_md_path} and {json_path}")

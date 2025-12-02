@@ -30,6 +30,7 @@ class EpisodeState(str, Enum):
     - DOWNSAMPLED: Audio converted to 16kHz WAV (has downsampled_audio_path)
     - TRANSCRIBED: Transcript generated (has raw_transcript_path)
     - CLEANED: Final cleaned transcript created (has clean_transcript_path)
+    - SUMMARIZED: Summary generated (has summary_path)
     """
 
     DISCOVERED = "discovered"
@@ -37,6 +38,7 @@ class EpisodeState(str, Enum):
     DOWNSAMPLED = "downsampled"
     TRANSCRIBED = "transcribed"
     CLEANED = "cleaned"
+    SUMMARIZED = "summarized"
 
 
 class Episode(BaseModel):
@@ -77,6 +79,8 @@ class Episode(BaseModel):
         Returns:
             EpisodeState: Current processing state
         """
+        if self.summary_path:
+            return EpisodeState.SUMMARIZED
         if self.clean_transcript_path:
             return EpisodeState.CLEANED
         if self.raw_transcript_path:

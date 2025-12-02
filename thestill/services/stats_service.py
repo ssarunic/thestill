@@ -40,11 +40,12 @@ class SystemStats(BaseModel):
     episodes_downloaded: int  # Downloaded but not downsampled
     episodes_downsampled: int  # Downsampled but not transcribed
     episodes_transcribed: int  # Transcribed but not cleaned
-    episodes_cleaned: int  # Fully processed
+    episodes_cleaned: int  # Cleaned but not summarized
+    episodes_summarized: int  # Fully processed (summary generated)
 
     # Legacy fields (for backward compatibility)
-    episodes_processed: int  # Same as episodes_cleaned
-    episodes_unprocessed: int  # Sum of all non-cleaned states
+    episodes_processed: int  # Same as episodes_summarized
+    episodes_unprocessed: int  # Sum of all non-summarized states
 
     transcripts_available: int
     audio_files_count: int
@@ -103,6 +104,7 @@ class StatsService:
         episodes_downsampled = 0
         episodes_transcribed = 0
         episodes_cleaned = 0
+        episodes_summarized = 0
         transcripts_available = 0
 
         for podcast in podcasts:
@@ -119,16 +121,18 @@ class StatsService:
                     episodes_transcribed += 1
                 elif episode.state == EpisodeState.CLEANED:
                     episodes_cleaned += 1
+                elif episode.state == EpisodeState.SUMMARIZED:
+                    episodes_summarized += 1
 
-                # Check if cleaned transcript file actually exists using PathManager
+                # Check if summary file actually exists using PathManager
                 if episode.summary_path:
                     md_path = self.path_manager.summary_file(episode.summary_path)
-                    if md_path.with_suffix(".md").exists():
+                    if md_path.exists():
                         transcripts_available += 1
 
         # Legacy fields for backward compatibility
-        episodes_processed = episodes_cleaned
-        episodes_unprocessed = episodes_total - episodes_cleaned
+        episodes_processed = episodes_summarized
+        episodes_unprocessed = episodes_total - episodes_summarized
 
         # Count audio files using PathManager
         audio_path = self.path_manager.original_audio_dir()
@@ -144,6 +148,7 @@ class StatsService:
             episodes_downsampled=episodes_downsampled,
             episodes_transcribed=episodes_transcribed,
             episodes_cleaned=episodes_cleaned,
+            episodes_summarized=episodes_summarized,
             episodes_processed=episodes_processed,
             episodes_unprocessed=episodes_unprocessed,
             transcripts_available=transcripts_available,

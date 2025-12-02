@@ -213,8 +213,31 @@ class TranscriptCleaner:
             episode_title=episode_title,
         )
 
+        # Get max output tokens for this model
+        max_output_tokens = get_max_output_tokens(self.provider.get_model_name())
+
+        # Calculate effective chunk size based on OUTPUT token limit
+        # For transcript cleaning, output ≈ input size, so we need to ensure
+        # each chunk's output fits within the model's output token limit.
+        #
+        # Key insight: Even if a model supports 65K output tokens, LLMs tend to
+        # produce better quality and more reliable outputs with smaller chunks.
+        # We cap at ~16K output tokens (~64K chars) for reliability.
+        #
+        # Use ~4 chars per token estimate, with 80% safety margin for output.
+        practical_output_limit = min(max_output_tokens, 16384)  # Cap at 16K tokens
+        max_output_chars = int(practical_output_limit * 4 * 0.8)
+        effective_chunk_size = min(self.chunk_size, max_output_chars)
+
+        logger.debug(
+            f"Chunk sizing: input={len(formatted_transcript)} chars, "
+            f"max_output_tokens={max_output_tokens}, "
+            f"effective_chunk_size={effective_chunk_size} chars"
+        )
+
         # Handle chunking for large transcripts
-        if len(formatted_transcript) > self.chunk_size:
+        # Chunk if input exceeds effective chunk size (based on output limit)
+        if len(formatted_transcript) > effective_chunk_size:
             return self._process_chunks(
                 formatted_transcript=formatted_transcript,
                 system_prompt=system_prompt,
@@ -222,6 +245,7 @@ class TranscriptCleaner:
                 episode_facts=episode_facts,
                 episode_title=episode_title,
                 on_prompt_ready=on_prompt_ready,
+                effective_chunk_size=effective_chunk_size,
             )
 
         # Get max tokens for this model
@@ -272,10 +296,17 @@ class TranscriptCleaner:
         episode_facts: EpisodeFacts,
         episode_title: str,
         on_prompt_ready: Optional[PromptSaveCallback] = None,
+        effective_chunk_size: Optional[int] = None,
     ) -> str:
         """Process large transcripts in chunks."""
-        chunks = self._split_into_chunks(formatted_transcript)
+        chunk_size = effective_chunk_size or self.chunk_size
+        chunks = self._split_into_chunks(formatted_transcript, chunk_size)
         cleaned_chunks = []
+
+        logger.info(
+            f"Splitting transcript into {len(chunks)} chunks "
+            f"(chunk_size={chunk_size} chars, total={len(formatted_transcript)} chars)"
+        )
 
         # Get max tokens for this model
         max_tokens = get_max_output_tokens(self.provider.get_model_name())
@@ -331,8 +362,9 @@ class TranscriptCleaner:
         # Combine chunks
         return "\n\n".join(cleaned_chunks)
 
-    def _split_into_chunks(self, text: str) -> List[str]:
+    def _split_into_chunks(self, text: str, chunk_size: Optional[int] = None) -> List[str]:
         """Split transcript into chunks at paragraph boundaries."""
+        target_size = chunk_size or self.chunk_size
         paragraphs = text.split("\n\n")
         chunks = []
         current_chunk = []
@@ -341,7 +373,7 @@ class TranscriptCleaner:
         for para in paragraphs:
             para_size = len(para) + 2  # +2 for \n\n
 
-            if current_size + para_size > self.chunk_size and current_chunk:
+            if current_size + para_size > target_size and current_chunk:
                 chunks.append("\n\n".join(current_chunk))
                 current_chunk = [para]
                 current_size = para_size

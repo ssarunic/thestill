@@ -29,7 +29,7 @@ def setup_logger(
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S")
 
     if console_output:
         # Use stderr for all logging to keep stdout clean for MCP protocol

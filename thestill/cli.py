@@ -28,7 +28,7 @@ from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_e
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider
-from .core.post_processor import EnhancedPostProcessor, PostProcessorConfig
+from .core.post_processor import TranscriptSummarizer
 from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
@@ -988,10 +988,11 @@ def status(ctx):
     click.echo(f"    ↓ Downloaded:                   {stats.episodes_downloaded}")
     click.echo(f"    ♪ Downsampled:                  {stats.episodes_downsampled}")
     click.echo(f"    ✎ Transcribed:                  {stats.episodes_transcribed}")
-    click.echo(f"    ✓ Cleaned (fully processed):    {stats.episodes_cleaned}")
+    click.echo(f"    ✓ Cleaned:                      {stats.episodes_cleaned}")
+    click.echo(f"    ★ Summarized (fully processed): {stats.episodes_summarized}")
     click.echo("")
     click.echo(
-        f"  Summary: {stats.episodes_cleaned}/{stats.episodes_total} fully processed ({stats.episodes_unprocessed} in progress)"
+        f"  Summary: {stats.episodes_summarized}/{stats.episodes_total} fully processed ({stats.episodes_unprocessed} in progress)"
     )
 
 
@@ -1315,44 +1316,32 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
 @main.command()
 @click.argument("transcript_path", type=click.Path(exists=True))
-@click.option("--add-timestamps/--no-timestamps", default=True, help="Add timestamps to sections")
-@click.option("--audio-url", default="", help="Base URL for audio deep links")
-@click.option("--speaker-map", default="{}", help="JSON dict of speaker name corrections")
-@click.option("--table-layout/--no-table-layout", default=True, help="Use table layout for ads")
-@click.option("--output", "-o", help="Output path (defaults to transcript_path with _processed suffix)")
+@click.option("--output", "-o", help="Output path (defaults to data/summaries/<filename>_summary.md)")
 @click.pass_context
-def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, table_layout, output):
-    """Post-process a transcript with enhanced LLM processing"""
+def summarize(ctx, transcript_path, output):
+    """Summarize a cleaned transcript with comprehensive analysis.
+
+    Produces executive summary, notable quotes, content angles, social snippets,
+    resource check, and critical analysis.
+    """
     if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        click.echo("Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
     config = ctx.obj.config
+    path_manager = ctx.obj.path_manager
 
-    # Load transcript and parse speaker map
-    import json
-
-    with open(transcript_path, "r", encoding="utf-8") as f:
-        transcript_data = json.load(f)
-
-    try:
-        speaker_map_dict = json.loads(speaker_map)
-    except (json.JSONDecodeError, ValueError):
-        speaker_map_dict = {}
-
-    # Create config
-    post_config = PostProcessorConfig(
-        add_timestamps=add_timestamps,
-        make_audio_links=bool(audio_url),
-        audio_base_url=audio_url,
-        speaker_map=speaker_map_dict,
-        table_layout_for_snappy_sections=table_layout,
-    )
+    # Load transcript (expects cleaned markdown transcript)
+    transcript_path_obj = Path(transcript_path)
+    with open(transcript_path_obj, "r", encoding="utf-8") as f:
+        transcript_text = f.read()
 
     # Determine output path
-    if not output:
-        transcript_path_obj = Path(transcript_path)
-        output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_processed")
+    if output:
+        output_path = Path(output)
+    else:
+        # Default to data/summaries/<filename>_summary.md
+        output_path = path_manager.summary_file(f"{transcript_path_obj.stem}_summary.md")
 
     # Create LLM provider
     try:
@@ -1368,19 +1357,19 @@ def postprocess(ctx, transcript_path, add_timestamps, audio_url, speaker_map, ta
             anthropic_model=config.anthropic_model,
         )
     except Exception as e:
-        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
+        click.echo(f"Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    # Process
-    post_processor = EnhancedPostProcessor(llm_provider)
-    click.echo(f"🔄 Post-processing transcript with {llm_provider.get_model_name()}...")
+    # Summarize
+    summarizer = TranscriptSummarizer(llm_provider)
+    click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
 
     try:
-        _ = post_processor.process_transcript(transcript_data, post_config, output)
-        click.echo("✅ Post-processing complete!")
-        click.echo(f"📄 Output saved to: {output}.md and {output}.json")
+        summarizer.summarize(transcript_text, output_path)
+        click.echo("Summarization complete!")
+        click.echo(f"Output saved to: {output_path}")
     except Exception as e:
-        click.echo(f"❌ Error during post-processing: {e}", err=True)
+        click.echo(f"Error during summarization: {e}", err=True)
         ctx.exit(1)
 
 
