@@ -57,16 +57,34 @@ thestill transcribe --max-episodes 3       # Limit transcriptions
 thestill transcribe --dry-run              # Preview what would be transcribed
 
 # Clean existing transcripts with LLM (step 5)
-thestill clean-transcript [--dry-run] [--max-episodes 5]
+thestill clean-transcript                  # Clean all transcripts needing cleaning
+thestill clean-transcript --dry-run        # Preview what would be cleaned
+thestill clean-transcript --max-episodes 5 # Limit episodes to clean
+thestill clean-transcript --force          # Re-clean even if clean transcript exists
+thestill clean-transcript --stream         # Stream LLM output in real-time
 
-# List tracked podcasts
-thestill list
+# Summarize cleaned transcripts (step 6)
+thestill summarize                         # Summarize next cleaned transcript(s)
+thestill summarize path/to/transcript.md   # Summarize specific file
+thestill summarize --dry-run               # Preview what would be summarized
+thestill summarize --max-episodes 3        # Limit summaries
+thestill summarize --force                 # Re-summarize even if summary exists
 
-# Check system status
-thestill status
+# Manage podcast/episode facts for transcript cleaning
+thestill facts list                        # List all facts files
+thestill facts show <podcast-id>           # Show facts for a podcast
+thestill facts edit <podcast-id>           # Open facts file in $EDITOR
+thestill facts extract <episode-id>        # Extract facts from transcript
 
-# Clean up old files
-thestill cleanup
+# Evaluate transcript quality
+thestill evaluate-transcript               # Evaluate raw transcript quality
+thestill evaluate-postprocess              # Evaluate post-processed transcript
+
+# Manage podcasts
+thestill list                              # List tracked podcasts
+thestill remove <podcast-id>               # Remove podcast by URL or index
+thestill status                            # Show system status and statistics
+thestill cleanup                           # Clean up old audio files
 ```
 
 ### Testing and Code Quality
@@ -167,26 +185,75 @@ mypy thestill/
    - Configurable via `TRANSCRIPTION_PROVIDER` (whisper or google)
    - Automatic fallback to standard Whisper if diarization fails (WhisperX only)
 
-7. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`)
-   - **NEW**: Three-phase LLM cleaning pipeline focused on accuracy:
-     - Phase 1: Analyze and identify corrections (spelling, grammar, filler words, ads)
-     - Phase 2: Identify speakers from context and self-introductions
-     - Phase 3: Generate final cleaned Markdown transcript
-   - Uses episode/podcast metadata for better context
-   - Saves corrections list for debugging
-   - British English output
+7. **Facts System** (`thestill/core/facts_extractor.py`, `thestill/core/facts_manager.py`)
+   - **Two-level facts architecture** for transcript cleaning:
+     - **PodcastFacts**: Recurring knowledge (hosts, sponsors, keywords) - stable, user-editable
+     - **EpisodeFacts**: Episode-specific knowledge (guests, speaker mapping, topics)
+   - **FactsExtractor**: Pass 1 of cleaning - analyzes transcript to extract speaker mapping and facts
+   - **FactsManager**: Loads/saves facts as human-editable Markdown files
+   - Facts stored in `data/podcast_facts/` and `data/episode_facts/`
 
-8. **Models** (`thestill/models/podcast.py`)
-   - Pydantic models for type safety
-   - Episode, Podcast, Quote, ProcessedContent, and CleanedTranscript schemas
+8. **Transcript Cleaner** (`thestill/core/transcript_cleaner.py`)
+   - **Pass 2 of two-pass cleaning pipeline**:
+     - Stage 2a: Deterministic speaker name substitution (no LLM)
+     - Stage 2b: LLM cleans spelling, grammar, detects ads, formats output
+   - Uses pre-formatted markdown (from TranscriptFormatter) to reduce token usage
+   - Supports streaming output for real-time feedback
 
-9. **Path Manager** (`thestill/utils/path_manager.py`)
-   - **Centralized path management** for all file artifacts
-   - Single source of truth for directory and file paths
-   - Prevents scattered path logic across codebase
-   - Methods for all artifact types (audio, transcripts, summaries, etc.)
-   - Integrated into Config and FeedManager
-   - **Reduces errors** when directory structures change
+9. **Post Processor / Summarizer** (`thestill/core/post_processor.py`)
+   - Produces comprehensive analysis of cleaned transcripts:
+     - Executive summary
+     - Notable quotes
+     - Content angles
+     - Social snippets
+     - Resource check
+     - Critical analysis
+   - Model-aware rate limits and context window management
+   - Supports multiple LLM providers (OpenAI, Anthropic, Google, Ollama)
+
+10. **Evaluator** (`thestill/core/evaluator.py`)
+    - Quality evaluation for raw and post-processed transcripts
+    - Scoring and feedback for transcript accuracy
+
+11. **Transcript Compactor** (`thestill/core/transcript_compactor.py`)
+    - Compacts transcripts for efficient processing
+    - Reduces token usage while preserving content
+
+12. **Transcript Formatter** (`thestill/core/transcript_formatter.py`)
+    - Converts raw JSON transcripts to markdown format
+    - Prepares transcripts for LLM processing
+
+13. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`) (Legacy)
+    - Original three-phase LLM cleaning pipeline
+    - Being replaced by the two-pass facts-based approach
+
+14. **Models** (`thestill/models/podcast.py`, `thestill/models/facts.py`)
+    - Pydantic models for type safety
+    - Episode, Podcast, Quote, ProcessedContent, CleanedTranscript, PodcastFacts, EpisodeFacts schemas
+
+15. **Path Manager** (`thestill/utils/path_manager.py`)
+    - **Centralized path management** for all file artifacts
+    - Single source of truth for directory and file paths
+    - Prevents scattered path logic across codebase
+    - Methods for all artifact types (audio, transcripts, summaries, etc.)
+    - Integrated into Config and FeedManager
+    - **Reduces errors** when directory structures change
+
+### MCP Server (`thestill/mcp/`)
+
+The project includes an MCP (Model Context Protocol) server for integration with AI assistants:
+
+- **server.py**: MCP server setup and configuration
+- **tools.py**: Action handlers for podcast management operations
+  - `add_podcast`: Add new podcast feeds
+  - `refresh_feeds`: Refresh all/specific podcast feeds
+  - `download_audio`: Download audio for episodes
+  - `downsample_audio`: Downsample audio files
+  - `transcribe_audio`: Transcribe episodes
+  - `list_podcasts`: List tracked podcasts
+  - `get_podcast_status`: Get status information
+- **resources.py**: MCP resources for exposing data
+- **utils.py**: MCP utility functions
 
 ### Identifier System: Internal UUIDs vs External IDs
 
@@ -257,7 +324,7 @@ mypy thestill/
 
 ### Data Flow
 
-**Five-Step Atomic Workflow (Refresh → Download → Downsample → Transcribe → Clean):**
+**Six-Step Atomic Workflow (Refresh → Download → Downsample → Transcribe → Clean → Summarize):**
 
 Each step is an atomic operation that can be run independently and scaled horizontally:
 
@@ -301,22 +368,40 @@ Each step is an atomic operation that can be run independently and scaled horizo
    - **No side effects**: Does not download or clean
 
 5. **Cleaning** (`thestill clean-transcript`):
-   - **Atomic operation**: Only cleans transcripts
-   - Loads existing transcript JSON files
-   - Phase 1: LLM analyzes for corrections (spelling, grammar, fillers, ads)
-   - Phase 2: LLM identifies speakers using episode/podcast context
-   - Phase 3: LLM generates clean Markdown transcript
+   - **Atomic operation**: Only cleans transcripts using two-pass facts-based approach
+   - **Pass 1 (Facts Extraction)**: LLM analyzes transcript to extract:
+     - Speaker mapping (SPEAKER_XX → actual names)
+     - Episode facts (guests, topics, ad sponsors)
+     - Podcast facts (hosts, recurring roles, keywords)
+   - Facts saved to `data/episode_facts/` and `data/podcast_facts/`
+   - **Pass 2 (Transcript Cleaning)**:
+     - Stage 2a: Deterministic speaker name substitution (no LLM)
+     - Stage 2b: LLM cleans spelling, grammar, detects ads, formats output
    - Saves cleaned Markdown to `data/clean_transcripts/`
-   - Optionally saves corrections and speaker mapping for debugging
    - Updates episode `clean_transcript_path` in database
    - **No side effects**: Does not download or transcribe
 
+6. **Summarize** (`thestill summarize`):
+   - **Atomic operation**: Only summarizes cleaned transcripts
+   - Produces comprehensive analysis:
+     - Executive summary
+     - Notable quotes
+     - Content angles for repurposing
+     - Social media snippets
+     - Resource/fact check
+     - Critical analysis
+   - Saves summaries to `data/summaries/`
+   - Updates episode `summary_path` in database
+   - **No side effects**: Does not clean or transcribe
+
 **Episode State Progression:**
+
 - `discovered` → new episode found in feed (has `audio_url`)
 - `downloaded` → audio_path set
 - `downsampled` → downsampled_audio_path set
 - `transcribed` → raw_transcript_path set
-- `cleaned` → clean_transcript_path set (final state)
+- `cleaned` → clean_transcript_path set
+- `summarized` → summary_path set (final state)
 
 **Pipeline Design:**
 - Each command can be run independently
@@ -327,29 +412,57 @@ Each step is an atomic operation that can be run independently and scaled horizo
 
 ## File Structure
 
-```
+```text
 thestill/
-├── core/              # Core processing modules
-│   ├── feed_manager.py
-│   ├── audio_downloader.py
-│   ├── youtube_downloader.py
-│   ├── transcriber.py
-│   ├── transcript_cleaning_processor.py  # NEW: Copywriting-focused cleaner
-│   └── llm_processor.py  # LEGACY: Old summarization pipeline
-├── models/            # Pydantic data models
-│   └── podcast.py
-├── utils/             # Utilities and configuration
-│   ├── config.py
-│   └── logger.py
-└── cli.py            # Command-line interface
+├── cli.py                 # Command-line interface
+├── core/                  # Core processing modules
+│   ├── feed_manager.py           # RSS/YouTube feed parsing
+│   ├── audio_downloader.py       # Audio file downloading
+│   ├── audio_preprocessor.py     # Audio downsampling to WAV
+│   ├── youtube_downloader.py     # YouTube audio extraction
+│   ├── transcriber.py            # Whisper/WhisperX transcription
+│   ├── google_transcriber.py     # Google Cloud Speech-to-Text
+│   ├── facts_extractor.py        # Pass 1: Extract speaker/episode facts
+│   ├── facts_manager.py          # Load/save facts as Markdown
+│   ├── transcript_cleaner.py     # Pass 2: Clean transcripts with LLM
+│   ├── transcript_formatter.py   # JSON to Markdown conversion
+│   ├── transcript_compactor.py   # Compact transcripts for processing
+│   ├── post_processor.py         # Summarization and analysis
+│   ├── evaluator.py              # Transcript quality evaluation
+│   ├── llm_provider.py           # Multi-provider LLM abstraction
+│   ├── llm_processor.py          # Legacy summarization pipeline
+│   ├── media_source.py           # Strategy pattern for RSS/YouTube
+│   └── transcript_cleaning_processor.py  # Legacy three-phase cleaner
+├── models/                # Pydantic data models
+│   ├── podcast.py                # Episode, Podcast, CleanedTranscript
+│   └── facts.py                  # PodcastFacts, EpisodeFacts
+├── repositories/          # Data persistence layer
+│   └── sqlite_podcast_repository.py
+├── services/              # Business logic layer
+│   ├── podcast_service.py
+│   ├── refresh_service.py
+│   └── stats_service.py
+├── mcp/                   # MCP server for AI integration
+│   ├── server.py
+│   ├── tools.py
+│   ├── resources.py
+│   └── utils.py
+└── utils/                 # Utilities and configuration
+    ├── config.py
+    ├── path_manager.py
+    └── logger.py
 
 data/                      # Generated data directory
 ├── podcasts.db            # SQLite database (podcast/episode metadata and state)
 ├── original_audio/        # Original downloaded audio files (MP3, M4A, etc.)
-├── downsampled_audio/     # Downsampled WAV files (16kHz, 16-bit, mono) for transcription
+├── downsampled_audio/     # Downsampled WAV files (16kHz, 16-bit, mono)
 ├── raw_transcripts/       # Raw Whisper JSON transcripts with speaker labels
 ├── clean_transcripts/     # Cleaned Markdown transcripts (corrected, formatted)
-└── summaries/             # Episode summaries (future use)
+├── summaries/             # Episode summaries and analysis
+├── podcast_facts/         # Podcast-level facts (hosts, sponsors, keywords)
+├── episode_facts/         # Episode-level facts (guests, speaker mapping)
+├── debug_feeds/           # Debug RSS feed snapshots
+└── evaluations/           # Transcript evaluation results
 ```
 
 ## Key Technologies
@@ -716,12 +829,17 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 
 This project underwent a comprehensive refactoring from October 2024 to present, transforming from a monolithic script into a well-architected, testable system. See [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) for the complete plan.
 
-### Current Status (as of 2025-10-16)
+### Current Status (as of 2025-12-02)
 
-**Progress**: 35/35 tasks complete (100%) ✅
-**Test Coverage**: 41.05% (↑128% from 18% baseline)
-**Tests Passing**: 265/265 (100%)
-**Storage**: Migrated from JSON to SQLite
+**Progress**: Refactoring complete ✅
+**Storage**: SQLite database
+**New Features Added Post-Refactoring**:
+
+- Facts-based two-pass transcript cleaning pipeline
+- Comprehensive summarization with post_processor.py
+- Transcript quality evaluation
+- MCP server for AI assistant integration
+- Streaming LLM output support
 
 ### Key Achievements
 
