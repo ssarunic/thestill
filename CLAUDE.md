@@ -277,13 +277,6 @@ The project includes an MCP (Model Context Protocol) server for integration with
 - `Episode.created_at`: When the episode was first discovered and added
 - Auto-generated via `default_factory=datetime.utcnow`
 
-**Migration from JSON to SQLite**:
-- Legacy `feeds.json` files can be migrated using `scripts/migrate_json_to_sqlite.py`
-- Migration script validates data integrity and creates backups
-- Supports dry-run mode to preview changes before committing
-- Old `guid` fields are renamed to `external_id` during migration
-- Missing `id` and `created_at` fields are auto-generated
-
 **Repository Methods**:
 - `get(podcast_id: str)`: Get podcast by internal UUID (primary key)
 - `get_by_index(index: int)`: Get podcast by 1-based index (for CLI convenience)
