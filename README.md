@@ -35,6 +35,9 @@ Each step is atomic and can be run independently for horizontal scaling.
   - Local Whisper with pyannote.audio diarization (free, private)
   - Google Cloud Speech-to-Text with built-in diarization (fast, accurate)
 - **LLM-Powered Cleaning**: Fix transcription errors, remove filler words, identify speakers
+- **Facts-Based Processing**: Extract and manage podcast/episode facts for better cleaning
+- **Comprehensive Summarization**: Generate executive summaries, quotes, and content analysis
+- **Quality Evaluation**: Assess transcript and post-processing quality
 - **Multiple LLM Providers**: OpenAI GPT-4, Ollama (local), Google Gemini, Anthropic Claude
 - **SQLite Database**: Indexed queries (O(log n)), row-level locking, ACID transactions
 - **Atomic Pipeline**: Each processing step is independent and idempotent
@@ -214,9 +217,23 @@ For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 - `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N] [--dry-run]` - Transcribe audio
 - `thestill clean-transcript [--max-episodes N] [--dry-run]` - Clean with LLM
 
+### Post-Processing
+
+- `thestill summarize [TRANSCRIPT_PATH] [--max-episodes N] [--dry-run]` - Generate comprehensive summaries
+- `thestill facts list` - List all facts files (podcast and episode)
+- `thestill facts show <podcast_id> [--episode-id ID]` - Show facts for a podcast or episode
+- `thestill facts edit <podcast_id> [--episode-id ID]` - Open facts file in $EDITOR
+- `thestill facts extract <podcast_id> [--episode-id ID] [--force]` - Extract facts from transcript
+
+### Quality Evaluation
+
+- `thestill evaluate-transcript <transcript_path>` - Evaluate raw transcript quality
+- `thestill evaluate-postprocess <processed_path> [--original PATH]` - Evaluate post-processed transcript
+
 ### System Management
+
 - `thestill status` - Display system status and episode statistics
-- `thestill cleanup` - Remove old audio files (configurable retention)
+- `thestill cleanup [--dry-run]` - Remove old audio files (configurable retention)
 - `thestill-mcp` - Start MCP server for Claude Desktop integration
 
 ### Supported URL Types
@@ -260,14 +277,16 @@ data/
 ├── original_audio/        # Downloaded audio files (MP3, M4A, etc.)
 ├── downsampled_audio/     # 16kHz WAV files for transcription
 ├── raw_transcripts/       # JSON transcripts with timestamps and speaker labels
-├── clean_transcripts/     # Cleaned Markdown transcripts (optional)
-├── summaries/             # Episode summaries (future use)
-└── feeds.json             # Podcast tracking database
+├── clean_transcripts/     # Cleaned Markdown transcripts
+├── summaries/             # Episode summaries and analysis
+├── podcast_facts/         # Podcast-level facts (hosts, format, etc.)
+├── episode_facts/         # Episode-specific facts for cleaning
+└── podcasts.db            # SQLite database (metadata and state)
 ```
 
 ### Episode States
 
-Episodes progress through states tracked in `feeds.json`:
+Episodes progress through states tracked in `podcasts.db`:
 1. **discovered** - Found in RSS feed, has `audio_url`
 2. **downloaded** - Audio file downloaded, has `audio_path`
 3. **downsampled** - Converted to WAV, has `downsampled_audio_path`
@@ -594,8 +613,8 @@ Core Layer (core/)
   ├── AudioDownloader (with retry)
   └── Transcriber (Whisper/Google)
   ↓ (persistence)
-Repository Layer (podcast_repository.py)
-  └── JsonPodcastRepository (→ future: PostgreSQL)
+Repository Layer (repositories/)
+  └── SqlitePodcastRepository (indexed queries, ACID transactions)
   ↓ (data models)
 Model Layer (models/podcast.py)
   └── Pydantic models with validation
@@ -610,79 +629,6 @@ Model Layer (models/podcast.py)
 
 For detailed development guidelines, see [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md).
 
-## Contributing
-
-We welcome contributions! Please follow these guidelines:
-
-### Development Workflow
-
-1. **Fork and clone** the repository
-2. **Create a branch** for your feature: `git checkout -b feature/your-feature-name`
-3. **Install dev dependencies**: `make install-dev`
-4. **Make your changes** following the code guidelines
-5. **Run quality checks**: `make check`
-6. **Commit your changes**: Pre-commit hooks will run automatically
-7. **Push and create a pull request**
-
-### Code Standards
-
-- ✅ **Type hints**: All new code must include type hints
-- ✅ **Tests**: Aim for 80%+ coverage on new code
-- ✅ **Documentation**: Update docstrings and README as needed
-- ✅ **Small PRs**: Keep changes under 300 lines when possible
-- ✅ **Commit messages**: Use conventional commits format (e.g., `feat:`, `fix:`, `docs:`)
-
-### Testing Your Changes
-
-```bash
-# Run tests locally
-make test
-
-# Check code quality
-make lint
-make typecheck
-
-# Format code
-make format
-
-# Run everything
-make check
-```
-
-### Architecture Guidelines
-
-When adding new features:
-- Follow the **layered architecture** (CLI → Service → Core → Repository → Model)
-- Use **dependency injection** for testability
-- Keep **atomic operations** (single responsibility per function)
-- Add **error handling** with proper logging
-- Use **existing patterns** (Repository, Strategy, Context Manager)
-
-### Pull Request Checklist
-
-- [ ] Tests added/updated and passing
-- [ ] Type hints added to all new code
-- [ ] Documentation updated (docstrings, README, CLAUDE.md)
-- [ ] Code formatted with `black` and `isort`
-- [ ] Linters pass (`pylint`, `mypy`)
-- [ ] Pre-commit hooks pass
-- [ ] CHANGELOG.md updated (if applicable)
-
-### Refactoring Status
-
-This project recently completed a comprehensive refactoring (29/35 tasks complete, 82.9% progress). See [docs/REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md) for details.
-
-**Current priorities:**
-- Increase test coverage from 41% to 70%+
-- Add GitHub Actions CI
-- Complete remaining polish tasks
-
-### Getting Help
-
-- **Issues**: Open an issue for bugs or feature requests
-- **Discussions**: Use GitHub Discussions for questions
-- **Documentation**: Check [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md) for detailed standards
-
 ## Future Roadmap (v2.0)
 
 - Blog post generation from processed content
@@ -694,4 +640,4 @@ This project recently completed a comprehensive refactoring (29/35 tasks complet
 
 ## License
 
-MIT License - See LICENSE file for details.
+Apache License 2.0
