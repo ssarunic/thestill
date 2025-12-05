@@ -84,6 +84,12 @@ def setup_resources(server: Server, storage_path: str):
                 description="Get audio file URL and metadata",
                 mimeType="application/json",
             ),
+            Resource(
+                uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/summary",
+                name="Episode summary",
+                description="Get comprehensive episode summary with executive summary, quotes, and analysis",
+                mimeType="text/markdown",
+            ),
         ]
 
     @server.read_resource()
@@ -214,6 +220,15 @@ def setup_resources(server: Server, storage_path: str):
             }
 
             return json.dumps(result, indent=2)
+
+        # Handle summary resource
+        elif resource_type == "summary":
+            summary = podcast_service.get_summary(podcast_id, episode_id)
+            if summary is None:
+                logger.warning(f"Episode not found for summary: {podcast_id}/{episode_id}")
+                raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
+
+            return summary
 
         else:
             logger.error(f"Unknown resource type: {resource_type}")

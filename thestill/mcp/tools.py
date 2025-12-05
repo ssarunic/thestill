@@ -247,6 +247,40 @@ def setup_tools(server: Server, storage_path: str):
                     "required": ["podcast_id", "episode_id"],
                 },
             ),
+            Tool(
+                name="summarize_episodes",
+                description="Summarize cleaned transcripts with comprehensive analysis. This is step 6 of the pipeline. Produces executive summary, notable quotes, content angles, social snippets, and critical analysis.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Optional: Podcast index or RSS URL to summarize only from that podcast",
+                        },
+                        "max_episodes": {
+                            "type": "integer",
+                            "description": "Maximum episodes to summarize (default: 1 due to LLM costs)",
+                            "default": 1,
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="get_summary",
+                description="Get the summary for a specific episode. Returns the comprehensive analysis including executive summary, quotes, and content angles.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
+                        "episode_id": {
+                            "type": "string",
+                            "description": "Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID",
+                        },
+                    },
+                    "required": ["podcast_id", "episode_id"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -835,11 +869,9 @@ def setup_tools(server: Server, storage_path: str):
                             podcast_description=podcast.description,
                             episode_title=episode.title,
                             episode_description=episode.description,
-                            episode_external_id=episode.external_id,
                             episode_id=episode.id,
                             output_path=str(cleaned_path),
-                            save_corrections=True,
-                            save_metrics=True,
+                            path_manager=path_manager,
                         )
 
                         if result_data:
@@ -1053,11 +1085,9 @@ def setup_tools(server: Server, storage_path: str):
                             podcast_description=podcast.description,
                             episode_title=episode.title,
                             episode_description=episode.description,
-                            episode_external_id=episode.external_id,
                             episode_id=episode.id,
                             output_path=str(cleaned_path),
-                            save_corrections=True,
-                            save_metrics=True,
+                            path_manager=path_manager,
                         )
 
                         if result_data:
@@ -1107,6 +1137,147 @@ def setup_tools(server: Server, storage_path: str):
                             ),
                         )
                     ]
+
+            elif name == "summarize_episodes":
+                podcast_id = arguments.get("podcast_id")
+                max_episodes = arguments.get("max_episodes", 1)
+
+                # Convert to int if it's a numeric string
+                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
+                    podcast_id = int(podcast_id)
+
+                # Find cleaned transcripts that need summarizing
+                podcasts = feed_manager.list_podcasts()
+                transcripts_to_summarize = []
+
+                for podcast in podcasts:
+                    # Filter by podcast_id if specified
+                    if podcast_id:
+                        target_podcast = podcast_service.get_podcast(podcast_id)
+                        if not target_podcast or str(podcast.rss_url) != str(target_podcast.rss_url):
+                            continue
+
+                    for episode in podcast.episodes:
+                        if episode.clean_transcript_path:
+                            clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
+                            if not clean_path.exists():
+                                continue
+
+                            # Check if summary already exists
+                            summary_exists = False
+                            if episode.summary_path:
+                                summary_path = path_manager.summary_file(episode.summary_path)
+                                summary_exists = summary_path.exists()
+
+                            if not summary_exists:
+                                transcripts_to_summarize.append((podcast, episode, clean_path))
+
+                if not transcripts_to_summarize:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "success": True,
+                                    "message": "No transcripts found that need summarizing",
+                                    "hint": "Run clean_transcripts first",
+                                }
+                            ),
+                        )
+                    ]
+
+                # Apply max_episodes limit
+                transcripts_to_summarize = transcripts_to_summarize[:max_episodes]
+
+                # Initialize summarizer
+                summarizer = _get_summarizer(config)
+                if summarizer is None:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {"success": False, "error": "LLM not configured. Check your .env settings."}
+                            ),
+                        )
+                    ]
+
+                # Summarize transcripts
+                summarized = []
+                failed = []
+                for podcast, episode, clean_path in transcripts_to_summarize:
+                    try:
+                        with open(clean_path, "r", encoding="utf-8") as f:
+                            transcript_text = f.read()
+
+                        # Generate output filename
+                        base_name = clean_path.stem
+                        if base_name.endswith("_cleaned"):
+                            base_name = base_name[: -len("_cleaned")]
+                        summary_filename = f"{base_name}_summary.md"
+                        summary_path = path_manager.summaries_dir() / summary_filename
+
+                        summarizer.summarize(transcript_text, summary_path)
+
+                        # Update feed manager
+                        feed_manager.mark_episode_processed(
+                            str(podcast.rss_url),
+                            episode.external_id,
+                            summary_path=summary_filename,
+                        )
+                        summarized.append({"podcast": podcast.title, "episode": episode.title})
+                    except Exception as e:
+                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+
+                result = {
+                    "success": True,
+                    "message": f"Summarized {len(summarized)} episode(s)",
+                    "summarized": summarized,
+                    "failed": failed if failed else None,
+                    "complete": "Summaries are now ready! Use get_summary to read them.",
+                }
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            elif name == "get_summary":
+                podcast_id = arguments.get("podcast_id")
+                episode_id = arguments.get("episode_id")
+
+                if not podcast_id or not episode_id:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {"success": False, "error": "Missing required parameters: podcast_id and episode_id"}
+                            ),
+                        )
+                    ]
+
+                # Convert to int if it's a numeric string
+                if isinstance(podcast_id, str) and podcast_id.isdigit():
+                    podcast_id = int(podcast_id)
+                if isinstance(episode_id, str) and episode_id.isdigit():
+                    episode_id = int(episode_id)
+
+                summary = podcast_service.get_summary(podcast_id, episode_id)
+
+                if summary is None:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "success": False,
+                                    "error": f"Episode not found: podcast={podcast_id}, episode={episode_id}",
+                                }
+                            ),
+                        )
+                    ]
+
+                # If summary starts with "N/A", it means it's not available
+                if summary.startswith("N/A"):
+                    return [TextContent(type="text", text=json.dumps({"success": False, "error": summary}))]
+
+                # Return the summary content directly (not JSON-encoded)
+                return [TextContent(type="text", text=summary)]
 
             else:
                 logger.error(f"Unknown tool: {name}")
@@ -1192,4 +1363,35 @@ def _get_cleaning_processor(config):
         return TranscriptCleaningProcessor(llm_provider)
     except Exception as e:
         logger.error(f"Failed to initialize cleaning processor: {e}")
+        return None
+
+
+def _get_summarizer(config):
+    """
+    Initialize and return a transcript summarizer based on config settings.
+
+    Args:
+        config: Configuration object
+
+    Returns:
+        TranscriptSummarizer instance or None if not configured
+    """
+    try:
+        from ..core.llm_provider import create_llm_provider
+        from ..core.post_processor import TranscriptSummarizer
+
+        llm_provider = create_llm_provider(
+            provider_type=config.llm_provider,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model,
+            gemini_api_key=config.gemini_api_key,
+            gemini_model=config.gemini_model,
+            anthropic_api_key=config.anthropic_api_key,
+            anthropic_model=config.anthropic_model,
+        )
+        return TranscriptSummarizer(llm_provider)
+    except Exception as e:
+        logger.error(f"Failed to initialize summarizer: {e}")
         return None

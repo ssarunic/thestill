@@ -380,3 +380,43 @@ class PodcastService:
         except Exception as e:
             logger.error(f"Error reading transcript file: {e}")
             return f"N/A - Error reading transcript: {e}"
+
+    def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
+        """
+        Get the summary for an episode.
+
+        Args:
+            podcast_id: Podcast index or RSS URL
+            episode_id: Episode index, 'latest', date, or GUID
+
+        Returns:
+            Summary Markdown content, "N/A" message, or None if episode not found
+        """
+        episode = self.get_episode(podcast_id, episode_id)
+        if not episode:
+            logger.warning(f"Episode not found for summary: {podcast_id}/{episode_id}")
+            return None
+
+        # Check if episode has a summary
+        if not episode.summary_path:
+            logger.info(f"Episode not yet summarized: {episode.title}")
+            return "N/A - Episode not yet summarized"
+
+        # Build full path to the summary file using PathManager
+        summary_path = self.path_manager.summary_file(episode.summary_path)
+
+        # Verify summary file exists
+        try:
+            self.path_manager.require_file_exists(summary_path, "Summary file not found")
+        except FileNotFoundError:
+            logger.warning(f"Summary file not found: {summary_path}")
+            return "N/A - Summary file not found"
+
+        try:
+            with open(summary_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            logger.info(f"Retrieved summary for: {episode.title}")
+            return content
+        except Exception as e:
+            logger.error(f"Error reading summary file: {e}")
+            return f"N/A - Error reading summary: {e}"

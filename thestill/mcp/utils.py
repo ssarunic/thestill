@@ -94,14 +94,14 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
     if len(parts) == 5:
         sub_resource = parts[4].lower()
 
-        if sub_resource not in ["transcript", "audio"]:
-            raise ValueError(f"Invalid sub-resource: {sub_resource}. " f"Expected 'transcript' or 'audio'")
+        if sub_resource not in ["transcript", "audio", "summary"]:
+            raise ValueError(f"Invalid sub-resource: {sub_resource}. Expected 'transcript', 'audio', or 'summary'")
 
         return {"resource": sub_resource, "podcast_id": podcast_id, "episode_id": episode_id}
 
     # Too many path segments
     raise ValueError(
-        f"Invalid URI format: {uri}. " f"Expected thestill://podcasts/{{id}}/episodes/{{id}}/[transcript|audio]"
+        f"Invalid URI format: {uri}. " f"Expected thestill://podcasts/{{id}}/episodes/{{id}}/[transcript|audio|summary]"
     )
 
 

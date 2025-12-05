@@ -1318,7 +1318,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 @click.argument("transcript_path", type=click.Path(exists=True), required=False)
 @click.option("--output", "-o", help="Output path (defaults to data/summaries/<filename>_summary.md)")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be summarized")
-@click.option("--max-episodes", "-m", default=1, help="Maximum episodes to summarize")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to summarize (default: all)")
 @click.option("--force", "-f", is_flag=True, help="Re-summarize even if summary exists")
 @click.pass_context
 def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
@@ -1403,11 +1403,17 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         click.echo("✓ No cleaned transcripts found to summarize")
         return
 
-    total_transcripts = min(len(transcripts_to_summarize), max_episodes)
+    # Apply max_episodes limit if specified, otherwise process all
+    if max_episodes:
+        transcripts_to_process = transcripts_to_summarize[:max_episodes]
+    else:
+        transcripts_to_process = transcripts_to_summarize
+
+    total_transcripts = len(transcripts_to_process)
     click.echo(f"📄 Found {len(transcripts_to_summarize)} transcripts. Processing {total_transcripts} episodes")
 
     if dry_run:
-        for podcast, episode, _ in transcripts_to_summarize[:max_episodes]:
+        for podcast, episode, _ in transcripts_to_process:
             click.echo(f"  • {podcast.title}: {episode.title}")
         click.echo("\n(Run without --dry-run to process)")
         return
@@ -1415,7 +1421,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     total_processed = 0
     start_time = time.time()
 
-    for podcast, episode, clean_path in transcripts_to_summarize[:max_episodes]:
+    for podcast, episode, clean_path in transcripts_to_process:
         click.echo(f"\n📻 {podcast.title}")
         click.echo(f"🎧 {episode.title}")
         click.echo("─" * 50)

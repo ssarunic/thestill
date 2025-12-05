@@ -181,6 +181,22 @@ Claude: "The audio is available at [URL] and is 45 minutes long..."
 }
 ```
 
+### Episode Summary
+
+**URI Format**: `thestill://podcasts/{podcast_id}/episodes/{episode_id}/summary`
+
+**Example Usage in Claude:**
+```
+User: "Show me the summary of episode 1.1"
+Claude: [reads thestill://podcasts/1/episodes/1/summary]
+Claude: [displays the comprehensive summary with executive summary, quotes, and analysis]
+```
+
+**Returns**:
+
+- Comprehensive Markdown summary (if summarized)
+- `"N/A - Episode not yet summarized"` (if not summarized)
+
 ---
 
 ## Available Tools
@@ -354,15 +370,16 @@ Claude: [Displays the full cleaned Markdown transcript]
 
 ## Pipeline Tools
 
-The following tools allow you to process episodes through the transcription pipeline. The pipeline has 5 steps that must be run in order:
+The following tools allow you to process episodes through the transcription pipeline. The pipeline has 6 steps that must be run in order:
 
 1. **refresh_feeds** - Discover new episodes from RSS feeds
 2. **download_episodes** - Download audio files
 3. **downsample_audio** - Convert to 16kHz WAV format
 4. **transcribe_episodes** - Create raw transcripts
 5. **clean_transcripts** - Clean with LLM for readability
+6. **summarize_episodes** - Create comprehensive summaries with analysis
 
-Alternatively, use **process_episode** to run all steps for a single episode.
+Alternatively, use **process_episode** to run steps 1-5 for a single episode, then use **summarize_episodes** to create the summary.
 
 ### 7. `refresh_feeds`
 
@@ -537,6 +554,53 @@ The transcript is now ready to read!"
   "transcript_ready": true
 }
 ```
+
+### 13. `summarize_episodes`
+
+Summarize cleaned transcripts with comprehensive analysis. This is step 6 of the pipeline. Produces executive summary, notable quotes, content angles, social snippets, and critical analysis.
+
+**Parameters:**
+
+- `podcast_id` (string, optional): Podcast index or RSS URL to summarize only from that podcast
+- `max_episodes` (integer, optional, default=1): Maximum episodes to summarize (low default due to LLM costs)
+
+**Example Usage:**
+```
+User: "Summarize the latest cleaned transcript"
+Claude: [calls summarize_episodes]
+Claude: "Summarized 1 episode. The summary includes an executive summary, notable quotes, and content angles."
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Summarized 1 episode(s)",
+  "summarized": [
+    {"podcast": "The Rest is Politics", "episode": "Episode Title"}
+  ],
+  "complete": "Summaries are now ready! Use get_summary to read them."
+}
+```
+
+### 14. `get_summary`
+
+Get the comprehensive summary for a specific episode.
+
+**Parameters:**
+
+- `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
+- `episode_id` (string, required): Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID
+
+**Example Usage:**
+
+```
+User: "Show me the summary of the latest episode from podcast 1"
+Claude: [calls get_summary with podcast_id="1", episode_id="latest"]
+Claude: [Displays the comprehensive summary with executive summary, quotes, and analysis]
+```
+
+**Response:** Returns the summary Markdown content directly, or an error message if not available.
 
 ---
 

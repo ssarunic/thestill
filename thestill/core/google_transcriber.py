@@ -50,8 +50,25 @@ DEFAULT_REGION = "us"
 
 # Chirp 3 has a 60-minute limit for BatchRecognize
 # We split longer files into chunks with overlap for seamless merging
-MAX_CHUNK_DURATION_MS = 10 * 60 * 1000  # 10 minutes in milliseconds (for debugging)
+MAX_CHUNK_DURATION_MS = 9 * 60 * 1000  # 9 minutes in milliseconds
 OVERLAP_DURATION_MS = 60 * 1000  # 1 minute overlap for merging
+
+# Timeout for BatchRecognize = 1.5x chunk duration (10 min chunk → 15 min timeout)
+BATCH_RECOGNIZE_TIMEOUT_SECONDS = int(MAX_CHUNK_DURATION_MS * 1.5 / 1000)  # 900 seconds
+MAX_CHUNK_RETRIES = 2  # Number of retries for stuck chunks
+
+
+class _SubChunkResult:
+    """
+    Wrapper for pre-formatted transcript from sub-chunk splitting.
+
+    When a chunk times out and is split into smaller sub-chunks, the results
+    are merged into a transcript dict. This wrapper allows the main loop to
+    detect that the result is already formatted (not a raw BatchRecognizeResults).
+    """
+
+    def __init__(self, transcript: Dict):
+        self.transcript = transcript
 
 
 class GoogleCloudTranscriber:
@@ -311,32 +328,63 @@ class GoogleCloudTranscriber:
                 chunk_audio.export(tmp_path, format="wav")
 
             try:
-                # Transcribe chunk
-                result = self._transcribe_batch(tmp_path, language, podcast_title)
-                transcript = self._format_transcript(result, 0, tmp_path)
+                # Transcribe chunk with retry logic
+                result = None
+                last_error = None
 
-                # Save raw chunk transcript (before timestamp adjustment) for debugging
-                if debug_dir:
-                    raw_chunk_path = debug_dir / f"{file_prefix}chunk_{i+1:02d}_raw.json"
-                    with open(raw_chunk_path, "w", encoding="utf-8") as f:
-                        json.dump(transcript, f, indent=2, ensure_ascii=False)
-                    print(f"  Saved raw chunk transcript: {raw_chunk_path.name}")
+                for attempt in range(MAX_CHUNK_RETRIES + 1):
+                    try:
+                        result = self._transcribe_batch(tmp_path, language, podcast_title)
+                        break  # Success
+                    except TimeoutError as e:
+                        last_error = e
+                        print(f"  Chunk timed out: {e}")
+                        if attempt < MAX_CHUNK_RETRIES:
+                            print(f"  Will retry with smaller sub-chunks ({attempt + 1}/{MAX_CHUNK_RETRIES})...")
+                            # Retry by splitting this chunk in half
+                            result = self._transcribe_chunk_split(
+                                chunk_audio, start_ms, language, podcast_title, debug_dir, file_prefix, i
+                            )
+                            if result:
+                                break
+                        continue
 
-                # Adjust timestamps by chunk offset
-                offset_seconds = start_ms / 1000
-                for segment in transcript["segments"]:
-                    segment["start"] += offset_seconds
-                    segment["end"] += offset_seconds
-                    for word in segment.get("words", []):
-                        word["start"] += offset_seconds
-                        word["end"] += offset_seconds
+                if result is None:
+                    raise RuntimeError(
+                        f"Failed to transcribe chunk after {MAX_CHUNK_RETRIES + 1} attempts: {last_error}"
+                    )
 
-                # Save adjusted chunk transcript for debugging
-                if debug_dir:
-                    adjusted_chunk_path = debug_dir / f"{file_prefix}chunk_{i+1:02d}_adjusted.json"
-                    with open(adjusted_chunk_path, "w", encoding="utf-8") as f:
-                        json.dump(transcript, f, indent=2, ensure_ascii=False)
-                    print(f"  Saved adjusted chunk transcript: {adjusted_chunk_path.name}")
+                # Check if result is from sub-chunk splitting (already formatted)
+                if isinstance(result, _SubChunkResult):
+                    # Already formatted and timestamps adjusted in _transcribe_chunk_split
+                    transcript = result.transcript
+                else:
+                    # Normal result - format it
+                    transcript = self._format_transcript(result, 0, tmp_path)
+
+                    # Save raw chunk transcript (before timestamp adjustment) for debugging
+                    if debug_dir:
+                        raw_chunk_path = debug_dir / f"{file_prefix}chunk_{i+1:02d}_raw.json"
+                        with open(raw_chunk_path, "w", encoding="utf-8") as f:
+                            json.dump(transcript, f, indent=2, ensure_ascii=False)
+                        print(f"  Saved raw chunk transcript: {raw_chunk_path.name}")
+
+                # Adjust timestamps by chunk offset (skip for sub-chunk results - already adjusted)
+                if not isinstance(result, _SubChunkResult):
+                    offset_seconds = start_ms / 1000
+                    for segment in transcript["segments"]:
+                        segment["start"] += offset_seconds
+                        segment["end"] += offset_seconds
+                        for word in segment.get("words", []):
+                            word["start"] += offset_seconds
+                            word["end"] += offset_seconds
+
+                    # Save adjusted chunk transcript for debugging
+                    if debug_dir:
+                        adjusted_chunk_path = debug_dir / f"{file_prefix}chunk_{i+1:02d}_adjusted.json"
+                        with open(adjusted_chunk_path, "w", encoding="utf-8") as f:
+                            json.dump(transcript, f, indent=2, ensure_ascii=False)
+                        print(f"  Saved adjusted chunk transcript: {adjusted_chunk_path.name}")
 
                 chunk_transcripts.append(
                     {
@@ -351,6 +399,105 @@ class GoogleCloudTranscriber:
 
         # Merge chunk transcripts
         return self._merge_chunk_transcripts(chunk_transcripts, original_path, language)
+
+    def _transcribe_chunk_split(
+        self,
+        chunk_audio: AudioSegment,
+        chunk_start_ms: int,
+        language: str,
+        podcast_title: Optional[str],
+        debug_dir: Optional[Path],
+        file_prefix: str,
+        chunk_index: int,
+    ) -> Optional[Any]:
+        """
+        Split a stuck chunk in half and transcribe both halves.
+
+        This is a fallback for chunks that time out - smaller chunks often
+        complete faster on Google Cloud Speech-to-Text.
+
+        Args:
+            chunk_audio: The audio segment that timed out
+            chunk_start_ms: Start time of this chunk in the original audio
+            language: Language code
+            podcast_title: Optional podcast title for GCS naming
+            debug_dir: Directory for debug output
+            file_prefix: Prefix for debug files
+            chunk_index: Original chunk index (for logging)
+
+        Returns:
+            Raw transcription result (BatchRecognizeResults) or None on failure
+        """
+        duration_ms = len(chunk_audio)
+        half_duration_ms = duration_ms // 2
+        sub_overlap_ms = 30 * 1000  # 30 second overlap for sub-chunks
+
+        # First sub-chunk: 0 to half + overlap
+        # Second sub-chunk: half - overlap to end
+        # This creates overlap in the middle for seamless merging
+        sub_chunks = [
+            (0, min(half_duration_ms + sub_overlap_ms, duration_ms)),
+            (max(0, half_duration_ms - sub_overlap_ms), duration_ms),
+        ]
+
+        print(
+            f"  Splitting chunk {chunk_index + 1} into two ~{half_duration_ms // 1000 // 60}:{half_duration_ms // 1000 % 60:02d} sub-chunks with {sub_overlap_ms // 1000}s overlap"
+        )
+
+        sub_results = []
+        for sub_idx, (sub_start, sub_end) in enumerate(sub_chunks):
+            sub_audio = chunk_audio[sub_start:sub_end]
+
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+                sub_audio.export(tmp_path, format="wav")
+
+            try:
+                print(f"  Processing sub-chunk {chunk_index + 1}.{sub_idx + 1}")
+                result = self._transcribe_batch(tmp_path, language, podcast_title)
+
+                # Format and adjust timestamps
+                transcript = self._format_transcript(result, 0, tmp_path)
+
+                # Adjust timestamps: add chunk offset + sub-chunk offset
+                offset_seconds = (chunk_start_ms + sub_start) / 1000
+                for segment in transcript["segments"]:
+                    segment["start"] += offset_seconds
+                    segment["end"] += offset_seconds
+                    for word in segment.get("words", []):
+                        word["start"] += offset_seconds
+                        word["end"] += offset_seconds
+
+                # Save debug output
+                if debug_dir:
+                    sub_chunk_path = debug_dir / f"{file_prefix}chunk_{chunk_index + 1:02d}_{sub_idx + 1}_adjusted.json"
+                    with open(sub_chunk_path, "w", encoding="utf-8") as f:
+                        json.dump(transcript, f, indent=2, ensure_ascii=False)
+                    print(f"    Saved sub-chunk transcript: {sub_chunk_path.name}")
+
+                sub_results.append(
+                    {
+                        "transcript": transcript,
+                        "start_ms": chunk_start_ms + sub_start,
+                        "end_ms": chunk_start_ms + sub_end,
+                    }
+                )
+
+            except Exception as e:
+                print(f"  Sub-chunk {chunk_index + 1}.{sub_idx + 1} failed: {e}")
+                return None
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        # Merge sub-chunk results
+        if len(sub_results) == 2:
+            merged = self._merge_chunk_transcripts(sub_results, "", language)
+            # Return in a format that _format_transcript can handle
+            # We need to return the raw result, so create a wrapper
+            return _SubChunkResult(merged)
+
+        return None
 
     def _merge_chunk_transcripts(
         self,
@@ -487,7 +634,13 @@ class GoogleCloudTranscriber:
             "speakers_detected": 0,
         }
 
-    def _transcribe_batch(self, audio_path: str, language: str, podcast_title: Optional[str] = None) -> Any:
+    def _transcribe_batch(
+        self,
+        audio_path: str,
+        language: str,
+        podcast_title: Optional[str] = None,
+        disable_diarization: bool = False,
+    ) -> Any:
         """
         Transcribe using BatchRecognize (required for Chirp 3 with diarization).
 
@@ -498,6 +651,7 @@ class GoogleCloudTranscriber:
             audio_path: Path to audio file
             language: Language code
             podcast_title: Optional podcast title used as prefix for temp files in GCS
+            disable_diarization: Force disable diarization for this request (for retry fallback)
         """
         if not self.storage_client:
             raise RuntimeError(
@@ -533,7 +687,8 @@ class GoogleCloudTranscriber:
             blob.upload_from_filename(audio_path)
 
             # Build recognition config
-            config = self._build_recognition_config(language)
+            use_diarization = self.enable_diarization and not disable_diarization
+            config = self._build_recognition_config(language, enable_diarization=use_diarization)
 
             # Build request
             file_metadata = cloud_speech.BatchRecognizeFileMetadata(uri=gcs_uri)
@@ -550,6 +705,11 @@ class GoogleCloudTranscriber:
             # Start batch transcription
             print("Starting BatchRecognize transcription (this may take several minutes)...")
             operation = self.speech_client.batch_recognize(request=request)
+
+            # Log operation name for debugging stuck jobs in GCP Console
+            operation_name = getattr(operation.operation, "name", None) or str(operation.operation)
+            print(f"Operation ID: {operation_name}")
+            print(f"Timeout: {self._format_time(BATCH_RECOGNIZE_TIMEOUT_SECONDS)}")
 
             # Wait for completion with progress tracking
             last_progress = None
@@ -582,9 +742,18 @@ class GoogleCloudTranscriber:
 
                 time.sleep(15)
 
-                # Timeout check
-                if elapsed > 3600:  # 1 hour timeout
-                    raise TimeoutError("Transcription timed out after 1 hour")
+                # Timeout check - fail fast instead of waiting 1 hour
+                if elapsed > BATCH_RECOGNIZE_TIMEOUT_SECONDS:
+                    # Try to cancel the stuck operation
+                    try:
+                        operation.cancel()
+                        print(f"Cancelled stuck operation: {operation_name}")
+                    except Exception:
+                        pass
+                    raise TimeoutError(
+                        f"Transcription timed out after {self._format_time(elapsed)}. "
+                        f"Operation ID: {operation_name}"
+                    )
 
             response = operation.result()
 
@@ -616,6 +785,13 @@ class GoogleCloudTranscriber:
             else:
                 raise RuntimeError("No inline transcript found in response")
 
+        except TimeoutError:
+            # Re-raise TimeoutError as-is so retry logic can handle it
+            try:
+                blob.delete()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             # Clean up on error
             try:
@@ -624,7 +800,9 @@ class GoogleCloudTranscriber:
                 pass
             raise RuntimeError(f"BatchRecognize failed: {e}")
 
-    def _build_recognition_config(self, language: str) -> cloud_speech.RecognitionConfig:
+    def _build_recognition_config(
+        self, language: str, enable_diarization: Optional[bool] = None
+    ) -> cloud_speech.RecognitionConfig:
         """Build V2 recognition configuration with Chirp 3 and optional diarization."""
         # Build features configuration
         # Note: Chirp 3 does not support enable_word_confidence
@@ -633,8 +811,11 @@ class GoogleCloudTranscriber:
             "enable_word_time_offsets": True,
         }
 
+        # Use instance setting if not explicitly overridden
+        use_diarization = enable_diarization if enable_diarization is not None else self.enable_diarization
+
         # Add diarization if enabled
-        if self.enable_diarization:
+        if use_diarization:
             diarization_config = cloud_speech.SpeakerDiarizationConfig(
                 min_speaker_count=self.min_speakers if self.min_speakers else 1,
                 max_speaker_count=self.max_speakers if self.max_speakers else 6,
