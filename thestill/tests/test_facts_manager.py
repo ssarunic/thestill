@@ -17,37 +17,39 @@
 
 import pytest
 
-from thestill.core.facts_manager import FactsManager, slugify
+from thestill.core.facts_manager import FactsManager
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 from thestill.utils.path_manager import PathManager
+from thestill.utils.slug import generate_slug
 
 
 class TestSlugify:
-    """Tests for the slugify function."""
+    """Tests for the generate_slug function (slug utility)."""
 
     def test_basic_slugify(self):
-        assert slugify("Prof G Markets") == "prof-g-markets"
+        assert generate_slug("Prof G Markets") == "prof-g-markets"
 
     def test_special_characters_removed(self):
-        assert slugify("The Daily Show!") == "the-daily-show"
+        assert generate_slug("The Daily Show!") == "the-daily-show"
 
     def test_multiple_spaces(self):
-        assert slugify("Too   Many   Spaces") == "too-many-spaces"
+        assert generate_slug("Too   Many   Spaces") == "too-many-spaces"
 
     def test_underscores_to_hyphens(self):
-        assert slugify("snake_case_name") == "snake-case-name"
+        assert generate_slug("snake_case_name") == "snake-case-name"
 
     def test_empty_string(self):
-        assert slugify("") == "unnamed"
+        assert generate_slug("") == "unnamed"
 
     def test_only_special_chars(self):
-        assert slugify("!!!???") == "unnamed"
+        assert generate_slug("!!!???") == "unnamed"
 
-    def test_unicode_removed(self):
-        assert slugify("Café") == "caf"
+    def test_unicode_transliterated(self):
+        # python-slugify properly transliterates Unicode characters
+        assert generate_slug("Café") == "cafe"
 
     def test_leading_trailing_hyphens(self):
-        assert slugify("-test-") == "test"
+        assert generate_slug("-test-") == "test"
 
 
 class TestFactsManagerDirectories:
@@ -94,8 +96,17 @@ class TestEpisodeFactsPaths:
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
 
-        path = facts_manager.get_episode_facts_path("abc-123-def")
-        assert path == tmp_path / "episode_facts" / "abc-123-def.facts.md"
+        path = facts_manager.get_episode_facts_path("prof-g-markets", "episode-title")
+        assert path == tmp_path / "episode_facts" / "prof-g-markets" / "episode-title.facts.md"
+
+    def test_get_episode_facts_path_creates_subdirectory(self, tmp_path):
+        """Test that episode facts path uses podcast subdirectory structure."""
+        path_manager = PathManager(str(tmp_path))
+        facts_manager = FactsManager(path_manager)
+
+        path = facts_manager.get_episode_facts_path("my-podcast", "my-episode")
+        assert path.parent.name == "my-podcast"
+        assert path.name == "my-episode.facts.md"
 
 
 class TestSavePodcastFacts:
@@ -198,12 +209,15 @@ class TestSaveEpisodeFacts:
             ad_sponsors=["Blueair"],
         )
 
-        path = facts_manager.save_episode_facts("ep-123", facts)
+        path = facts_manager.save_episode_facts("prof-g-markets", "jpmorgans-playbook", facts)
 
         assert path.exists()
         content = path.read_text()
         assert "# Episode: JPMorgan's Playbook" in content
         assert "SPEAKER_01: Scott Galloway" in content
+        # Verify subdirectory structure
+        assert path.parent.name == "prof-g-markets"
+        assert path.name == "jpmorgans-playbook.facts.md"
 
 
 class TestLoadEpisodeFacts:
@@ -213,7 +227,7 @@ class TestLoadEpisodeFacts:
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
 
-        result = facts_manager.load_episode_facts("nonexistent")
+        result = facts_manager.load_episode_facts("nonexistent-podcast", "nonexistent-episode")
         assert result is None
 
     def test_load_episode_facts_roundtrip(self, tmp_path):
@@ -231,8 +245,8 @@ class TestLoadEpisodeFacts:
             ad_sponsors=["Sponsor 1"],
         )
 
-        facts_manager.save_episode_facts("ep-456", original)
-        loaded = facts_manager.load_episode_facts("ep-456")
+        facts_manager.save_episode_facts("test-podcast", "test-episode", original)
+        loaded = facts_manager.load_episode_facts("test-podcast", "test-episode")
 
         assert loaded is not None
         assert loaded.episode_title == original.episode_title
@@ -266,14 +280,14 @@ class TestGetFactsMarkdown:
         facts_manager = FactsManager(path_manager)
 
         # Not created yet
-        assert facts_manager.get_episode_facts_markdown("ep-123") is None
+        assert facts_manager.get_episode_facts_markdown("test-podcast", "test-episode") is None
 
         # Create it
         facts = EpisodeFacts(episode_title="Test Episode")
-        facts_manager.save_episode_facts("ep-123", facts)
+        facts_manager.save_episode_facts("test-podcast", "test-episode", facts)
 
         # Now should return content
-        md = facts_manager.get_episode_facts_markdown("ep-123")
+        md = facts_manager.get_episode_facts_markdown("test-podcast", "test-episode")
         assert md is not None
         assert "# Episode: Test Episode" in md
 
@@ -300,9 +314,10 @@ class TestMarkdownParsing:
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
 
-        # Create file with speaker mapping
+        # Create file with speaker mapping in podcast subdirectory
         facts_manager.ensure_facts_directories()
-        path = facts_manager.get_episode_facts_path("ep-test")
+        path = facts_manager.get_episode_facts_path("test-podcast", "test-episode")
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             """# Episode: Test
 
@@ -313,7 +328,7 @@ class TestMarkdownParsing:
 """
         )
 
-        loaded = facts_manager.load_episode_facts("ep-test")
+        loaded = facts_manager.load_episode_facts("test-podcast", "test-episode")
         assert loaded is not None
         assert loaded.speaker_mapping == {
             "SPEAKER_00": "Scott Galloway (Host)",

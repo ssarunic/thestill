@@ -164,7 +164,10 @@ class PodcastService:
 
         result = []
         for idx, podcast in enumerate(podcasts, start=1):
-            episodes_processed = sum(1 for ep in podcast.episodes if ep.state == EpisodeState.CLEANED)
+            # Count episodes that have completed the cleaning pipeline (CLEANED or SUMMARIZED)
+            episodes_processed = sum(
+                1 for ep in podcast.episodes if ep.state in (EpisodeState.CLEANED, EpisodeState.SUMMARIZED)
+            )
             result.append(
                 PodcastWithIndex(
                     index=idx,

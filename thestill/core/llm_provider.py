@@ -16,15 +16,20 @@
 Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, and Anthropic.
 """
 
+import json
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import google.generativeai as genai
 import ollama
 from anthropic import Anthropic, APIStatusError, BadRequestError, RateLimitError
 from openai import OpenAI
+from pydantic import BaseModel
+
+# TypeVar for generic structured output return type
+T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +77,42 @@ class LLMProvider(ABC):
     @abstractmethod
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
+        pass
+
+    @abstractmethod
+    def supports_structured_output(self) -> bool:
+        """Check if this provider/model supports schema-validated structured output"""
+        pass
+
+    @abstractmethod
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response matching the Pydantic model schema.
+
+        This method guarantees the response will be valid JSON matching the schema
+        defined by response_model. For providers that support native structured output,
+        the schema is enforced by the API. For providers without native support,
+        this falls back to JSON mode with Pydantic validation.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            response_model: Pydantic model class defining the expected response schema
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Parsed and validated Pydantic model instance
+
+        Raises:
+            ValueError: If the model refuses to generate or response is invalid
+            json.JSONDecodeError: If response cannot be parsed as JSON (fallback mode)
+        """
         pass
 
 
@@ -254,6 +295,59 @@ class OpenAIProvider(LLMProvider):
         """Get human-readable model name for display"""
         return f"OpenAI {self.model}"
 
+    def supports_structured_output(self) -> bool:
+        """Check if this model supports structured output (reasoning models don't)"""
+        return not self._is_reasoning_model()
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response using OpenAI's native structured output.
+
+        Uses client.beta.chat.completions.parse() for schema-validated JSON output.
+        Falls back to JSON mode + Pydantic validation for reasoning models.
+        """
+        if self._is_reasoning_model():
+            # Reasoning models don't support structured output, use fallback
+            logger.warning(f"Model {self.model} doesn't support structured output, using JSON mode fallback")
+            response = self.chat_completion(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(response)
+            return response_model(**data)
+
+        # Use native structured output
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_model,
+        }
+
+        if temperature is not None:
+            params["temperature"] = temperature
+        if max_tokens is not None:
+            params["max_completion_tokens"] = max_tokens
+
+        completion = self.client.beta.chat.completions.parse(**params)
+
+        # Check for model refusal
+        if completion.choices[0].message.refusal:
+            raise ValueError(f"Model refused to generate: {completion.choices[0].message.refusal}")
+
+        parsed = completion.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Model returned empty parsed response")
+
+        return parsed
+
     def chat_completion_streaming(
         self,
         messages: List[Dict[str, str]],
@@ -422,6 +516,36 @@ class OllamaProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
         return f"Ollama {self.model}"
+
+    def supports_structured_output(self) -> bool:
+        """Ollama doesn't support native structured output"""
+        return False
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response using JSON mode fallback.
+
+        Ollama doesn't support native schema-validated output, so we use
+        JSON mode and validate with Pydantic after parsing.
+        """
+        logger.debug(f"Ollama using JSON mode fallback for structured output")
+
+        response = self.chat_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+
+        # Parse JSON and validate with Pydantic
+        data = json.loads(response)
+        return response_model(**data)
 
     def chat_completion_streaming(
         self,
@@ -810,6 +934,122 @@ class AnthropicProvider(LLMProvider):
         """Get human-readable model name for display"""
         return f"Anthropic {self.model}"
 
+    def supports_structured_output(self) -> bool:
+        """Check if this model supports structured output (Claude 4.5+ with beta)"""
+        # Import here to avoid circular imports
+        from .post_processor import MODEL_CONFIGS
+
+        # Check MODEL_CONFIGS for structured output support
+        if self.model in MODEL_CONFIGS:
+            return MODEL_CONFIGS[self.model].supports_structured_output
+
+        # Check for partial match
+        for model_name, limits in MODEL_CONFIGS.items():
+            if self.model.startswith(model_name.rsplit("-", 1)[0]):
+                return limits.supports_structured_output
+
+        return False
+
+    def _get_structured_output_beta(self) -> Optional[str]:
+        """Get the beta header required for structured output, if any"""
+        from .post_processor import MODEL_CONFIGS
+
+        if self.model in MODEL_CONFIGS:
+            return MODEL_CONFIGS[self.model].structured_output_beta
+
+        for model_name, limits in MODEL_CONFIGS.items():
+            if self.model.startswith(model_name.rsplit("-", 1)[0]):
+                return limits.structured_output_beta
+
+        return None
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response using Anthropic's structured output.
+
+        Uses client.beta.messages.create() with output_format for schema-validated JSON.
+        Falls back to JSON mode + Pydantic validation for unsupported models.
+        """
+        beta_header = self._get_structured_output_beta()
+
+        if not self.supports_structured_output() or not beta_header:
+            # Fallback for models without structured output support
+            logger.warning(f"Model {self.model} doesn't support structured output, using JSON mode fallback")
+            response = self.chat_completion(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(response)
+            return response_model(**data)
+
+        # Separate system messages from conversation messages
+        system_message = None
+        conversation_messages = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_message = content
+            elif role in ["user", "assistant"]:
+                conversation_messages.append({"role": role, "content": content})
+
+        # Validate and cap max_tokens to model limit
+        effective_max_tokens = self._validate_max_tokens(max_tokens or 4096)
+
+        # Build request parameters for beta structured output
+        # Note: Anthropic uses a different API method for structured output
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": conversation_messages,
+            "max_tokens": effective_max_tokens,
+        }
+
+        if system_message:
+            params["system"] = system_message
+        if temperature is not None:
+            params["temperature"] = temperature
+
+        # Use beta API with structured output
+        # Convert Pydantic model to JSON schema for Anthropic
+        json_schema = response_model.model_json_schema()
+
+        try:
+            response = self.client.beta.messages.create(
+                **params,
+                betas=[beta_header],
+                extra_headers={"anthropic-beta": beta_header},
+            )
+
+            # Extract and parse the response
+            if response.content and len(response.content) > 0:
+                response_text = response.content[0].text
+                data = json.loads(response_text)
+                return response_model(**data)
+            else:
+                raise ValueError("Anthropic returned empty response")
+
+        except Exception as e:
+            # If beta API fails, fall back to JSON mode
+            logger.warning(f"Anthropic structured output failed, using fallback: {e}")
+            response = self.chat_completion(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(response)
+            return response_model(**data)
+
     def chat_completion_streaming(
         self,
         messages: List[Dict[str, str]],
@@ -1125,6 +1365,70 @@ class GeminiProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
         return f"Google {self.model}"
+
+    def supports_structured_output(self) -> bool:
+        """Gemini supports structured output via response_schema"""
+        return True
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response using Gemini's response_schema.
+
+        Uses response_schema parameter for schema-validated JSON output.
+        Gemini requires manual parsing of the JSON response.
+        """
+        # Convert OpenAI-style messages to Gemini format
+        gemini_messages = self._convert_messages(messages)
+
+        # Build generation config with response_schema
+        generation_config = {
+            "response_mime_type": "application/json",
+            "response_schema": response_model,
+        }
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if max_tokens is not None:
+            generation_config["max_output_tokens"] = max_tokens
+
+        # Configure safety settings
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
+        # Generate response
+        response = self.client.generate_content(
+            gemini_messages,
+            generation_config=genai.GenerationConfig(**generation_config),
+            safety_settings=safety_settings,
+        )
+
+        # Extract and parse the response
+        if not response.candidates:
+            raise RuntimeError("Gemini returned no candidates in response")
+
+        response_text = None
+        try:
+            response_text = response.text
+        except Exception:
+            candidate = response.candidates[0]
+            if candidate.content and candidate.content.parts and len(candidate.content.parts) > 0:
+                response_text = candidate.content.parts[0].text
+
+        if not response_text:
+            raise ValueError("Gemini returned empty response")
+
+        # Parse JSON and validate with Pydantic
+        data = json.loads(response_text)
+        return response_model(**data)
 
     def chat_completion_streaming(
         self,

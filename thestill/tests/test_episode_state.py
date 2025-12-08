@@ -223,11 +223,11 @@ class TestStateValidation:
         assert episode.state in [EpisodeState.DISCOVERED, EpisodeState.DOWNLOADED]
 
     def test_state_with_summary_path_set(self, base_episode_data):
-        """Test that summary_path doesn't affect state (it's for future use)."""
+        """Test that summary_path correctly sets SUMMARIZED state."""
         episode = Episode(
             **base_episode_data,
             audio_path="audio.mp3",
             summary_path="summary.txt",
         )
-        # summary_path shouldn't affect state determination
-        assert episode.state == EpisodeState.DOWNLOADED
+        # summary_path is the final pipeline state
+        assert episode.state == EpisodeState.SUMMARIZED

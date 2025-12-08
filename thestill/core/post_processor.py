@@ -32,145 +32,388 @@ class ModelLimits(NamedTuple):
     context_window: int  # Maximum context window size (input)
     max_output_tokens: int = 4096  # Maximum output tokens the model can generate
     supports_temperature: bool = True  # Whether model supports custom temperature
+    supports_structured_output: bool = False  # Whether model supports schema-validated JSON output
+    structured_output_beta: Optional[str] = None  # Beta header required for structured output (e.g., Anthropic)
 
 
-# Model rate limits, context windows, and output token limits
+# Model rate limits, context windows, output token limits, and structured output support
 # Sources:
 # - OpenAI: https://platform.openai.com/docs/models
+# - OpenAI Structured Outputs: https://platform.openai.com/docs/guides/structured-outputs
 # - Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
+# - Anthropic Structured Outputs: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
 # - Google: https://ai.google.dev/gemini-api/docs/models
+# - Google Structured Outputs: https://ai.google.dev/gemini-api/docs/structured-output
+#
+# Structured output notes:
+# - OpenAI: Supported via response_format with JSON schema (gpt-4o+), NOT supported for reasoning models (o1, o3, gpt-5)
+# - Anthropic: Supported via beta header "structured-outputs-2025-11-13" (Claude 4.5+)
+# - Gemini: Supported via response_schema parameter (all models)
+# - Ollama: No native schema validation, falls back to JSON mode + Pydantic validation
 MODEL_CONFIGS = {
     # OpenAI GPT-5.1 series (November 2025) - adaptive reasoning models
     # Uses reasoning_effort parameter ('none', 'low', 'medium', 'high')
+    # Reasoning models do NOT support structured outputs
     "gpt-5.1": ModelLimits(
-        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "gpt-5.1-codex": ModelLimits(
-        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "gpt-5.1-codex-mini": ModelLimits(
-        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "gpt-5.1-codex-max": ModelLimits(
-        tpm=500000, rpm=500, tpd=5000000, context_window=1000000, max_output_tokens=32768, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=1000000,
+        max_output_tokens=32768,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
-    # OpenAI GPT-5.0 series
+    # OpenAI GPT-5.0 series - reasoning models, no structured output
     "gpt-5": ModelLimits(
-        tpm=500000, rpm=500, tpd=1500000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=1500000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "gpt-5-mini": ModelLimits(
-        tpm=500000, rpm=500, tpd=5000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "gpt-5-nano": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=200000,
+        rpm=500,
+        tpd=2000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
-    # OpenAI GPT-4.1 series
+    # OpenAI GPT-4.1 series - supports structured output
     "gpt-4.1": ModelLimits(
-        tpm=30000, rpm=500, tpd=900000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=30000,
+        rpm=500,
+        tpd=900000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gpt-4.1-mini": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=200000,
+        rpm=500,
+        tpd=2000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gpt-4.1-nano": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=200000,
+        rpm=500,
+        tpd=2000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
-    # OpenAI o-series reasoning models
+    # OpenAI o-series reasoning models - no structured output
     "o3": ModelLimits(
-        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=30000,
+        rpm=500,
+        tpd=90000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
     "o4-mini": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=False
+        tpm=200000,
+        rpm=500,
+        tpd=2000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,
+        supports_structured_output=False,
     ),
-    # OpenAI GPT-4o series (legacy)
+    # OpenAI GPT-4o series - supports structured output (Aug 2024+)
     "gpt-4o": ModelLimits(
-        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=30000,
+        rpm=500,
+        tpd=90000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gpt-4o-mini": ModelLimits(
-        tpm=200000, rpm=500, tpd=2000000, context_window=128000, max_output_tokens=16384, supports_temperature=True
+        tpm=200000,
+        rpm=500,
+        tpd=2000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gpt-4-turbo": ModelLimits(
-        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=4096, supports_temperature=True
+        tpm=30000,
+        rpm=500,
+        tpd=90000,
+        context_window=128000,
+        max_output_tokens=4096,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gpt-4-turbo-preview": ModelLimits(
-        tpm=30000, rpm=500, tpd=90000, context_window=128000, max_output_tokens=4096, supports_temperature=True
+        tpm=30000,
+        rpm=500,
+        tpd=90000,
+        context_window=128000,
+        max_output_tokens=4096,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
-    # Anthropic Claude Opus 4.5 (November 2025) - best for coding, agents, computer use
+    # Anthropic Claude Opus 4.5 (November 2025) - supports structured output (beta)
     # 200K input, 64K output tokens, uses effort parameter (low/medium/high)
     "claude-opus-4-5-20251101": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=64000, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=True,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
     ),
-    # Anthropic Claude 4.5 series
+    # Anthropic Claude 4.5 series - supports structured output (beta)
     "claude-sonnet-4-5-20250929": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=64000, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=True,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
     ),
     "claude-haiku-4-5-20251015": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
     ),
-    # Anthropic Claude 4.x models
+    # Anthropic Claude 4.x models - no structured output (pre-beta)
     "claude-sonnet-4-20250514": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-opus-4-20250514": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-opus-4-1-20250925": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
     ),
-    # Legacy Claude 3.x models (max_output_tokens: 8192 for 3.5 series, 4096 for 3.x)
+    # Legacy Claude 3.x models - no structured output
     "claude-3-5-sonnet-20241022": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-3-5-haiku-20241022": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=8192, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-3-opus-20240229": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=4096,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-3-sonnet-20240229": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=4096,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "claude-3-haiku-20240307": ModelLimits(
-        tpm=400000, rpm=1000, tpd=5000000, context_window=200000, max_output_tokens=4096, supports_temperature=True
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=4096,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
-    # Google Gemini 3 (November 2025) - 1M context, 65K output
+    # Google Gemini 3 (November 2025) - supports structured output
     # Uses thinking_level parameter for reasoning depth
     "gemini-3-pro-preview": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=65536,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
-    # Google Gemini 2.5 series (stable)
+    # Google Gemini 2.5 series - supports structured output
     "gemini-2.5-pro": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=65536,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gemini-2.5-flash": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=65536,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gemini-2.5-flash-lite": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=65536, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=65536,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
-    # Google Gemini 2.0 series (legacy)
+    # Google Gemini 2.0 series - supports structured output
     "gemini-2.0-flash-exp": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=8192, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
     "gemini-2.0-flash": ModelLimits(
-        tpm=500000, rpm=1000, tpd=10000000, context_window=1048576, max_output_tokens=8192, supports_temperature=True
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
-    # Ollama/Gemma 3 models (no rate limits for local inference)
+    # Ollama/Gemma 3 models - no native structured output (uses JSON mode + Pydantic fallback)
     # Using very high tpm/rpm/tpd since there are no actual limits
-    # max_output_tokens is model-dependent but typically limited by context_window
     "gemma3:270m": ModelLimits(
-        tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, max_output_tokens=8192, supports_temperature=True
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=32000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "gemma3:1b": ModelLimits(
-        tpm=1000000, rpm=10000, tpd=100000000, context_window=32000, max_output_tokens=8192, supports_temperature=True
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=32000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "gemma3:4b": ModelLimits(
-        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=128000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "gemma3:12b": ModelLimits(
-        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=128000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
     "gemma3:27b": ModelLimits(
-        tpm=1000000, rpm=10000, tpd=100000000, context_window=128000, max_output_tokens=8192, supports_temperature=True
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=128000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
     ),
 }
 

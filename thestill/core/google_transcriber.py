@@ -57,6 +57,10 @@ OVERLAP_DURATION_MS = 60 * 1000  # 1 minute overlap for merging
 BATCH_RECOGNIZE_TIMEOUT_SECONDS = int(MAX_CHUNK_DURATION_MS * 1.5 / 1000)  # 900 seconds
 MAX_CHUNK_RETRIES = 2  # Number of retries for stuck chunks
 
+# GCS upload settings for reliability on slow/unstable connections
+GCS_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks (default is 100MB)
+GCS_UPLOAD_TIMEOUT = 180  # seconds per chunk
+
 
 class _SubChunkResult:
     """
@@ -681,10 +685,11 @@ class GoogleCloudTranscriber:
                 # This prevents orphaned files if the app crashes before cleanup
                 self._configure_bucket_lifecycle(bucket)
 
-            # Upload audio file
+            # Upload audio file with smaller chunks and extended timeout for reliability
             blob = bucket.blob(blob_name)
+            blob.chunk_size = GCS_UPLOAD_CHUNK_SIZE
             print(f"Uploading to {gcs_uri}")
-            blob.upload_from_filename(audio_path)
+            blob.upload_from_filename(audio_path, timeout=GCS_UPLOAD_TIMEOUT)
 
             # Build recognition config
             use_diarization = self.enable_diarization and not disable_diarization

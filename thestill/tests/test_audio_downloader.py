@@ -74,7 +74,7 @@ class TestDownloadEpisode:
     """Test download_episode method."""
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_success(self, mock_get, audio_downloader, sample_episode):
+    def test_download_success(self, mock_get, audio_downloader, sample_episode, temp_storage):
         """Should download episode successfully."""
         # Setup mock response
         mock_response = Mock()
@@ -87,15 +87,19 @@ class TestDownloadEpisode:
         # Execute
         result = audio_downloader.download_episode(sample_episode, "Test Podcast")
 
-        # Verify
+        # Verify - result is relative path like "Test_Podcast/test-episode-123_hash.mp3"
         assert result is not None
-        assert Path(result).exists()
-        assert "Test_Podcast" in result
-        assert "Test_Episode_123" in result
+        # Build full path to verify file exists
+        full_path = temp_storage / result
+        assert full_path.exists()
+        # Now uses podcast subdirectory structure
+        assert "/" in result  # Contains subdirectory
+        assert result.startswith("Test_Podcast/")  # Podcast slug is directory
+        assert "test-episode-123" in result.lower()  # Episode slug in filename
         assert result.endswith(".mp3")
 
         # Verify file content
-        with open(result, "rb") as f:
+        with open(full_path, "rb") as f:
             content = f.read()
             assert content == b"chunk1chunk2chunk3"
 
@@ -109,8 +113,11 @@ class TestDownloadEpisode:
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_already_exists(self, mock_get, audio_downloader, sample_episode, temp_storage):
         """Should return existing file path without downloading."""
-        # Create existing file
-        existing_file = temp_storage / "Test_Podcast_Test_Episode_123_12345678.mp3"
+        # Create existing file with subdirectory structure (matches what downloader generates)
+        # Episode slug is auto-generated from "Test Episode 123" -> "test-episode-123"
+        podcast_dir = temp_storage / "Test_Podcast"
+        podcast_dir.mkdir(parents=True, exist_ok=True)
+        existing_file = podcast_dir / "test-episode-123_12345678.mp3"
         existing_file.write_text("existing content")
 
         # Mock to match the hash that will be generated
@@ -167,7 +174,7 @@ class TestDownloadEpisode:
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_retry_succeeds_on_second_attempt(self, mock_get, audio_downloader, sample_episode):
+    def test_download_retry_succeeds_on_second_attempt(self, mock_get, audio_downloader, sample_episode, temp_storage):
         """Should succeed if retry attempt succeeds."""
         # Setup mock to fail first time, succeed second time
         mock_response = Mock()
@@ -185,11 +192,12 @@ class TestDownloadEpisode:
 
         # Verify - should succeed on second attempt
         assert result is not None
-        assert Path(result).exists()
+        full_path = temp_storage / result
+        assert full_path.exists()
         assert mock_get.call_count == 2  # Failed once, succeeded on retry
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_retry_succeeds_on_third_attempt(self, mock_get, audio_downloader, sample_episode):
+    def test_download_retry_succeeds_on_third_attempt(self, mock_get, audio_downloader, sample_episode, temp_storage):
         """Should succeed if final retry attempt succeeds."""
         # Setup mock to fail twice, succeed on third attempt
         mock_response = Mock()
@@ -208,7 +216,8 @@ class TestDownloadEpisode:
 
         # Verify - should succeed on third attempt
         assert result is not None
-        assert Path(result).exists()
+        full_path = temp_storage / result
+        assert full_path.exists()
         assert mock_get.call_count == 3
 
     def test_download_youtube_url(self, audio_downloader):
@@ -268,7 +277,7 @@ class TestDownloadEpisode:
             assert result.endswith(ext)
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_no_content_length(self, mock_get, audio_downloader, sample_episode):
+    def test_download_no_content_length(self, mock_get, audio_downloader, sample_episode, temp_storage):
         """Should handle missing Content-Length header."""
         # Setup mock without content-length
         mock_response = Mock()
@@ -282,7 +291,8 @@ class TestDownloadEpisode:
 
         # Verify - should still work
         assert result is not None
-        assert Path(result).exists()
+        full_path = temp_storage / result
+        assert full_path.exists()
 
 
 class TestFilenameSanitization:
@@ -512,7 +522,7 @@ class TestEdgeCases:
     """Test edge cases and error handling."""
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_with_special_characters_in_title(self, mock_get, audio_downloader):
+    def test_download_with_special_characters_in_title(self, mock_get, audio_downloader, temp_storage):
         """Should handle special characters in podcast/episode titles."""
         episode = Episode(
             title="Episode: Test / Part 1 <New>",
@@ -534,11 +544,11 @@ class TestEdgeCases:
 
         # Verify - should work without errors
         assert result is not None
-        assert Path(result).exists()
+        full_path = temp_storage / result
+        assert full_path.exists()
         # Special characters should be sanitized in filename (not full path)
         filename = Path(result).name
         assert ":" not in filename
-        assert "/" not in filename
         assert "<" not in filename
         assert ">" not in filename
 

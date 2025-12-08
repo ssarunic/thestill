@@ -62,9 +62,21 @@ class AudioDownloader:
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.media_source_factory: MediaSourceFactory = MediaSourceFactory(storage_path)
 
-    def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
+    def download_episode(
+        self,
+        episode: Episode,
+        podcast_title: str,
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Download episode audio file to original_audio/ directory.
+
+        Args:
+            episode: Episode to download
+            podcast_title: Title of the podcast (used for logging and fallback naming)
+            podcast_slug: URL-safe podcast slug for filename (falls back to sanitized title)
+            episode_slug: URL-safe episode slug for filename (falls back to episode.slug or sanitized title)
 
         Returns:
             Path to downloaded audio file, or None if download failed
@@ -88,28 +100,37 @@ class AudioDownloader:
                 return None
 
             # Handle standard HTTP downloads (RSS feeds)
-            safe_podcast_title = self._sanitize_filename(podcast_title)
-            safe_episode_title = self._sanitize_filename(episode.title)
+            # Use slugs for filename generation (fall back to sanitized titles for backwards compatibility)
+            safe_podcast = podcast_slug or self._sanitize_filename(podcast_title)
+            safe_episode = episode_slug or episode.slug or self._sanitize_filename(episode.title)
 
             url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:URL_HASH_LENGTH]
 
             parsed_url = urlparse(str(episode.audio_url))
             extension = self._get_file_extension(parsed_url.path)
 
-            filename = f"{safe_podcast_title}_{safe_episode_title}_{url_hash}{extension}"
-            local_path = self.storage_path / filename
+            # Create podcast subdirectory
+            podcast_dir = self.storage_path / safe_podcast
+            podcast_dir.mkdir(parents=True, exist_ok=True)
+
+            # Filename format: {episode_slug}_{hash}.ext (podcast slug is in directory)
+            filename = f"{safe_episode}_{url_hash}{extension}"
+            local_path = podcast_dir / filename
+
+            # Database stores relative path: {podcast_slug}/{filename}
+            relative_path = f"{safe_podcast}/{filename}"
 
             if local_path.exists():
-                logger.info(f"File already exists: {filename}")
-                return str(local_path)
+                logger.info(f"File already exists: {relative_path}")
+                return relative_path
 
             logger.info(f"Downloading episode: {episode.title}")
 
             # Use retry-enabled download method for network operations
             self._download_with_retry(str(episode.audio_url), local_path)
 
-            logger.info(f"Download completed: {filename}")
-            return str(local_path)
+            logger.info(f"Download completed: {relative_path}")
+            return relative_path
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error downloading {episode.title}: {e}")

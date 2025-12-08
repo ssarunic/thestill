@@ -19,6 +19,8 @@ Analyzes transcript and metadata to extract:
 - Speaker mapping (SPEAKER_XX → Name)
 - Episode-specific facts (guests, topics, ad sponsors)
 - Initial podcast facts (hosts, recurring roles, keywords)
+
+Uses structured output (when supported) for reliable JSON schema validation.
 """
 
 import json
@@ -26,12 +28,45 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, Field
+
 from thestill.core.llm_provider import LLMProvider
 from thestill.core.post_processor import MODEL_CONFIGS
 from thestill.core.transcript_formatter import TranscriptFormatter
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 
 logger = logging.getLogger(__name__)
+
+
+# Response models for structured output
+class EpisodeFactsResponse(BaseModel):
+    """LLM response schema for episode facts extraction."""
+
+    speaker_mapping: Dict[str, str] = Field(
+        default_factory=dict, description="Mapping of SPEAKER_XX to 'Name (Role)' format"
+    )
+    guests: List[str] = Field(default_factory=list, description="List of guests in 'Name - Role/Company' format")
+    topics_keywords: List[str] = Field(default_factory=list, description="Episode-specific proper nouns and terms")
+    ad_sponsors: List[str] = Field(default_factory=list, description="Sponsors mentioned in ad segments")
+
+
+class PodcastFactsResponse(BaseModel):
+    """LLM response schema for podcast facts extraction."""
+
+    hosts: List[str] = Field(default_factory=list, description="Regular hosts in 'Name - Description' format")
+    recurring_roles: List[str] = Field(default_factory=list, description="Non-host roles that appear regularly")
+    known_guests: List[str] = Field(
+        default_factory=list, description="Notable guests (usually empty for initial extraction)"
+    )
+    sponsors: List[str] = Field(
+        default_factory=list, description="Long-term sponsors (usually empty for initial extraction)"
+    )
+    keywords: List[str] = Field(default_factory=list, description="Permanent terms related to the podcast")
+    style_notes: List[str] = Field(
+        default_factory=lambda: ["Preserve original speaking style"],
+        description="General style guidance for the podcast",
+    )
+
 
 # Default max output tokens for facts extraction (fallback for unknown models)
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
@@ -145,6 +180,9 @@ class FactsExtractor:
         - Topics and keywords specific to this episode
         - Ad sponsors mentioned
 
+        Uses structured output when supported by the provider for guaranteed
+        schema compliance.
+
         Args:
             transcript_data: Raw transcript JSON from transcriber
             podcast_title: Title of the podcast
@@ -175,13 +213,50 @@ class FactsExtractor:
             podcast_context=podcast_context,
         )
 
-        # Call LLM
-        logger.info("Extracting episode facts with LLM...")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # Call LLM with structured output
+        logger.info("Extracting episode facts with LLM (structured output)...")
+        try:
+            result = self.provider.generate_structured(
+                messages=messages,
+                response_model=EpisodeFactsResponse,
+                temperature=0.1,
+                max_tokens=self.max_output_tokens,
+            )
+
+            # Convert response model to EpisodeFacts
+            return EpisodeFacts(
+                episode_title=episode_title,
+                speaker_mapping=result.speaker_mapping,
+                guests=result.guests,
+                topics_keywords=result.topics_keywords,
+                ad_sponsors=result.ad_sponsors,
+            )
+
+        except Exception as e:
+            logger.error(f"Structured output extraction failed: {e}")
+            logger.info("Falling back to legacy JSON mode extraction...")
+            return self._extract_episode_facts_legacy(
+                messages=messages,
+                episode_title=episode_title,
+            )
+
+    def _extract_episode_facts_legacy(
+        self,
+        messages: List[Dict[str, str]],
+        episode_title: str,
+    ) -> EpisodeFacts:
+        """
+        Legacy extraction method using JSON mode (fallback).
+
+        Used when structured output fails or is not available.
+        """
         response = self.provider.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=self.max_output_tokens,
             response_format={"type": "json_object"},
@@ -217,6 +292,7 @@ class FactsExtractor:
         Extract initial podcast facts from first episode processed.
 
         This is called when no podcast facts file exists yet.
+        Uses structured output when supported by the provider.
 
         Args:
             transcript_data: Raw transcript JSON
@@ -239,13 +315,52 @@ class FactsExtractor:
             episode_facts=episode_facts,
         )
 
-        # Call LLM
-        logger.info("Extracting initial podcast facts with LLM...")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # Call LLM with structured output
+        logger.info("Extracting initial podcast facts with LLM (structured output)...")
+        try:
+            result = self.provider.generate_structured(
+                messages=messages,
+                response_model=PodcastFactsResponse,
+                temperature=0.1,
+                max_tokens=self.max_output_tokens,
+            )
+
+            # Convert response model to PodcastFacts
+            return PodcastFacts(
+                podcast_title=podcast_title,
+                hosts=result.hosts,
+                recurring_roles=result.recurring_roles,
+                known_guests=result.known_guests,
+                sponsors=result.sponsors,
+                keywords=result.keywords,
+                style_notes=result.style_notes,
+            )
+
+        except Exception as e:
+            logger.error(f"Structured output extraction failed: {e}")
+            logger.info("Falling back to legacy JSON mode extraction...")
+            return self._extract_podcast_facts_legacy(
+                messages=messages,
+                podcast_title=podcast_title,
+            )
+
+    def _extract_podcast_facts_legacy(
+        self,
+        messages: List[Dict[str, str]],
+        podcast_title: str,
+    ) -> PodcastFacts:
+        """
+        Legacy extraction method using JSON mode (fallback).
+
+        Used when structured output fails or is not available.
+        """
         response = self.provider.chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=self.max_output_tokens,
             response_format={"type": "json_object"},

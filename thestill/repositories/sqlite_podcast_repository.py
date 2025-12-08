@@ -89,6 +89,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 rss_url TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL,
+                slug TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 last_processed TIMESTAMP NULL,
                 CHECK (length(id) = 36),
@@ -97,6 +98,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_podcasts_rss_url ON podcasts(rss_url);
             CREATE INDEX IF NOT EXISTS idx_podcasts_updated_at ON podcasts(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
 
             -- ========================================================================
             -- EPISODES TABLE
@@ -108,6 +110,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 external_id TEXT NOT NULL,
                 title TEXT NOT NULL,
+                slug TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 pub_date TIMESTAMP NULL,
                 audio_url TEXT NOT NULL,
@@ -128,6 +131,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_episodes_external_id ON episodes(podcast_id, external_id);
             CREATE INDEX IF NOT EXISTS idx_episodes_pub_date ON episodes(pub_date DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_updated_at ON episodes(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_episodes_slug ON episodes(podcast_id, slug) WHERE slug != '';
 
             -- Partial indexes for state queries (highly selective)
             CREATE INDEX IF NOT EXISTS idx_episodes_state_discovered
@@ -201,7 +205,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Fetch all podcasts
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at ASC
             """
@@ -219,7 +223,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -236,7 +240,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
             """,
@@ -256,7 +260,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at ASC
                 LIMIT 1 OFFSET ?
@@ -293,10 +297,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Upsert podcast
             conn.execute(
                 """
-                INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, description, last_processed)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, last_processed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rss_url) DO UPDATE SET
                     title = excluded.title,
+                    slug = excluded.slug,
                     description = excluded.description,
                     last_processed = excluded.last_processed,
                     updated_at = ?
@@ -307,6 +312,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     now.isoformat(),
                     str(podcast.rss_url),
                     podcast.title,
+                    podcast.slug,
                     podcast.description,
                     podcast.last_processed.isoformat() if podcast.last_processed else None,
                     now.isoformat(),  # Set updated_at explicitly (no trigger)
@@ -367,6 +373,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "clean_transcript_path",
             "summary_path",
             "title",
+            "slug",
             "description",
             "duration",
         }
@@ -422,8 +429,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
-                       p.description as p_description, p.last_processed, p.updated_at as p_updated_at,
-                       e.*
+                       p.slug as p_slug, p.description as p_description, p.last_processed,
+                       p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE e.id = ?
@@ -468,6 +475,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             EpisodeState.DOWNLOADED.value: "e.audio_path IS NOT NULL AND e.downsampled_audio_path IS NULL",
             EpisodeState.DOWNSAMPLED.value: "e.downsampled_audio_path IS NOT NULL AND e.raw_transcript_path IS NULL",
             EpisodeState.TRANSCRIBED.value: "e.raw_transcript_path IS NOT NULL AND e.clean_transcript_path IS NULL",
+            EpisodeState.CLEANED.value: "e.clean_transcript_path IS NOT NULL AND e.summary_path IS NULL",
         }
 
         condition = state_conditions.get(state)
@@ -480,8 +488,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 f"""
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
-                       p.description as p_description, p.last_processed, p.updated_at as p_updated_at,
-                       e.*
+                       p.slug as p_slug, p.description as p_description, p.last_processed,
+                       p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
@@ -519,6 +527,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 created_at=datetime.fromisoformat(row["created_at"]),
                 rss_url=row["rss_url"],
                 title=row["title"],
+                slug=row["slug"] or "",
                 description=row["description"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
                 episodes=episodes,
@@ -534,6 +543,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             created_at=datetime.fromisoformat(row["p_created_at"]),
             rss_url=row["rss_url"],
             title=row["p_title"],
+            slug=row["p_slug"] or "",
             description=row["p_description"],
             last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
             episodes=[],  # Episodes not loaded
@@ -546,6 +556,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             created_at=datetime.fromisoformat(row["created_at"]),
             external_id=row["external_id"],
             title=row["title"],
+            slug=row["slug"] or "",
             description=row["description"],
             pub_date=datetime.fromisoformat(row["pub_date"]) if row["pub_date"] else None,
             audio_url=row["audio_url"],
@@ -562,10 +573,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         conn.execute(
             """
             INSERT INTO episodes (
-                id, podcast_id, created_at, updated_at, external_id, title, description,
+                id, podcast_id, created_at, updated_at, external_id, title, slug, description,
                 pub_date, audio_url, duration, audio_path, downsampled_audio_path,
                 raw_transcript_path, clean_transcript_path, summary_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -574,6 +585,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 now.isoformat(),
                 episode.external_id,
                 episode.title,
+                episode.slug,
                 episode.description,
                 episode.pub_date.isoformat() if episode.pub_date else None,
                 str(episode.audio_url),

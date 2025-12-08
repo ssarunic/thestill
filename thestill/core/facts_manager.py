@@ -26,13 +26,17 @@ from typing import Optional
 
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 from thestill.utils.path_manager import PathManager
+from thestill.utils.slug import generate_slug
 
 logger = logging.getLogger(__name__)
 
 
+# Backwards compatibility alias - use generate_slug from thestill.utils.slug instead
 def slugify(text: str) -> str:
     """
     Convert text to a URL/filesystem-safe slug.
+
+    DEPRECATED: Use generate_slug from thestill.utils.slug instead.
 
     Args:
         text: Text to slugify (e.g., podcast title)
@@ -40,17 +44,7 @@ def slugify(text: str) -> str:
     Returns:
         Lowercase string with spaces replaced by hyphens, special chars removed
     """
-    # Convert to lowercase
-    slug = text.lower()
-    # Replace spaces and underscores with hyphens
-    slug = re.sub(r"[\s_]+", "-", slug)
-    # Remove special characters except hyphens
-    slug = re.sub(r"[^a-z0-9\-]", "", slug)
-    # Collapse multiple hyphens
-    slug = re.sub(r"-+", "-", slug)
-    # Strip leading/trailing hyphens
-    slug = slug.strip("-")
-    return slug or "unnamed"
+    return generate_slug(text)
 
 
 class FactsManager:
@@ -58,8 +52,8 @@ class FactsManager:
     Manages loading and saving facts as Markdown files.
 
     Facts are stored in two directories:
-    - data/podcast_facts/{slug}.facts.md - Podcast-level facts
-    - data/episode_facts/{episode_id}.facts.md - Episode-specific facts
+    - data/podcast_facts/{podcast_slug}.facts.md - Podcast-level facts
+    - data/episode_facts/{podcast_slug}/{episode_slug}.facts.md - Episode-specific facts
     """
 
     def __init__(self, path_manager: PathManager):
@@ -98,17 +92,18 @@ class FactsManager:
         """
         return self.podcast_facts_dir() / f"{podcast_slug}.facts.md"
 
-    def get_episode_facts_path(self, episode_id: str) -> Path:
+    def get_episode_facts_path(self, podcast_slug: str, episode_slug: str) -> Path:
         """
         Get path to episode facts file.
 
         Args:
-            episode_id: Episode UUID
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
 
         Returns:
-            Path to {episode_id}.facts.md file
+            Path to {podcast_slug}/{episode_slug}.facts.md file
         """
-        return self.episode_facts_dir() / f"{episode_id}.facts.md"
+        return self.episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md"
 
     def load_podcast_facts(self, podcast_slug: str) -> Optional[PodcastFacts]:
         """
@@ -146,17 +141,18 @@ class FactsManager:
         logger.info(f"Saved podcast facts to {path}")
         return path
 
-    def load_episode_facts(self, episode_id: str) -> Optional[EpisodeFacts]:
+    def load_episode_facts(self, podcast_slug: str, episode_slug: str) -> Optional[EpisodeFacts]:
         """
         Load episode facts from Markdown file.
 
         Args:
-            episode_id: Episode UUID
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
 
         Returns:
             EpisodeFacts if file exists, None otherwise
         """
-        path = self.get_episode_facts_path(episode_id)
+        path = self.get_episode_facts_path(podcast_slug, episode_slug)
         if not path.exists():
             logger.debug(f"No episode facts found at {path}")
             return None
@@ -164,19 +160,22 @@ class FactsManager:
         content = path.read_text(encoding="utf-8")
         return self._parse_episode_facts(content)
 
-    def save_episode_facts(self, episode_id: str, facts: EpisodeFacts) -> Path:
+    def save_episode_facts(self, podcast_slug: str, episode_slug: str, facts: EpisodeFacts) -> Path:
         """
         Save episode facts to Markdown file.
 
         Args:
-            episode_id: Episode UUID
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
             facts: EpisodeFacts to save
 
         Returns:
             Path to saved file
         """
         self.ensure_facts_directories()
-        path = self.get_episode_facts_path(episode_id)
+        path = self.get_episode_facts_path(podcast_slug, episode_slug)
+        # Create podcast subdirectory if needed
+        path.parent.mkdir(parents=True, exist_ok=True)
         content = self._render_episode_facts(facts)
         path.write_text(content, encoding="utf-8")
         logger.info(f"Saved episode facts to {path}")
@@ -350,17 +349,18 @@ class FactsManager:
             return None
         return path.read_text(encoding="utf-8")
 
-    def get_episode_facts_markdown(self, episode_id: str) -> Optional[str]:
+    def get_episode_facts_markdown(self, podcast_slug: str, episode_slug: str) -> Optional[str]:
         """
         Get raw Markdown content of episode facts for embedding in prompts.
 
         Args:
-            episode_id: Episode UUID
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
 
         Returns:
             Markdown content or None if file doesn't exist
         """
-        path = self.get_episode_facts_path(episode_id)
+        path = self.get_episode_facts_path(podcast_slug, episode_slug)
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8")

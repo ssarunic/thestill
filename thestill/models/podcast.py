@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, computed_field
+from pydantic import BaseModel, Field, HttpUrl, computed_field, model_validator
 
 
 class EpisodeState(str, Enum):
@@ -51,6 +51,7 @@ class Episode(BaseModel):
 
     # Episode metadata
     title: str
+    slug: str = ""  # URL/filesystem-safe identifier (auto-generated from title if empty)
     description: str
     pub_date: Optional[datetime] = None
     audio_url: HttpUrl
@@ -62,6 +63,15 @@ class Episode(BaseModel):
     raw_transcript_path: Optional[str] = None  # Filename of the raw transcript JSON (Whisper output)
     clean_transcript_path: Optional[str] = None  # Filename of the cleaned transcript MD (corrected, formatted)
     summary_path: Optional[str] = None  # Filename of the summary (future use)
+
+    @model_validator(mode="after")
+    def ensure_slug(self) -> "Episode":
+        """Auto-generate slug from title if not provided."""
+        if not self.slug and self.title:
+            from thestill.utils.slug import generate_slug
+
+            self.slug = generate_slug(self.title)
+        return self
 
     @computed_field  # type: ignore[misc]
     @property
@@ -102,6 +112,7 @@ class Podcast(BaseModel):
 
     # Podcast metadata
     title: str
+    slug: str = ""  # URL/filesystem-safe identifier (auto-generated from title if empty)
     description: str
 
     # Processing status
@@ -109,6 +120,15 @@ class Podcast(BaseModel):
 
     # Episodes
     episodes: List[Episode] = []
+
+    @model_validator(mode="after")
+    def ensure_slug(self) -> "Podcast":
+        """Auto-generate slug from title if not provided."""
+        if not self.slug and self.title:
+            from thestill.utils.slug import generate_slug
+
+            self.slug = generate_slug(self.title)
+        return self
 
 
 class Word(BaseModel):

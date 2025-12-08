@@ -570,7 +570,12 @@ def setup_tools(server: Server, storage_path: str):
                 failed = []
                 for podcast, episode in all_episodes:
                     try:
-                        audio_path = audio_downloader.download_episode(episode, podcast.title)
+                        audio_path = audio_downloader.download_episode(
+                            episode,
+                            podcast.title,
+                            podcast_slug=podcast.slug,
+                            episode_slug=episode.slug,
+                        )
                         if audio_path:
                             audio_filename = Path(audio_path).name
                             feed_manager.mark_episode_downloaded(
@@ -951,7 +956,12 @@ def setup_tools(server: Server, storage_path: str):
                     # Step 1: Download if needed
                     if not episode.audio_path:
                         current_step = "download"
-                        audio_path = audio_downloader.download_episode(episode, podcast.title)
+                        audio_path = audio_downloader.download_episode(
+                            episode,
+                            podcast.title,
+                            podcast_slug=podcast.slug,
+                            episode_slug=episode.slug,
+                        )
                         if audio_path:
                             audio_filename = Path(audio_path).name
                             feed_manager.mark_episode_downloaded(

@@ -91,7 +91,8 @@ class TranscriptCleaningProcessor:
         podcast_description: str = "",
         episode_title: str = "",
         episode_description: str = "",
-        episode_id: str = "",
+        podcast_slug: str = "",
+        episode_slug: str = "",
         output_path: Optional[str] = None,
         path_manager: Optional[Any] = None,
         save_prompts: bool = True,
@@ -105,8 +106,8 @@ class TranscriptCleaningProcessor:
         - Pass 2: Transcript cleanup using extracted facts
 
         Facts are stored as human-editable Markdown files:
-        - Podcast facts: data/podcast_facts/{slug}.facts.md
-        - Episode facts: data/episode_facts/{episode_id}.facts.md
+        - Podcast facts: data/podcast_facts/{podcast_slug}.facts.md
+        - Episode facts: data/episode_facts/{podcast_slug}/{episode_slug}.facts.md
 
         Debug artifacts (when output_path provided):
         - data/clean_transcripts/debug/{base_name}.original.md - Formatted transcript before LLM cleaning
@@ -119,7 +120,8 @@ class TranscriptCleaningProcessor:
             podcast_description: Description of the podcast
             episode_title: Title of the episode
             episode_description: Description of the episode
-            episode_id: Internal episode ID (UUID) for facts file naming
+            podcast_slug: Slugified podcast title for facts file naming
+            episode_slug: Slugified episode title for facts file naming
             output_path: Optional path to save final cleaned transcript
             path_manager: PathManager instance for facts file paths (required)
             save_prompts: Whether to save prompts to debug folder (default: True)
@@ -129,8 +131,9 @@ class TranscriptCleaningProcessor:
             Dict with keys: cleaned_markdown, podcast_facts, episode_facts, processing_time
         """
         from thestill.core.facts_extractor import FactsExtractor
-        from thestill.core.facts_manager import FactsManager, slugify
+        from thestill.core.facts_manager import FactsManager
         from thestill.core.transcript_cleaner import TranscriptCleaner
+        from thestill.utils.slug import generate_slug
 
         if path_manager is None:
             raise ValueError("path_manager is required for clean_transcript")
@@ -151,12 +154,17 @@ class TranscriptCleaningProcessor:
             on_stream_chunk=on_stream_chunk,
         )
 
-        # Get podcast slug for facts lookup
-        podcast_slug = slugify(podcast_title) if podcast_title else "unknown-podcast"
+        # Get podcast slug for facts lookup (use provided or generate from title)
+        effective_podcast_slug = podcast_slug or (generate_slug(podcast_title) if podcast_title else "unknown-podcast")
+        effective_episode_slug = episode_slug or (generate_slug(episode_title) if episode_title else "unknown-episode")
 
         # Load existing facts
-        podcast_facts = facts_manager.load_podcast_facts(podcast_slug)
-        episode_facts = facts_manager.load_episode_facts(episode_id) if episode_id else None
+        podcast_facts = facts_manager.load_podcast_facts(effective_podcast_slug)
+        episode_facts = (
+            facts_manager.load_episode_facts(effective_podcast_slug, effective_episode_slug)
+            if effective_episode_slug
+            else None
+        )
 
         # Pass 1: Extract facts if not already present
         if not episode_facts:
@@ -170,9 +178,11 @@ class TranscriptCleaningProcessor:
                 podcast_facts=podcast_facts,
             )
             # Save episode facts
-            if episode_id:
-                facts_manager.save_episode_facts(episode_id, episode_facts)
-                logger.info(f"Saved episode facts: {facts_manager.get_episode_facts_path(episode_id)}")
+            if effective_episode_slug:
+                facts_manager.save_episode_facts(effective_podcast_slug, effective_episode_slug, episode_facts)
+                logger.info(
+                    f"Saved episode facts: {facts_manager.get_episode_facts_path(effective_podcast_slug, effective_episode_slug)}"
+                )
 
         # Initialize podcast facts if first episode
         if not podcast_facts:
@@ -184,8 +194,8 @@ class TranscriptCleaningProcessor:
                 episode_facts=episode_facts,
             )
             # Save podcast facts
-            facts_manager.save_podcast_facts(podcast_slug, podcast_facts)
-            logger.info(f"Saved podcast facts: {facts_manager.get_podcast_facts_path(podcast_slug)}")
+            facts_manager.save_podcast_facts(effective_podcast_slug, podcast_facts)
+            logger.info(f"Saved podcast facts: {facts_manager.get_podcast_facts_path(effective_podcast_slug)}")
 
         # Format JSON to markdown (much smaller than raw JSON for LLM)
         logger.info("Formatting transcript JSON to markdown...")

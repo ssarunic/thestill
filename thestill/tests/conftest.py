@@ -19,11 +19,16 @@ Provides MockLLMProvider to avoid calling real LLM APIs during tests,
 making tests faster, more reliable, and free from API costs.
 """
 
-from typing import Dict, List, Optional
+import json
+from typing import Dict, List, Optional, Type, TypeVar
 
 import pytest
+from pydantic import BaseModel
 
 from thestill.core.llm_provider import LLMProvider
+
+# TypeVar for generic structured output return type
+T = TypeVar("T", bound=BaseModel)
 
 
 class MockLLMProvider(LLMProvider):
@@ -147,6 +152,34 @@ class MockLLMProvider(LLMProvider):
     def get_model_display_name(self) -> str:
         """Return human-readable model name."""
         return f"Mock ({self._model_name})"
+
+    def supports_structured_output(self) -> bool:
+        """Mock supports structured output."""
+        return True
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Return a mock structured response.
+
+        Uses chat_completion to get response string, then parses as JSON
+        and validates with the response_model.
+        """
+        response = self.chat_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+
+        # Parse JSON and validate with Pydantic
+        data = json.loads(response)
+        return response_model(**data)
 
 
 @pytest.fixture

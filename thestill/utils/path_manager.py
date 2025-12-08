@@ -194,17 +194,20 @@ class PathManager:
         """
         return self.podcast_facts_dir() / f"{podcast_slug}.facts.md"
 
-    def episode_facts_file(self, episode_id: str) -> Path:
+    def episode_facts_file(self, podcast_slug: str, episode_slug: str) -> Path:
         """
         Get full path to an episode facts file.
 
+        Uses podcast subdirectory structure to avoid name collisions.
+
         Args:
-            episode_id: Episode UUID
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
 
         Returns:
-            Full path to the facts file in episode_facts directory
+            Full path to the facts file: episode_facts/{podcast_slug}/{episode_slug}.facts.md
         """
-        return self.episode_facts_dir() / f"{episode_id}.facts.md"
+        return self.episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md"
 
     def debug_feed_file(self, podcast_slug: str) -> Path:
         """

@@ -295,7 +295,12 @@ def download(ctx, podcast_id, max_episodes, dry_run):
             click.echo(f"\n🎧 {episode.title}")
 
             try:
-                audio_path = downloader.download_episode(episode, podcast.title)
+                audio_path = downloader.download_episode(
+                    episode,
+                    podcast.title,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
+                )
 
                 if audio_path:
                     # Store just the filename
@@ -423,19 +428,28 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                     click.echo(f"❌ Original audio file not found: {episode.audio_path}")
                     continue
 
+                # Determine output directory - use podcast subdirectory if audio_path has one
+                audio_path_obj = Path(episode.audio_path)
+                if len(audio_path_obj.parts) > 1:
+                    # audio_path is like "podcast-slug/episode_hash.mp3", use podcast-slug subdirectory
+                    podcast_subdir = audio_path_obj.parent
+                    output_dir = config.path_manager.downsampled_audio_dir() / podcast_subdir
+                else:
+                    # Flat structure (legacy) - use podcast slug for new subdirectory
+                    output_dir = config.path_manager.downsampled_audio_dir() / podcast.slug
+
+                output_dir.mkdir(parents=True, exist_ok=True)
+
                 # Downsample
                 click.echo("🔧 Downsampling to 16kHz, 16-bit, mono WAV...")
-                downsampled_path = preprocessor.downsample_audio(
-                    str(original_audio_file), str(config.path_manager.downsampled_audio_dir())
-                )
+                downsampled_path = preprocessor.downsample_audio(str(original_audio_file), str(output_dir))
 
                 if downsampled_path:
-                    # Store just the filename
-                    downsampled_filename = Path(downsampled_path).name
+                    # Store relative path: podcast-slug/filename.wav
+                    downsampled_path_obj = Path(downsampled_path)
+                    relative_path = f"{output_dir.name}/{downsampled_path_obj.name}"
 
-                    feed_manager.mark_episode_downsampled(
-                        str(podcast.rss_url), episode.external_id, downsampled_filename
-                    )
+                    feed_manager.mark_episode_downsampled(str(podcast.rss_url), episode.external_id, relative_path)
                     downsampled_count += 1
                     click.echo("✅ Downsampled successfully")
                 else:
@@ -564,7 +578,8 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
                 podcast_description=podcast.description,
                 episode_title=episode.title,
                 episode_description=episode.description,
-                episode_id=episode.id,
+                podcast_slug=podcast.slug,
+                episode_slug=episode.slug,
                 output_path=str(cleaned_path),
                 path_manager=path_manager,
                 on_stream_chunk=stream_callback,
@@ -639,17 +654,25 @@ def facts_list(ctx):
     else:
         click.echo("  (directory not created)")
 
-    # Episode facts
+    # Episode facts (now in subdirectories by podcast)
     click.echo("\n🎧 Episode Facts:")
     if episode_facts_dir.exists():
-        episode_files = list(episode_facts_dir.glob("*.facts.md"))
-        if episode_files:
-            click.echo(f"  {len(episode_files)} episode facts files")
-            # Show first 10
-            for f in sorted(episode_files)[:10]:
-                click.echo(f"  • {f.name}")
-            if len(episode_files) > 10:
-                click.echo(f"  ... and {len(episode_files) - 10} more")
+        # List podcast subdirectories
+        podcast_subdirs = [d for d in episode_facts_dir.iterdir() if d.is_dir()]
+        if podcast_subdirs:
+            total_files = 0
+            for podcast_dir in sorted(podcast_subdirs):
+                episode_files = list(podcast_dir.glob("*.facts.md"))
+                if episode_files:
+                    total_files += len(episode_files)
+                    click.echo(f"  📻 {podcast_dir.name}/ ({len(episode_files)} episodes)")
+                    # Show first 3 per podcast
+                    for f in sorted(episode_files)[:3]:
+                        click.echo(f"     • {f.name}")
+                    if len(episode_files) > 3:
+                        click.echo(f"     ... and {len(episode_files) - 3} more")
+            if total_files == 0:
+                click.echo("  (no episode facts files)")
         else:
             click.echo("  (no episode facts files)")
     else:
@@ -658,7 +681,7 @@ def facts_list(ctx):
 
 @facts.command("show")
 @click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
-@click.option("--episode-id", "-e", help="Episode UUID")
+@click.option("--episode-id", "-e", help="Episode ID (index, 'latest', or slug)")
 @click.pass_context
 def facts_show(ctx, podcast_id, episode_id):
     """Show facts for a podcast or episode"""
@@ -666,20 +689,33 @@ def facts_show(ctx, podcast_id, episode_id):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    from .core.facts_manager import FactsManager, slugify
+    from .core.facts_manager import FactsManager
+    from .utils.slug import generate_slug
 
     path_manager = ctx.obj.path_manager
     repository = ctx.obj.repository
+    podcast_service = ctx.obj.podcast_service
     facts_manager = FactsManager(path_manager)
 
-    if episode_id:
-        # Show episode facts
-        episode_facts = facts_manager.load_episode_facts(episode_id)
+    if episode_id and podcast_id:
+        # Show episode facts - need both podcast and episode to build path
+        podcast = podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}")
+            ctx.exit(1)
+
+        episode = podcast_service.get_episode(podcast_id, episode_id)
+        if not episode:
+            click.echo(f"❌ Episode not found: {episode_id}")
+            ctx.exit(1)
+
+        episode_facts = facts_manager.load_episode_facts(podcast.slug, episode.slug)
         if episode_facts:
             click.echo(CLIFormatter.format_header(f"Episode Facts: {episode_facts.episode_title}"))
-            click.echo(facts_manager.get_episode_facts_markdown(episode_id))
+            click.echo(facts_manager.get_episode_facts_markdown(podcast.slug, episode.slug))
         else:
-            click.echo(f"❌ No facts file found for episode: {episode_id}")
+            click.echo(f"❌ No facts file found for episode: {episode.title}")
+            click.echo(f"   Expected file: {facts_manager.get_episode_facts_path(podcast.slug, episode.slug)}")
             ctx.exit(1)
 
     elif podcast_id:
@@ -694,7 +730,7 @@ def facts_show(ctx, podcast_id, episode_id):
             click.echo(f"❌ Podcast not found: {podcast_id}")
             ctx.exit(1)
 
-        podcast_slug = slugify(podcast.title)
+        podcast_slug = generate_slug(podcast.title)
         podcast_facts = facts_manager.load_podcast_facts(podcast_slug)
 
         if podcast_facts:
@@ -711,7 +747,7 @@ def facts_show(ctx, podcast_id, episode_id):
 
 @facts.command("edit")
 @click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
-@click.option("--episode-id", "-e", help="Episode UUID")
+@click.option("--episode-id", "-e", help="Episode ID (index, 'latest', or slug)")
 @click.pass_context
 def facts_edit(ctx, podcast_id, episode_id):
     """Open facts file in $EDITOR"""
@@ -722,17 +758,30 @@ def facts_edit(ctx, podcast_id, episode_id):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    from .core.facts_manager import FactsManager, slugify
+    from .core.facts_manager import FactsManager
+    from .utils.slug import generate_slug
 
     path_manager = ctx.obj.path_manager
     repository = ctx.obj.repository
+    podcast_service = ctx.obj.podcast_service
     facts_manager = FactsManager(path_manager)
 
     editor = os.environ.get("EDITOR", "nano")
     file_path = None
 
-    if episode_id:
-        file_path = facts_manager.get_episode_facts_path(episode_id)
+    if episode_id and podcast_id:
+        # Episode facts - need both podcast and episode
+        podcast = podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}")
+            ctx.exit(1)
+
+        episode = podcast_service.get_episode(podcast_id, episode_id)
+        if not episode:
+            click.echo(f"❌ Episode not found: {episode_id}")
+            ctx.exit(1)
+
+        file_path = facts_manager.get_episode_facts_path(podcast.slug, episode.slug)
     elif podcast_id:
         podcast = None
         if podcast_id.isdigit():
@@ -744,7 +793,7 @@ def facts_edit(ctx, podcast_id, episode_id):
             click.echo(f"❌ Podcast not found: {podcast_id}")
             ctx.exit(1)
 
-        podcast_slug = slugify(podcast.title)
+        podcast_slug = generate_slug(podcast.title)
         file_path = facts_manager.get_podcast_facts_path(podcast_slug)
     else:
         click.echo("❌ Please specify --podcast-id or --episode-id")
@@ -773,8 +822,9 @@ def facts_extract(ctx, podcast_id, episode_id, force):
         ctx.exit(1)
 
     from .core.facts_extractor import FactsExtractor
-    from .core.facts_manager import FactsManager, slugify
+    from .core.facts_manager import FactsManager
     from .core.llm_provider import create_llm_provider
+    from .utils.slug import generate_slug
 
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
@@ -814,9 +864,10 @@ def facts_extract(ctx, podcast_id, episode_id, force):
         ctx.exit(1)
 
     # Check existing facts
-    podcast_slug = slugify(podcast.title)
+    podcast_slug = podcast.slug or generate_slug(podcast.title)
+    episode_slug = episode.slug or generate_slug(episode.title)
     if not force:
-        if facts_manager.load_episode_facts(episode.id):
+        if facts_manager.load_episode_facts(podcast_slug, episode_slug):
             click.echo(f"❌ Episode facts already exist. Use --force to overwrite.")
             ctx.exit(1)
 
@@ -868,8 +919,8 @@ def facts_extract(ctx, podcast_id, episode_id, force):
     )
 
     # Save episode facts
-    facts_manager.save_episode_facts(episode.id, episode_facts)
-    click.echo(f"✓ Saved episode facts: {facts_manager.get_episode_facts_path(episode.id)}")
+    facts_manager.save_episode_facts(podcast_slug, episode_slug, episode_facts)
+    click.echo(f"✓ Saved episode facts: {facts_manager.get_episode_facts_path(podcast_slug, episode_slug)}")
 
     # Extract podcast facts if not present
     if not podcast_facts:
@@ -1430,12 +1481,30 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             with open(clean_path, "r", encoding="utf-8") as f:
                 transcript_text = f.read()
 
-            # Generate output path
+            # Generate output path with podcast subdirectory
+            # Use episode slug and hash from clean transcript name
             base_name = clean_path.stem
             if base_name.endswith("_cleaned"):
                 base_name = base_name[: -len("_cleaned")]
-            summary_filename = f"{base_name}_summary.md"
-            output_path = path_manager.summaries_dir() / summary_filename
+
+            # Extract episode_slug_hash from base_name (format: podcast-slug_episode-slug_hash)
+            # We want just episode-slug_hash for the filename
+            parts = base_name.split("_")
+            if len(parts) >= 3:
+                # Last part is hash, everything between first and last is episode slug
+                episode_slug_hash = "_".join(parts[1:])  # episode-slug_hash
+            else:
+                episode_slug_hash = base_name
+
+            # Create podcast subdirectory
+            podcast_subdir = path_manager.summaries_dir() / podcast.slug
+            podcast_subdir.mkdir(parents=True, exist_ok=True)
+
+            summary_filename = f"{episode_slug_hash}_summary.md"
+            output_path = podcast_subdir / summary_filename
+
+            # Database stores relative path: {podcast_slug}/{filename}
+            summary_db_path = f"{podcast.slug}/{summary_filename}"
 
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
             summarizer.summarize(transcript_text, output_path)
@@ -1444,7 +1513,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             feed_manager.mark_episode_processed(
                 str(podcast.rss_url),
                 episode.external_id,
-                summary_path=summary_filename,
+                summary_path=summary_db_path,
             )
 
             click.echo(f"✓ Saved: {output_path}")

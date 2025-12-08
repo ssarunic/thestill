@@ -244,7 +244,9 @@ class TestPipelineDownload:
         audio_path = downloader.download_episode(episodes[0], podcast.title)
 
         assert audio_path is not None
-        assert Path(audio_path).exists()
+        # audio_path is relative (e.g., "Test_Podcast/episode_hash.mp3"), so build full path
+        full_audio_path = path_manager.original_audio_dir() / audio_path
+        assert full_audio_path.exists()
 
         # Mark as downloaded
         feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].external_id, audio_path)
@@ -485,31 +487,56 @@ class TestFullPipelineIntegration:
         assert episode.state == EpisodeState.CLEANED
 
     @patch("thestill.core.media_source.requests.get")
-    @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_multiple_podcasts_isolation(
-        self, mock_parse, mock_rss_get, podcast_service, feed_manager, sample_rss_feed
-    ):
+    @patch("thestill.core.media_source.feedparser.parse")
+    def test_multiple_podcasts_isolation(self, mock_parse, mock_rss_get, podcast_service, feed_manager):
         """Test that multiple podcasts are processed independently."""
-        # Mock requests.get for RSS fetching
-        mock_rss_response = MagicMock()
-        mock_rss_response.text = "<rss>fake content</rss>"
-        mock_rss_response.raise_for_status = MagicMock()
-        mock_rss_get.return_value = mock_rss_response
-
-        # Create two different RSS feeds
+        # Create two different RSS feeds with unique episode IDs
         feed1 = Mock()
         feed1.feed = {"title": "Podcast 1", "description": "First podcast"}
-        feed1.entries = [sample_rss_feed.entries[0]]
+        feed1.entries = [
+            {
+                "title": "Episode A",
+                "description": "Episode from podcast 1",
+                "guid": "podcast1-ep-a",  # Unique GUID for podcast 1
+                "published_parsed": datetime(2025, 1, 1).timetuple(),
+                "itunes_duration": "30:00",
+                "links": [{"type": "audio/mpeg", "href": "https://example.com/podcast1/ep-a.mp3"}],
+                "enclosures": [],
+            }
+        ]
         feed1.bozo = False
 
         feed2 = Mock()
         feed2.feed = {"title": "Podcast 2", "description": "Second podcast"}
-        feed2.entries = [sample_rss_feed.entries[1]]
+        feed2.entries = [
+            {
+                "title": "Episode B",
+                "description": "Episode from podcast 2",
+                "guid": "podcast2-ep-b",  # Unique GUID for podcast 2
+                "published_parsed": datetime(2025, 1, 2).timetuple(),
+                "itunes_duration": "25:00",
+                "links": [{"type": "audio/mpeg", "href": "https://example.com/podcast2/ep-b.mp3"}],
+                "enclosures": [],
+            }
+        ]
         feed2.bozo = False
 
-        # Mock different responses for different URLs
-        def mock_parse_side_effect(url):
+        # Mock requests.get to return different content per URL so feedparser can differentiate
+        def mock_get_side_effect(url, **kwargs):
+            response = MagicMock()
+            # Embed the URL in the content so feedparser mock can differentiate
             if "podcast1" in url:
+                response.text = "<rss>podcast1 content</rss>"
+            else:
+                response.text = "<rss>podcast2 content</rss>"
+            response.raise_for_status = MagicMock()
+            return response
+
+        mock_rss_get.side_effect = mock_get_side_effect
+
+        # Mock feedparser to return different feeds based on content
+        def mock_parse_side_effect(content):
+            if "podcast1" in str(content):
                 return feed1
             return feed2
 
@@ -532,11 +559,13 @@ class TestFullPipelineIntegration:
         new_episodes = feed_manager.get_new_episodes()
         assert len(new_episodes) == 2  # Episodes from both podcasts
 
-        # Verify each podcast has its own episodes
-        podcast1_refreshed = podcast_service.get_podcast(1)
-        podcast2_refreshed = podcast_service.get_podcast(2)
+        # Verify each podcast has its own episodes (use URL lookup for reliable ordering)
+        podcast1_refreshed = podcast_service.get_podcast("https://example.com/podcast1.xml")
+        podcast2_refreshed = podcast_service.get_podcast("https://example.com/podcast2.xml")
         assert podcast1_refreshed is not None
         assert podcast2_refreshed is not None
         assert len(podcast1_refreshed.episodes) == 1
         assert len(podcast2_refreshed.episodes) == 1
-        assert podcast1_refreshed.episodes[0].external_id != podcast2_refreshed.episodes[0].external_id
+        # Each podcast has a unique episode
+        assert podcast1_refreshed.episodes[0].external_id == "podcast1-ep-a"
+        assert podcast2_refreshed.episodes[0].external_id == "podcast2-ep-b"
