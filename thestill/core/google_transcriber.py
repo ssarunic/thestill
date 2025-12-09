@@ -603,6 +603,7 @@ class GoogleCloudTranscriber:
         # Check for pending operations from previous run (resumption support)
         resumed_results: Dict[int, _ChunkResult] = {}
         chunks_to_transcribe: List[int] = list(range(len(chunks)))
+        chunks_in_progress: List[int] = []  # Chunks still running on GCS
 
         if episode_id:
             pending_ops = self.get_pending_operations_for_episode(episode_id)
@@ -634,8 +635,8 @@ class GoogleCloudTranscriber:
                                 self._delete_operation(op.operation_id)
                                 # Keep in chunks_to_transcribe to retry
                             else:
-                                # Still pending - remove from chunks_to_transcribe to avoid duplicate upload
-                                # The operation is already running on GCS, we shouldn't start a new one
+                                # Still pending - track it and remove from chunks_to_transcribe
+                                chunks_in_progress.append(op.chunk_index)
                                 if op.chunk_index in chunks_to_transcribe:
                                     chunks_to_transcribe.remove(op.chunk_index)
                                 logger.info(f"Chunk {op.chunk_index} still in progress on GCS, skipping")
@@ -645,6 +646,80 @@ class GoogleCloudTranscriber:
                             logger.warning(f"Failed to resume chunk {op.chunk_index}: {e}")
                             self._delete_operation(op.operation_id)
                             # Keep in chunks_to_transcribe to retry
+
+        # Respect parallel_chunks limit including in-progress operations on GCS
+        # If we have 3 chunks in progress and parallel_chunks=3, don't start any new ones
+        available_slots = max(0, self.parallel_chunks - len(chunks_in_progress))
+        if chunks_in_progress and available_slots < len(chunks_to_transcribe):
+            logger.info(
+                f"Limiting new chunks to {available_slots} (parallel_chunks={self.parallel_chunks}, "
+                f"in_progress={len(chunks_in_progress)})"
+            )
+            print(
+                f"   ℹ️ {len(chunks_in_progress)} chunk(s) running on GCS, "
+                f"limiting new uploads to {available_slots} (max parallel={self.parallel_chunks})"
+            )
+            chunks_to_transcribe = chunks_to_transcribe[:available_slots]
+
+        # If all slots are taken by in-progress chunks, wait for them to complete
+        if chunks_in_progress and not chunks_to_transcribe and not resumed_results:
+            print(f"   ⏳ All {self.parallel_chunks} slots in use, waiting for chunks to complete...")
+            print(f"      (Checking every 30 seconds. Press Ctrl+C to cancel)")
+
+            # We need to wait for in-progress chunks and collect their results
+            # Re-fetch pending ops and poll until some complete
+            while chunks_in_progress:
+                time.sleep(30)
+                pending_ops = self.get_pending_operations_for_episode(episode_id)
+
+                newly_completed = []
+                still_pending = []
+
+                for op in pending_ops:
+                    if op.chunk_index in chunks_in_progress:
+                        try:
+                            updated_op = self.check_pending_operation(op)
+                            if updated_op.state == TranscriptionOperationState.COMPLETED:
+                                transcript_data = self.download_completed_operation(updated_op)
+                                resumed_results[op.chunk_index] = _ChunkResult(
+                                    chunk_index=op.chunk_index,
+                                    start_ms=op.chunk_start_ms or 0,
+                                    end_ms=op.chunk_end_ms or 0,
+                                    transcript=transcript_data,
+                                )
+                                newly_completed.append(op.chunk_index)
+                                print(f"   ✓ Chunk {op.chunk_index + 1}/{len(chunks)} completed")
+                            elif updated_op.state == TranscriptionOperationState.FAILED:
+                                logger.warning(f"Chunk {op.chunk_index} failed: {updated_op.error}")
+                                self._delete_operation(op.operation_id)
+                                # Add back to chunks_to_transcribe for retry
+                                chunks_to_transcribe.append(op.chunk_index)
+                                newly_completed.append(op.chunk_index)
+                            else:
+                                still_pending.append(op.chunk_index)
+                        except Exception as e:
+                            logger.warning(f"Error checking chunk {op.chunk_index}: {e}")
+                            still_pending.append(op.chunk_index)
+
+                # Update in-progress list
+                chunks_in_progress = still_pending
+
+                if newly_completed:
+                    # Some chunks completed, we can now start more
+                    remaining_chunks = [
+                        i for i in range(len(chunks)) if i not in resumed_results and i not in chunks_in_progress
+                    ]
+                    available_slots = max(0, self.parallel_chunks - len(chunks_in_progress))
+                    chunks_to_transcribe = remaining_chunks[:available_slots]
+
+                    if chunks_to_transcribe:
+                        print(f"   ➡️ Starting {len(chunks_to_transcribe)} more chunk(s)")
+                        break  # Exit wait loop to start new chunks
+                    elif not chunks_in_progress:
+                        break  # All done
+
+                if chunks_in_progress:
+                    print(f"   ⏳ Still waiting for {len(chunks_in_progress)} chunk(s)...")
 
         # Create progress tracker for coordinated output
         total_to_transcribe = len(chunks_to_transcribe)
