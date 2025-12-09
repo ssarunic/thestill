@@ -68,6 +68,7 @@ class PathManager:
         self._podcast_facts = "podcast_facts"
         self._episode_facts = "episode_facts"
         self._debug_feeds = "debug_feeds"
+        self._pending_operations = "pending_operations"
         self._feeds_file = "feeds.json"
 
     # Directory path methods
@@ -108,6 +109,10 @@ class PathManager:
         """Get path to debug feeds directory (stores last downloaded RSS for each podcast)"""
         return self.storage_path / self._debug_feeds
 
+    def pending_operations_dir(self) -> Path:
+        """Get path to pending operations directory (stores in-progress transcription jobs)"""
+        return self.storage_path / self._pending_operations
+
     # File path methods
 
     def original_audio_file(self, filename: str) -> Path:
@@ -138,25 +143,63 @@ class PathManager:
         """
         Get full path to a raw transcript file.
 
+        Supports both flat structure (legacy) and podcast subdirectory structure.
+        If filename contains a path separator (e.g., "podcast-slug/episode_transcript.json"),
+        it will be treated as a relative path.
+
         Args:
-            filename: Name of the transcript file
+            filename: Name of the transcript file, or relative path with podcast subdirectory
 
         Returns:
             Full path to the transcript file in raw_transcripts directory
         """
         return self.raw_transcripts_dir() / filename
 
+    def raw_transcript_file_with_podcast(self, podcast_slug: str, episode_filename: str) -> Path:
+        """
+        Get full path to a raw transcript file in a podcast subdirectory.
+
+        Uses podcast subdirectory structure to organize transcripts by podcast.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_filename: Filename of the raw transcript (e.g., "episode-slug_hash_transcript.json")
+
+        Returns:
+            Full path: raw_transcripts/{podcast_slug}/{episode_filename}
+        """
+        return self.raw_transcripts_dir() / podcast_slug / episode_filename
+
     def clean_transcript_file(self, filename: str) -> Path:
         """
         Get full path to a cleaned transcript file.
 
+        Supports both flat structure (legacy) and podcast subdirectory structure.
+        If filename contains a path separator (e.g., "podcast-slug/episode_cleaned.md"),
+        it will be treated as a relative path.
+
         Args:
-            filename: Name of the cleaned transcript file
+            filename: Name of the cleaned transcript file, or relative path with podcast subdirectory
 
         Returns:
             Full path to the cleaned transcript file in clean_transcripts directory
         """
         return self.clean_transcripts_dir() / filename
+
+    def clean_transcript_file_with_podcast(self, podcast_slug: str, episode_filename: str) -> Path:
+        """
+        Get full path to a cleaned transcript file in a podcast subdirectory.
+
+        Uses podcast subdirectory structure to organize transcripts by podcast.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_filename: Filename of the cleaned transcript (e.g., "episode-slug_hash_cleaned.md")
+
+        Returns:
+            Full path: clean_transcripts/{podcast_slug}/{episode_filename}
+        """
+        return self.clean_transcripts_dir() / podcast_slug / episode_filename
 
     def summary_file(self, filename: str) -> Path:
         """
@@ -224,6 +267,39 @@ class PathManager:
         """
         return self.debug_feeds_dir() / f"{podcast_slug}.xml"
 
+    def pending_operation_file(self, operation_id: str) -> Path:
+        """
+        Get full path to a pending operation state file.
+
+        Stores the state of in-progress Google Cloud transcription operations
+        so they can be resumed if the app is restarted.
+
+        Args:
+            operation_id: Unique operation identifier
+
+        Returns:
+            Full path to the operation JSON file in pending_operations directory
+        """
+        return self.pending_operations_dir() / f"{operation_id}.json"
+
+    def chunks_dir(self, podcast_slug: str, episode_slug: str) -> Path:
+        """
+        Get path to chunk debug directory for an episode.
+
+        Chunks are stored inside the podcast subdirectory to avoid clashes
+        between episodes from different podcasts.
+
+        Structure: raw_transcripts/{podcast_slug}/chunks/{episode_slug}/
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title (used as subfolder name)
+
+        Returns:
+            Full path to the chunks directory for this episode
+        """
+        return self.raw_transcripts_dir() / podcast_slug / "chunks" / episode_slug
+
     def feeds_file(self) -> Path:
         """
         Get full path to the feeds.json metadata file.
@@ -248,6 +324,7 @@ class PathManager:
             self.podcast_facts_dir(),
             self.episode_facts_dir(),
             self.debug_feeds_dir(),
+            self.pending_operations_dir(),
         ]
 
         for directory in directories:

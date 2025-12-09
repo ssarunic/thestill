@@ -119,6 +119,21 @@ class TestFilePaths:
         expected = Path("/tmp/test/raw_transcripts/episode_transcript.json")
         assert pm.raw_transcript_file(filename) == expected
 
+    def test_raw_transcript_file_with_subdirectory(self):
+        """Test raw_transcript_file with podcast subdirectory path"""
+        pm = PathManager(storage_path="/tmp/test")
+        filename = "my-podcast/episode_transcript.json"
+        expected = Path("/tmp/test/raw_transcripts/my-podcast/episode_transcript.json")
+        assert pm.raw_transcript_file(filename) == expected
+
+    def test_raw_transcript_file_with_podcast(self):
+        """Test raw_transcript_file_with_podcast returns correct path"""
+        pm = PathManager(storage_path="/tmp/test")
+        podcast_slug = "my-podcast"
+        episode_filename = "episode-slug_abc123_transcript.json"
+        expected = Path("/tmp/test/raw_transcripts/my-podcast/episode-slug_abc123_transcript.json")
+        assert pm.raw_transcript_file_with_podcast(podcast_slug, episode_filename) == expected
+
     def test_clean_transcript_file(self):
         """Test clean_transcript_file returns correct path"""
         pm = PathManager(storage_path="/tmp/test")

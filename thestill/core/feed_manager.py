@@ -326,12 +326,13 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
                         # Set file paths - state will be auto-computed by model validator
-                        if raw_transcript_path:
-                            episode.raw_transcript_path = raw_transcript_path
-                        if clean_transcript_path:
-                            episode.clean_transcript_path = clean_transcript_path
-                        if summary_path:
-                            episode.summary_path = summary_path
+                        # None = don't update, "" = clear the field, "path" = set the field
+                        if raw_transcript_path is not None:
+                            episode.raw_transcript_path = raw_transcript_path if raw_transcript_path else None
+                        if clean_transcript_path is not None:
+                            episode.clean_transcript_path = clean_transcript_path if clean_transcript_path else None
+                        if summary_path is not None:
+                            episode.summary_path = summary_path if summary_path else None
                         podcast.last_processed = datetime.now()
                         logger.info(f"Marked episode as processed (in transaction): {episode_external_id}")
                         episode_found = True
@@ -344,13 +345,14 @@ class PodcastFeedManager:
         else:
             # Direct repository update (original logic)
             # Build updates dictionary - only file paths, state will be auto-computed
+            # None = don't update, "" = clear the field, "path" = set the field
             updates: Dict[str, Any] = {}
-            if raw_transcript_path:
-                updates["raw_transcript_path"] = raw_transcript_path
-            if clean_transcript_path:
-                updates["clean_transcript_path"] = clean_transcript_path
-            if summary_path:
-                updates["summary_path"] = summary_path
+            if raw_transcript_path is not None:
+                updates["raw_transcript_path"] = raw_transcript_path if raw_transcript_path else None
+            if clean_transcript_path is not None:
+                updates["clean_transcript_path"] = clean_transcript_path if clean_transcript_path else None
+            if summary_path is not None:
+                updates["summary_path"] = summary_path if summary_path else None
 
             # Try to update existing episode
             success = self.repository.update_episode(podcast_rss_url, episode_external_id, updates)

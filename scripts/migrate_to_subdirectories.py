@@ -27,7 +27,7 @@ This script:
    - Moves the file to the subdirectory
    - Updates the database path to use relative path format
 
-Supports: original_audio, downsampled_audio (audio files only for now)
+Supports: original_audio, downsampled_audio, raw_transcripts
 
 Usage:
     python scripts/migrate_to_subdirectories.py --dry-run    # Preview changes
@@ -153,13 +153,14 @@ def get_file_moves(
     file_configs = [
         ("audio_path", "original_audio"),
         ("downsampled_audio_path", "downsampled_audio"),
+        ("raw_transcript_path", "raw_transcripts"),
     ]
 
     # Get all episodes with their podcast info
     cursor = conn.execute(
         """
         SELECT e.id, e.title, e.slug as e_slug,
-               e.audio_path, e.downsampled_audio_path,
+               e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
                p.title as p_title, p.slug as p_slug
         FROM episodes e
         JOIN podcasts p ON e.podcast_id = p.id
@@ -170,7 +171,7 @@ def get_file_moves(
     for row in cursor.fetchall():
         episode_id = row[0]
         episode_slug = row[2] or ""
-        podcast_slug = row[6] or ""
+        podcast_slug = row[7] or ""  # Index 7 after adding raw_transcript_path
 
         if not podcast_slug:
             logger.warning(f"Episode {episode_id} missing podcast slug, skipping")
@@ -180,7 +181,7 @@ def get_file_moves(
         # Check each file type
         for db_field, subdir in file_configs:
             # Get current path from row
-            field_index = {"audio_path": 3, "downsampled_audio_path": 4}[db_field]
+            field_index = {"audio_path": 3, "downsampled_audio_path": 4, "raw_transcript_path": 5}[db_field]
             current_value = row[field_index]
 
             if not current_value:

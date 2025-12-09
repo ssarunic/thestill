@@ -204,11 +204,11 @@ class TranscriptCleaningProcessor:
         # Save debug artifacts if output_path provided
         if output_path:
             # Save original formatted markdown (before LLM cleaning)
-            self._save_phase_output(output_path, "original", formatted_markdown, episode_id)
+            self._save_phase_output(output_path, "original", formatted_markdown)
 
             # Save speaker mapping from episode facts
             if episode_facts and episode_facts.speaker_mapping:
-                self._save_phase_output(output_path, "speakers", episode_facts.speaker_mapping, episode_id)
+                self._save_phase_output(output_path, "speakers", episode_facts.speaker_mapping)
 
         # Pass 2: Clean transcript using facts
         logger.info("Pass 2: Cleaning transcript with facts context...")

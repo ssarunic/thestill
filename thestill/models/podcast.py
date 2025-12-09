@@ -185,6 +185,68 @@ class CleanedTranscript(BaseModel):
     created_at: datetime
 
 
+class TranscriptionOperationState(str, Enum):
+    """
+    State of a Google Cloud transcription operation.
+
+    States represent the lifecycle of a BatchRecognize operation:
+    - PENDING: Operation submitted, waiting for completion
+    - COMPLETED: Operation finished successfully, transcript available in GCS
+    - DOWNLOADED: Transcript downloaded from GCS to local storage
+    - FAILED: Operation failed (see error field for details)
+    - CANCELLED: Operation was cancelled
+    """
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    DOWNLOADED = "downloaded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TranscriptionOperation(BaseModel):
+    """
+    Tracks the state of a Google Cloud BatchRecognize operation.
+
+    This model is persisted to disk so that pending operations can be
+    resumed if the application is restarted. It stores all information
+    needed to:
+    1. Check if the operation has completed
+    2. Download the transcript from GCS when ready
+    3. Clean up GCS resources after download
+
+    Stored in: data/pending_operations/{operation_id}.json
+    """
+
+    # Operation identifiers
+    operation_id: str  # Short ID for local tracking (extracted from operation_name)
+    operation_name: str  # Full GCP operation name (projects/.../operations/...)
+
+    # Context for resuming
+    episode_id: str  # Episode UUID for updating database after completion
+    podcast_slug: str  # For organizing output files
+    episode_slug: str  # For naming output files
+    audio_gcs_uri: str  # GCS URI of the uploaded audio file
+    output_gcs_uri: str  # GCS URI prefix where transcript will be written
+    language: str  # Language code used for transcription
+
+    # Chunk info (for multi-chunk transcriptions)
+    chunk_index: Optional[int] = None  # None for single-file transcription
+    chunk_start_ms: Optional[int] = None  # Start time offset for this chunk
+    chunk_end_ms: Optional[int] = None  # End time offset for this chunk
+    total_chunks: Optional[int] = None  # Total number of chunks
+
+    # State tracking
+    state: TranscriptionOperationState = TranscriptionOperationState.PENDING
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+    # Result info (populated after completion)
+    transcript_gcs_uri: Optional[str] = None  # Actual transcript file URI (from response)
+    local_transcript_path: Optional[str] = None  # Path where transcript was downloaded
+
+
 class TranscriptCleaningMetrics(BaseModel):
     """
     Performance metrics for transcript cleaning pipeline.

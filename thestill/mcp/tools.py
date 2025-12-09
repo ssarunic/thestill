@@ -577,10 +577,8 @@ def setup_tools(server: Server, storage_path: str):
                             episode_slug=episode.slug,
                         )
                         if audio_path:
-                            audio_filename = Path(audio_path).name
-                            feed_manager.mark_episode_downloaded(
-                                str(podcast.rss_url), episode.external_id, audio_filename
-                            )
+                            # Store the relative path (includes podcast subdirectory)
+                            feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_path)
                             downloaded.append({"podcast": podcast.title, "episode": episode.title})
                         else:
                             failed.append(
@@ -762,16 +760,28 @@ def setup_tools(server: Server, storage_path: str):
                             )
                             continue
 
-                        # Determine output path
-                        output_filename = f"{audio_file.stem}_transcript.json"
-                        output_path = str(path_manager.raw_transcript_file(output_filename))
+                        # Determine output path using podcast subdirectory structure
+                        # Downsampled audio path is in format: pod-slug/episode-slug_hash.wav
+                        path_parts = Path(episode.downsampled_audio_path).parts
+                        if len(path_parts) >= 2:
+                            podcast_subdir = path_parts[0]
+                        else:
+                            podcast_subdir = podcast.slug
+
+                        # Create podcast subdirectory for raw transcripts
+                        transcript_dir = path_manager.raw_transcripts_dir() / podcast_subdir
+                        transcript_dir.mkdir(parents=True, exist_ok=True)
+
+                        transcript_filename = f"{audio_file.stem}_transcript.json"
+                        output_path = str(transcript_dir / transcript_filename)
+                        output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
                         # Transcribe
                         transcript_data = transcriber.transcribe_audio(str(audio_file), output_path)
 
                         if transcript_data:
                             feed_manager.mark_episode_processed(
-                                str(podcast.rss_url), episode.external_id, raw_transcript_path=output_filename
+                                str(podcast.rss_url), episode.external_id, raw_transcript_path=output_db_path
                             )
                             transcribed.append({"podcast": podcast.title, "episode": episode.title})
                         else:
@@ -861,12 +871,28 @@ def setup_tools(server: Server, storage_path: str):
                         with open(transcript_path, "r", encoding="utf-8") as f:
                             transcript_data = json.load(f)
 
-                        # Generate output filename
+                        # Generate output path using podcast subdirectory structure
                         base_name = transcript_path.stem
                         if base_name.endswith("_transcript"):
                             base_name = base_name[: -len("_transcript")]
-                        cleaned_filename = f"{base_name}_cleaned.md"
-                        cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
+
+                        # Extract episode_slug_hash from base_name (format: podcast-slug_episode-slug_hash)
+                        # We want just episode-slug_hash for the filename
+                        parts = base_name.split("_")
+                        if len(parts) >= 3:
+                            episode_slug_hash = "_".join(parts[1:])  # episode-slug_hash
+                        else:
+                            episode_slug_hash = base_name
+
+                        # Create podcast subdirectory
+                        podcast_subdir = path_manager.clean_transcripts_dir() / podcast.slug
+                        podcast_subdir.mkdir(parents=True, exist_ok=True)
+
+                        cleaned_filename = f"{episode_slug_hash}_cleaned.md"
+                        cleaned_path = podcast_subdir / cleaned_filename
+
+                        # Database stores relative path: {podcast_slug}/{filename}
+                        clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
                         result_data = cleaning_processor.clean_transcript(
                             transcript_data=transcript_data,
@@ -874,7 +900,8 @@ def setup_tools(server: Server, storage_path: str):
                             podcast_description=podcast.description,
                             episode_title=episode.title,
                             episode_description=episode.description,
-                            episode_id=episode.id,
+                            podcast_slug=podcast.slug,
+                            episode_slug=episode.slug,
                             output_path=str(cleaned_path),
                             path_manager=path_manager,
                         )
@@ -884,7 +911,7 @@ def setup_tools(server: Server, storage_path: str):
                                 str(podcast.rss_url),
                                 episode.external_id,
                                 raw_transcript_path=transcript_path.name,
-                                clean_transcript_path=cleaned_filename,
+                                clean_transcript_path=clean_transcript_db_path,
                             )
                             cleaned.append(
                                 {
@@ -963,11 +990,9 @@ def setup_tools(server: Server, storage_path: str):
                             episode_slug=episode.slug,
                         )
                         if audio_path:
-                            audio_filename = Path(audio_path).name
-                            feed_manager.mark_episode_downloaded(
-                                str(podcast.rss_url), episode.external_id, audio_filename
-                            )
-                            episode.audio_path = audio_filename
+                            # Store the relative path (includes podcast subdirectory)
+                            feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_path)
+                            episode.audio_path = audio_path
                             steps_completed.append("download")
                         else:
                             return [
@@ -1034,15 +1059,27 @@ def setup_tools(server: Server, storage_path: str):
                             ]
 
                         audio_file = path_manager.downsampled_audio_file(episode.downsampled_audio_path)
-                        output_filename = f"{audio_file.stem}_transcript.json"
-                        output_path = str(path_manager.raw_transcript_file(output_filename))
+
+                        # Determine output path using podcast subdirectory structure
+                        path_parts = Path(episode.downsampled_audio_path).parts
+                        if len(path_parts) >= 2:
+                            podcast_subdir = path_parts[0]
+                        else:
+                            podcast_subdir = podcast.slug
+
+                        transcript_dir = path_manager.raw_transcripts_dir() / podcast_subdir
+                        transcript_dir.mkdir(parents=True, exist_ok=True)
+
+                        transcript_filename = f"{audio_file.stem}_transcript.json"
+                        output_path = str(transcript_dir / transcript_filename)
+                        output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
                         transcript_data = transcriber.transcribe_audio(str(audio_file), output_path)
                         if transcript_data:
                             feed_manager.mark_episode_processed(
-                                str(podcast.rss_url), episode.external_id, raw_transcript_path=output_filename
+                                str(podcast.rss_url), episode.external_id, raw_transcript_path=output_db_path
                             )
-                            episode.raw_transcript_path = output_filename
+                            episode.raw_transcript_path = output_db_path
                             steps_completed.append("transcribe")
                         else:
                             return [
@@ -1323,6 +1360,7 @@ def _get_transcriber(config):
                 enable_diarization=config.enable_diarization,
                 min_speakers=config.min_speakers,
                 max_speakers=config.max_speakers,
+                parallel_chunks=config.max_workers,
             )
         elif config.enable_diarization:
             from ..core.transcriber import WhisperXTranscriber

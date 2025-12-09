@@ -39,11 +39,19 @@ logger = logging.getLogger(__name__)
 
 
 # Response models for structured output
+class SpeakerMappingEntry(BaseModel):
+    """A single speaker mapping entry for structured output compatibility."""
+
+    speaker_id: str = Field(description="The speaker ID from the transcript (e.g., 'SPEAKER_00', 'SPEAKER_01')")
+    name: str = Field(description="The identified name and role (e.g., 'John Smith (Host)')")
+
+
 class EpisodeFactsResponse(BaseModel):
     """LLM response schema for episode facts extraction."""
 
-    speaker_mapping: Dict[str, str] = Field(
-        default_factory=dict, description="Mapping of SPEAKER_XX to 'Name (Role)' format"
+    speaker_mapping: List[SpeakerMappingEntry] = Field(
+        default_factory=list,
+        description="List of speaker mappings from SPEAKER_XX to 'Name (Role)' format",
     )
     guests: List[str] = Field(default_factory=list, description="List of guests in 'Name - Role/Company' format")
     topics_keywords: List[str] = Field(default_factory=list, description="Episode-specific proper nouns and terms")
@@ -229,9 +237,11 @@ class FactsExtractor:
             )
 
             # Convert response model to EpisodeFacts
+            # Convert List[SpeakerMappingEntry] back to Dict[str, str] for EpisodeFacts
+            speaker_mapping_dict = {entry.speaker_id: entry.name for entry in result.speaker_mapping}
             return EpisodeFacts(
                 episode_title=episode_title,
-                speaker_mapping=result.speaker_mapping,
+                speaker_mapping=speaker_mapping_dict,
                 guests=result.guests,
                 topics_keywords=result.topics_keywords,
                 ad_sponsors=result.ad_sponsors,

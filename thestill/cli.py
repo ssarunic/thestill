@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -303,10 +305,8 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                 )
 
                 if audio_path:
-                    # Store just the filename
-                    audio_filename = Path(audio_path).name
-
-                    feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_filename)
+                    # Store the relative path (includes podcast subdirectory)
+                    feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_path)
                     downloaded_count += 1
                     click.echo("✅ Downloaded successfully")
                 else:
@@ -564,12 +564,29 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
             with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript_data = json.load(f)
 
-            # Generate output path
+            # Generate output path using podcast subdirectory structure
             base_name = transcript_path.stem
             if base_name.endswith("_transcript"):
                 base_name = base_name[: -len("_transcript")]
-            cleaned_filename = f"{base_name}_cleaned.md"
-            cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
+
+            # Extract episode_slug_hash from base_name (format: podcast-slug_episode-slug_hash)
+            # We want just episode-slug_hash for the filename
+            parts = base_name.split("_")
+            if len(parts) >= 3:
+                # Last part is hash, everything between first and last is episode slug
+                episode_slug_hash = "_".join(parts[1:])  # episode-slug_hash
+            else:
+                episode_slug_hash = base_name
+
+            # Create podcast subdirectory
+            podcast_subdir = path_manager.clean_transcripts_dir() / podcast.slug
+            podcast_subdir.mkdir(parents=True, exist_ok=True)
+
+            cleaned_filename = f"{episode_slug_hash}_cleaned.md"
+            cleaned_path = podcast_subdir / cleaned_filename
+
+            # Database stores relative path: {podcast_slug}/{filename}
+            clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
             # Clean transcript
             result = cleaning_processor.clean_transcript(
@@ -591,11 +608,13 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
 
             if result:
                 # Update feed manager
+                # Note: raw_transcript_path is preserved (episode.raw_transcript_path)
+                # Only clean_transcript_path is updated
                 feed_manager.mark_episode_processed(
                     str(podcast.rss_url),
                     episode.external_id,
-                    raw_transcript_path=transcript_path.name,
-                    clean_transcript_path=cleaned_filename,
+                    raw_transcript_path=episode.raw_transcript_path,
+                    clean_transcript_path=clean_transcript_db_path,
                 )
 
                 total_processed += 1
@@ -1046,6 +1065,31 @@ def status(ctx):
         f"  Summary: {stats.episodes_summarized}/{stats.episodes_total} fully processed ({stats.episodes_unprocessed} in progress)"
     )
 
+    # Show pending Google Cloud transcription operations (if using Google provider)
+    if config.transcription_provider.lower() == "google":
+        try:
+            transcriber = GoogleCloudTranscriber(
+                credentials_path=config.google_app_credentials or None,
+                project_id=config.google_cloud_project_id or None,
+                storage_bucket=config.google_storage_bucket or None,
+                enable_diarization=config.enable_diarization,
+                min_speakers=config.min_speakers,
+                max_speakers=config.max_speakers,
+                path_manager=config.path_manager,
+                _quiet=True,
+            )
+            pending_ops = transcriber.list_pending_operations()
+            if pending_ops:
+                click.echo("\n⏳ Pending Transcription Operations:")
+                for op in pending_ops:
+                    age_hours = (datetime.now() - op.created_at).total_seconds() / 3600
+                    click.echo(f"   • {op.podcast_slug}/{op.episode_slug}")
+                    click.echo(f"     Started: {age_hours:.1f} hours ago")
+                    click.echo(f"     Operation: {op.operation_id[:16]}...")
+                click.echo(f"\n   Run 'thestill transcribe' to check and download completed operations")
+        except Exception:
+            pass  # Silently skip if Google Cloud is not configured
+
 
 @main.command()
 @click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
@@ -1085,8 +1129,13 @@ def cleanup(ctx, dry_run):
 @click.option("--episode-id", help="Transcribe specific episode (requires --podcast-id)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to transcribe")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be transcribed without transcribing")
+@click.option(
+    "--cancel-pending",
+    is_flag=True,
+    help="Download completed operations and CANCEL still-running ones (don't wait)",
+)
 @click.pass_context
-def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run):
+def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run, cancel_pending):
     """Transcribe audio files to JSON transcripts.
 
     Without arguments: Transcribes all downloaded episodes that need transcription.
@@ -1100,6 +1149,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     preprocessor = ctx.obj.audio_preprocessor
 
     # Initialize the appropriate transcriber based on config settings
+    transcriber = None
     if config.transcription_provider.lower() == "google":
         click.echo("🎤 Using Google Cloud Speech-to-Text")
         if not config.google_app_credentials and not config.google_cloud_project_id:
@@ -1115,7 +1165,88 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 enable_diarization=config.enable_diarization,
                 min_speakers=config.min_speakers,
                 max_speakers=config.max_speakers,
+                parallel_chunks=config.max_workers,
+                path_manager=config.path_manager,
             )
+
+            # Check for pending operations from previous runs
+            pending_ops = transcriber.list_pending_operations()
+            if pending_ops:
+                click.echo(f"\n⏳ Found {len(pending_ops)} pending transcription operation(s) from previous run")
+                for op in pending_ops:
+                    age_hours = (datetime.now() - op.created_at).total_seconds() / 3600
+                    click.echo(f"   • {op.podcast_slug}/{op.episode_slug} (started {age_hours:.1f}h ago)")
+
+                if cancel_pending:
+                    # Cancel mode: download completed, cancel still-running
+                    click.echo("\n⏹ Cancelling pending operations...")
+                    results = transcriber.reset_pending_operations()
+                else:
+                    # Wait mode: wait for all to complete
+                    click.echo("\n🔄 Waiting for pending operations to complete...")
+                    click.echo("   (This may take a while - checking every 30 seconds)")
+                    click.echo("   (Use --cancel-pending to cancel instead of waiting)")
+                    results = transcriber.wait_for_pending_operations(timeout_minutes=240)
+
+                completed_count = 0
+                cancelled_count = 0
+                failed = 0
+
+                # Process each operation result
+                for op, transcript_data in results:
+                    if transcript_data is not None:
+                        # Save transcript and update database
+                        try:
+                            # Build output path using podcast subdirectory structure
+                            transcript_dir = config.path_manager.raw_transcripts_dir() / op.podcast_slug
+                            transcript_dir.mkdir(parents=True, exist_ok=True)
+
+                            transcript_filename = f"{op.episode_slug}_transcript.json"
+                            output_path = transcript_dir / transcript_filename
+                            output_db_path = f"{op.podcast_slug}/{transcript_filename}"
+
+                            # Save transcript to file
+                            with open(output_path, "w", encoding="utf-8") as f:
+                                json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+
+                            # Update database - find podcast by slug and episode by id
+                            # We need to find the podcast URL to use mark_episode_processed
+                            podcast = ctx.obj.repository.get(op.episode_id)
+                            if podcast is None:
+                                # Find podcast by slug (iterate through all podcasts)
+                                for p in ctx.obj.repository.list():
+                                    if p.slug == op.podcast_slug:
+                                        for ep in p.episodes:
+                                            if ep.id == op.episode_id:
+                                                ctx.obj.feed_manager.mark_episode_processed(
+                                                    str(p.rss_url),
+                                                    ep.external_id,
+                                                    raw_transcript_path=output_db_path,
+                                                    clean_transcript_path="",  # Clear - needs re-cleaning
+                                                    summary_path="",  # Clear - needs re-summarizing
+                                                )
+                                                break
+                                        break
+
+                            click.echo(f"   ✅ {op.podcast_slug}/{op.episode_slug} - saved to {output_db_path}")
+                            completed_count += 1
+                        except Exception as e:
+                            click.echo(f"   ❌ {op.podcast_slug}/{op.episode_slug} - failed to save: {e}")
+                            failed += 1
+                    elif op.state.value == "pending":
+                        # Operation was cancelled or timed out
+                        cancelled_count += 1
+                    elif op.state.value == "failed":
+                        failed += 1
+
+                if completed_count > 0:
+                    click.echo(f"\n✅ {completed_count} operation(s) completed and saved")
+                if cancelled_count > 0:
+                    click.echo(f"⏹ {cancelled_count} operation(s) cancelled")
+                if failed > 0:
+                    click.echo(f"❌ {failed} operation(s) failed")
+                click.echo("")
+
         except ImportError as e:
             click.echo(f"❌ {e}", err=True)
             click.echo("   Install with: pip install google-cloud-speech google-cloud-storage", err=True)
@@ -1316,9 +1447,27 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 # Use downsampled audio directly (no further preprocessing needed)
                 transcription_audio_path = str(audio_file)
 
-                # Determine output path
-                output_filename = f"{audio_file.stem}_transcript.json"
-                output = str(config.path_manager.raw_transcript_file(output_filename))
+                # Determine output path using podcast subdirectory structure
+                # Downsampled audio path is in format: pod-slug/episode-slug_hash.wav
+                # Extract podcast slug from the path
+                path_parts = Path(episode.downsampled_audio_path).parts
+                if len(path_parts) >= 2:
+                    # Has subdirectory structure: pod-slug/filename.wav
+                    podcast_subdir = path_parts[0]
+                else:
+                    # Fallback for legacy flat structure
+                    podcast_subdir = podcast.slug
+
+                # Create podcast subdirectory for raw transcripts
+                transcript_dir = config.path_manager.raw_transcripts_dir() / podcast_subdir
+                transcript_dir.mkdir(parents=True, exist_ok=True)
+
+                # Filename format: episode-slug_hash_transcript.json
+                transcript_filename = f"{audio_file.stem}_transcript.json"
+                output = str(transcript_dir / transcript_filename)
+
+                # Database stores relative path: pod-slug/episode-slug_hash_transcript.json
+                output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
                 # Transcribe
                 click.echo("📝 Transcribing...")
@@ -1336,17 +1485,27 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         "api_key": config.openai_api_key,
                     }
 
+                # Pass episode context for Google Cloud operation persistence
+                # This allows resuming transcriptions if the app is restarted
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
                     output,
                     clean_transcript=config.enable_transcript_cleaning,
                     cleaning_config=cleaning_config,
+                    episode_id=episode.id,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
                 )
 
                 if transcript_data:
                     # Mark episode as having transcript
+                    # Clear clean_transcript_path and summary_path since underlying data changed
                     feed_manager.mark_episode_processed(
-                        str(podcast.rss_url), episode.external_id, raw_transcript_path=output_filename
+                        str(podcast.rss_url),
+                        episode.external_id,
+                        raw_transcript_path=output_db_path,
+                        clean_transcript_path="",  # Clear - needs re-cleaning
+                        summary_path="",  # Clear - needs re-summarizing
                     )
                     transcribed_count += 1
                     click.echo("✅ Transcription complete!")
