@@ -667,6 +667,16 @@ class GoogleCloudTranscriber:
         # Total chunks is the ORIGINAL count, not len(chunk_tasks) which may be fewer after resumption
         total_chunks = len(chunks)
 
+        # Log what we're about to transcribe for debugging
+        if chunk_tasks:
+            chunk_indices = [t.chunk_index for t in chunk_tasks]
+            logger.info(
+                f"Will transcribe {len(chunk_tasks)} chunks: indices {chunk_indices} "
+                f"(total_chunks={total_chunks}, resumed={len(resumed_results)})"
+            )
+            if resumed_results:
+                print(f"   Will transcribe chunks: {[i+1 for i in chunk_indices]} of {total_chunks}")
+
         # Transcribe remaining chunks (parallel or sequential based on configuration)
         if chunk_tasks:
             if self.parallel_chunks > 1 and len(chunk_tasks) > 1:
