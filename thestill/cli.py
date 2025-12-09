@@ -1209,24 +1209,18 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                             with open(output_path, "w", encoding="utf-8") as f:
                                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
-                            # Update database - find podcast by slug and episode by id
-                            # We need to find the podcast URL to use mark_episode_processed
-                            podcast = ctx.obj.repository.get(op.episode_id)
-                            if podcast is None:
-                                # Find podcast by slug (iterate through all podcasts)
-                                for p in ctx.obj.repository.list():
-                                    if p.slug == op.podcast_slug:
-                                        for ep in p.episodes:
-                                            if ep.id == op.episode_id:
-                                                ctx.obj.feed_manager.mark_episode_processed(
-                                                    str(p.rss_url),
-                                                    ep.external_id,
-                                                    raw_transcript_path=output_db_path,
-                                                    clean_transcript_path="",  # Clear - needs re-cleaning
-                                                    summary_path="",  # Clear - needs re-summarizing
-                                                )
-                                                break
-                                        break
+                            # Update database - find podcast and episode by ID
+                            # Use get_episode which returns (Podcast, Episode) tuple
+                            result = ctx.obj.repository.get_episode(op.episode_id)
+                            if result:
+                                podcast, episode = result
+                                ctx.obj.feed_manager.mark_episode_processed(
+                                    str(podcast.rss_url),
+                                    episode.external_id,
+                                    raw_transcript_path=output_db_path,
+                                    clean_transcript_path="",  # Clear - needs re-cleaning
+                                    summary_path="",  # Clear - needs re-summarizing
+                                )
 
                             click.echo(f"   ✅ {op.podcast_slug}/{op.episode_slug} - saved to {output_db_path}")
                             completed_count += 1
