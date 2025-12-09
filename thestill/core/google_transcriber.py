@@ -664,6 +664,9 @@ class GoogleCloudTranscriber:
             for i in chunks_to_transcribe
         ]
 
+        # Total chunks is the ORIGINAL count, not len(chunk_tasks) which may be fewer after resumption
+        total_chunks = len(chunks)
+
         # Transcribe remaining chunks (parallel or sequential based on configuration)
         if chunk_tasks:
             if self.parallel_chunks > 1 and len(chunk_tasks) > 1:
@@ -677,6 +680,7 @@ class GoogleCloudTranscriber:
                     episode_id=episode_id,
                     podcast_slug=podcast_slug,
                     episode_slug=episode_slug,
+                    total_chunks=total_chunks,
                 )
             else:
                 chunk_results = self._transcribe_chunks_sequential(
@@ -689,6 +693,7 @@ class GoogleCloudTranscriber:
                     episode_id=episode_id,
                     podcast_slug=podcast_slug,
                     episode_slug=episode_slug,
+                    total_chunks=total_chunks,
                 )
         else:
             chunk_results = []
@@ -726,6 +731,7 @@ class GoogleCloudTranscriber:
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        total_chunks: Optional[int] = None,
     ) -> List[_ChunkResult]:
         """
         Transcribe chunks sequentially (original behavior).
@@ -740,12 +746,14 @@ class GoogleCloudTranscriber:
             episode_id: Optional episode UUID for operation persistence
             podcast_slug: Optional podcast slug for operation persistence
             episode_slug: Optional episode slug for operation persistence
+            total_chunks: Total number of chunks (for naming, may differ from len(tasks) when resuming)
 
         Returns:
             List of chunk results
         """
         results = []
-        total_chunks = len(tasks)
+        # Use provided total_chunks or fall back to len(tasks)
+        actual_total_chunks = total_chunks if total_chunks is not None else len(tasks)
         for task in tasks:
             result = self._transcribe_single_chunk(
                 task,
@@ -757,7 +765,7 @@ class GoogleCloudTranscriber:
                 episode_id=episode_id,
                 podcast_slug=podcast_slug,
                 episode_slug=episode_slug,
-                total_chunks=total_chunks,
+                total_chunks=actual_total_chunks,
             )
             results.append(result)
         return results
@@ -773,6 +781,7 @@ class GoogleCloudTranscriber:
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        total_chunks: Optional[int] = None,
     ) -> List[_ChunkResult]:
         """
         Transcribe chunks in parallel using ThreadPoolExecutor.
@@ -789,13 +798,15 @@ class GoogleCloudTranscriber:
             episode_id: Optional episode UUID for operation persistence
             podcast_slug: Optional podcast slug for operation persistence
             episode_slug: Optional episode slug for operation persistence
+            total_chunks: Total number of chunks (for naming, may differ from len(tasks) when resuming)
 
         Returns:
             List of chunk results
         """
         num_workers = min(self.parallel_chunks, len(tasks))
         results: List[_ChunkResult] = []
-        total_chunks = len(tasks)
+        # Use provided total_chunks or fall back to len(tasks)
+        actual_total_chunks = total_chunks if total_chunks is not None else len(tasks)
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             # Submit all tasks
@@ -811,7 +822,7 @@ class GoogleCloudTranscriber:
                     episode_id,
                     podcast_slug,
                     episode_slug,
-                    total_chunks,
+                    actual_total_chunks,
                 ): task
                 for task in tasks
             }
