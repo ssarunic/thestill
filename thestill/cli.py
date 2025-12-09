@@ -1170,76 +1170,44 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             )
 
             # Check for pending operations from previous runs
+            # Note: For chunked transcriptions, individual chunks are persisted as operations.
+            # These are handled by _transcribe_chunked when the episode is processed again.
+            # We only need to handle --cancel-pending here to clean up operations.
             pending_ops = transcriber.list_pending_operations()
             if pending_ops:
-                click.echo(f"\n⏳ Found {len(pending_ops)} pending transcription operation(s) from previous run")
-                for op in pending_ops:
-                    age_hours = (datetime.now() - op.created_at).total_seconds() / 3600
-                    click.echo(f"   • {op.podcast_slug}/{op.episode_slug} (started {age_hours:.1f}h ago)")
+                # Group by episode to show user-friendly count
+                episodes_with_pending = set((op.podcast_slug, op.episode_slug) for op in pending_ops)
+                click.echo(
+                    f"\n⏳ Found {len(pending_ops)} pending chunk operation(s) for {len(episodes_with_pending)} episode(s)"
+                )
+                for podcast_slug, episode_slug in sorted(episodes_with_pending):
+                    chunk_count = sum(
+                        1 for op in pending_ops if op.podcast_slug == podcast_slug and op.episode_slug == episode_slug
+                    )
+                    click.echo(f"   • {podcast_slug}/{episode_slug} ({chunk_count} chunk(s))")
 
                 if cancel_pending:
                     # Cancel mode: download completed, cancel still-running
                     click.echo("\n⏹ Cancelling pending operations...")
                     results = transcriber.reset_pending_operations()
+
+                    completed_count = sum(1 for op, data in results if data is not None)
+                    cancelled_count = sum(1 for op, data in results if data is None and op.state.value == "pending")
+                    failed_count = sum(1 for op, data in results if op.state.value == "failed")
+
+                    if completed_count > 0:
+                        click.echo(f"   Downloaded {completed_count} completed chunk(s)")
+                    if cancelled_count > 0:
+                        click.echo(f"   Cancelled {cancelled_count} in-progress chunk(s)")
+                    if failed_count > 0:
+                        click.echo(f"   {failed_count} chunk(s) had failed")
+                    click.echo("   Note: Cancelled episodes will restart from scratch on next run")
+                    click.echo("")
                 else:
-                    # Wait mode: wait for all to complete
-                    click.echo("\n🔄 Waiting for pending operations to complete...")
-                    click.echo("   (This may take a while - checking every 30 seconds)")
-                    click.echo("   (Use --cancel-pending to cancel instead of waiting)")
-                    results = transcriber.wait_for_pending_operations(timeout_minutes=240)
-
-                completed_count = 0
-                cancelled_count = 0
-                failed = 0
-
-                # Process each operation result
-                for op, transcript_data in results:
-                    if transcript_data is not None:
-                        # Save transcript and update database
-                        try:
-                            # Build output path using podcast subdirectory structure
-                            transcript_dir = config.path_manager.raw_transcripts_dir() / op.podcast_slug
-                            transcript_dir.mkdir(parents=True, exist_ok=True)
-
-                            transcript_filename = f"{op.episode_slug}_transcript.json"
-                            output_path = transcript_dir / transcript_filename
-                            output_db_path = f"{op.podcast_slug}/{transcript_filename}"
-
-                            # Save transcript to file
-                            with open(output_path, "w", encoding="utf-8") as f:
-                                json.dump(transcript_data, f, indent=2, ensure_ascii=False)
-
-                            # Update database - find podcast and episode by ID
-                            # Use get_episode which returns (Podcast, Episode) tuple
-                            result = ctx.obj.repository.get_episode(op.episode_id)
-                            if result:
-                                podcast, episode = result
-                                ctx.obj.feed_manager.mark_episode_processed(
-                                    str(podcast.rss_url),
-                                    episode.external_id,
-                                    raw_transcript_path=output_db_path,
-                                    clean_transcript_path="",  # Clear - needs re-cleaning
-                                    summary_path="",  # Clear - needs re-summarizing
-                                )
-
-                            click.echo(f"   ✅ {op.podcast_slug}/{op.episode_slug} - saved to {output_db_path}")
-                            completed_count += 1
-                        except Exception as e:
-                            click.echo(f"   ❌ {op.podcast_slug}/{op.episode_slug} - failed to save: {e}")
-                            failed += 1
-                    elif op.state.value == "pending":
-                        # Operation was cancelled or timed out
-                        cancelled_count += 1
-                    elif op.state.value == "failed":
-                        failed += 1
-
-                if completed_count > 0:
-                    click.echo(f"\n✅ {completed_count} operation(s) completed and saved")
-                if cancelled_count > 0:
-                    click.echo(f"⏹ {cancelled_count} operation(s) cancelled")
-                if failed > 0:
-                    click.echo(f"❌ {failed} operation(s) failed")
-                click.echo("")
+                    # Normal mode: pending operations will be resumed when their episodes are processed
+                    click.echo("   These will be resumed when the episode is transcribed again.")
+                    click.echo("   (Use --cancel-pending to discard and start fresh)")
+                    click.echo("")
 
         except ImportError as e:
             click.echo(f"❌ {e}", err=True)
