@@ -23,7 +23,6 @@ import feedparser
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
-from ..utils.slug import generate_slug
 from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
@@ -193,7 +192,7 @@ class PodcastFeedManager:
                 from .media_source import RSSMediaSource
 
                 if isinstance(source, RSSMediaSource):
-                    fetch_kwargs["podcast_slug"] = generate_slug(podcast.title)
+                    fetch_kwargs["podcast_slug"] = podcast.slug
 
                 episodes = source.fetch_episodes(**fetch_kwargs)
 
