@@ -146,6 +146,17 @@ class Segment(BaseModel):
     text: str
     words: List[Word] = []
     speaker: Optional[str] = None
+    # Enhanced metadata from Google Speech-to-Text V2 (optional)
+    confidence: Optional[float] = None  # Alternative-level confidence (0.0-1.0)
+    language_code: Optional[str] = None  # Per-segment detected language
+    result_end_offset: Optional[float] = None  # End offset for alignment verification
+
+
+class GoogleTranscriptMetadata(BaseModel):
+    """Metadata from Google Cloud Speech-to-Text API response."""
+
+    request_id: Optional[str] = None  # UUID for debugging/audit trails
+    total_billed_duration_seconds: Optional[float] = None  # For cost tracking
 
 
 class TranscriptMetadata(BaseModel):
@@ -156,6 +167,8 @@ class TranscriptMetadata(BaseModel):
     timestamp: float
     diarization_enabled: bool = False
     speakers_detected: Optional[int] = None
+    # Enhanced metadata from Google Speech-to-Text V2 (optional)
+    google_metadata: Optional[GoogleTranscriptMetadata] = None
 
 
 class Quote(BaseModel):

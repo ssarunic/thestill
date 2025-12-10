@@ -2509,6 +2509,9 @@ class GoogleCloudTranscriber:
                     "end": float,
                     "text": str,
                     "speaker": str,  # "SPEAKER_01", "SPEAKER_02", etc.
+                    "confidence": float,  # Alternative-level confidence (0.0-1.0)
+                    "language_code": str,  # Per-segment detected language
+                    "result_end_offset": float,  # End offset from Google result
                     "words": [
                         {
                             "word": str,
@@ -2524,7 +2527,11 @@ class GoogleCloudTranscriber:
             "model_used": str,
             "timestamp": float,
             "diarization_enabled": bool,
-            "speakers_detected": int
+            "speakers_detected": int,
+            "google_metadata": {  # NEW: Metadata from Google API
+                "request_id": str,  # UUID for debugging/audit
+                "total_billed_duration_seconds": float  # For cost tracking
+            }
         }
         """
         segments = []
@@ -2534,15 +2541,36 @@ class GoogleCloudTranscriber:
         segment_id = 0
         detected_language = "en-US"
 
+        # Extract metadata from Google response
+        google_metadata = {}
+        if hasattr(transcript, "metadata") and transcript.metadata:
+            metadata = transcript.metadata
+            if hasattr(metadata, "request_id") and metadata.request_id:
+                google_metadata["request_id"] = metadata.request_id
+            if hasattr(metadata, "total_billed_duration") and metadata.total_billed_duration:
+                google_metadata["total_billed_duration_seconds"] = self._get_seconds(metadata.total_billed_duration)
+
         for result in transcript.results:
             if not result.alternatives:
                 continue
 
             alternative = result.alternatives[0]
 
-            # Get detected language if available
+            # Get detected language if available (per-result)
+            result_language = None
             if hasattr(result, "language_code") and result.language_code:
-                detected_language = result.language_code
+                result_language = result.language_code
+                detected_language = result.language_code  # Also update global for backward compat
+
+            # Get result end offset for alignment verification
+            result_end_offset = None
+            if hasattr(result, "result_end_offset") and result.result_end_offset:
+                result_end_offset = self._get_seconds(result.result_end_offset)
+
+            # Get alternative-level confidence (overall confidence for this result)
+            alternative_confidence = None
+            if hasattr(alternative, "confidence"):
+                alternative_confidence = alternative.confidence
 
             # Check if we have word-level information
             if hasattr(alternative, "words") and alternative.words:
@@ -2571,16 +2599,22 @@ class GoogleCloudTranscriber:
                             # Save previous segment
                             if current_words:
                                 segment_text = " ".join(w["word"] for w in current_words)
-                                segments.append(
-                                    {
-                                        "id": segment_id,
-                                        "start": current_start,
-                                        "end": current_end,
-                                        "text": segment_text,
-                                        "speaker": current_speaker,
-                                        "words": current_words,
-                                    }
-                                )
+                                segment_data = {
+                                    "id": segment_id,
+                                    "start": current_start,
+                                    "end": current_end,
+                                    "text": segment_text,
+                                    "speaker": current_speaker,
+                                    "words": current_words,
+                                }
+                                # Add enhanced metadata if available
+                                if alternative_confidence is not None:
+                                    segment_data["confidence"] = alternative_confidence
+                                if result_language:
+                                    segment_data["language_code"] = result_language
+                                if result_end_offset is not None:
+                                    segment_data["result_end_offset"] = result_end_offset
+                                segments.append(segment_data)
                                 full_text_parts.append(segment_text)
                                 segment_id += 1
 
@@ -2605,16 +2639,22 @@ class GoogleCloudTranscriber:
                     # Save final segment
                     if current_words:
                         segment_text = " ".join(w["word"] for w in current_words)
-                        segments.append(
-                            {
-                                "id": segment_id,
-                                "start": current_start,
-                                "end": current_end,
-                                "text": segment_text,
-                                "speaker": current_speaker,
-                                "words": current_words,
-                            }
-                        )
+                        segment_data = {
+                            "id": segment_id,
+                            "start": current_start,
+                            "end": current_end,
+                            "text": segment_text,
+                            "speaker": current_speaker,
+                            "words": current_words,
+                        }
+                        # Add enhanced metadata if available
+                        if alternative_confidence is not None:
+                            segment_data["confidence"] = alternative_confidence
+                        if result_language:
+                            segment_data["language_code"] = result_language
+                        if result_end_offset is not None:
+                            segment_data["result_end_offset"] = result_end_offset
+                        segments.append(segment_data)
                         full_text_parts.append(segment_text)
                         segment_id += 1
                 else:
@@ -2636,16 +2676,22 @@ class GoogleCloudTranscriber:
 
                     if words:
                         segment_text = " ".join(w["word"] for w in words)
-                        segments.append(
-                            {
-                                "id": segment_id,
-                                "start": words[0]["start"],
-                                "end": words[-1]["end"],
-                                "text": segment_text,
-                                "speaker": None,
-                                "words": words,
-                            }
-                        )
+                        segment_data = {
+                            "id": segment_id,
+                            "start": words[0]["start"],
+                            "end": words[-1]["end"],
+                            "text": segment_text,
+                            "speaker": None,
+                            "words": words,
+                        }
+                        # Add enhanced metadata if available
+                        if alternative_confidence is not None:
+                            segment_data["confidence"] = alternative_confidence
+                        if result_language:
+                            segment_data["language_code"] = result_language
+                        if result_end_offset is not None:
+                            segment_data["result_end_offset"] = result_end_offset
+                        segments.append(segment_data)
                         full_text_parts.append(segment_text)
                         segment_id += 1
 
@@ -2653,22 +2699,28 @@ class GoogleCloudTranscriber:
                 # Fallback: use transcript text without word-level info
                 segment_text = alternative.transcript.strip()
                 if segment_text:
-                    segments.append(
-                        {
-                            "id": segment_id,
-                            "start": 0.0,
-                            "end": 0.0,
-                            "text": segment_text,
-                            "speaker": None,
-                            "words": [],
-                        }
-                    )
+                    segment_data = {
+                        "id": segment_id,
+                        "start": 0.0,
+                        "end": 0.0,
+                        "text": segment_text,
+                        "speaker": None,
+                        "words": [],
+                    }
+                    # Add enhanced metadata if available
+                    if alternative_confidence is not None:
+                        segment_data["confidence"] = alternative_confidence
+                    if result_language:
+                        segment_data["language_code"] = result_language
+                    if result_end_offset is not None:
+                        segment_data["result_end_offset"] = result_end_offset
+                    segments.append(segment_data)
                     full_text_parts.append(segment_text)
                     segment_id += 1
 
         full_text = " ".join(full_text_parts)
 
-        return {
+        result = {
             "audio_file": audio_path,
             "language": detected_language,
             "text": full_text,
@@ -2679,6 +2731,12 @@ class GoogleCloudTranscriber:
             "diarization_enabled": self.enable_diarization,
             "speakers_detected": len(speakers_detected) if self.enable_diarization else None,
         }
+
+        # Add Google metadata if available
+        if google_metadata:
+            result["google_metadata"] = google_metadata
+
+        return result
 
     def _get_seconds(self, duration) -> float:
         """Convert protobuf Duration to seconds."""
