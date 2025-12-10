@@ -1,6 +1,12 @@
 # MCP Server Usage Guide
 
-This guide explains how to use the thestill.ai MCP server with Claude Desktop and other MCP-compatible clients.
+This guide explains how to use the thestill.ai MCP server with Claude Desktop, ChatGPT Desktop, and other MCP-compatible clients.
+
+## Supported Clients
+
+- **Claude Desktop** (Anthropic) - Full MCP support
+- **ChatGPT Desktop** (OpenAI) - MCP support via plugin system
+- **Any MCP-compatible client** - Standard MCP protocol
 
 ## Installation
 
@@ -74,6 +80,43 @@ Close and reopen Claude Desktop for the changes to take effect.
 ### Step 4: Verify Connection
 
 In Claude Desktop, you should see a small indicator showing the MCP server is connected. You can now use natural language to interact with your podcast library!
+
+---
+
+## Setting Up with ChatGPT Desktop
+
+ChatGPT Desktop supports MCP servers through its plugin system.
+
+### Locate Configuration File
+
+The configuration file location depends on your OS:
+
+- **macOS**: `~/Library/Application Support/ChatGPT/chatgpt_config.json`
+- **Windows**: `%APPDATA%\ChatGPT\chatgpt_config.json`
+
+### Add Server Configuration
+
+Edit the configuration file and add the thestill MCP server:
+
+```json
+{
+  "mcpServers": {
+    "thestill": {
+      "command": "thestill-mcp",
+      "args": [],
+      "env": {
+        "STORAGE_PATH": "/path/to/your/data"
+      }
+    }
+  }
+}
+```
+
+**Note**: Replace `/path/to/your/data` with the actual path to your thestill data directory.
+
+### Restart and Verify
+
+Close and reopen ChatGPT Desktop for the changes to take effect. You should see the thestill tools available when you start a new conversation. You can now use natural language to interact with your podcast library!
 
 ---
 

@@ -6,7 +6,7 @@ An automated pipeline that converts podcasts into readable, summarized content t
 
 - **[CLAUDE.md](CLAUDE.md)** - Project overview, architecture, and development commands
 - **[CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md)** - Coding standards, best practices, and development workflow
-- **[MCP_USAGE.md](docs/MCP_USAGE.md)** - MCP server setup and usage guide for Claude Desktop
+- **[MCP_USAGE.md](docs/MCP_USAGE.md)** - MCP server setup for Claude Desktop, ChatGPT Desktop, and other clients
 - **[TRANSCRIPT_CLEANING.md](docs/TRANSCRIPT_CLEANING.md)** - Transcript cleaning configuration and usage
 
 ## Overview
@@ -14,6 +14,7 @@ An automated pipeline that converts podcasts into readable, summarized content t
 thestill.ai is a production-ready podcast transcription and analysis pipeline that converts audio podcasts into clean, readable transcripts with speaker identification. Built with Python and designed for both local and cloud processing.
 
 **Key Capabilities:**
+
 - **Transcription**: OpenAI Whisper (local) or Google Cloud Speech-to-Text (cloud)
 - **Speaker Diarization**: Automatic speaker identification in multi-person conversations
 - **Transcript Cleaning**: LLM-powered correction of errors, removal of filler words and ads
@@ -23,9 +24,11 @@ thestill.ai is a production-ready podcast transcription and analysis pipeline th
 - **MCP Server**: Integrate with Claude Desktop and other MCP-compatible clients
 
 **Processing Pipeline:**
+
+```text
+Refresh → Download → Downsample → Transcribe → Clean → Summarize
 ```
-Refresh → Download → Downsample → Transcribe → Clean
-```
+
 Each step is atomic and can be run independently for horizontal scaling.
 
 ## Features
@@ -69,7 +72,8 @@ Create a `.env` file with your configuration. Choose from multiple LLM providers
 
 #### Transcription Configuration
 
-**Option 1: Local Whisper (Free, Private)**
+##### Local Whisper (Free, Private)
+
 ```env
 TRANSCRIPTION_PROVIDER=whisper
 WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
@@ -77,7 +81,8 @@ ENABLE_DIARIZATION=true  # Optional: Enable speaker identification
 HUGGINGFACE_TOKEN=your_token  # Required for diarization
 ```
 
-**Option 2: Google Cloud Speech-to-Text (Fast, Accurate)**
+##### Google Cloud Speech-to-Text (Fast, Accurate)
+
 ```env
 TRANSCRIPTION_PROVIDER=google
 GOOGLE_APP_CREDENTIALS=/path/to/service-account-key.json
@@ -87,28 +92,32 @@ ENABLE_DIARIZATION=true  # Built-in, no additional setup needed
 
 #### LLM Provider Configuration
 
-**Option 1: OpenAI (Cloud)**
+##### OpenAI (Cloud)
+
 ```env
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o
 ```
 
-**Option 2: Ollama (Local, Free)**
+##### Ollama (Local, Free)
+
 ```env
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=gemma3:4b
 ```
 
-**Option 3: Google Gemini (Fast, Cost-Effective)**
+##### Google Gemini (Fast, Cost-Effective)
+
 ```env
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.0-flash-exp
 ```
 
-**Option 4: Anthropic Claude (High Quality)**
+##### Anthropic Claude (High Quality)
+
 ```env
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
@@ -119,7 +128,7 @@ See [.env.example](.env.example) for all available configuration options.
 
 ### Basic Usage
 
-The processing pipeline consists of five atomic steps:
+The processing pipeline consists of six atomic steps:
 
 ```bash
 # 1. Add a podcast from various sources
@@ -154,6 +163,11 @@ thestill clean-transcript
 thestill clean-transcript --dry-run        # Preview without changes
 thestill clean-transcript --max-episodes 5 # Limit cleaning
 
+# 7. Summarize cleaned transcripts (optional)
+thestill summarize
+thestill summarize --dry-run               # Preview without changes
+thestill summarize --max-episodes 3        # Limit summaries
+
 # Management commands
 thestill list                              # List tracked podcasts
 thestill status                            # Show system status and statistics
@@ -163,63 +177,53 @@ thestill cleanup                           # Remove old files
 thestill-mcp
 ```
 
-**Why Separate Steps?**
+#### Why Separate Steps?
 
 Each step is atomic and idempotent, allowing you to:
+
 - Resume from failures without re-downloading/re-transcribing
 - Scale horizontally (e.g., multiple workers per step)
 - Mix local and cloud processing (Whisper + Google, OpenAI + Ollama)
 - Process episodes incrementally as they arrive
 
-## MCP Server (Claude Desktop Integration)
+## MCP Server (AI Desktop Integration)
 
-thestill.ai includes an MCP (Model Context Protocol) server that lets you interact with your podcast library through Claude Desktop or other MCP-compatible clients.
+thestill.ai includes an MCP (Model Context Protocol) server that lets you interact with your podcast library through Claude Desktop, ChatGPT Desktop, or other MCP-compatible clients using natural language.
 
-### Quick Setup
+**Supported Clients:**
 
-1. **Configure Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+- Claude Desktop (Anthropic)
+- ChatGPT Desktop (OpenAI)
+- Any MCP-compatible client
 
-```json
-{
-  "mcpServers": {
-    "thestill": {
-      "command": "thestill-mcp",
-      "args": [],
-      "env": {
-        "STORAGE_PATH": "/path/to/your/data"
-      }
-    }
-  }
-}
-```
+**Example Commands:**
 
-2. **Restart Claude Desktop**
+- "What podcasts am I tracking?"
+- "Show me the latest episode from The Rest is Politics"
+- "Process and summarize the latest episode"
+- "Add the Lex Fridman podcast"
 
-3. **Start using natural language:**
-   - "What podcasts am I tracking?"
-   - "Show me the latest episode from The Rest is Politics"
-   - "Summarize episodes from the last 24 hours"
-   - "Add the Lex Fridman podcast"
-
-For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
+For setup instructions and detailed usage, see **[MCP Server Guide](docs/MCP_USAGE.md)**.
 
 ## Commands Reference
 
 ### Feed Management
+
 - `thestill add <url>` - Add a podcast from RSS, Apple Podcasts, or YouTube
 - `thestill remove <podcast_id>` - Remove a podcast by index or URL
 - `thestill list` - Show all tracked podcasts with indices
 
 ### Processing Pipeline
+
 - `thestill refresh [--podcast-id ID] [--max-episodes N] [--dry-run]` - Discover new episodes
 - `thestill download [--podcast-id ID] [--max-episodes N] [--dry-run]` - Download audio files
 - `thestill downsample [--podcast-id ID] [--max-episodes N] [--dry-run]` - Convert to 16kHz WAV
 - `thestill transcribe [--podcast-id ID] [--episode-id ID] [--max-episodes N] [--dry-run]` - Transcribe audio
-- `thestill clean-transcript [--max-episodes N] [--dry-run]` - Clean with LLM
+- `thestill clean-transcript [--max-episodes N] [--dry-run] [--force]` - Clean with LLM
+- `thestill summarize [--max-episodes N] [--dry-run] [--force]` - Generate comprehensive summaries
 
-### Post-Processing
+### Facts Management
 
-- `thestill summarize [TRANSCRIPT_PATH] [--max-episodes N] [--dry-run]` - Generate comprehensive summaries
 - `thestill facts list` - List all facts files (podcast and episode)
 - `thestill facts show <podcast_id> [--episode-id ID]` - Show facts for a podcast or episode
 - `thestill facts edit <podcast_id> [--episode-id ID]` - Open facts file in $EDITOR
@@ -244,25 +248,31 @@ For detailed MCP usage, see [docs/MCP_USAGE.md](docs/MCP_USAGE.md).
 
 ### Common Workflows
 
-**Process a single podcast end-to-end:**
+#### Process a single podcast end-to-end
+
 ```bash
 thestill add "https://example.com/podcast/rss"
 thestill refresh --podcast-id 1
 thestill download --podcast-id 1
 thestill downsample --podcast-id 1
 thestill transcribe --podcast-id 1
-thestill clean-transcript  # Optional
+thestill clean-transcript --podcast-id 1  # Optional: clean transcripts
+thestill summarize --podcast-id 1         # Optional: generate summaries
 ```
 
-**Process all new episodes from all podcasts:**
+#### Process all new episodes from all podcasts
+
 ```bash
 thestill refresh
 thestill download
 thestill downsample
 thestill transcribe
+thestill clean-transcript  # Optional
+thestill summarize         # Optional
 ```
 
-**Preview changes before committing:**
+#### Preview changes before committing
+
 ```bash
 thestill refresh --dry-run
 thestill download --dry-run
@@ -272,7 +282,7 @@ thestill download --dry-run
 
 Processed content is saved in organized directories:
 
-```
+```text
 data/
 ├── original_audio/        # Downloaded audio files (MP3, M4A, etc.)
 ├── downsampled_audio/     # 16kHz WAV files for transcription
@@ -287,15 +297,18 @@ data/
 ### Episode States
 
 Episodes progress through states tracked in `podcasts.db`:
+
 1. **discovered** - Found in RSS feed, has `audio_url`
 2. **downloaded** - Audio file downloaded, has `audio_path`
 3. **downsampled** - Converted to WAV, has `downsampled_audio_path`
 4. **transcribed** - Transcription complete, has `raw_transcript_path`
 5. **cleaned** - Transcript cleaned (optional), has `clean_transcript_path`
+6. **summarized** - Summary generated (optional), has `summary_path`
 
 ### Transcript Format
 
-**Raw Transcript (JSON)**:
+#### Raw Transcript (JSON)
+
 ```json
 {
   "segments": [
@@ -309,7 +322,8 @@ Episodes progress through states tracked in `podcasts.db`:
 }
 ```
 
-**Cleaned Transcript (Markdown)**:
+#### Cleaned Transcript (Markdown)
+
 ```markdown
 [00:15] [Host] Welcome to the podcast.
 [00:18] [Guest] Thanks for having me on.
@@ -319,7 +333,8 @@ Episodes progress through states tracked in `podcasts.db`:
 
 Key environment variables (see [.env.example](.env.example) for complete list):
 
-### Transcription
+### Transcription Settings
+
 ```env
 TRANSCRIPTION_PROVIDER=whisper     # whisper or google
 WHISPER_MODEL=base                 # tiny, base, small, medium, large
@@ -327,7 +342,8 @@ ENABLE_DIARIZATION=true            # Enable speaker identification
 HUGGINGFACE_TOKEN=your_token       # Required for Whisper diarization
 ```
 
-### LLM Providers
+### LLM Provider Settings
+
 ```env
 LLM_PROVIDER=openai                # openai, ollama, gemini, anthropic
 OPENAI_MODEL=gpt-4o
@@ -336,13 +352,15 @@ GEMINI_MODEL=gemini-2.0-flash-exp
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 ```
 
-### Episode Management
+### Episode Management Settings
+
 ```env
 MAX_EPISODES_PER_PODCAST=50        # Limit episodes per podcast (optional)
 CLEANUP_DAYS=30                    # Delete audio files after N days
 ```
 
-### Storage
+### Storage Settings
+
 ```env
 STORAGE_PATH=./data
 ```
@@ -351,42 +369,48 @@ STORAGE_PATH=./data
 
 Ollama allows you to run LLM models locally, providing privacy and eliminating API costs for post-processing.
 
-### Installation
+### Ollama Installation
 
-**macOS:**
+#### macOS
+
 ```bash
 brew install ollama
 ```
 
-**Linux:**
+#### Linux
+
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-**Windows:**
+#### Windows
+
 Download from [ollama.com](https://ollama.com/download)
 
 ### Running Ollama
 
 1. Start the Ollama server:
-```bash
-ollama serve
-```
 
-2. Pull a model (first time only):
-```bash
-# Recommended models for podcast processing:
-ollama pull gemma3:4b       # Best balance of speed/quality (4B parameters) - recommended
-ollama pull gemma3:27b      # Highest quality (27B parameters)
-ollama pull llama3.2        # Fast, good quality (3B parameters)
-ollama pull mistral         # Alternative balanced option (7B parameters)
-```
+   ```bash
+   ollama serve
+   ```
 
-3. Update your `.env` file:
-```env
-LLM_PROVIDER=ollama
-OLLAMA_MODEL=gemma3:4b
-```
+1. Pull a model (first time only):
+
+   ```bash
+   # Recommended models for podcast processing:
+   ollama pull gemma3:4b       # Best balance of speed/quality (4B parameters) - recommended
+   ollama pull gemma3:27b      # Highest quality (27B parameters)
+   ollama pull llama3.2        # Fast, good quality (3B parameters)
+   ollama pull mistral         # Alternative balanced option (7B parameters)
+   ```
+
+1. Update your `.env` file:
+
+   ```env
+   LLM_PROVIDER=ollama
+   OLLAMA_MODEL=gemma3:4b
+   ```
 
 ### Model Recommendations
 
@@ -398,6 +422,7 @@ OLLAMA_MODEL=gemma3:4b
 ### Performance Notes
 
 Local inference is slower than OpenAI API but provides:
+
 - Complete privacy (no data leaves your machine)
 - No API costs
 - No rate limits
@@ -408,30 +433,36 @@ Expect processing times of 3-10 minutes per podcast depending on model and hardw
 ## System Requirements
 
 ### For OpenAI Provider
+
 - Python 3.9 or higher (3.10+ recommended)
 - OpenAI API key
 - 2GB+ RAM
 - Internet connection
 
 ### For Ollama Provider
+
 - Python 3.9 or higher (3.10+ recommended)
 - 4GB+ RAM (8GB+ recommended for larger models)
 - Ollama installed and running
 - Internet connection for downloads
 
 ### Common Requirements
+
 - FFmpeg (required for YouTube audio extraction)
 - 2GB+ disk space for audio files
 
 ## Cost Estimation
 
-### OpenAI Provider
+### OpenAI Provider Costs
+
 Processing costs depend on episode length and model choices:
+
 - Whisper: Free (runs locally)
 - GPT-4o: ~$0.01-0.05 per episode (varies by length)
 - 60-minute episode: approximately $0.02-0.08
 
-### Ollama Provider
+### Ollama Provider Costs
+
 - Whisper: Free (runs locally)
 - Ollama: Free (runs locally)
 - 60-minute episode: $0.00 (only electricity costs)
@@ -440,23 +471,27 @@ Processing costs depend on episode length and model choices:
 
 ### OpenAI Provider Issues
 
-**API Key Issues:**
+#### API Key Issues
+
 ```bash
 export OPENAI_API_KEY="your-key-here"
 ```
 
-**API Quota Errors:**
+#### API Quota Errors
+
 - Check OpenAI API quotas and billing
 - Consider switching to Ollama for unlimited processing
 
 ### Ollama Provider Issues
 
-**Connection Refused:**
+#### Connection Refused
+
 - Ensure Ollama is running: `ollama serve`
 - Check Ollama is accessible at `http://localhost:11434`
 - Verify firewall settings
 
-**Model Not Found:**
+#### Model Not Found
+
 ```bash
 # List available models
 ollama list
@@ -465,13 +500,15 @@ ollama list
 ollama pull llama3.2
 ```
 
-**Slow Processing:**
+#### Slow Processing
+
 - Use smaller models (llama3.2 or gemma3:4b instead of gemma3:27b)
 - Ensure sufficient RAM is available
 - Close other applications to free up resources
 - Consider using OpenAI API for faster processing
 
-**Out of Memory:**
+#### Out of Memory
+
 - Use a smaller model (llama3.2 ~2GB, gemma3:4b ~3GB, mistral ~4GB, gemma3:27b ~17GB)
 - Increase system swap space
 - Close other applications
@@ -479,19 +516,21 @@ ollama pull llama3.2
 
 ### Common Issues
 
-**Download Failures:**
+#### Download Failures
+
 - Check internet connection
 - Verify RSS feed URLs are accessible
 - Some feeds may require specific user agents
 - For YouTube: Ensure FFmpeg is installed (`brew install ffmpeg` on macOS)
 
-**Processing Errors:**
+#### Processing Errors
+
 - Ensure sufficient disk space for audio files
 - Monitor system resources during Whisper processing
 
 ## Development
 
-### Setup
+### Development Setup
 
 ```bash
 # Clone the repository
@@ -521,7 +560,8 @@ make clean             # Clean generated files (.pypy_cache, .coverage, etc.)
 
 ### Testing
 
-**Run Tests:**
+#### Run Tests
+
 ```bash
 # All tests with coverage
 pytest --cov=thestill --cov-report=html
@@ -536,8 +576,9 @@ pytest -k "test_download" -v
 pytest -v
 ```
 
-**Test Structure:**
-```
+#### Test Structure
+
+```text
 tests/
 ├── test_path_manager.py          # Utils layer (100% coverage)
 ├── test_podcast_service.py       # Service layer (92% coverage)
@@ -553,13 +594,15 @@ tests/
 ### Code Quality
 
 **Pre-commit Hooks** (run automatically on commit):
+
 - `black` - Code formatting
 - `isort` - Import sorting
 - `pylint` - Linting
 - `mypy` - Type checking
 - `pytest` - Run test suite
 
-**Manual Quality Checks:**
+#### Manual Quality Checks
+
 ```bash
 # Format code
 black thestill/ tests/
@@ -589,7 +632,8 @@ def download_episode(
     pass
 ```
 
-**Run Type Checking:**
+#### Run Type Checking
+
 ```bash
 mypy thestill/          # Check all modules
 make typecheck          # Using Makefile
@@ -599,7 +643,7 @@ make typecheck          # Using Makefile
 
 The project uses a **layered architecture** with dependency injection:
 
-```
+```text
 CLI Layer (cli.py)
   ↓ (dependency injection)
 Service Layer (services/)
@@ -621,6 +665,7 @@ Model Layer (models/podcast.py)
 ```
 
 **Key Design Patterns:**
+
 - **Repository Pattern**: Abstract data persistence for easy database migration
 - **Strategy Pattern**: MediaSource abstraction for multiple podcast sources
 - **Dependency Injection**: Services receive dependencies in constructor
