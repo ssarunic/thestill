@@ -1224,19 +1224,57 @@ class GeminiProvider(LLMProvider):
         response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate a chat completion using Gemini API"""
-        # Convert OpenAI-style messages to Gemini format
-        gemini_messages = self._convert_messages(messages)
+        return self._create_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            enable_continuation=False,
+            max_attempts=1,
+        )
 
-        # Build generation config
-        generation_config = {}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        if max_tokens is not None:
-            generation_config["max_output_tokens"] = max_tokens
+    def chat_completion_with_continuation(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        max_attempts: int = 3,
+    ) -> str:
+        """
+        Generate a complete chat completion with automatic continuation on truncation.
 
-        # Handle JSON response format
-        if response_format and response_format.get("type") == "json_object":
-            generation_config["response_mime_type"] = "application/json"
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate per attempt
+            response_format: Response format specification
+            max_attempts: Maximum continuation attempts (default: 3)
+
+        Returns:
+            The complete generated text response
+        """
+        return self._create_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            enable_continuation=True,
+            max_attempts=max_attempts,
+        )
+
+    def _create_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        enable_continuation: bool = False,
+        max_attempts: int = 3,
+    ) -> str:
+        """Internal method to create completions with optional continuation"""
+        full_response = ""
+        current_messages = messages.copy()
 
         # Configure safety settings to be less restrictive for transcript processing
         # This helps avoid false positives when processing podcast content
@@ -1247,75 +1285,105 @@ class GeminiProvider(LLMProvider):
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
 
-        # Generate response
-        response = self.client.generate_content(
-            gemini_messages,
-            generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
-            safety_settings=safety_settings,
-        )
+        for attempt in range(max_attempts):
+            # Convert OpenAI-style messages to Gemini format
+            gemini_messages = self._convert_messages(current_messages)
 
-        # Handle different finish reasons
-        # See: https://ai.google.dev/api/generate-content#finishreason
-        if not response.candidates:
-            raise RuntimeError("Gemini returned no candidates in response")
+            # Build generation config
+            generation_config = {}
+            if temperature is not None:
+                generation_config["temperature"] = temperature
+            if max_tokens is not None:
+                generation_config["max_output_tokens"] = max_tokens
 
-        candidate = response.candidates[0]
-        finish_reason = candidate.finish_reason
+            # Handle JSON response format
+            if response_format and response_format.get("type") == "json_object":
+                generation_config["response_mime_type"] = "application/json"
 
-        # Try to get text first, regardless of finish reason
-        response_text = None
-        try:
-            response_text = response.text
-        except:
-            # If response.text fails, try getting from candidate
-            if candidate.content and candidate.content.parts and len(candidate.content.parts) > 0:
-                try:
-                    response_text = candidate.content.parts[0].text
-                except:
-                    pass
+            # Generate response
+            response = self.client.generate_content(
+                gemini_messages,
+                generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
+                safety_settings=safety_settings,
+            )
 
-        # 0 = FINISH_REASON_UNSPECIFIED, 1 = STOP (success), 2 = MAX_TOKENS,
-        # 3 = SAFETY, 4 = RECITATION, 5 = OTHER
-        if finish_reason == 1:  # STOP - normal completion
-            return response_text if response_text else ""
-        elif finish_reason == 2:  # MAX_TOKENS
-            # We already extracted text above, return it with a warning
+            # Handle different finish reasons
+            # See: https://ai.google.dev/api/generate-content#finishreason
+            if not response.candidates:
+                raise RuntimeError("Gemini returned no candidates in response")
+
+            candidate = response.candidates[0]
+            finish_reason = candidate.finish_reason
+
+            # Try to get text first, regardless of finish reason
+            response_text = None
+            try:
+                response_text = response.text
+            except Exception:
+                # If response.text fails, try getting from candidate
+                if candidate.content and candidate.content.parts and len(candidate.content.parts) > 0:
+                    try:
+                        response_text = candidate.content.parts[0].text
+                    except Exception:
+                        pass
+
+            # Accumulate response text
             if response_text:
-                char_count = len(response_text)
-                # Rough estimate: 1 token ≈ 4 characters
-                estimated_tokens = char_count // 4
-                logger.warning(
-                    f"Gemini response truncated due to max_tokens limit. "
-                    f"Limit: {max_tokens if max_tokens else 'default (8192)'} tokens, "
-                    f"Generated: ~{estimated_tokens} tokens ({char_count} characters)"
-                )
-                logger.info("Consider using smaller chunks or increasing max_tokens")
-                return response_text
+                full_response += response_text
 
+            # 0 = FINISH_REASON_UNSPECIFIED, 1 = STOP (success), 2 = MAX_TOKENS,
+            # 3 = SAFETY, 4 = RECITATION, 5 = OTHER
+            if finish_reason == 1:  # STOP - normal completion
+                break
+            elif finish_reason == 2:  # MAX_TOKENS
+                if enable_continuation and attempt < max_attempts - 1:
+                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    # Continue from where we left off
+                    current_messages = messages + [
+                        {"role": "assistant", "content": full_response},
+                        {"role": "user", "content": "Please continue from where you left off."},
+                    ]
+                    continue
+                else:
+                    char_count = len(full_response) if full_response else 0
+                    # Rough estimate: 1 token ≈ 4 characters
+                    estimated_tokens = char_count // 4
+                    logger.warning(
+                        f"Gemini response truncated due to max_tokens limit. "
+                        f"Limit: {max_tokens if max_tokens else 'default (8192)'} tokens, "
+                        f"Generated: ~{estimated_tokens} tokens ({char_count} characters)"
+                    )
+                    if not enable_continuation:
+                        logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
+                    break
+            elif finish_reason == 3:  # SAFETY
+                raise RuntimeError(
+                    f"Gemini blocked response due to safety filters. Safety ratings: {candidate.safety_ratings}"
+                )
+            elif finish_reason == 4:  # RECITATION
+                # We already extracted text above, return it if available
+                if full_response:
+                    logger.warning("Gemini flagged potential recitation but returned content")
+                    break
+                raise RuntimeError(
+                    "Gemini blocked response due to potential recitation (copyrighted content). "
+                    "Try adjusting the prompt or use a different model."
+                )
+            else:
+                # For any other finish reason, try to return text if we have it
+                if full_response:
+                    logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
+                    break
+                raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
+
+        if not full_response and not enable_continuation:
             raise RuntimeError(
                 f"Gemini response exceeded max_tokens limit with no usable content. "
                 f"Current limit: {max_tokens if max_tokens else 'default (8192)'}. "
                 f"Try increasing max_tokens or reducing input size."
             )
-        elif finish_reason == 3:  # SAFETY
-            raise RuntimeError(
-                f"Gemini blocked response due to safety filters. " f"Safety ratings: {candidate.safety_ratings}"
-            )
-        elif finish_reason == 4:  # RECITATION
-            # We already extracted text above, return it if available
-            if response_text:
-                logger.warning("Gemini flagged potential recitation but returned content")
-                return response_text
-            raise RuntimeError(
-                "Gemini blocked response due to potential recitation (copyrighted content). "
-                "Try adjusting the prompt or use a different model."
-            )
-        else:
-            # For any other finish reason, try to return text if we have it
-            if response_text:
-                logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
-                return response_text
-            raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
+
+        return full_response
 
     def _convert_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Convert OpenAI-style messages to Gemini format"""

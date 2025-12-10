@@ -279,6 +279,13 @@ class TranscriptCleaner:
                 max_tokens=max_tokens,
                 on_chunk=self.on_stream_chunk,
             )
+        elif hasattr(self.provider, "chat_completion_with_continuation"):
+            # Use continuation to handle truncated responses
+            response = self.provider.chat_completion_with_continuation(
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens,
+            )
         else:
             response = self.provider.chat_completion(
                 messages=messages,
@@ -349,6 +356,13 @@ class TranscriptCleaner:
                     temperature=0,
                     max_tokens=max_tokens,
                     on_chunk=self.on_stream_chunk,
+                )
+            elif hasattr(self.provider, "chat_completion_with_continuation"):
+                # Use continuation to handle truncated responses
+                response = self.provider.chat_completion_with_continuation(
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=max_tokens,
                 )
             else:
                 response = self.provider.chat_completion(
