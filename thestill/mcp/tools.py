@@ -121,7 +121,7 @@ def setup_tools(server: Server, storage_path: str):
             ),
             Tool(
                 name="get_transcript",
-                description="Get the cleaned Markdown transcript for a specific episode. Returns the processed transcript from the processed/ directory.",
+                description="Get the cleaned Markdown transcript for a specific episode. Returns the cleaned transcript from clean_transcripts/ directory. Episode must be in CLEANED or SUMMARIZED state.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1124,7 +1124,14 @@ def setup_tools(server: Server, storage_path: str):
                         if base_name.endswith("_transcript"):
                             base_name = base_name[: -len("_transcript")]
                         cleaned_filename = f"{base_name}_cleaned.md"
-                        cleaned_path = path_manager.clean_transcripts_dir() / cleaned_filename
+
+                        # Create podcast subdirectory for clean transcripts
+                        podcast_subdir = path_manager.clean_transcripts_dir() / podcast.slug
+                        podcast_subdir.mkdir(parents=True, exist_ok=True)
+                        cleaned_path = podcast_subdir / cleaned_filename
+
+                        # Database stores relative path: {podcast_slug}/{filename}
+                        clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
                         result_data = cleaning_processor.clean_transcript(
                             transcript_data=transcript_data,
@@ -1142,7 +1149,7 @@ def setup_tools(server: Server, storage_path: str):
                                 str(podcast.rss_url),
                                 episode.external_id,
                                 raw_transcript_path=episode.raw_transcript_path,
-                                clean_transcript_path=cleaned_filename,
+                                clean_transcript_path=clean_transcript_db_path,
                             )
                             steps_completed.append("clean")
                         else:

@@ -187,7 +187,7 @@ class PodcastService:
         Get a podcast by ID.
 
         Args:
-            podcast_id: Integer index (1-based) or RSS URL string
+            podcast_id: Integer index (1-based), RSS URL string, or UUID string
 
         Returns:
             Podcast object or None if not found
@@ -206,6 +206,13 @@ class PodcastService:
         if isinstance(podcast_id, str) and podcast_id.isdigit():
             return self.get_podcast(int(podcast_id))
 
+        # Check if it's a UUID (internal ID)
+        if isinstance(podcast_id, str) and len(podcast_id) == 36 and podcast_id.count("-") == 4:
+            for podcast in podcasts:
+                if podcast.id == podcast_id:
+                    logger.debug(f"Retrieved podcast by UUID: {podcast.title}")
+                    return podcast
+
         # Otherwise, treat as RSS URL
         for podcast in podcasts:
             if str(podcast.rss_url) == podcast_id:
@@ -220,8 +227,8 @@ class PodcastService:
         Get an episode by podcast ID and episode ID.
 
         Args:
-            podcast_id: Podcast index or RSS URL
-            episode_id: Episode index (1=latest), 'latest', date (YYYY-MM-DD), or GUID
+            podcast_id: Podcast index, RSS URL, or UUID
+            episode_id: Episode index (1=latest), 'latest', date (YYYY-MM-DD), UUID, or external ID
 
         Returns:
             Episode object or None if not found
@@ -267,7 +274,14 @@ class PodcastService:
                 logger.warning(f"No episode found for date: {episode_id}")
                 return None
             except ValueError:
-                pass  # Not a valid date, continue to GUID matching
+                pass  # Not a valid date, continue to UUID/GUID matching
+
+        # Check if it's a UUID (internal ID)
+        if isinstance(episode_id, str) and len(episode_id) == 36 and episode_id.count("-") == 4:
+            for episode in podcast.episodes:
+                if episode.id == episode_id:
+                    logger.debug(f"Retrieved episode by UUID: {episode.title}")
+                    return episode
 
         # Otherwise, treat as external ID (GUID from RSS feed)
         for episode in podcast.episodes:
@@ -360,7 +374,8 @@ class PodcastService:
         from ..models.podcast import EpisodeState
 
         # Check if processed and has clean transcript
-        if episode.state != EpisodeState.CLEANED or not episode.clean_transcript_path:
+        # Episodes in CLEANED or SUMMARIZED state have transcripts
+        if episode.state not in (EpisodeState.CLEANED, EpisodeState.SUMMARIZED) or not episode.clean_transcript_path:
             logger.info(f"Episode not yet processed: {episode.title}")
             return "N/A - Episode not yet processed"
 
