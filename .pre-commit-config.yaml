@@ -48,6 +48,13 @@ repos:
           --exit-zero,      # Don't fail on warnings
         ]
 
+  # markdownlint - Markdown linter
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.46.0
+    hooks:
+      - id: markdownlint
+        args: ["--fix"]
+
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

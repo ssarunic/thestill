@@ -1,0 +1,25 @@
+# markdownlint configuration
+# See: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+
+# Disable line length limit (too restrictive for prose)
+MD013: false
+
+# Allow inline HTML (needed for complex formatting)
+MD033: false
+
+# First line doesn't need to be h1 (flexibility for different doc types)
+MD041: false
+
+# Allow duplicate headings in different sections
+MD024:
+  siblings_only: true
+
+# Allow trailing punctuation in headings (e.g., "What's new?")
+MD026:
+  punctuation: ".,;:!"
+
+# Allow code blocks without language (common in documentation)
+MD040: false
+
+# Disable strict table column style (spacing around pipes)
+MD060: false
