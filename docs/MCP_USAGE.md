@@ -833,6 +833,6 @@ Episodes need to go through the full pipeline before transcripts are available. 
 - **Explore transcripts:** Ask Claude to analyze, summarize, or compare!
 
 For more information, see:
-- [MCP Implementation Plan](MCP_IMPLEMENTATION_PLAN.md)
+
 - [Main README](../README.md)
 - [Transcript Cleaning Guide](TRANSCRIPT_CLEANING.md)
