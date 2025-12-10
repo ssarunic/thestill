@@ -8,13 +8,28 @@ thestill.ai is an automated podcast transcription and summarization pipeline bui
 
 ## Development Commands
 
+### Virtual Environment
+
+**IMPORTANT**: This project uses a virtual environment. Always use `./venv/bin/python` or `./venv/bin/pytest` instead of bare `python` or `pytest` commands.
+
+```bash
+# Run Python
+./venv/bin/python script.py
+
+# Run pytest
+./venv/bin/python -m pytest tests/
+
+# Run the CLI
+./venv/bin/thestill <command>
+```
+
 ### Installation and Setup
 ```bash
 # Install in development mode
-pip install -e .
+./venv/bin/pip install -e .
 
 # Install with development dependencies
-pip install -e ".[dev]"
+./venv/bin/pip install -e ".[dev]"
 
 # Set up environment
 cp .env.example .env
