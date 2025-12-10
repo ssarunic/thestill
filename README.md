@@ -4,10 +4,10 @@ An automated pipeline that converts podcasts into readable, summarized content t
 
 ## 📚 Documentation
 
-- **[CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md)** - Coding standards, best practices, and development workflow
 - **[CLAUDE.md](CLAUDE.md)** - Project overview, architecture, and development commands
-- **[REFACTORING_FINDINGS.md](docs/REFACTORING_FINDINGS.md)** - Detailed code quality assessment with 25+ findings
-- **[REFACTORING_PLAN.md](docs/REFACTORING_PLAN.md)** - Step-by-step refactoring roadmap with 35 atomic tasks
+- **[CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md)** - Coding standards, best practices, and development workflow
+- **[MCP_USAGE.md](docs/MCP_USAGE.md)** - MCP server setup and usage guide for Claude Desktop
+- **[TRANSCRIPT_CLEANING.md](docs/TRANSCRIPT_CLEANING.md)** - Transcript cleaning configuration and usage
 
 ## Overview
 
