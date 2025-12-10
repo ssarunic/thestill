@@ -66,12 +66,12 @@ except ImportError:
 # Default region for Speech-to-Text V2 API
 # Chirp 3 supported regions (GA): us, eu, asia-northeast1, asia-southeast1
 # Chirp 3 supported regions (Preview): asia-south1, europe-west2, europe-west3, northamerica-northeast1
-DEFAULT_REGION = "us"
+DEFAULT_REGION = "europe-west2"  # London - matches GCS bucket location
 
 # Chunk size for BatchRecognize transcription
-# Using smaller chunks (9 min) improves parallelization and reduces risk of timeouts
+# Using 12 min chunks balances parallelization with fewer merge operations
 # The 1 minute overlap ensures seamless merging with speaker reconciliation
-MAX_CHUNK_DURATION_MS = 9 * 60 * 1000  # 9 minutes in milliseconds
+MAX_CHUNK_DURATION_MS = 12 * 60 * 1000  # 12 minutes in milliseconds
 OVERLAP_DURATION_MS = 60 * 1000  # 1 minute overlap for merging
 
 # Timeout for BatchRecognize is now handled by OPERATION_MAX_WAIT_HOURS
