@@ -581,7 +581,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """Convert database row to Episode model."""
         return Episode(
             id=row["id"],
+            podcast_id=row["podcast_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
             external_id=row["external_id"],
             title=row["title"],
             slug=row["slug"] or "",

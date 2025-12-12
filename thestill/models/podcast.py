@@ -90,7 +90,9 @@ class TranscriptLink(BaseModel):
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID
+    podcast_id: Optional[str] = None  # FK to parent Podcast (set when loaded from DB)
     created_at: datetime = Field(default_factory=datetime.utcnow)  # When episode was first added to database
+    updated_at: datetime = Field(default_factory=datetime.utcnow)  # When episode was last modified
 
     # External identifiers
     external_id: str  # External ID from RSS feed (publisher's GUID)

@@ -304,12 +304,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
             click.echo(f"\n🎧 {episode.title}")
 
             try:
-                audio_path = downloader.download_episode(
-                    episode,
-                    podcast.title,
-                    podcast_slug=podcast.slug,
-                    episode_slug=episode.slug,
-                )
+                audio_path = downloader.download_episode(episode, podcast)
 
                 if audio_path:
                     # Get accurate duration from the downloaded file

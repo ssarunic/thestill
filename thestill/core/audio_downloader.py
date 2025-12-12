@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from ..models.podcast import Episode
+from ..models.podcast import Episode, Podcast
 from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
@@ -65,18 +65,14 @@ class AudioDownloader:
     def download_episode(
         self,
         episode: Episode,
-        podcast_title: str,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
+        podcast: Podcast,
     ) -> Optional[str]:
         """
         Download episode audio file to original_audio/ directory.
 
         Args:
             episode: Episode to download
-            podcast_title: Title of the podcast (used for logging and fallback naming)
-            podcast_slug: URL-safe podcast slug for filename (falls back to sanitized title)
-            episode_slug: URL-safe episode slug for filename (falls back to episode.slug or sanitized title)
+            podcast: Podcast the episode belongs to
 
         Returns:
             Path to downloaded audio file, or None if download failed
@@ -84,7 +80,7 @@ class AudioDownloader:
         try:
             # Detect source type and delegate if needed
             source = self.media_source_factory.detect_source(str(episode.audio_url))
-            source_result = source.download_episode(episode, podcast_title, str(self.storage_path))
+            source_result = source.download_episode(episode, podcast.title, str(self.storage_path))
 
             # If source handled download (e.g., YouTube), return result
             # Note: YouTube source will return None on failure, but we should NOT
@@ -101,8 +97,8 @@ class AudioDownloader:
 
             # Handle standard HTTP downloads (RSS feeds)
             # Use slugs for filename generation (fall back to sanitized titles for backwards compatibility)
-            safe_podcast = podcast_slug or self._sanitize_filename(podcast_title)
-            safe_episode = episode_slug or episode.slug or self._sanitize_filename(episode.title)
+            safe_podcast = podcast.slug or self._sanitize_filename(podcast.title)
+            safe_episode = episode.slug or self._sanitize_filename(episode.title)
 
             url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:URL_HASH_LENGTH]
 
