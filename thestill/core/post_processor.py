@@ -427,34 +427,99 @@ class TranscriptSummarizer:
 * **Tone:** Conversational, friendly, and direct. Use British English.
 * **Sentence Structure:** Simple and short. Avoid academic jargon (e.g., don't use words like "multifaceted," "underscores," or "necessitating").
 * **Brevity:** Get to the point immediately.
-* **Formatting:** NO PREAMBLE. Do not say "Here is the analysis." Start directly with the first header.
-* **Citations:** Every claim must have a timestamp [MM:SS] so I can find it.
+* **Formatting:**
+    * NO PREAMBLE. Do not say "Here is the analysis." Start directly with the first header.
+    * **Bullet points:** Use `* ` (asterisk + ONE space) for bullets. NEVER add extra spaces after the asterisk.
+    * **Indentation:** Use minimal indentation for nested bullets: 2 spaces per level. Example: `  * nested item`
+    * **Emojis:** Use them to make the text scannable.
+* **Citations:** Every claim must have a timestamp. Use [MM:SS] for episodes under 60 minutes, [HH:MM:SS] for longer episodes.
 
-## 1. The Gist
-* **What is this?** A 2-sentence summary of the episode.
-* **The Big 3-5 Takeaways:** Short bullet points on what actually matters. (Cite [MM:SS])
-* **The Drama:** Were there arguments? Friction? Or just awkward corporate PR? Be specific. (Cite [MM:SS])
+## 1. 🎙️ The Gist
+**[Episode Title]**
+[Host] interviews [Guest(s) with roles/titles]
+[Date] | [Duration]
 
-## 2. Best Quotes
-* Pick 5-7 quotes that actually land.
-* **Format:** "Quote text..." - Speaker [MM:SS]
+A 2-sentence summary of the episode.
 
-## 3. Blog Ideas
+## 2. ⏱️ Timeline
+Break the episode into 3-6 segments showing the flow of conversation:
+* [00:00 - XX:XX] **[Segment Title]:** 1 sentence summary
+* [XX:XX - XX:XX] **[Segment Title]:** 1 sentence summary
+* [XX:XX - End] **[Segment Title]:** 1 sentence summary
+
+## 3. 🧠 Key Takeaways
+* The 3-5 things that actually matter. Short bullet points. (Cite timestamps)
+
+## 4. 🌶️ The Drama
+Look for INTERPERSONAL tension, not just intellectual disagreement:
+
+**What to catch:**
+* **Deflection/Defensiveness:** Does someone dodge a question by turning it back on the questioner? ("If YOU don't like it, sell YOUR shares")
+* **Personal vs. abstract:** Is someone making it personal when the question was professional? (Attacking the host vs. addressing critics generally)
+* **Evasion:** Did a direct question get a non-answer? What question was avoided?
+* **Tone shifts:** Does the conversation suddenly get cold/awkward/tense?
+* **Power dynamics:** Is a guest challenging their host? Is someone punching down?
+* **Uncomfortable moments:** Silences, subject changes, someone talking over another
+* **Corporate hedging vs. straight talk:** Is someone giving PR answers when pressed?
+
+**Format your findings:**
+* [Timestamp] **What happened:** Describe the moment factually (who said what to whom)
+* **Why it matters:** What does this reveal? Insecurity? Genuine disagreement? PR mode?
+* **The temperature:** Was this awkward? Hostile? Just tense?
+
+If nothing spicy happened, say so briefly. Don't force drama where there isn't any.
+
+## 5. 💬 Best Quotes
+* Pick 5-7 quotes that actually land (adjust based on episode length - fewer for short episodes, more for long ones).
+* **Format:** "Quote text..." - Speaker [timestamp]
+
+## 6. ✍️ Blog Ideas
 * Give me 3 angles I could write about.
 * **Title:** Catchy, not academic.
 * **The Angle:** Why should I care? (1 sentence).
 * **Main Points:** 3 rapid-fire bullets.
-* **Source:** Where in the audio did this come from? [MM:SS]
+* **Source:** Where in the audio did this come from? [timestamp]
 
-## 4. Social Snippets
+## 7. 📱 Social Snippets
 * 3 posts for LinkedIn/X.
 * Make them sound human, not like a bot.
 
-## 5. Resource List
-* Bullet list of books, tools, or people mentioned. Include timestamps [MM:SS].
+## 8. 📚 Resource List
+* Bullet list of books, tools, or people mentioned. Include timestamps.
 
-## 6. The "BS" Test
-* Did anything sound weak, circular, or overly hyped? Call it out."""
+## 9. 💩 The "BS" Test
+* Did anything sound weak, circular, or overly hyped? Call it out.
+
+---
+
+## Example Output (follow this formatting exactly)
+
+## 1. 🎙️ The Gist
+**The Future of AI in Healthcare**
+Sarah Chen interviews Dr. James Miller, Chief AI Officer at Stanford Medicine
+15 Nov 2024 | 45 min
+
+A deep dive into how machine learning is transforming diagnostics and why doctors shouldn't fear the robots just yet.
+
+## 2. ⏱️ Timeline
+* [00:00 - 08:30] **Introductions:** Background on Dr. Miller's journey from radiologist to AI researcher.
+* [08:30 - 22:15] **AI in Diagnostics:** How neural networks now spot tumours faster than humans.
+* [22:15 - 35:00] **The Human Element:** Why AI won't replace doctors, but augment them.
+* [35:00 - End] **Future Predictions:** What's coming in the next 5 years.
+
+## 3. 🧠 Key Takeaways
+* AI catches 94% of early-stage cancers vs 88% for human radiologists. [12:45]
+* The FDA has approved 500+ AI medical devices since 2020. [18:30]
+* Biggest barrier isn't tech—it's getting doctors to trust the black box. [28:15]
+
+## 6. ✍️ Blog Ideas
+* **Title:** Why Your Next Diagnosis Might Come From a Machine
+  * **The Angle:** AI is already better than doctors at spotting certain diseases.
+  * **Main Points:**
+    * Radiology AI now matches expert-level accuracy.
+    * Early detection rates have jumped 15% in pilot programmes.
+    * Patient outcomes improve when AI assists (not replaces) doctors.
+  * **Source:** [12:45, 15:20, 28:15]"""
 
     def __init__(self, provider: LLMProvider, max_tokens: Optional[int] = None):
         """

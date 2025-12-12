@@ -31,6 +31,7 @@ import json
 import logging
 import re
 import urllib.request
+import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import feedparser
 import requests
 
-from ..models.podcast import Episode
+from ..models.podcast import Episode, TranscriptLink
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -469,6 +470,78 @@ class RSSMediaSource(MediaSource):
                 return str(href) if href else None
 
         return None
+
+    def extract_transcript_links(self, rss_content: str) -> Dict[str, List[TranscriptLink]]:
+        """
+        Extract podcast:transcript links from raw RSS content.
+
+        Feedparser only returns the last transcript tag per entry, so we need to
+        parse the raw XML to get all transcript formats (SRT, VTT, JSON, etc.).
+
+        Args:
+            rss_content: Raw RSS XML content
+
+        Returns:
+            Dict mapping episode GUID -> list of TranscriptLink objects
+        """
+        result: Dict[str, List[TranscriptLink]] = {}
+
+        try:
+            root = ET.fromstring(rss_content)
+        except ET.ParseError as e:
+            logger.warning(f"Failed to parse RSS XML for transcript extraction: {e}")
+            return result
+
+        # Define podcast namespace
+        ns = {"podcast": "https://podcastindex.org/namespace/1.0"}
+
+        # Find all items
+        for item in root.findall(".//item"):
+            # Get episode GUID (same logic as feedparser)
+            guid_elem = item.find("guid")
+            id_elem = item.find("id")  # Fallback
+
+            if guid_elem is not None and guid_elem.text:
+                episode_guid = guid_elem.text
+            elif id_elem is not None and id_elem.text:
+                episode_guid = id_elem.text
+            else:
+                # Skip items without identifiable GUID
+                continue
+
+            # Find all podcast:transcript tags for this item
+            transcripts = item.findall("podcast:transcript", ns)
+            if not transcripts:
+                continue
+
+            links: List[TranscriptLink] = []
+            for t in transcripts:
+                url = t.get("url")
+                mime_type = t.get("type")
+
+                if not url or not mime_type:
+                    continue
+
+                try:
+                    link = TranscriptLink(
+                        url=url,  # type: ignore[arg-type]  # Pydantic validates to HttpUrl
+                        mime_type=mime_type,
+                        language=t.get("language"),
+                        rel=t.get("rel"),
+                    )
+                    links.append(link)
+                except Exception as e:
+                    logger.debug(f"Failed to create TranscriptLink for {url}: {e}")
+                    continue
+
+            if links:
+                result[episode_guid] = links
+                logger.debug(f"Found {len(links)} transcript links for episode {episode_guid[:50]}...")
+
+        if result:
+            logger.info(f"Extracted transcript links for {len(result)} episodes")
+
+        return result
 
 
 class YouTubeMediaSource(MediaSource):

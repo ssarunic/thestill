@@ -52,6 +52,7 @@ CLEANING_EXTRACT_ENTITIES=true  # Extract names/acronyms for consistency
 ### Pass 1: Entity Extraction (Optional)
 
 The cleaner first analyzes the transcript (or first 10K tokens) to extract:
+
 - **Names**: Dr. Sarah Johnson, Elon Musk
 - **Companies**: OpenAI, NASA, MIT
 - **Acronyms**: AI, LLM, CEO, FOMO
@@ -63,6 +64,7 @@ This creates a "glossary" used in all subsequent chunks for consistency.
 ### Pass 2: Chunk-by-Chunk Cleaning
 
 For each overlapping chunk:
+
 1. Add entity glossary to prompt
 2. Send to LLM with cleaning instructions
 3. Receive cleaned text
@@ -178,12 +180,14 @@ The cleaned transcript is added to the transcript JSON:
 ### 2. Adjust Chunking Parameters
 
 For very small models (gemma3:270m, gemma3:1b):
+
 ```bash
 CLEANING_CHUNK_SIZE=15000  # Smaller chunks
 CLEANING_OVERLAP_PCT=0.20   # More overlap for better context
 ```
 
 For larger models (gemma3:12b, gpt-4):
+
 ```bash
 CLEANING_CHUNK_SIZE=30000  # Larger chunks
 CLEANING_OVERLAP_PCT=0.10   # Less overlap needed
@@ -192,11 +196,13 @@ CLEANING_OVERLAP_PCT=0.10   # Less overlap needed
 ### 3. Entity Extraction Trade-offs
 
 **Enable** (`CLEANING_EXTRACT_ENTITIES=true`):
+
 - ✅ Consistent spelling of names/terms across entire transcript
 - ✅ Better handling of uncommon names and technical terms
 - ❌ Adds ~10 seconds processing time
 
 **Disable** (`CLEANING_EXTRACT_ENTITIES=false`):
+
 - ✅ Faster processing
 - ❌ May have inconsistent spelling across chunks
 - ✅ Still effective for filler word removal and grammar fixes
@@ -240,6 +246,7 @@ CLEANING_EXTRACT_ENTITIES=true
 ### Issue: Processing too slow
 
 **Solutions**:
+
 1. Use smaller model: `CLEANING_MODEL=gemma3:1b`
 2. Disable entity extraction: `CLEANING_EXTRACT_ENTITIES=false`
 3. Reduce overlap: `CLEANING_OVERLAP_PCT=0.10`
@@ -261,6 +268,7 @@ CLEANING_MODEL=gpt-4o-mini
 - `nltk` (optional): Better sentence splitting
 
 Install with:
+
 ```bash
 pip install tiktoken nltk
 ```
@@ -268,6 +276,7 @@ pip install tiktoken nltk
 ### Token Estimation
 
 Without tiktoken, uses character-based estimation:
+
 ```
 tokens ≈ characters / 4
 ```
@@ -277,11 +286,13 @@ This is 85-90% accurate for English text.
 ### Overlap Calculation
 
 For a chunk size of 20K tokens and 15% overlap:
+
 - Chunk 1: tokens 0-20,000
 - Chunk 2: tokens 17,000-37,000 (3K overlap with chunk 1)
 - Chunk 3: tokens 34,000-54,000 (3K overlap with chunk 2)
 
 During reassembly:
+
 - Keep all of chunk 1
 - From chunk 2, discard first 3K tokens (already in chunk 1), keep rest
 - From chunk 3, discard first 3K tokens (already in chunk 2), keep rest

@@ -24,6 +24,7 @@ thestill.ai is an automated podcast transcription and summarization pipeline bui
 ```
 
 ### Installation and Setup
+
 ```bash
 # Install in development mode
 ./venv/bin/pip install -e .
@@ -37,6 +38,7 @@ cp .env.example .env
 ```
 
 ### Main CLI Commands
+
 ```bash
 # Add podcast feed (supports RSS, Apple Podcasts, YouTube)
 thestill add "https://example.com/rss"
@@ -105,6 +107,7 @@ thestill cleanup                           # Clean up old audio files
 ### Testing and Code Quality
 
 **Quick Commands (using Makefile):**
+
 ```bash
 # Show all available commands
 make help
@@ -135,6 +138,7 @@ make clean
 ```
 
 **Direct Commands:**
+
 ```bash
 # Run tests
 pytest
@@ -275,6 +279,7 @@ The project includes an MCP (Model Context Protocol) server for integration with
 **NEW (as of 2025-10-14)**: The system now uses both internal and external identifiers for stability and traceability:
 
 **Internal Identifiers (UUIDs)**:
+
 - Every `Podcast` and `Episode` has an auto-generated `id` field (UUID v4)
 - These are **internal, immutable identifiers** generated when records are first created
 - Format: `"id": "550e8400-e29b-41d4-a716-446655440000"`
@@ -282,17 +287,20 @@ The project includes an MCP (Model Context Protocol) server for integration with
 - Auto-generated via Pydantic's `default_factory=lambda: str(uuid.uuid4())`
 
 **External Identifiers**:
+
 - `Podcast.rss_url`: The RSS feed URL (external identifier from publisher)
 - `Episode.external_id`: The GUID/ID from the RSS feed (replaces old `guid` field)
 - These come from external sources (RSS feeds, YouTube, etc.)
 - Can change if publishers modify their feeds (rare but possible)
 
 **Timestamps**:
+
 - `Podcast.created_at`: When the podcast was first added to the database
 - `Episode.created_at`: When the episode was first discovered and added
 - Auto-generated via `default_factory=datetime.utcnow`
 
 **Repository Methods**:
+
 - `get(podcast_id: str)`: Get podcast by internal UUID (primary key)
 - `get_by_index(index: int)`: Get podcast by 1-based index (for CLI convenience)
 - `get_by_url(url: str)`: Get podcast by RSS URL (external identifier)
@@ -300,6 +308,7 @@ The project includes an MCP (Model Context Protocol) server for integration with
 - `get_episode_by_external_id(podcast_url, episode_external_id)`: Get episode by external ID
 
 **Why This Design?**:
+
 - **Stability**: Internal UUIDs never change, even if external RSS URLs or GUIDs change
 - **Traceability**: Timestamps track when records were added to the system
 - **Performance**: SQLite with indexed queries (O(log n) vs O(n) for JSON scans)
@@ -315,6 +324,7 @@ The project includes an MCP (Model Context Protocol) server for integration with
 #### Episode Management
 
 **MAX_EPISODES_PER_PODCAST**: Limit the number of episodes tracked per podcast
+
 - **Purpose**: Prevents database from becoming unmanageable for podcasts with hundreds of episodes
 - **Behavior**:
   - Only the N most recent episodes (by `pub_date`) are kept per podcast
@@ -412,6 +422,7 @@ Each step is an atomic operation that can be run independently and scaled horizo
 - `summarized` → summary_path set (final state)
 
 **Pipeline Design:**
+
 - Each command can be run independently
 - Commands only process what's needed (idempotent)
 - **Separation of concerns**: Refresh (network I/O) vs Download (file I/O) vs Processing (CPU/GPU)
@@ -476,18 +487,21 @@ data/                      # Generated data directory
 ## Key Technologies
 
 ### Transcription Providers
+
 - **OpenAI Whisper**: Local speech-to-text transcription (CPU/GPU)
 - **WhisperX**: Enhanced Whisper with speaker diarization and improved alignment
 - **pyannote.audio**: State-of-the-art speaker diarization (for Whisper)
 - **Google Cloud Speech-to-Text**: Cloud-based transcription with built-in diarization
 
 ### LLM Providers
+
 - **OpenAI GPT-4**: Text processing, summarization, and analysis
 - **Ollama**: Local LLM models for cost-effective processing
 - **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
 - **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
 
 ### Data Storage
+
 - **SQLite**: Relational database for podcast/episode metadata
   - O(log n) indexed queries vs O(n) linear JSON scans
   - Row-level locking for concurrent operations
@@ -496,6 +510,7 @@ data/                      # Generated data directory
   - WAL mode for better read concurrency
 
 ### Other Dependencies
+
 - **yt-dlp**: YouTube video/audio extraction with dynamic URL handling
 - **Pydantic**: Data validation and settings management
 - **Click**: Command-line interface framework
@@ -509,12 +524,14 @@ For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUID
 ### Testing Strategy
 
 **Coverage Targets**:
+
 - **Overall**: 70%+ (current: 41.05%)
 - **Core modules**: 90%+ (feed_manager, audio_downloader, transcriber)
 - **Models**: 100% with branch coverage (✅ achieved: podcast.py)
 - **Focus areas**: Public APIs, error paths, edge cases
 
 **Test Types**:
+
 1. **Unit Tests**: Test individual functions in isolation with mocked dependencies
    - Example: `test_audio_downloader.py` (28 tests, 99% coverage)
    - Pattern: Mock external dependencies (requests, feedparser)
@@ -531,6 +548,7 @@ For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUID
    - Critical for refactoring without breaking consumers
 
 **Test Organization**:
+
 ```
 tests/
 ├── test_path_manager.py          # Utils layer (100% coverage)
@@ -543,6 +561,7 @@ tests/
 ```
 
 **Running Tests**:
+
 ```bash
 # Run all tests with coverage
 pytest --cov=thestill --cov-report=html
@@ -558,6 +577,7 @@ pre-commit run --all-files
 ```
 
 **Test Fixtures and Mocking**:
+
 - Use `@pytest.fixture` for reusable test data
 - Mock external APIs (requests, feedparser, LLM providers)
 - Use `tmp_path` fixture for file system tests
@@ -570,6 +590,7 @@ pre-commit run --all-files
 **Current Status**: ✅ 100% core and service layers type-hinted (Tasks R-019, R-021 complete)
 
 **Type Hint Standards**:
+
 ```python
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -601,6 +622,7 @@ class Episode(BaseModel):
 ```
 
 **Running Type Checks**:
+
 ```bash
 # Check all files
 mypy thestill/
@@ -623,12 +645,14 @@ check_untyped_defs = true
 The project uses a **layered architecture** with dependency injection for better testability and separation of concerns:
 
 **1. CLI Layer** ([cli.py](thestill/cli.py)):
+
 - User interface, command parsing, output formatting
 - Instantiates services once and passes via Click context (`CLIContext`)
 - Uses `CLIFormatter` for consistent output
 - **Thin layer**: Delegates all business logic to services
 
 **2. Service Layer** ([services/](thestill/services/)):
+
 - **PodcastService**: Podcast CRUD operations, episode filtering
 - **RefreshService**: Feed refresh business logic, episode discovery
 - **StatsService**: Statistics and reporting
@@ -636,6 +660,7 @@ The project uses a **layered architecture** with dependency injection for better
 - All services accept dependencies via constructor (dependency injection)
 
 **3. Core Layer** ([core/](thestill/core/)):
+
 - **Atomic processors**: Each module has single responsibility
 - **FeedManager**: RSS/YouTube feed parsing with transaction context manager
 - **AudioDownloader**: Downloads audio with retry logic (exponential backoff)
@@ -644,17 +669,20 @@ The project uses a **layered architecture** with dependency injection for better
 - **MediaSource Strategy Pattern**: Abstracts RSS vs YouTube (easy to add Spotify, etc.)
 
 **4. Repository Layer** ([repositories/](thestill/repositories/)):
+
 - Abstract interface for podcast/episode persistence
 - `SqlitePodcastRepository`: SQLite implementation with indexed queries
 - Cache-friendly design (explicit timestamps, no DB-level cascades)
 - Pattern: Repository pattern with CRUD operations and transaction support
 
 **5. Model Layer** ([models/podcast.py](thestill/models/podcast.py)):
+
 - Pydantic models for type safety and validation
 - `Episode`, `Podcast`, `EpisodeState` enum, `CleanedTranscript`
 - Immutable data structures with computed properties
 
 **Dependency Flow**:
+
 ```
 CLI → Services → Core → Repository → Models
      ↓
@@ -662,6 +690,7 @@ CLI → Services → Core → Repository → Models
 ```
 
 **Key Design Patterns**:
+
 - **Dependency Injection**: Services receive dependencies in constructor
 - **Strategy Pattern**: MediaSource abstraction for multiple podcast sources
 - **Repository Pattern**: Abstract data persistence (SQLite with migration script from JSON)
@@ -671,6 +700,7 @@ CLI → Services → Core → Repository → Models
 ### Error Handling Patterns
 
 **1. Custom Exception Hierarchy** ([utils/exceptions.py](thestill/utils/exceptions.py)):
+
 ```python
 class ThestillError(Exception):
     """Base exception for all domain errors"""
@@ -683,6 +713,7 @@ class TranscriptionError(ThestillError):
 ```
 
 **2. Fail Fast with Validation**:
+
 ```python
 def require_file_exists(self, file_path: Path, error_message: str) -> Path:
     """Validate file exists or raise FileNotFoundError"""
@@ -692,6 +723,7 @@ def require_file_exists(self, file_path: Path, error_message: str) -> Path:
 ```
 
 **3. Structured Logging** (replaced all `print()` statements):
+
 ```python
 import logging
 logger = logging.getLogger(__name__)
@@ -705,6 +737,7 @@ logger.critical("Cannot load configuration file")
 ```
 
 **4. Retry Logic with Exponential Backoff**:
+
 ```python
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -720,6 +753,7 @@ def _download_with_retry(self, url: str) -> bytes:
 ```
 
 **5. Error Handling Guidelines**:
+
 - **Never catch bare `except:`** - always specify exception types
 - **Never silently fail** - always log errors before handling
 - **Early returns** - use guard clauses to reduce nesting
@@ -727,17 +761,20 @@ def _download_with_retry(self, url: str) -> bytes:
 - **User-friendly CLI errors** - catch and format for end users
 
 **6. Error Recovery**:
+
 - **Idempotent operations**: All pipeline steps can be safely re-run
 - **State tracking**: Episodes track progress through pipeline (EpisodeState enum)
 - **Partial failures**: One episode failure doesn't stop batch processing
 - **Transaction support**: Batch updates with rollback on error (FeedManager.transaction())
 
 ### Performance Considerations
+
 - Whisper processing is CPU-intensive; consider model size vs. accuracy tradeoffs
 - LLM API calls can be expensive; estimate costs before processing
 - Audio files can be large; implement cleanup strategies
 
 ### Configuration Patterns
+
 - Use environment variables for sensitive data (API keys)
 - Provide sensible defaults for all configuration options
 - Validate configuration at startup
@@ -747,6 +784,7 @@ def _download_with_retry(self, url: str) -> bytes:
 ### Whisper (Local Transcription)
 
 **Basic Setup:**
+
 ```bash
 # Install dependencies
 pip install -e .
@@ -757,12 +795,14 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 ```
 
 **With Speaker Diarization:**
+
 1. Get HuggingFace Token:
-   - Create account at https://huggingface.co
-   - Get token from https://huggingface.co/settings/tokens
-   - Accept model license at https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Create account at <https://huggingface.co>
+   - Get token from <https://huggingface.co/settings/tokens>
+   - Accept model license at <https://huggingface.co/pyannote/speaker-diarization-3.1>
 
 2. Configure .env:
+
    ```bash
    ENABLE_DIARIZATION=true
    HUGGINGFACE_TOKEN=your_token_here
@@ -771,6 +811,7 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
    ```
 
 **How it works:**
+
 - WhisperXTranscriber with diarization enabled:
   1. Transcribes audio with WhisperX (improved alignment)
   2. Aligns output for accurate word-level timestamps
@@ -781,12 +822,14 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 ### Google Cloud Speech-to-Text (Cloud Transcription)
 
 **Setup:**
-1. Create Google Cloud project at https://console.cloud.google.com/
+
+1. Create Google Cloud project at <https://console.cloud.google.com/>
 2. Enable Speech-to-Text API
 3. Create service account and download JSON key:
-   - Go to https://console.cloud.google.com/apis/credentials
+   - Go to <https://console.cloud.google.com/apis/credentials>
    - Create service account → Download JSON key
 4. Configure .env:
+
    ```bash
    TRANSCRIPTION_PROVIDER=google
    GOOGLE_APP_CREDENTIALS=/path/to/service-account-key.json
@@ -796,15 +839,17 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
    ```
 
 **How it works:**
+
 - Files <10MB: Synchronous transcription (fast)
 - Files >10MB: Async transcription via Google Cloud Storage
 - Language automatically detected from podcast RSS metadata
 - Built-in speaker diarization (no additional setup required)
 
 **Pricing:**
+
 - Standard recognition: ~$0.024/minute
 - With speaker diarization: ~$0.048/minute
-- See: https://cloud.google.com/speech-to-text/pricing
+- See: <https://cloud.google.com/speech-to-text/pricing>
 
 ### Comparison: Whisper vs Google
 
@@ -819,12 +864,14 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 | **Network** | Not required | Required |
 
 **Transcript Output Format (both providers):**
+
 ```
 [00:15] [SPEAKER_01] Welcome to the podcast.
 [00:18] [SPEAKER_02] Thanks for having me.
 ```
 
 **Configuration Options (both providers):**
+
 - `ENABLE_DIARIZATION`: Enable/disable speaker identification
 - `MIN_SPEAKERS`: Minimum speakers (leave empty to use provider's internal defaults for best results)
 - `MAX_SPEAKERS`: Maximum speakers (leave empty to use provider's internal defaults for best results)
@@ -852,6 +899,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 ### Key Achievements
 
 **Week 1: Foundation & Testing Infrastructure** ✅ (100% complete)
+
 - ✅ Repository layer abstraction (enables future database migration)
 - ✅ PathManager centralization (single source of truth for file paths)
 - ✅ Pre-commit hooks (black, isort, pylint, mypy)
@@ -859,6 +907,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 - ✅ Replaced all `print()` with structured logging
 
 **Week 2: Service Layer & CLI Refactoring** ✅ (100% complete)
+
 - ✅ CLI context dependency injection (services instantiated once)
 - ✅ RefreshService extraction (business logic out of CLI)
 - ✅ CLIFormatter for consistent output
@@ -867,6 +916,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 - ✅ Magic numbers extracted to constants
 
 **Week 3: Testing & Type Coverage** ✅ (100% complete)
+
 - ✅ Type hints for all core and service modules (100% mypy clean)
 - ✅ Integration tests for full pipeline (9 end-to-end scenarios)
 - ✅ Contract tests for service boundaries (32 tests prevent API breakage)
@@ -874,6 +924,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 - ✅ Comprehensive unit tests (AudioDownloader 99%, PathManager 100%, PodcastService 92%)
 
 **Week 4: Architecture & Polish** ✅ (100% complete)
+
 - ✅ MediaSource strategy pattern (RSS + YouTube abstraction, enables Spotify/SoundCloud)
 - ✅ FeedManager transaction context manager (batch operations)
 - ✅ PathManager require_file_exists helper (centralized validation)
@@ -882,6 +933,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 - ✅ Documentation updated
 
 **Week 5: SQLite Migration** ✅ (100% complete)
+
 - ✅ SQLite repository implementation (540 lines, 34 tests)
 - ✅ API refactoring (get vs find naming, method collision fix)
 - ✅ Migration script with dry-run and backup support
@@ -892,6 +944,7 @@ This project underwent a comprehensive refactoring from October 2024 to present,
 ### Architecture Improvements
 
 **Before Refactoring**:
+
 ```
 cli.py (1000+ lines)
 ├── Inline path construction
@@ -902,6 +955,7 @@ cli.py (1000+ lines)
 ```
 
 **After Refactoring**:
+
 ```
 CLI Layer (cli.py)
   ↓ (dependency injection)
@@ -951,6 +1005,7 @@ Model Layer (models/podcast.py)
 ### Testing Infrastructure
 
 **Current Test Suite**: 269 tests across 9 test files
+
 - `test_path_manager.py`: 41 tests, 100% coverage
 - `test_podcast_service.py`: 38 tests, 92% coverage
 - `test_service_contracts.py`: 32 tests (API stability)
@@ -961,6 +1016,7 @@ Model Layer (models/podcast.py)
 - Plus: json_repository, llm_provider, podcast models
 
 **Testing Best Practices**:
+
 - Mock external dependencies (requests, feedparser, LLM APIs)
 - Use `tmp_path` for file system tests
 - Arrange-Act-Assert pattern
@@ -979,10 +1035,12 @@ Model Layer (models/podcast.py)
 ### Remaining Work (6 tasks)
 
 **High Priority**:
+
 - R-032: GitHub Actions CI workflow (45 min)
 - R-031: Makefile for common commands (20 min)
 
 **Low Priority**:
+
 - R-033: Simplify CLI import pattern (30 min)
 - R-034: Episode GUID uniqueness validation (30 min)
 - R-035: Update README with new features (30 min)
@@ -992,6 +1050,7 @@ Model Layer (models/podcast.py)
 ### Lessons Learned
 
 **What Worked Well**:
+
 - ✅ Small atomic commits (1 task = 1 commit = <1 hour)
 - ✅ Tests green at all times (no breaking changes)
 - ✅ Repository pattern (easiest architectural change)
@@ -999,11 +1058,13 @@ Model Layer (models/podcast.py)
 - ✅ Type hints (caught 2 bugs during R-021)
 
 **What Was Challenging**:
+
 - ⚠️ Increasing test coverage for complex modules (FeedManager at 26%)
 - ⚠️ Mocking LLM API calls (async, streaming responses)
 - ⚠️ Balancing refactoring vs new features (discipline required)
 
 **Key Takeaways**:
+
 1. **Start with data layer**: Repository pattern was the best first move
 2. **Type hints reveal bugs**: Found 2 production bugs during type annotation
 3. **Contract tests prevent breakage**: Critical for refactoring service boundaries
@@ -1013,12 +1074,14 @@ Model Layer (models/podcast.py)
 ### Future Improvements
 
 **Architecture** (Post-Refactoring):
+
 - Add SQLite/PostgreSQL repository implementation
 - Add message queue for distributed processing (RabbitMQ/Redis)
 - Extract LLM prompts to configuration files
 - Add caching layer for expensive operations
 
 **Features** (Separate from Refactoring):
+
 - Add Spotify podcast support (via MediaSource)
 - Add SoundCloud support (via MediaSource)
 - Web UI for podcast management
@@ -1026,6 +1089,7 @@ Model Layer (models/podcast.py)
 - RSS feed output for processed transcripts
 
 **Operations**:
+
 - Add Docker Compose for deployment
 - Add monitoring and alerting (Sentry, DataDog)
 - Add rate limiting for LLM APIs

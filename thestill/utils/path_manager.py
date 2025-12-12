@@ -69,6 +69,7 @@ class PathManager:
         self._episode_facts = "episode_facts"
         self._debug_feeds = "debug_feeds"
         self._pending_operations = "pending_operations"
+        self._external_transcripts = "external_transcripts"
         self._feeds_file = "feeds.json"
 
     # Directory path methods
@@ -112,6 +113,10 @@ class PathManager:
     def pending_operations_dir(self) -> Path:
         """Get path to pending operations directory (stores in-progress transcription jobs)"""
         return self.storage_path / self._pending_operations
+
+    def external_transcripts_dir(self) -> Path:
+        """Get path to external transcripts directory (stores downloaded RSS transcripts)"""
+        return self.storage_path / self._external_transcripts
 
     # File path methods
 
@@ -213,6 +218,34 @@ class PathManager:
         """
         return self.summaries_dir() / filename
 
+    def external_transcript_file(self, podcast_slug: str, episode_slug: str, extension: str) -> Path:
+        """
+        Get full path to an external transcript file downloaded from RSS feed.
+
+        External transcripts are stored in podcast subdirectories with format-specific extensions.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_slug: Slugified episode title
+            extension: File extension (e.g., "srt", "vtt", "json", "txt", "html")
+
+        Returns:
+            Full path: external_transcripts/{podcast_slug}/{episode_slug}.{extension}
+        """
+        return self.external_transcripts_dir() / podcast_slug / f"{episode_slug}.{extension}"
+
+    def external_transcript_dir_for_podcast(self, podcast_slug: str) -> Path:
+        """
+        Get path to external transcripts directory for a specific podcast.
+
+        Args:
+            podcast_slug: Slugified podcast title
+
+        Returns:
+            Full path: external_transcripts/{podcast_slug}/
+        """
+        return self.external_transcripts_dir() / podcast_slug
+
     def evaluation_file(self, filename: str) -> Path:
         """
         Get full path to an evaluation file.
@@ -224,6 +257,36 @@ class PathManager:
             Full path to the evaluation file in evaluations directory
         """
         return self.evaluations_dir() / filename
+
+    def raw_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
+        """
+        Get full path to a raw transcript evaluation file.
+
+        Evaluations are organized by type (raw vs clean) and podcast.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_filename: Filename for the evaluation (e.g., "episode-slug_hash_evaluation.json")
+
+        Returns:
+            Full path: evaluations/raw/{podcast_slug}/{episode_filename}
+        """
+        return self.evaluations_dir() / "raw" / podcast_slug / episode_filename
+
+    def clean_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
+        """
+        Get full path to a clean transcript evaluation file.
+
+        Evaluations are organized by type (raw vs clean) and podcast.
+
+        Args:
+            podcast_slug: Slugified podcast title
+            episode_filename: Filename for the evaluation (e.g., "episode-slug_hash_evaluation.json")
+
+        Returns:
+            Full path: evaluations/clean/{podcast_slug}/{episode_filename}
+        """
+        return self.evaluations_dir() / "clean" / podcast_slug / episode_filename
 
     def podcast_facts_file(self, podcast_slug: str) -> Path:
         """

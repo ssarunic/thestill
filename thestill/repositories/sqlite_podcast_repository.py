@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from ..models.podcast import Episode, EpisodeState, Podcast
+from ..models.podcast import Episode, EpisodeState, Podcast, TranscriptLink
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_episodes_state_transcribed
                 ON episodes(podcast_id, pub_date DESC)
                 WHERE raw_transcript_path IS NOT NULL AND clean_transcript_path IS NULL;
+
+            -- ========================================================================
+            -- EPISODE TRANSCRIPT LINKS TABLE (Podcasting 2.0 <podcast:transcript>)
+            -- ========================================================================
+            -- Stores external transcript URLs from RSS feeds for evaluation/debugging.
+            -- Each episode can have multiple transcript formats (SRT, VTT, JSON, etc.)
+            CREATE TABLE IF NOT EXISTS episode_transcript_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                language TEXT NULL,
+                rel TEXT NULL,
+                downloaded_path TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                UNIQUE(episode_id, url),
+                CHECK (length(url) > 0),
+                CHECK (length(mime_type) > 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_transcript_links_episode
+                ON episode_transcript_links(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_transcript_links_mime_type
+                ON episode_transcript_links(mime_type);
+            CREATE INDEX IF NOT EXISTS idx_transcript_links_not_downloaded
+                ON episode_transcript_links(episode_id)
+                WHERE downloaded_path IS NULL;
         """
         )
 
@@ -597,3 +625,195 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.summary_path,
             ),
         )
+
+    # ============================================================================
+    # TranscriptLink Methods (Podcasting 2.0 <podcast:transcript> support)
+    # ============================================================================
+
+    def get_transcript_links(self, episode_id: str) -> List[TranscriptLink]:
+        """
+        Get all transcript links for an episode.
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            List of TranscriptLink objects for the episode
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, episode_id, url, mime_type, language, rel, downloaded_path, created_at
+                FROM episode_transcript_links
+                WHERE episode_id = ?
+                ORDER BY created_at ASC
+            """,
+                (episode_id,),
+            )
+
+            return [self._row_to_transcript_link(row) for row in cursor.fetchall()]
+
+    def add_transcript_links(self, episode_id: str, links: List[TranscriptLink]) -> int:
+        """
+        Add transcript links for an episode.
+
+        Skips duplicates (same episode_id + url).
+
+        Args:
+            episode_id: Episode UUID
+            links: List of TranscriptLink objects to add
+
+        Returns:
+            Number of links actually inserted (excludes duplicates)
+        """
+        if not links:
+            return 0
+
+        inserted = 0
+        with self._get_connection() as conn:
+            for link in links:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO episode_transcript_links (episode_id, url, mime_type, language, rel)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                        (
+                            episode_id,
+                            str(link.url),
+                            link.mime_type,
+                            link.language,
+                            link.rel,
+                        ),
+                    )
+                    inserted += 1
+                except sqlite3.IntegrityError:
+                    # Duplicate (episode_id, url) - skip
+                    logger.debug(f"Transcript link already exists: {link.url}")
+                    continue
+
+        if inserted > 0:
+            logger.debug(f"Added {inserted} transcript links for episode {episode_id}")
+
+        return inserted
+
+    def mark_transcript_downloaded(self, link_id: int, local_path: str) -> bool:
+        """
+        Mark a transcript link as downloaded.
+
+        Args:
+            link_id: Primary key of the transcript link
+            local_path: Local file path where transcript was saved
+
+        Returns:
+            True if update succeeded, False if link not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episode_transcript_links
+                SET downloaded_path = ?
+                WHERE id = ?
+            """,
+                (local_path, link_id),
+            )
+            return cursor.rowcount > 0
+
+    def get_episodes_with_undownloaded_transcript_links(
+        self, podcast_id: Optional[str] = None
+    ) -> List[Tuple[Episode, List[TranscriptLink]]]:
+        """
+        Get episodes that have transcript links not yet downloaded.
+
+        Args:
+            podcast_id: Optional podcast UUID to filter by
+
+        Returns:
+            List of (Episode, List[TranscriptLink]) tuples for episodes with pending downloads
+        """
+        with self._get_connection() as conn:
+            # Find episodes with undownloaded transcript links
+            if podcast_id:
+                cursor = conn.execute(
+                    """
+                    SELECT DISTINCT e.id, e.podcast_id, e.created_at, e.updated_at, e.external_id,
+                           e.title, e.slug, e.description, e.pub_date, e.audio_url, e.duration,
+                           e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
+                           e.clean_transcript_path, e.summary_path
+                    FROM episodes e
+                    INNER JOIN episode_transcript_links etl ON e.id = etl.episode_id
+                    WHERE etl.downloaded_path IS NULL AND e.podcast_id = ?
+                    ORDER BY e.pub_date DESC
+                """,
+                    (podcast_id,),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT DISTINCT e.id, e.podcast_id, e.created_at, e.updated_at, e.external_id,
+                           e.title, e.slug, e.description, e.pub_date, e.audio_url, e.duration,
+                           e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
+                           e.clean_transcript_path, e.summary_path
+                    FROM episodes e
+                    INNER JOIN episode_transcript_links etl ON e.id = etl.episode_id
+                    WHERE etl.downloaded_path IS NULL
+                    ORDER BY e.pub_date DESC
+                """
+                )
+
+            results = []
+            for row in cursor.fetchall():
+                episode = self._row_to_episode(row)
+                # Fetch undownloaded links for this episode
+                link_cursor = conn.execute(
+                    """
+                    SELECT id, episode_id, url, mime_type, language, rel, downloaded_path, created_at
+                    FROM episode_transcript_links
+                    WHERE episode_id = ? AND downloaded_path IS NULL
+                """,
+                    (episode.id,),
+                )
+                links = [self._row_to_transcript_link(link_row) for link_row in link_cursor.fetchall()]
+                results.append((episode, links))
+
+            return results
+
+    def _row_to_transcript_link(self, row: sqlite3.Row) -> TranscriptLink:
+        """Convert database row to TranscriptLink model."""
+        return TranscriptLink(
+            id=row["id"],
+            episode_id=row["episode_id"],
+            url=row["url"],
+            mime_type=row["mime_type"],
+            language=row["language"],
+            rel=row["rel"],
+            downloaded_path=row["downloaded_path"],
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        )
+
+    def get_podcast_for_episode(self, episode_id: str) -> Optional[Podcast]:
+        """
+        Get the podcast that owns a specific episode.
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            Podcast object if found, None otherwise
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description,
+                       p.last_processed, p.updated_at
+                FROM podcasts p
+                INNER JOIN episodes e ON e.podcast_id = p.id
+                WHERE e.id = ?
+            """,
+                (episode_id,),
+            )
+
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_podcast(row, conn)
+            return None

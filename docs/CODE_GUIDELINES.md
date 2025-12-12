@@ -32,6 +32,7 @@ pytest
 Create the following configuration files:
 
 **pyproject.toml (add these sections)**:
+
 ```toml
 [tool.black]
 line-length = 120
@@ -66,6 +67,7 @@ disable = [
 ```
 
 **.pylintrc** (create at root):
+
 ```ini
 [MASTER]
 max-line-length=120
@@ -138,6 +140,7 @@ thestill/
 5. **Infrastructure Layer** (`utils/`): Config, logging, paths, external integrations
 
 **Rules**:
+
 - CLI depends on Services and Core, never the reverse
 - Core modules should not depend on CLI
 - Use dependency injection for services and providers
@@ -220,6 +223,7 @@ def get_new_episodes(
 - **Early Returns**: Use guard clauses to reduce nesting
 
 **Good**:
+
 ```python
 def mark_episode_downloaded(self, rss_url: str, guid: str, audio_filename: str) -> bool:
     """Mark episode as downloaded with audio file path"""
@@ -237,6 +241,7 @@ def mark_episode_downloaded(self, rss_url: str, guid: str, audio_filename: str) 
 ```
 
 **Bad**:
+
 ```python
 def process_episode(self, rss_url, guid, audio_url, should_download, should_transcribe):
     # Too many args, unclear responsibilities
@@ -258,6 +263,7 @@ def process_episode(self, rss_url, guid, audio_url, should_download, should_tran
 - **Small Interfaces**: Keep public API minimal
 
 **Good**:
+
 ```python
 class AudioDownloader:
     """Downloads podcast audio files from URLs"""
@@ -272,6 +278,7 @@ class AudioDownloader:
 ```
 
 **Bad**:
+
 ```python
 class PodcastProcessor:
     """Handles everything podcast-related"""
@@ -329,6 +336,7 @@ def download_episode(self, episode: Episode) -> Optional[str]:
 ```
 
 **Logging Levels**:
+
 - `DEBUG`: Detailed diagnostic info for development
 - `INFO`: Important state changes (episode downloaded, transcribed)
 - `WARNING`: Recoverable issues (retry after failure)
@@ -336,6 +344,7 @@ def download_episode(self, episode: Episode) -> Optional[str]:
 - `CRITICAL`: System-wide failures
 
 **Never Log**:
+
 - API keys, tokens, credentials
 - Full file contents
 - PII (personally identifiable information)
@@ -521,6 +530,7 @@ type(scope): subject
 ```
 
 **Types**:
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `refactor`: Code change that neither fixes a bug nor adds a feature
@@ -529,6 +539,7 @@ type(scope): subject
 - `chore`: Build, CI, or tooling changes
 
 **Examples**:
+
 ```
 feat(transcription): add Google Cloud Speech-to-Text support
 
@@ -610,6 +621,7 @@ Track these metrics to measure code health:
 ## Pre-Commit Checklist
 
 Before committing:
+
 - [ ] Code compiles (no syntax errors)
 - [ ] All tests pass locally (`pytest`)
 - [ ] Linter runs clean (`pylint thestill/`)
@@ -622,6 +634,7 @@ Before committing:
 ## Review Checklist
 
 When reviewing PRs:
+
 - [ ] Names are clear and follow conventions
 - [ ] Functions are small and focused
 - [ ] No code duplication
@@ -634,6 +647,7 @@ When reviewing PRs:
 ## Acceptance Criteria
 
 A change is ready to merge when:
+
 - All automated checks pass (tests, linting, type checking)
 - Code review approved by at least one maintainer
 - Documentation updated for user-facing changes

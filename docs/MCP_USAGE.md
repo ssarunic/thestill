@@ -19,7 +19,7 @@ pip install -e .
 
 This installs both the CLI tool (`thestill`) and the MCP server (`thestill-mcp`).
 
-2. **Verify installation:**
+1. **Verify installation:**
 
 ```bash
 thestill-mcp --help  # Should show help (once implemented)
@@ -129,10 +129,12 @@ MCP resources provide read-only access to data. Claude can read these automatica
 **URI Format**: `thestill://podcasts/{podcast_id}`
 
 **Podcast ID can be:**
+
 - Integer index: `thestill://podcasts/1`, `thestill://podcasts/2`, etc.
 - RSS URL (URL-encoded): `thestill://podcasts/https%3A%2F%2Ffeeds.example.com%2Frss`
 
 **Example Usage in Claude:**
+
 ```
 User: "Tell me about podcast 1"
 Claude: [reads thestill://podcasts/1]
@@ -140,6 +142,7 @@ Claude: "Podcast #1 is 'The Rest is Politics' with 150 episodes, 45 of which hav
 ```
 
 **Returns**: JSON with podcast metadata
+
 ```json
 {
   "index": 1,
@@ -157,12 +160,14 @@ Claude: "Podcast #1 is 'The Rest is Politics' with 150 episodes, 45 of which hav
 **URI Format**: `thestill://podcasts/{podcast_id}/episodes/{episode_id}`
 
 **Episode ID can be:**
+
 - Integer index: `1` (latest), `2` (second latest), etc.
 - Keyword: `latest`
 - Date: `2025-01-15`
 - GUID: exact episode identifier
 
 **Example Usage in Claude:**
+
 ```
 User: "What's the latest episode from podcast 1?"
 Claude: [reads thestill://podcasts/1/episodes/latest]
@@ -170,6 +175,7 @@ Claude: "The latest episode is 'Nigel Farage and Reform' published on Jan 15, 20
 ```
 
 **Returns**: JSON with episode metadata
+
 ```json
 {
   "podcast_index": 1,
@@ -191,6 +197,7 @@ Claude: "The latest episode is 'Nigel Farage and Reform' published on Jan 15, 20
 **URI Format**: `thestill://podcasts/{podcast_id}/episodes/{episode_id}/transcript`
 
 **Example Usage in Claude:**
+
 ```
 User: "Show me the transcript of episode 1.2"
 Claude: [reads thestill://podcasts/1/episodes/2/transcript]
@@ -198,15 +205,16 @@ Claude: [displays the full cleaned Markdown transcript]
 ```
 
 **Returns**:
+
 - Cleaned Markdown transcript (if processed)
 - `"N/A - Episode not yet processed"` (if not processed)
-
 
 ### Episode Audio Reference
 
 **URI Format**: `thestill://podcasts/{podcast_id}/episodes/{episode_id}/audio`
 
 **Example Usage in Claude:**
+
 ```
 User: "Where can I find the audio for episode 1.1?"
 Claude: [reads thestill://podcasts/1/episodes/1/audio]
@@ -214,6 +222,7 @@ Claude: "The audio is available at [URL] and is 45 minutes long..."
 ```
 
 **Returns**: JSON with audio metadata
+
 ```json
 {
   "audio_url": "https://traffic.megaphone.fm/...",
@@ -229,6 +238,7 @@ Claude: "The audio is available at [URL] and is 45 minutes long..."
 **URI Format**: `thestill://podcasts/{podcast_id}/episodes/{episode_id}/summary`
 
 **Example Usage in Claude:**
+
 ```
 User: "Show me the summary of episode 1.1"
 Claude: [reads thestill://podcasts/1/episodes/1/summary]
@@ -251,9 +261,11 @@ MCP tools allow Claude to perform actions. Claude will call these when appropria
 Add a new podcast to tracking.
 
 **Parameters:**
+
 - `url` (string, required): RSS feed URL, Apple Podcast URL, or YouTube channel/playlist URL
 
 **Example Usage:**
+
 ```
 User: "Add The Rest is Politics podcast"
 Claude: [calls add_podcast with URL]
@@ -261,6 +273,7 @@ Claude: "I've added podcast #3: The Rest is Politics"
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -279,9 +292,11 @@ Claude: "I've added podcast #3: The Rest is Politics"
 Remove a podcast from tracking.
 
 **Parameters:**
+
 - `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
 
 **Example Usage:**
+
 ```
 User: "Remove podcast 2"
 Claude: [calls remove_podcast with podcast_id="2"]
@@ -289,6 +304,7 @@ Claude: "Podcast removed successfully"
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -303,6 +319,7 @@ List all tracked podcasts.
 **Parameters:** None
 
 **Example Usage:**
+
 ```
 User: "What podcasts am I tracking?"
 Claude: [calls list_podcasts]
@@ -313,6 +330,7 @@ Claude: "You're tracking 3 podcasts:
 ```
 
 **Response:**
+
 ```json
 {
   "podcasts": [
@@ -333,11 +351,13 @@ Claude: "You're tracking 3 podcasts:
 List episodes for a specific podcast.
 
 **Parameters:**
+
 - `podcast_id` (string, required): Podcast index or RSS URL
 - `limit` (integer, optional, default=10): Maximum episodes to return
 - `since_hours` (integer, optional): Only episodes from last N hours
 
 **Example Usage:**
+
 ```
 User: "What episodes were published in the last 24 hours?"
 Claude: [calls list_episodes for each podcast with since_hours=24]
@@ -347,6 +367,7 @@ Claude: "In the last 24 hours, there were 2 new episodes:
 ```
 
 **Response:**
+
 ```json
 {
   "podcast_title": "The Rest is Politics",
@@ -371,6 +392,7 @@ Get system-wide statistics.
 **Parameters:** None
 
 **Example Usage:**
+
 ```
 User: "How many podcasts do I have?"
 Claude: [calls get_status]
@@ -379,6 +401,7 @@ Claude: "You're tracking 3 podcasts with a total of 550 episodes.
 ```
 
 **Response:**
+
 ```json
 {
   "podcasts_tracked": 3,
@@ -397,10 +420,12 @@ Claude: "You're tracking 3 podcasts with a total of 550 episodes.
 Get the cleaned transcript for a specific episode.
 
 **Parameters:**
+
 - `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
 - `episode_id` (string, required): Episode index (1=latest), 'latest', date (YYYY-MM-DD), or GUID
 
 **Example Usage:**
+
 ```
 User: "Show me the transcript of the latest episode from podcast 1"
 Claude: [calls get_transcript with podcast_id="1", episode_id="latest"]
@@ -429,10 +454,12 @@ Alternatively, use **process_episode** to run steps 1-5 for a single episode, th
 Refresh podcast feeds to discover new episodes. This is step 1 of the pipeline.
 
 **Parameters:**
+
 - `podcast_id` (string, optional): Podcast index or RSS URL to refresh only that podcast
 - `max_episodes` (integer, optional): Maximum episodes to discover per podcast
 
 **Example Usage:**
+
 ```
 User: "Check for new podcast episodes"
 Claude: [calls refresh_feeds]
@@ -445,6 +472,7 @@ Next step: Run download_episodes to download the audio."
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -462,10 +490,12 @@ Next step: Run download_episodes to download the audio."
 Download audio files for discovered episodes. This is step 2 of the pipeline.
 
 **Parameters:**
+
 - `podcast_id` (string, optional): Podcast index or RSS URL to download only from that podcast
 - `max_episodes` (integer, optional, default=5): Maximum episodes to download
 
 **Example Usage:**
+
 ```
 User: "Download the new episodes"
 Claude: [calls download_episodes]
@@ -473,6 +503,7 @@ Claude: "Downloaded 3 episodes successfully. Next step: downsample the audio."
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -489,10 +520,12 @@ Claude: "Downloaded 3 episodes successfully. Next step: downsample the audio."
 Downsample downloaded audio to 16kHz WAV format for transcription. This is step 3 of the pipeline.
 
 **Parameters:**
+
 - `podcast_id` (string, optional): Podcast index or RSS URL to downsample only from that podcast
 - `max_episodes` (integer, optional, default=5): Maximum episodes to downsample
 
 **Example Usage:**
+
 ```
 User: "Prepare the audio for transcription"
 Claude: [calls downsample_audio]
@@ -500,6 +533,7 @@ Claude: "Downsampled 3 episodes. Ready for transcription."
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -516,10 +550,12 @@ Claude: "Downsampled 3 episodes. Ready for transcription."
 Transcribe downsampled audio to JSON transcripts. This is step 4 of the pipeline.
 
 **Parameters:**
+
 - `podcast_id` (string, optional): Podcast index or RSS URL to transcribe only from that podcast
 - `max_episodes` (integer, optional, default=1): Maximum episodes to transcribe (low default due to processing time)
 
 **Example Usage:**
+
 ```
 User: "Transcribe the prepared episodes"
 Claude: [calls transcribe_episodes]
@@ -527,6 +563,7 @@ Claude: "Transcribed 1 episode. The raw transcript is ready for cleaning."
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -543,10 +580,12 @@ Claude: "Transcribed 1 episode. The raw transcript is ready for cleaning."
 Clean raw transcripts with LLM processing for better readability. This is step 5 (final) of the pipeline.
 
 **Parameters:**
+
 - `podcast_id` (string, optional): Podcast index or RSS URL to clean only from that podcast
 - `max_episodes` (integer, optional, default=1): Maximum episodes to clean (low default due to LLM costs)
 
 **Example Usage:**
+
 ```
 User: "Clean up the transcripts"
 Claude: [calls clean_transcripts]
@@ -554,6 +593,7 @@ Claude: "Cleaned 1 transcript with 45 corrections. Applied speaker identificatio
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -570,10 +610,12 @@ Claude: "Cleaned 1 transcript with 45 corrections. Applied speaker identificatio
 Run the full processing pipeline for a specific episode. Convenient for processing a single episode end-to-end.
 
 **Parameters:**
+
 - `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
 - `episode_id` (string, required): Episode index (1=latest), 'latest', date (YYYY-MM-DD), or GUID
 
 **Example Usage:**
+
 ```
 User: "Process the latest episode from podcast 1"
 Claude: [calls process_episode with podcast_id="1", episode_id="latest"]
@@ -587,6 +629,7 @@ The transcript is now ready to read!"
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -608,6 +651,7 @@ Summarize cleaned transcripts with comprehensive analysis. This is step 6 of the
 - `max_episodes` (integer, optional, default=1): Maximum episodes to summarize (low default due to LLM costs)
 
 **Example Usage:**
+
 ```
 User: "Summarize the latest cleaned transcript"
 Claude: [calls summarize_episodes]
@@ -615,6 +659,7 @@ Claude: "Summarized 1 episode. The summary includes an executive summary, notabl
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -796,6 +841,7 @@ All 5 episodes are now fully processed! You can read any of them using:
    - Check Claude Desktop logs (Help → Show Logs)
 
 2. **Verify configuration:**
+
    ```bash
    # Test the server manually
    thestill-mcp

@@ -41,6 +41,52 @@ class EpisodeState(str, Enum):
     SUMMARIZED = "summarized"
 
 
+class TranscriptLink(BaseModel):
+    """
+    Represents a <podcast:transcript> tag from an RSS feed (Podcasting 2.0 namespace).
+
+    This model stores metadata about external transcripts available for an episode.
+    Transcripts are stored in a separate database table (episode_transcript_links)
+    and downloaded to data/external_transcripts/ for evaluation purposes.
+
+    See: https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md#transcript
+    """
+
+    # Database fields (optional, only set when loaded from DB)
+    id: Optional[int] = None  # Primary key from episode_transcript_links table
+    episode_id: Optional[str] = None  # FK to episodes.id (UUID)
+
+    # RSS feed fields (required)
+    url: HttpUrl  # URL to the transcript file
+    mime_type: str  # MIME type: "text/plain", "application/json", "application/x-subrip", "text/vtt", "text/html"
+
+    # RSS feed fields (optional)
+    language: Optional[str] = None  # Language code, e.g., "en", "es"
+    rel: Optional[str] = None  # Relationship, e.g., "captions" for timed transcripts
+
+    # Download tracking (set after download)
+    downloaded_path: Optional[str] = None  # Local path after download (relative to data dir)
+    created_at: Optional[datetime] = None  # When the link was first discovered
+
+    @property
+    def format_extension(self) -> str:
+        """
+        Get file extension based on MIME type.
+
+        Returns:
+            File extension (without dot): "srt", "vtt", "json", "txt", "html"
+        """
+        mime_to_ext = {
+            "application/x-subrip": "srt",
+            "application/srt": "srt",
+            "text/vtt": "vtt",
+            "application/json": "json",
+            "text/plain": "txt",
+            "text/html": "html",
+        }
+        return mime_to_ext.get(self.mime_type, "txt")
+
+
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID

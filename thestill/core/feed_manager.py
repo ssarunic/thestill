@@ -23,7 +23,7 @@ import feedparser
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
-from .media_source import MediaSourceFactory
+from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +189,6 @@ class PodcastFeedManager:
                 }
 
                 # Add podcast_slug for RSS sources to enable debug RSS saving
-                from .media_source import RSSMediaSource
-
                 if isinstance(source, RSSMediaSource):
                     fetch_kwargs["podcast_slug"] = podcast.slug
 
@@ -231,13 +229,73 @@ class PodcastFeedManager:
                 # Save podcast with new episodes
                 self.repository.save(podcast)
 
+                # Extract and save transcript links for RSS sources (Podcasting 2.0)
+                if isinstance(source, RSSMediaSource) and episodes:
+                    self._save_transcript_links_for_episodes(podcast, episodes, source)
+
             except Exception as e:
                 logger.error(f"Error checking feed {podcast.rss_url}: {e}")
                 continue
 
         return new_episodes
 
-    def mark_episode_downloaded(self, podcast_rss_url: str, episode_external_id: str, audio_path: str) -> None:
+    def _save_transcript_links_for_episodes(
+        self,
+        podcast: Podcast,
+        episodes: List[Episode],
+        source: RSSMediaSource,
+    ) -> None:
+        """
+        Extract and save transcript links for newly discovered episodes.
+
+        Reads the debug RSS file (saved during fetch_episodes) and extracts
+        <podcast:transcript> tags for each episode. Saves links to database
+        for later download.
+
+        Args:
+            podcast: The podcast these episodes belong to
+            episodes: List of newly discovered episodes
+            source: The RSSMediaSource that fetched the episodes
+        """
+        try:
+            # Read the debug RSS file (saved during fetch_episodes)
+            debug_file = self.path_manager.debug_feed_file(podcast.slug)
+            if not debug_file.exists():
+                logger.debug(f"No debug RSS file found for {podcast.slug}, skipping transcript link extraction")
+                return
+
+            rss_content = debug_file.read_text(encoding="utf-8")
+
+            # Extract transcript links from RSS
+            transcript_links_by_guid = source.extract_transcript_links(rss_content)
+            if not transcript_links_by_guid:
+                return
+
+            # Save transcript links for each new episode
+            total_saved = 0
+            for episode in episodes:
+                links = transcript_links_by_guid.get(episode.external_id, [])
+                if links:
+                    # Use repository method to save links
+                    saved = self.repository.add_transcript_links(episode.id, links)
+                    if saved > 0:
+                        total_saved += saved
+                        logger.debug(f"Saved {saved} transcript links for episode {episode.title[:50]}...")
+
+            if total_saved > 0:
+                logger.info(f"Saved {total_saved} transcript links for {len(episodes)} new episodes in {podcast.title}")
+
+        except Exception as e:
+            # Don't fail episode discovery if transcript link extraction fails
+            logger.warning(f"Failed to extract transcript links for {podcast.title}: {e}")
+
+    def mark_episode_downloaded(
+        self,
+        podcast_rss_url: str,
+        episode_external_id: str,
+        audio_path: str,
+        duration: Optional[str] = None,
+    ) -> None:
         """
         Mark an episode as downloaded with audio file path.
 
@@ -245,6 +303,7 @@ class PodcastFeedManager:
             podcast_rss_url: RSS URL of the podcast
             episode_external_id: External ID (from RSS feed) of the episode
             audio_path: Path to the downloaded audio file
+            duration: Optional duration in seconds (as string) from ffprobe
         """
         if self._in_transaction:
             # Update in-memory cache
@@ -253,6 +312,8 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
                         episode.audio_path = audio_path
+                        if duration is not None:
+                            episode.duration = duration
                         logger.info(f"Marked episode as downloaded (in transaction): {episode_external_id}")
                         return
                 logger.warning(f"Episode not found for download marking: {episode_external_id}")
@@ -260,14 +321,21 @@ class PodcastFeedManager:
                 logger.warning(f"Podcast not found: {podcast_rss_url}")
         else:
             # Direct repository update
-            success = self.repository.update_episode(podcast_rss_url, episode_external_id, {"audio_path": audio_path})
+            updates = {"audio_path": audio_path}
+            if duration is not None:
+                updates["duration"] = duration
+            success = self.repository.update_episode(podcast_rss_url, episode_external_id, updates)
             if success:
                 logger.info(f"Marked episode as downloaded: {episode_external_id}")
             else:
                 logger.warning(f"Episode not found for download marking: {episode_external_id}")
 
     def mark_episode_downsampled(
-        self, podcast_rss_url: str, episode_external_id: str, downsampled_audio_path: str
+        self,
+        podcast_rss_url: str,
+        episode_external_id: str,
+        downsampled_audio_path: str,
+        duration: Optional[str] = None,
     ) -> None:
         """
         Mark an episode as downsampled with downsampled audio file path.
@@ -276,6 +344,7 @@ class PodcastFeedManager:
             podcast_rss_url: RSS URL of the podcast
             episode_external_id: External ID (from RSS feed) of the episode
             downsampled_audio_path: Path to the downsampled audio file
+            duration: Optional duration in seconds (as string) from ffprobe
         """
         if self._in_transaction:
             # Update in-memory cache
@@ -284,6 +353,8 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
                         episode.downsampled_audio_path = downsampled_audio_path
+                        if duration is not None:
+                            episode.duration = duration
                         logger.info(f"Marked episode as downsampled (in transaction): {episode_external_id}")
                         return
                 logger.warning(f"Episode not found for downsample marking: {episode_external_id}")
@@ -291,9 +362,10 @@ class PodcastFeedManager:
                 logger.warning(f"Podcast not found: {podcast_rss_url}")
         else:
             # Direct repository update
-            success = self.repository.update_episode(
-                podcast_rss_url, episode_external_id, {"downsampled_audio_path": downsampled_audio_path}
-            )
+            updates = {"downsampled_audio_path": downsampled_audio_path}
+            if duration is not None:
+                updates["duration"] = duration
+            success = self.repository.update_episode(podcast_rss_url, episode_external_id, updates)
             if success:
                 logger.info(f"Marked episode as downsampled: {episode_external_id}")
             else:
@@ -516,6 +588,72 @@ class PodcastFeedManager:
                 episodes_to_downsample.append((podcast, episodes))
 
         return episodes_to_downsample
+
+    def get_episodes_with_raw_transcripts(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:
+        """
+        Get all episodes that have raw transcripts available for evaluation.
+
+        Returns episodes sorted by publication date (newest first) across all podcasts,
+        enabling cross-podcast prioritization when using --max-episodes.
+
+        Args:
+            storage_path: Base storage path (unused, kept for compatibility)
+
+        Returns:
+            List of (Podcast, Episode) tuples sorted by pub_date descending
+        """
+        episodes_with_transcripts = []
+        podcasts = self.repository.get_all()
+
+        for podcast in podcasts:
+            for episode in podcast.episodes:
+                # Check if raw transcript path is set
+                if not episode.raw_transcript_path:
+                    continue
+
+                # Check if raw transcript file actually exists
+                if not self.path_manager.raw_transcript_file(episode.raw_transcript_path).exists():
+                    continue
+
+                episodes_with_transcripts.append((podcast, episode))
+
+        # Sort by publication date (newest first) for cross-podcast prioritization
+        episodes_with_transcripts.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
+
+        return episodes_with_transcripts
+
+    def get_episodes_with_clean_transcripts(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:
+        """
+        Get all episodes that have clean transcripts available for evaluation.
+
+        Returns episodes sorted by publication date (newest first) across all podcasts,
+        enabling cross-podcast prioritization when using --max-episodes.
+
+        Args:
+            storage_path: Base storage path (unused, kept for compatibility)
+
+        Returns:
+            List of (Podcast, Episode) tuples sorted by pub_date descending
+        """
+        episodes_with_clean = []
+        podcasts = self.repository.get_all()
+
+        for podcast in podcasts:
+            for episode in podcast.episodes:
+                # Check if clean transcript path is set
+                if not episode.clean_transcript_path:
+                    continue
+
+                # Check if clean transcript file actually exists
+                if not self.path_manager.clean_transcript_file(episode.clean_transcript_path).exists():
+                    continue
+
+                episodes_with_clean.append((podcast, episode))
+
+        # Sort by publication date (newest first) for cross-podcast prioritization
+        episodes_with_clean.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
+
+        return episodes_with_clean
 
     def list_podcasts(self) -> List[Podcast]:
         """Return list of all podcasts"""
