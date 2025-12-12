@@ -31,7 +31,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from thestill.core.llm_provider import LLMProvider
-from thestill.core.post_processor import MODEL_CONFIGS
 from thestill.core.transcript_formatter import TranscriptFormatter
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 
@@ -74,33 +73,6 @@ class PodcastFactsResponse(BaseModel):
         default_factory=lambda: ["Preserve original speaking style"],
         description="General style guidance for the podcast",
     )
-
-
-# Default max output tokens for facts extraction (fallback for unknown models)
-DEFAULT_MAX_OUTPUT_TOKENS = 8192
-
-
-def get_max_output_tokens(model_name: str) -> int:
-    """
-    Get the maximum output tokens for a model from MODEL_CONFIGS.
-
-    Args:
-        model_name: The model name to look up
-
-    Returns:
-        Maximum output tokens for the model, or DEFAULT_MAX_OUTPUT_TOKENS if not found
-    """
-    # Check for exact match first
-    if model_name in MODEL_CONFIGS:
-        return MODEL_CONFIGS[model_name].max_output_tokens
-
-    # Check for partial match (model names often have date suffixes)
-    for config_model_name, limits in MODEL_CONFIGS.items():
-        if model_name.startswith(config_model_name.rsplit("-", 1)[0]):
-            return limits.max_output_tokens
-
-    logger.warning(f"Model '{model_name}' not found in MODEL_CONFIGS, using default {DEFAULT_MAX_OUTPUT_TOKENS}")
-    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def extract_json_from_response(response: str) -> str:
@@ -164,8 +136,8 @@ class FactsExtractor:
         self.provider = provider
         self.chunk_size = chunk_size
         self.formatter = TranscriptFormatter()
-        # Get max output tokens from model config
-        self.max_output_tokens = get_max_output_tokens(provider.get_model_name())
+        # Get max output tokens from provider
+        self.max_output_tokens = provider.get_max_output_tokens()
         logger.info(
             f"FactsExtractor using model '{provider.get_model_name()}' with max_output_tokens={self.max_output_tokens}"
         )

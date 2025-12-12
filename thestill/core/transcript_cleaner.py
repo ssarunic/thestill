@@ -33,51 +33,11 @@ from thestill.models.facts import EpisodeFacts, PodcastFacts
 
 logger = logging.getLogger(__name__)
 
-# Import model configs for dynamic max_tokens lookup
-from thestill.core.post_processor import MODEL_CONFIGS
-
 # Type alias for prompt save callback
 PromptSaveCallback = Callable[[Dict[str, Any]], None]
 
 # Type alias for streaming chunk callback
 StreamingCallback = Callable[[str], None]
-
-# Default max output tokens for unknown models (conservative)
-DEFAULT_MAX_OUTPUT_TOKENS = 8192
-
-
-def get_max_output_tokens(model_name: str) -> int:
-    """
-    Get the maximum output tokens for a model from MODEL_CONFIGS.
-
-    Args:
-        model_name: The model name (e.g., "claude-sonnet-4-5-20250929")
-
-    Returns:
-        The max_output_tokens for the model, or DEFAULT_MAX_OUTPUT_TOKENS if unknown
-    """
-    # Check for exact match first
-    if model_name in MODEL_CONFIGS:
-        return MODEL_CONFIGS[model_name].max_output_tokens
-
-    # Check for partial match (model names often have date suffixes)
-    for config_name, limits in MODEL_CONFIGS.items():
-        # Match by prefix (e.g., "claude-sonnet-4-5" matches "claude-sonnet-4-5-20250929")
-        if model_name.startswith(config_name.rsplit("-", 1)[0]):
-            return limits.max_output_tokens
-        if config_name.startswith(model_name.rsplit("-", 1)[0]):
-            return limits.max_output_tokens
-
-    # Fallback for common provider patterns
-    model_lower = model_name.lower()
-    if "gemini" in model_lower:
-        return 65536  # Gemini 2.x default
-    elif "gpt-4" in model_lower:
-        return 16384  # GPT-4o default
-    elif "claude" in model_lower:
-        return 64000  # Claude 4.x default
-
-    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class TranscriptCleaner:
@@ -214,7 +174,7 @@ class TranscriptCleaner:
         )
 
         # Get max output tokens for this model
-        max_output_tokens = get_max_output_tokens(self.provider.get_model_name())
+        max_output_tokens = self.provider.get_max_output_tokens()
 
         # Calculate effective chunk size based on OUTPUT token limit
         # For transcript cleaning, output ≈ input size, so we need to ensure
@@ -249,7 +209,7 @@ class TranscriptCleaner:
             )
 
         # Get max tokens for this model
-        max_tokens = get_max_output_tokens(self.provider.get_model_name())
+        max_tokens = self.provider.get_max_output_tokens()
         logger.debug(f"Using max_tokens={max_tokens} for model {self.provider.get_model_name()}")
 
         # Prepare messages
@@ -316,7 +276,7 @@ class TranscriptCleaner:
         )
 
         # Get max tokens for this model
-        max_tokens = get_max_output_tokens(self.provider.get_model_name())
+        max_tokens = self.provider.get_max_output_tokens()
 
         for i, chunk in enumerate(chunks):
             logger.info(f"Processing chunk {i + 1}/{len(chunks)}...")
