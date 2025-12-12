@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.ai
+# Copyright 2025 thestill.me
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -145,7 +145,7 @@ class ExternalTranscriptDownloader:
         response = requests.get(
             str(link.url),
             timeout=DOWNLOAD_TIMEOUT,
-            headers={"User-Agent": "thestill.ai podcast transcription pipeline"},
+            headers={"User-Agent": "thestill.me podcast transcription pipeline"},
         )
         response.raise_for_status()
 

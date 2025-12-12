@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.ai
+# Copyright 2025 thestill.me
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Service layer for thestill.ai
+Service layer for thestill.me
 
 This package contains business logic services that can be used by multiple
 presentation layers (CLI, MCP server, web API, etc.)

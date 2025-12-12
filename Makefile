@@ -10,7 +10,7 @@ YELLOW := \033[0;33m
 RESET := \033[0m
 
 help: ## Show this help message
-	@echo "$(CYAN)thestill.ai - Development Makefile$(RESET)"
+	@echo "$(CYAN)thestill.me - Development Makefile$(RESET)"
 	@echo ""
 	@echo "$(GREEN)Available targets:$(RESET)"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
