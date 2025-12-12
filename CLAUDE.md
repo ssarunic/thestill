@@ -234,23 +234,19 @@ mypy thestill/
     - Quality evaluation for raw and post-processed transcripts
     - Scoring and feedback for transcript accuracy
 
-11. **Transcript Compactor** (`thestill/core/transcript_compactor.py`)
-    - Compacts transcripts for efficient processing
-    - Reduces token usage while preserving content
-
-12. **Transcript Formatter** (`thestill/core/transcript_formatter.py`)
+11. **Transcript Formatter** (`thestill/core/transcript_formatter.py`)
     - Converts raw JSON transcripts to markdown format
     - Prepares transcripts for LLM processing
 
-13. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`) (Legacy)
+12. **Transcript Cleaning Processor** (`thestill/core/transcript_cleaning_processor.py`) (Legacy)
     - Original three-phase LLM cleaning pipeline
     - Being replaced by the two-pass facts-based approach
 
-14. **Models** (`thestill/models/podcast.py`, `thestill/models/facts.py`)
+13. **Models** (`thestill/models/podcast.py`, `thestill/models/facts.py`)
     - Pydantic models for type safety
     - Episode, Podcast, Quote, ProcessedContent, CleanedTranscript, PodcastFacts, EpisodeFacts schemas
 
-15. **Path Manager** (`thestill/utils/path_manager.py`)
+14. **Path Manager** (`thestill/utils/path_manager.py`)
     - **Centralized path management** for all file artifacts
     - Single source of truth for directory and file paths
     - Prevents scattered path logic across codebase
@@ -445,11 +441,9 @@ thestill/
 │   ├── facts_manager.py          # Load/save facts as Markdown
 │   ├── transcript_cleaner.py     # Pass 2: Clean transcripts with LLM
 │   ├── transcript_formatter.py   # JSON to Markdown conversion
-│   ├── transcript_compactor.py   # Compact transcripts for processing
 │   ├── post_processor.py         # Summarization and analysis
 │   ├── evaluator.py              # Transcript quality evaluation
 │   ├── llm_provider.py           # Multi-provider LLM abstraction
-│   ├── llm_processor.py          # Legacy summarization pipeline
 │   ├── media_source.py           # Strategy pattern for RSS/YouTube
 │   └── transcript_cleaning_processor.py  # Legacy three-phase cleaner
 ├── models/                # Pydantic data models
