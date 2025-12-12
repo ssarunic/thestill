@@ -27,20 +27,6 @@ from .media_source import MediaSourceFactory
 
 logger = logging.getLogger(__name__)
 
-# Network Configuration Constants
-DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
-DEFAULT_CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
-
-# Retry Configuration Constants
-MAX_RETRY_ATTEMPTS = 3  # Maximum number of download retry attempts
-RETRY_WAIT_MIN_SECONDS = 1  # Minimum wait time between retries (exponential backoff start)
-RETRY_WAIT_MAX_SECONDS = 60  # Maximum wait time between retries (exponential backoff cap)
-RETRY_WAIT_MULTIPLIER = 1  # Multiplier for exponential backoff (2^attempt * multiplier)
-
-# Filename Constants
-MAX_FILENAME_LENGTH = 100  # Maximum characters for sanitized filenames
-URL_HASH_LENGTH = 8  # Number of characters from MD5 hash to include in filename
-
 
 class AudioDownloader:
     """
@@ -50,6 +36,20 @@ class AudioDownloader:
         storage_path: Directory where downloaded audio files are stored
         media_source_factory: Factory for detecting and handling different media sources
     """
+
+    # Network configuration
+    _DEFAULT_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
+    _CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
+
+    # Retry configuration
+    _MAX_RETRY_ATTEMPTS = 3  # Maximum number of download retry attempts
+    _RETRY_WAIT_MIN_SECONDS = 1  # Minimum wait time between retries
+    _RETRY_WAIT_MAX_SECONDS = 60  # Maximum wait time between retries
+    _RETRY_WAIT_MULTIPLIER = 1  # Multiplier for exponential backoff
+
+    # Filename configuration
+    _MAX_FILENAME_LENGTH = 100  # Maximum characters for sanitized filenames
+    _URL_HASH_LENGTH = 8  # Number of characters from MD5 hash to include
 
     def __init__(self, storage_path: str = "./data/original_audio") -> None:
         """
@@ -100,7 +100,7 @@ class AudioDownloader:
             safe_podcast = podcast.slug or self._sanitize_filename(podcast.title)
             safe_episode = episode.slug or self._sanitize_filename(episode.title)
 
-            url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[:URL_HASH_LENGTH]
+            url_hash = hashlib.md5(str(episode.audio_url).encode()).hexdigest()[: self._URL_HASH_LENGTH]
 
             parsed_url = urlparse(str(episode.audio_url))
             extension = self._get_file_extension(parsed_url.path)
@@ -136,8 +136,8 @@ class AudioDownloader:
             return None
 
     @retry(
-        stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=RETRY_WAIT_MULTIPLIER, min=RETRY_WAIT_MIN_SECONDS, max=RETRY_WAIT_MAX_SECONDS),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=60),
         retry=retry_if_exception_type(requests.exceptions.RequestException),
         reraise=True,
     )
@@ -159,7 +159,7 @@ class AudioDownloader:
             url,
             stream=True,
             headers={"User-Agent": "thestill.ai/1.0"},
-            timeout=DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
+            timeout=self._DEFAULT_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
 
@@ -167,7 +167,7 @@ class AudioDownloader:
         downloaded = 0
 
         with open(local_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=DEFAULT_CHUNK_SIZE_BYTES):
+            for chunk in response.iter_content(chunk_size=self._CHUNK_SIZE_BYTES):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
@@ -228,7 +228,7 @@ class AudioDownloader:
         filename = filename.replace(" ", "_")
         filename = "".join(c for c in filename if c.isprintable())
 
-        return filename[:MAX_FILENAME_LENGTH]
+        return filename[: self._MAX_FILENAME_LENGTH]
 
     def _get_file_extension(self, url_path: str) -> str:
         """Extract file extension from URL path"""
