@@ -1360,7 +1360,7 @@ def _get_transcriber(config):
                 parallel_chunks=config.max_workers,
             )
         elif config.enable_diarization:
-            from ..core.transcriber import WhisperXTranscriber
+            from ..core.whisper_transcriber import WhisperXTranscriber
 
             return WhisperXTranscriber(
                 model_name=config.whisper_model,
@@ -1372,7 +1372,7 @@ def _get_transcriber(config):
                 diarization_model=config.diarization_model,
             )
         else:
-            from ..core.transcriber import WhisperTranscriber
+            from ..core.whisper_transcriber import WhisperTranscriber
 
             return WhisperTranscriber(config.whisper_model, config.whisper_device)
     except Exception as e:

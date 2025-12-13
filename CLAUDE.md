@@ -527,31 +527,20 @@ For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUID
 **Test Types**:
 
 1. **Unit Tests**: Test individual functions in isolation with mocked dependencies
-   - Example: `test_audio_downloader.py` (28 tests, 99% coverage)
+   - Example: `test_transcript_parser.py` (47 tests)
    - Pattern: Mock external dependencies (requests, feedparser)
    - Fast execution, isolated failures
 
-2. **Integration Tests**: Test interactions between components
-   - Example: `test_integration_pipeline.py` (9 tests, full pipeline coverage)
+2. **Feature Tests**: Test complete feature modules
+   - Example: `test_external_transcript_downloader.py` (19 tests)
    - Pattern: Use real PathManager, mock external APIs only
-   - Tests state transitions (DISCOVERED → DOWNLOADED → DOWNSAMPLED → TRANSCRIBED → CLEANED)
-
-3. **Contract Tests**: Test service boundaries and prevent API breakage
-   - Example: `test_service_contracts.py` (32 tests)
-   - Pattern: Assert method signatures, return types, model field stability
-   - Critical for refactoring without breaking consumers
 
 **Test Organization**:
 
 ```
 tests/
-├── test_path_manager.py          # Utils layer (100% coverage)
-├── test_podcast_service.py       # Service layer (38 tests, 92% coverage)
-├── test_audio_downloader.py      # Core layer (28 tests, 99% coverage)
-├── test_feed_manager.py          # Core layer (17 tests, 26% coverage - complex module)
-├── test_media_source.py          # Core layer (34 tests, strategy pattern)
-├── test_integration_pipeline.py  # End-to-end workflows (9 tests)
-└── test_service_contracts.py     # API stability (32 tests)
+├── test_transcript_parser.py              # Transcript parsing (47 tests)
+└── test_external_transcript_downloader.py # External transcript downloads (19 tests)
 ```
 
 **Running Tests**:
@@ -561,13 +550,10 @@ tests/
 pytest --cov=thestill --cov-report=html
 
 # Run specific test file
-pytest tests/test_path_manager.py -v
+pytest tests/test_transcript_parser.py -v
 
 # Run tests matching pattern
 pytest -k "test_download" -v
-
-# Pre-commit hook automatically runs tests
-pre-commit run --all-files
 ```
 
 **Test Fixtures and Mocking**:
@@ -998,16 +984,10 @@ Model Layer (models/podcast.py)
 
 ### Testing Infrastructure
 
-**Current Test Suite**: 269 tests across 9 test files
+**Current Test Suite**: 66 tests across 2 test files
 
-- `test_path_manager.py`: 41 tests, 100% coverage
-- `test_podcast_service.py`: 38 tests, 92% coverage
-- `test_service_contracts.py`: 32 tests (API stability)
-- `test_audio_downloader.py`: 28 tests, 99% coverage
-- `test_feed_manager.py`: 17 tests, 26% coverage (complex module)
-- `test_media_source.py`: 34 tests (strategy pattern)
-- `test_integration_pipeline.py`: 9 tests (end-to-end)
-- Plus: json_repository, llm_provider, podcast models
+- `test_transcript_parser.py`: 47 tests (transcript format parsing)
+- `test_external_transcript_downloader.py`: 19 tests (external transcript downloads)
 
 **Testing Best Practices**:
 
@@ -1015,16 +995,6 @@ Model Layer (models/podcast.py)
 - Use `tmp_path` for file system tests
 - Arrange-Act-Assert pattern
 - Descriptive test names (`test_download_retries_on_network_error`)
-
-### Code Quality Metrics
-
-| Metric | Baseline (Oct 2024) | Current (Oct 2025) | Target |
-|--------|---------------------|-------------------|--------|
-| Test Coverage | 18% | 41.05% | 70%+ |
-| Tests Passing | 0 | 269 | All |
-| Type Coverage | 0% | ~80% | 90%+ |
-| Lint Errors | Many | 0 | 0 |
-| Lines in cli.py | ~800 | ~600 | <500 |
 
 ### Remaining Work (6 tasks)
 

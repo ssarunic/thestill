@@ -34,7 +34,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydub import AudioSegment
 
 from thestill.models.podcast import TranscriptionOperation, TranscriptionOperationState
+from thestill.models.transcript import Segment, Transcript, Word
 from thestill.utils.path_manager import PathManager
+
+from .transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +201,7 @@ class _ChunkResult:
     chunk_index: int
     start_ms: int
     end_ms: int
-    transcript: Dict
+    transcript: Transcript
     error: Optional[str] = None
 
 
@@ -207,15 +210,15 @@ class _SubChunkResult:
     Wrapper for pre-formatted transcript from sub-chunk splitting.
 
     When a chunk times out and is split into smaller sub-chunks, the results
-    are merged into a transcript dict. This wrapper allows the main loop to
+    are merged into a Transcript. This wrapper allows the main loop to
     detect that the result is already formatted (not a raw BatchRecognizeResults).
     """
 
-    def __init__(self, transcript: Dict):
+    def __init__(self, transcript: Transcript):
         self.transcript = transcript
 
 
-class GoogleCloudTranscriber:
+class GoogleCloudTranscriber(Transcriber):
     """
     Google Cloud Speech-to-Text V2 transcriber with Chirp 3 model.
 
@@ -310,6 +313,15 @@ class GoogleCloudTranscriber:
                         )
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Google Cloud clients: {e}")
+
+    def load_model(self) -> None:
+        """
+        Load/initialize the transcription model.
+
+        For GoogleCloudTranscriber, clients are initialized in __init__,
+        so this method is a no-op. Provided for Transcriber interface compliance.
+        """
+        pass
 
     def _print_transcription_header(
         self,
@@ -472,7 +484,7 @@ class GoogleCloudTranscriber:
         episode_id: str = None,
         podcast_slug: str = None,
         episode_slug: str = None,
-    ) -> Optional[Dict]:
+    ) -> Optional[Transcript]:
         """
         Transcribe audio file using Chirp 3 with optional speaker diarization.
 
@@ -493,7 +505,7 @@ class GoogleCloudTranscriber:
             episode_slug: Optional episode slug for operation persistence
 
         Returns:
-            Transcript dictionary matching Whisper format, or None on error
+            Transcript object, or None on error
         """
         try:
             start_time = time.time()
@@ -545,7 +557,7 @@ class GoogleCloudTranscriber:
                 transcript_data = self._format_transcript(result, time.time() - start_time, audio_path)
 
             processing_time = time.time() - start_time
-            transcript_data["processing_time"] = processing_time
+            transcript_data.processing_time = processing_time
             print(f"✓ Transcription completed in {self._format_time(processing_time)}")
 
             if output_path:
@@ -570,7 +582,7 @@ class GoogleCloudTranscriber:
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
-    ) -> Dict:
+    ) -> Transcript:
         """
         Split audio into chunks, transcribe each (optionally in parallel), and merge results.
 
@@ -585,7 +597,7 @@ class GoogleCloudTranscriber:
             episode_slug: Optional episode slug for operation persistence
 
         Returns:
-            Merged transcript dictionary
+            Merged Transcript object
         """
         duration_ms = len(audio)
         chunks = self._calculate_equal_chunks(duration_ms)
@@ -792,18 +804,68 @@ class GoogleCloudTranscriber:
             error_msgs = "; ".join(f"chunk {r.chunk_index + 1}: {r.error}" for r in errors)
             raise RuntimeError(f"Failed to transcribe chunks: {error_msgs}")
 
-        # Convert all results (resumed + new) to expected format for merging
-        chunk_transcripts = [
-            {
-                "transcript": r.transcript,
-                "start_ms": r.start_ms,
-                "end_ms": r.end_ms,
-            }
-            for r in sorted(all_results, key=lambda x: x.chunk_index)
-        ]
+        # Sort results by chunk index for sequential processing
+        sorted_results = sorted(all_results, key=lambda x: x.chunk_index)
 
-        # Merge chunk transcripts
-        return self._merge_chunk_transcripts(chunk_transcripts, original_path, language)
+        if not sorted_results:
+            return self._empty_transcript(original_path)
+
+        if len(sorted_results) == 1:
+            return sorted_results[0].transcript
+
+        logger.info(f"Merging {len(sorted_results)} chunk transcripts...")
+
+        # Reconcile speakers across chunks using overlap regions, then merge
+        # Each chunk has overlap with the next, so we process sequentially
+        merged_transcript = sorted_results[0].transcript
+
+        for i in range(1, len(sorted_results)):
+            prev_result = sorted_results[i - 1]
+            curr_result = sorted_results[i]
+
+            # Calculate overlap region (in absolute time)
+            overlap_start = curr_result.start_ms / 1000  # Convert to seconds
+            overlap_end = prev_result.end_ms / 1000
+
+            if overlap_start < overlap_end:
+                # Build speaker mapping from current chunk to merged transcript
+                speaker_mapping = curr_result.transcript.build_speaker_mapping(
+                    other=merged_transcript,
+                    overlap_start=overlap_start,
+                    overlap_end=overlap_end,
+                    match_window_sec=OVERLAP_MATCH_WINDOW_MS / 1000,
+                    min_votes=MIN_SPEAKER_VOTES,
+                )
+
+                if speaker_mapping:
+                    # Apply mapping to current chunk before merging
+                    curr_transcript = curr_result.transcript.apply_speaker_mapping(speaker_mapping)
+                    mapping_str = ", ".join(f"{k}->{v}" for k, v in speaker_mapping.items())
+                    logger.info(f"Chunk {i}->{i+1}: Speaker mapping applied: {mapping_str}")
+                else:
+                    curr_transcript = curr_result.transcript
+                    logger.debug(f"Chunk {i}->{i+1}: No mapping (insufficient matches in overlap)")
+            else:
+                curr_transcript = curr_result.transcript
+                logger.debug(f"Chunk {i}->{i+1}: No overlap")
+
+            # Merge current chunk into accumulated transcript
+            merged_transcript = merged_transcript.merge(curr_transcript)
+
+        # Update metadata for merged transcript
+        speakers = merged_transcript.get_speakers()
+        return Transcript(
+            audio_file=original_path,
+            language=language,
+            text=merged_transcript.text,
+            segments=merged_transcript.segments,
+            processing_time=0,  # Will be updated by caller
+            model_used="google-cloud-speech-v2-chirp_3",
+            timestamp=time.time(),
+            diarization_enabled=self.enable_diarization,
+            speakers_detected=len(speakers) if speakers else None,
+            provider_metadata={"chunks_processed": len(sorted_results)},
+        )
 
     def _transcribe_chunks_sequential(
         self,
@@ -1089,7 +1151,7 @@ class GoogleCloudTranscriber:
                     chunk_index=i,
                     start_ms=start_ms,
                     end_ms=end_ms,
-                    transcript={},
+                    transcript=self._empty_transcript(tmp_path),
                     error=f"Failed after {MAX_CHUNK_RETRIES + 1} attempts: {last_error}",
                 )
 
@@ -1098,23 +1160,18 @@ class GoogleCloudTranscriber:
                 # Already formatted and timestamps adjusted in _transcribe_chunk_split
                 transcript = result.transcript
             else:
-                # Normal result - format it
+                # Normal result - format and adjust timestamps using typed methods
                 transcript = self._format_transcript(result, 0, tmp_path)
 
                 # Adjust timestamps by chunk offset
                 offset_seconds = start_ms / 1000
-                for segment in transcript["segments"]:
-                    segment["start"] += offset_seconds
-                    segment["end"] += offset_seconds
-                    for word in segment.get("words", []):
-                        word["start"] += offset_seconds
-                        word["end"] += offset_seconds
+                transcript = transcript.adjust_timestamps(offset_seconds)
 
                 # Save chunk transcript for debugging (silent)
                 if debug_dir:
                     chunk_path = debug_dir / f"{file_prefix}chunk_{i+1:02d}.json"
                     with open(chunk_path, "w", encoding="utf-8") as f:
-                        json.dump(transcript, f, indent=2, ensure_ascii=False)
+                        json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False)
 
             if progress_tracker:
                 progress_tracker.chunk_completed(i, success=True)
@@ -1178,7 +1235,7 @@ class GoogleCloudTranscriber:
         ]
 
         # Sub-chunk splitting is silent - progress tracker shows overall progress
-        sub_results = []
+        sub_transcripts: List[Transcript] = []
         for sub_idx, (sub_start, sub_end) in enumerate(sub_chunks):
             sub_audio = chunk_audio[sub_start:sub_end]
 
@@ -1189,7 +1246,6 @@ class GoogleCloudTranscriber:
 
             try:
                 # For sub-chunks, use naming like chunk-01a-of-05, chunk-01b-of-05
-                sub_chunk_suffix = chr(ord("a") + sub_idx)  # 'a', 'b', etc.
                 result = self._transcribe_batch(
                     tmp_path,
                     language,
@@ -1203,31 +1259,18 @@ class GoogleCloudTranscriber:
                     total_chunks=total_chunks,
                 )
 
-                # Format and adjust timestamps
+                # Format and adjust timestamps using typed methods
                 transcript = self._format_transcript(result, 0, tmp_path)
-
-                # Adjust timestamps: add chunk offset + sub-chunk offset
                 offset_seconds = (chunk_start_ms + sub_start) / 1000
-                for segment in transcript["segments"]:
-                    segment["start"] += offset_seconds
-                    segment["end"] += offset_seconds
-                    for word in segment.get("words", []):
-                        word["start"] += offset_seconds
-                        word["end"] += offset_seconds
+                transcript = transcript.adjust_timestamps(offset_seconds)
 
                 # Save debug output (silent)
                 if debug_dir:
                     sub_chunk_path = debug_dir / f"{file_prefix}chunk_{chunk_index + 1:02d}_{sub_idx + 1}_adjusted.json"
                     with open(sub_chunk_path, "w", encoding="utf-8") as f:
-                        json.dump(transcript, f, indent=2, ensure_ascii=False)
+                        json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False)
 
-                sub_results.append(
-                    {
-                        "transcript": transcript,
-                        "start_ms": chunk_start_ms + sub_start,
-                        "end_ms": chunk_start_ms + sub_end,
-                    }
-                )
+                sub_transcripts.append(transcript)
 
             except Exception:
                 # Sub-chunk failure is silent - main chunk will be marked as failed
@@ -1235,356 +1278,26 @@ class GoogleCloudTranscriber:
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
-        # Merge sub-chunk results
-        if len(sub_results) == 2:
-            merged = self._merge_chunk_transcripts(sub_results, "", language)
-            # Return in a format that _format_transcript can handle
-            # We need to return the raw result, so create a wrapper
+        # Merge sub-chunk transcripts using typed method
+        if len(sub_transcripts) == 2:
+            merged = sub_transcripts[0].merge(sub_transcripts[1])
             return _SubChunkResult(merged)
 
         return None
 
-    def _reconcile_speakers_across_chunks(
-        self,
-        chunk_transcripts: List[Dict],
-    ) -> List[Dict]:
-        """
-        Reconcile speaker labels across chunks using overlap regions.
-
-        Google Speech-to-Text assigns speaker labels independently per chunk,
-        so SPEAKER_00 in chunk 1 might be SPEAKER_01 in chunk 2. This method
-        uses the overlap regions (same audio transcribed twice) to match
-        speakers across chunks and renumber them consistently.
-
-        Algorithm:
-        1. For each pair of adjacent chunks, find the overlap time range
-        2. Match words in the overlap by timestamp proximity and text similarity
-        3. Count speaker co-occurrences: if word W is spoken by SPEAKER_A in chunk N
-           and SPEAKER_B in chunk N+1, that's a vote for mapping B→A
-        4. Build the mapping using majority voting
-        5. Apply mapping to chunk N+1 (renumber all its speakers)
-
-        Args:
-            chunk_transcripts: List of {transcript, start_ms, end_ms} dicts, sorted by start_ms
-
-        Returns:
-            Same list with speaker labels reconciled to be consistent across chunks
-        """
-        if len(chunk_transcripts) <= 1:
-            return chunk_transcripts
-
-        logger.info(f"Reconciling speakers across {len(chunk_transcripts)} chunks...")
-
-        # Process chunks sequentially, remapping each to match the previous
-        for i in range(1, len(chunk_transcripts)):
-            prev_chunk = chunk_transcripts[i - 1]
-            curr_chunk = chunk_transcripts[i]
-
-            # Calculate overlap region (in absolute time)
-            overlap_start = curr_chunk["start_ms"] / 1000  # Convert to seconds
-            overlap_end = prev_chunk["end_ms"] / 1000
-
-            if overlap_start >= overlap_end:
-                # No overlap - can't reconcile
-                logger.debug(f"Chunk {i}->{i+1}: No overlap (start={overlap_start:.1f}s >= end={overlap_end:.1f}s)")
-                continue
-
-            # Build speaker mapping from current chunk to previous chunk
-            speaker_mapping = self._build_speaker_mapping_from_overlap(
-                prev_chunk["transcript"],
-                curr_chunk["transcript"],
-                overlap_start,
-                overlap_end,
-            )
-
-            if speaker_mapping:
-                # Apply mapping to current chunk
-                self._apply_speaker_mapping_to_transcript(
-                    curr_chunk["transcript"],
-                    speaker_mapping,
-                )
-                mapping_str = ", ".join(f"{k}->{v}" for k, v in speaker_mapping.items())
-                logger.info(f"Chunk {i}->{i+1}: Speaker mapping applied: {mapping_str}")
-            else:
-                logger.debug(f"Chunk {i}->{i+1}: No mapping (insufficient matches in overlap)")
-
-        return chunk_transcripts
-
-    def _build_speaker_mapping_from_overlap(
-        self,
-        prev_transcript: Dict,
-        curr_transcript: Dict,
-        overlap_start: float,
-        overlap_end: float,
-    ) -> Dict[str, str]:
-        """
-        Build a speaker mapping from current chunk to previous chunk using overlap.
-
-        Finds matching words in the overlap region and counts which speakers
-        in the current chunk correspond to which speakers in the previous chunk.
-
-        Args:
-            prev_transcript: Transcript dict from previous chunk
-            curr_transcript: Transcript dict from current chunk
-            overlap_start: Start of overlap region (seconds, absolute time)
-            overlap_end: End of overlap region (seconds, absolute time)
-
-        Returns:
-            Dict mapping current chunk speaker IDs to previous chunk speaker IDs
-        """
-        # Extract words from overlap region in both chunks
-        prev_words = self._get_words_in_range(prev_transcript, overlap_start, overlap_end)
-        curr_words = self._get_words_in_range(curr_transcript, overlap_start, overlap_end)
-
-        if not prev_words or not curr_words:
-            return {}
-
-        # Count speaker co-occurrences
-        # Key: (curr_speaker, prev_speaker), Value: count of matching words
-        speaker_votes: Counter = Counter()
-
-        # For each word in current chunk's overlap, find best match in previous chunk
-        match_window_sec = OVERLAP_MATCH_WINDOW_MS / 1000
-
-        for curr_word in curr_words:
-            curr_speaker = curr_word.get("speaker")
-            if not curr_speaker:
-                continue
-
-            # Find matching word in previous chunk (same text, close timestamp)
-            best_match = None
-            best_time_diff = float("inf")
-
-            for prev_word in prev_words:
-                # Check text match (case-insensitive)
-                if curr_word["word"].lower() != prev_word["word"].lower():
-                    continue
-
-                # Check timestamp proximity
-                time_diff = abs(curr_word["start"] - prev_word["start"])
-                if time_diff < match_window_sec and time_diff < best_time_diff:
-                    best_match = prev_word
-                    best_time_diff = time_diff
-
-            if best_match:
-                prev_speaker = best_match.get("speaker")
-                if prev_speaker:
-                    speaker_votes[(curr_speaker, prev_speaker)] += 1
-
-        # Build mapping using majority voting
-        # For each speaker in current chunk, find the most voted previous speaker
-        curr_speakers = set(w.get("speaker") for w in curr_words if w.get("speaker"))
-        speaker_mapping = {}
-
-        for curr_speaker in curr_speakers:
-            # Get all votes for this current speaker
-            votes_for_speaker = {
-                prev_spk: count for (curr_spk, prev_spk), count in speaker_votes.items() if curr_spk == curr_speaker
-            }
-
-            if votes_for_speaker:
-                # Find the previous speaker with most votes
-                best_prev_speaker = max(votes_for_speaker, key=votes_for_speaker.get)
-                vote_count = votes_for_speaker[best_prev_speaker]
-
-                # Only accept if we have enough votes (confidence threshold)
-                if vote_count >= MIN_SPEAKER_VOTES:
-                    speaker_mapping[curr_speaker] = best_prev_speaker
-
-        return speaker_mapping
-
-    def _get_words_in_range(
-        self,
-        transcript: Dict,
-        start_sec: float,
-        end_sec: float,
-    ) -> List[Dict]:
-        """
-        Extract all words from transcript within a time range.
-
-        Args:
-            transcript: Transcript dict with segments
-            start_sec: Start of range (seconds)
-            end_sec: End of range (seconds)
-
-        Returns:
-            List of word dicts within the range
-        """
-        words = []
-        for segment in transcript.get("segments", []):
-            for word in segment.get("words", []):
-                word_start = word.get("start", 0)
-                if start_sec <= word_start <= end_sec:
-                    words.append(word)
-        return words
-
-    def _apply_speaker_mapping_to_transcript(
-        self,
-        transcript: Dict,
-        speaker_mapping: Dict[str, str],
-    ) -> None:
-        """
-        Apply speaker mapping to a transcript, renumbering speaker labels in-place.
-
-        Args:
-            transcript: Transcript dict to modify
-            speaker_mapping: Dict mapping old speaker IDs to new speaker IDs
-        """
-        if not speaker_mapping:
-            return
-
-        for segment in transcript.get("segments", []):
-            # Remap segment speaker
-            old_speaker = segment.get("speaker")
-            if old_speaker and old_speaker in speaker_mapping:
-                segment["speaker"] = speaker_mapping[old_speaker]
-
-            # Remap word speakers
-            for word in segment.get("words", []):
-                old_speaker = word.get("speaker")
-                if old_speaker and old_speaker in speaker_mapping:
-                    word["speaker"] = speaker_mapping[old_speaker]
-
-    def _merge_chunk_transcripts(
-        self,
-        chunk_transcripts: List[Dict],
-        original_path: str,
-        language: str,
-    ) -> Dict:
-        """
-        Merge transcripts from multiple chunks, handling overlap deduplication.
-
-        The overlap region is used to find matching words and avoid duplication.
-        We keep words from the first chunk up to the best match point, then
-        continue with words from the second chunk.
-
-        Args:
-            chunk_transcripts: List of {transcript, start_ms, end_ms} dicts
-            original_path: Original audio file path
-            language: Detected language
-
-        Returns:
-            Merged transcript dictionary
-        """
-        if not chunk_transcripts:
-            return self._empty_transcript(original_path)
-
-        if len(chunk_transcripts) == 1:
-            return chunk_transcripts[0]["transcript"]
-
-        logger.info(f"Merging {len(chunk_transcripts)} chunk transcripts...")
-
-        # Reconcile speaker labels across chunks before merging
-        # This ensures SPEAKER_00 in chunk 1 is the same person as SPEAKER_00 in chunk 2
-        chunk_transcripts = self._reconcile_speakers_across_chunks(chunk_transcripts)
-
-        # Collect all words with timestamps from all chunks
-        all_words = []
-        for chunk_data in chunk_transcripts:
-            transcript = chunk_data["transcript"]
-            for segment in transcript.get("segments", []):
-                for word in segment.get("words", []):
-                    all_words.append(word)
-
-        # Sort by start time
-        all_words.sort(key=lambda w: w["start"])
-
-        # Remove duplicates from overlap regions
-        # Words within 0.5 seconds with same text are considered duplicates
-        deduplicated_words = []
-        for word in all_words:
-            is_duplicate = False
-            for existing in deduplicated_words[-10:]:  # Check last 10 words
-                time_diff = abs(word["start"] - existing["start"])
-                if time_diff < 0.5 and word["word"].lower() == existing["word"].lower():
-                    is_duplicate = True
-                    break
-            if not is_duplicate:
-                deduplicated_words.append(word)
-
-        # Rebuild segments from deduplicated words
-        segments = []
-        speakers_detected = set()
-
-        if not deduplicated_words:
-            return self._empty_transcript(original_path)
-
-        # Group words by speaker changes
-        current_speaker = deduplicated_words[0].get("speaker")
-        current_words = []
-        current_start = deduplicated_words[0]["start"]
-        segment_id = 0
-
-        for word in deduplicated_words:
-            speaker = word.get("speaker")
-            if speaker:
-                speakers_detected.add(speaker)
-
-            if speaker != current_speaker and current_words:
-                # Save segment
-                segment_text = " ".join(w["word"] for w in current_words)
-                segments.append(
-                    {
-                        "id": segment_id,
-                        "start": current_start,
-                        "end": current_words[-1]["end"],
-                        "text": segment_text,
-                        "speaker": current_speaker,
-                        "words": current_words,
-                    }
-                )
-                segment_id += 1
-
-                # Start new segment
-                current_speaker = speaker
-                current_words = []
-                current_start = word["start"]
-
-            current_words.append(word)
-
-        # Save final segment
-        if current_words:
-            segment_text = " ".join(w["word"] for w in current_words)
-            segments.append(
-                {
-                    "id": segment_id,
-                    "start": current_start,
-                    "end": current_words[-1]["end"],
-                    "text": segment_text,
-                    "speaker": current_speaker,
-                    "words": current_words,
-                }
-            )
-
-        # Build full text
-        full_text = " ".join(seg["text"] for seg in segments)
-
-        return {
-            "audio_file": original_path,
-            "language": language,
-            "text": full_text,
-            "segments": segments,
-            "processing_time": 0,  # Will be updated by caller
-            "model_used": "google-cloud-speech-v2-chirp_3",
-            "timestamp": time.time(),
-            "diarization_enabled": self.enable_diarization,
-            "speakers_detected": len(speakers_detected) if speakers_detected else None,
-            "chunks_processed": len(chunk_transcripts),
-        }
-
-    def _empty_transcript(self, audio_path: str) -> Dict:
+    def _empty_transcript(self, audio_path: str) -> Transcript:
         """Return an empty transcript structure."""
-        return {
-            "audio_file": audio_path,
-            "language": "en-US",
-            "text": "",
-            "segments": [],
-            "processing_time": 0,
-            "model_used": "google-cloud-speech-v2-chirp_3",
-            "timestamp": time.time(),
-            "diarization_enabled": self.enable_diarization,
-            "speakers_detected": 0,
-        }
+        return Transcript(
+            audio_file=audio_path,
+            language="en-US",
+            text="",
+            segments=[],
+            processing_time=0,
+            model_used="google-cloud-speech-v2-chirp_3",
+            timestamp=time.time(),
+            diarization_enabled=self.enable_diarization,
+            speakers_detected=0,
+        )
 
     def _transcribe_batch(
         self,
@@ -2230,7 +1943,7 @@ class GoogleCloudTranscriber:
             logger.error(f"Failed to check operation {operation.operation_id}: {e}")
             raise RuntimeError(f"Failed to check operation: {e}")
 
-    def download_completed_operation(self, operation: TranscriptionOperation) -> Dict:
+    def download_completed_operation(self, operation: TranscriptionOperation) -> Transcript:
         """
         Download transcript for a completed operation and clean up GCS.
 
@@ -2238,7 +1951,7 @@ class GoogleCloudTranscriber:
             operation: TranscriptionOperation in COMPLETED state
 
         Returns:
-            Formatted transcript dictionary
+            Formatted Transcript object
 
         Raises:
             ValueError: If operation is not in COMPLETED state
@@ -2255,17 +1968,12 @@ class GoogleCloudTranscriber:
             transcript_result = self._download_transcript_from_gcs(operation.transcript_gcs_uri)
 
             # Format the transcript
-            transcript_data = self._format_transcript(transcript_result, 0, "")
+            transcript = self._format_transcript(transcript_result, 0, "")
 
             # Adjust timestamps if this is a chunk
             if operation.chunk_start_ms is not None:
                 offset_seconds = operation.chunk_start_ms / 1000
-                for segment in transcript_data["segments"]:
-                    segment["start"] += offset_seconds
-                    segment["end"] += offset_seconds
-                    for word in segment.get("words", []):
-                        word["start"] += offset_seconds
-                        word["end"] += offset_seconds
+                transcript = transcript.adjust_timestamps(offset_seconds)
 
             # Clean up GCS files
             try:
@@ -2286,13 +1994,13 @@ class GoogleCloudTranscriber:
             # Delete the operation file since we're done
             self._delete_operation(operation.operation_id)
 
-            return transcript_data
+            return transcript
 
         except Exception as e:
             logger.error(f"Failed to download transcript for operation {operation.operation_id}: {e}")
             raise RuntimeError(f"Failed to download transcript: {e}")
 
-    def resume_pending_operations(self) -> List[Tuple[TranscriptionOperation, Optional[Dict]]]:
+    def resume_pending_operations(self) -> List[Tuple[TranscriptionOperation, Optional[Transcript]]]:
         """
         Resume all pending operations from previous app run.
 
@@ -2303,8 +2011,8 @@ class GoogleCloudTranscriber:
         4. Returns results for integration into the pipeline
 
         Returns:
-            List of (operation, transcript_data) tuples.
-            transcript_data is None if operation is still pending or failed.
+            List of (operation, transcript) tuples.
+            transcript is None if operation is still pending or failed.
         """
         results = []
         pending_ops = self.list_pending_operations()
@@ -2493,7 +2201,7 @@ class GoogleCloudTranscriber:
             secs = total_seconds % 60
             return f"{hours}:{mins:02d}:{secs:02d}"
 
-    def _format_transcript(self, transcript: Any, processing_time: float, audio_path: str) -> Dict:
+    def _format_transcript(self, transcript: Any, processing_time: float, audio_path: str) -> Transcript:
         """
         Format Google Cloud V2 response to match Whisper transcript structure.
 
@@ -2720,23 +2428,43 @@ class GoogleCloudTranscriber:
 
         full_text = " ".join(full_text_parts)
 
-        result = {
-            "audio_file": audio_path,
-            "language": detected_language,
-            "text": full_text,
-            "segments": segments,
-            "processing_time": processing_time,
-            "model_used": "google-cloud-speech-v2-chirp_3",
-            "timestamp": time.time(),
-            "diarization_enabled": self.enable_diarization,
-            "speakers_detected": len(speakers_detected) if self.enable_diarization else None,
-        }
+        # Convert dict segments to Segment objects
+        transcript_segments = []
+        for seg in segments:
+            words = [
+                Word(
+                    word=w["word"],
+                    start=w.get("start"),
+                    end=w.get("end"),
+                    probability=w.get("probability"),
+                    speaker=w.get("speaker"),
+                )
+                for w in seg.get("words", [])
+            ]
+            transcript_segments.append(
+                Segment(
+                    id=seg["id"],
+                    start=seg.get("start", 0.0),
+                    end=seg.get("end", 0.0),
+                    text=seg.get("text", ""),
+                    speaker=seg.get("speaker"),
+                    words=words,
+                    confidence=seg.get("confidence"),
+                )
+            )
 
-        # Add Google metadata if available
-        if google_metadata:
-            result["google_metadata"] = google_metadata
-
-        return result
+        return Transcript(
+            audio_file=audio_path,
+            language=detected_language,
+            text=full_text,
+            segments=transcript_segments,
+            processing_time=processing_time,
+            model_used="google-cloud-speech-v2-chirp_3",
+            timestamp=time.time(),
+            diarization_enabled=self.enable_diarization,
+            speakers_detected=len(speakers_detected) if self.enable_diarization else None,
+            provider_metadata=google_metadata if google_metadata else None,
+        )
 
     def _get_seconds(self, duration) -> float:
         """Convert protobuf Duration to seconds."""
@@ -2748,36 +2476,3 @@ class GoogleCloudTranscriber:
         if hasattr(duration, "seconds") and hasattr(duration, "nanos"):
             return duration.seconds + duration.nanos / 1e9
         return 0.0
-
-    def _save_transcript(self, transcript_data: Dict, output_path: str):
-        """Save transcript to JSON file."""
-        try:
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(transcript_data, f, indent=2, ensure_ascii=False)
-            print(f"Transcript saved to: {output_path}")
-        except Exception as e:
-            print(f"Error saving transcript: {e}")
-
-    def get_transcript_text(self, transcript_data: Dict) -> str:
-        """Extract plain text from transcript data with speaker labels and timestamps."""
-        if not transcript_data or "segments" not in transcript_data:
-            return ""
-
-        text_parts = []
-        for segment in transcript_data["segments"]:
-            text = segment.get("text", "").strip()
-            if text:
-                start_time = segment.get("start", 0)
-                minutes = int(start_time // 60)
-                seconds = int(start_time % 60)
-                timestamp = f"[{minutes:02d}:{seconds:02d}]"
-
-                # Add speaker label if available
-                speaker = segment.get("speaker")
-                if speaker:
-                    text_parts.append(f"{timestamp} [{speaker}] {text}")
-                else:
-                    text_parts.append(f"{timestamp} {text}")
-
-        return "\n".join(text_parts)

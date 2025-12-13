@@ -12,20 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
-import os
+"""
+NVIDIA Parakeet transcriber for speech-to-text.
+
+Parakeet is a fast speech recognition model that doesn't support
+custom prompts or word-level timestamps like Whisper does.
+"""
+
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import torch
-from pydub import AudioSegment
+
+from thestill.models.transcript import Segment, Transcript
+
+from .transcriber import Transcriber
 
 
-class ParakeetTranscriber:
+class ParakeetTranscriber(Transcriber):
     """
     Transcriber using NVIDIA's Parakeet model for speech-to-text.
-    Provides an interface compatible with WhisperTranscriber.
+
+    Note: Parakeet doesn't support custom prompts or word-level timestamps.
+    Parameters for these features are accepted for API compatibility but ignored.
     """
 
     def __init__(self, device: str = "auto"):
@@ -34,48 +44,47 @@ class ParakeetTranscriber:
         self._model = None
         self._processor = None
 
-    def _resolve_device(self, device: str) -> str:
-        """Resolve 'auto' device to actual device"""
-        if device == "auto":
-            if torch.cuda.is_available():
-                return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "mps"
-            else:
-                return "cpu"
-        return device
-
-    def load_model(self):
+    def load_model(self) -> None:
         """Lazy load the Parakeet model"""
-        if self._model is None:
-            try:
-                from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+        if self._model is not None:
+            return
 
-                print(f"Loading Parakeet model: {self.model_name}")
-                self._processor = AutoProcessor.from_pretrained(self.model_name)
-                self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                    low_cpu_mem_usage=True,
-                )
-                self._model.to(self.device)
-                print("Model loaded successfully")
-            except ImportError:
-                raise ImportError(
-                    "Parakeet requires the transformers library. " "Install with: pip install transformers"
-                )
-            except Exception as e:
-                print(f"Error loading Parakeet model: {e}")
-                raise
+        try:
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+            print(f"Loading Parakeet model: {self.model_name}")
+            self._processor = AutoProcessor.from_pretrained(self.model_name)
+            self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+                low_cpu_mem_usage=True,
+            )
+            self._model.to(self.device)
+            print("Model loaded successfully")
+        except ImportError:
+            raise ImportError("Parakeet requires the transformers library. Install with: pip install transformers")
+        except Exception as e:
+            print(f"Error loading Parakeet model: {e}")
+            raise
 
     def transcribe_audio(
-        self, audio_path: str, output_path: str = None, custom_prompt: str = None, preprocess_audio: bool = False
-    ) -> Optional[Dict]:
+        self,
+        audio_path: str,
+        output_path: Optional[str] = None,
+        language: str = "en",
+        custom_prompt: Optional[str] = None,
+    ) -> Optional[Transcript]:
         """
         Transcribe audio file using Parakeet model.
 
-        Note: Parakeet doesn't support custom prompts or word-level timestamps
-        like Whisper does. These parameters are accepted for API compatibility.
+        Args:
+            audio_path: Path to audio file
+            output_path: Path to save transcript JSON
+            language: Language code (ignored - Parakeet is English-only)
+            custom_prompt: Custom prompt (ignored - Parakeet doesn't support prompts)
+
+        Returns:
+            Transcript object or None on error
         """
         try:
             self.load_model()
@@ -83,10 +92,9 @@ class ParakeetTranscriber:
             print(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
-            audio_duration = self._get_audio_duration(audio_path)
+            audio_duration = self._get_audio_duration_minutes(audio_path)
             print(f"Audio duration: {audio_duration:.1f} minutes")
 
-            # Load and preprocess audio
             import librosa
 
             audio_array, sample_rate = librosa.load(audio_path, sr=16000, mono=True)
@@ -116,12 +124,12 @@ class ParakeetTranscriber:
             processing_time = time.time() - start_time
             print(f"Transcription completed in {processing_time:.1f} seconds")
 
-            transcript_data = self._format_transcript(full_text, processing_time, audio_path)
+            transcript = self._format_transcript(full_text, processing_time, audio_path)
 
             if output_path:
-                self._save_transcript(transcript_data, output_path)
+                self._save_transcript(transcript, output_path)
 
-            return transcript_data
+            return transcript
 
         except Exception as e:
             print(f"Error transcribing {audio_path}: {e}")
@@ -138,55 +146,23 @@ class ParakeetTranscriber:
 
         return transcription.strip()
 
-    def _get_audio_duration(self, audio_path: str) -> float:
-        """Get audio duration in minutes"""
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / (1000 * 60)  # Convert ms to minutes
-        except:
-            return 0.0
-
-    def _format_transcript(self, text: str, processing_time: float, audio_path: str) -> Dict:
+    def _format_transcript(self, text: str, processing_time: float, audio_path: str) -> Transcript:
         """
-        Format Parakeet output into a structure compatible with Whisper's output.
+        Format Parakeet output into a Transcript.
         Note: Parakeet doesn't provide word-level timestamps or segments like Whisper.
         """
-        return {
-            "audio_file": audio_path,
-            "language": "en",
-            "text": text,
-            "segments": [
-                {"id": 0, "start": 0.0, "end": 0.0, "text": text, "words": []}  # No timestamp information available
-            ],
-            "processing_time": processing_time,
-            "model_used": self.model_name,
-            "timestamp": time.time(),
-        }
-
-    def _save_transcript(self, transcript_data: Dict, output_path: str):
-        """Save transcript to JSON file"""
-        try:
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(transcript_data, f, indent=2, ensure_ascii=False)
-            print(f"Transcript saved to: {output_path}")
-        except Exception as e:
-            print(f"Error saving transcript: {e}")
-
-    def get_transcript_text(self, transcript_data: Dict) -> str:
-        """
-        Extract plain text from transcript data.
-        Compatible with WhisperTranscriber interface.
-        """
-        if not transcript_data:
-            return ""
-
-        # For Parakeet, we just return the text directly since we don't have timestamps
-        return transcript_data.get("text", "")
+        return Transcript(
+            audio_file=audio_path,
+            language="en",
+            text=text,
+            segments=[Segment(id=0, start=0.0, end=0.0, text=text, words=[])],
+            processing_time=processing_time,
+            model_used=self.model_name,
+            timestamp=time.time(),
+        )
 
     def estimate_processing_time(self, audio_duration_minutes: float) -> float:
         """Estimate transcription time based on audio duration"""
-        # Parakeet is typically faster than Whisper on GPU
         if self.device == "cuda":
             ratio = 0.08  # ~8% of audio length on GPU
         else:

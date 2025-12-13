@@ -32,7 +32,7 @@ from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider
 from .core.post_processor import TranscriptSummarizer
-from .core.transcriber import WhisperTranscriber, WhisperXTranscriber
+from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
 from .utils.cli_formatter import CLIFormatter
