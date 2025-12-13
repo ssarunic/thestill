@@ -26,6 +26,7 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
+from .core.elevenlabs_transcriber import ElevenLabsTranscriber
 from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
@@ -1018,6 +1019,9 @@ def status(ctx):
     elif config.transcription_provider == "google":
         click.echo(f"  Google Cloud project: {config.google_cloud_project_id or 'Not set'}")
         click.echo(f"  Google Cloud bucket: {config.google_storage_bucket or 'Auto'}")
+    elif config.transcription_provider == "elevenlabs":
+        click.echo(f"  ElevenLabs model: {config.elevenlabs_model}")
+        click.echo(f"  ElevenLabs API key: {'✓ Set' if config.elevenlabs_api_key else '✗ Not set'}")
 
     # Diarization settings
     click.echo(f"  Speaker diarization: {'✓ Enabled' if config.enable_diarization else '✗ Disabled'}")
@@ -1239,6 +1243,21 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             click.echo(f"❌ {e}", err=True)
             click.echo("   Install with: pip install google-cloud-speech google-cloud-storage", err=True)
             ctx.exit(1)
+    elif config.transcription_provider.lower() == "elevenlabs":
+        click.echo("🎤 Using ElevenLabs Speech-to-Text")
+        if not config.elevenlabs_api_key:
+            click.echo("❌ ElevenLabs API key not configured", err=True)
+            click.echo("   Set ELEVENLABS_API_KEY in .env", err=True)
+            ctx.exit(1)
+
+        transcriber = ElevenLabsTranscriber(
+            api_key=config.elevenlabs_api_key,
+            model=config.elevenlabs_model,
+            enable_diarization=config.enable_diarization,
+            num_speakers=config.max_speakers,  # ElevenLabs uses num_speakers instead of min/max
+            path_manager=config.path_manager,
+            use_async=True,  # Enable async mode for large files
+        )
     elif config.transcription_model.lower() == "parakeet":
         from .core.parakeet_transcriber import ParakeetTranscriber
 

@@ -831,26 +831,56 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 - With speaker diarization: ~$0.048/minute
 - See: <https://cloud.google.com/speech-to-text/pricing>
 
-### Comparison: Whisper vs Google
+### ElevenLabs Speech-to-Text (Cloud Transcription)
 
-| Feature | Whisper (Local) | Google Cloud |
-|---------|----------------|--------------|
-| **Cost** | Free (uses local CPU/GPU) | ~$0.024-0.048/min |
-| **Privacy** | Fully local | Audio sent to Google |
-| **Speed** | Depends on hardware | Fast (cloud processing) |
-| **Diarization Setup** | Requires HuggingFace token + pyannote.audio | Built-in, no setup |
-| **Accuracy** | Good | Excellent (especially accents) |
-| **Large Files** | Memory intensive | Handles via GCS |
-| **Network** | Not required | Required |
+**Setup:**
 
-**Transcript Output Format (both providers):**
+1. Create ElevenLabs account at <https://elevenlabs.io>
+2. Get API key from <https://elevenlabs.io/app/settings/api-keys>
+3. Configure .env:
+
+   ```bash
+   TRANSCRIPTION_PROVIDER=elevenlabs
+   ELEVENLABS_API_KEY=your-api-key-here
+   ELEVENLABS_MODEL=scribe_v1  # Options: scribe_v1, scribe_v1_experimental
+   ENABLE_DIARIZATION=true  # Built-in diarization (up to 32 speakers)
+   ```
+
+**How it works:**
+
+- Uses Scribe v1 model for high-accuracy transcription
+- Supports files up to 2GB
+- Built-in speaker diarization (up to 32 speakers)
+- Word-level timestamps
+- Language auto-detection (or specify with language code)
+- Optional audio event detection (laughter, applause, etc.)
+
+**Pricing:**
+
+- See: <https://elevenlabs.io/pricing>
+- Billed per audio hour
+
+### Comparison: Whisper vs Google vs ElevenLabs
+
+| Feature | Whisper (Local) | Google Cloud | ElevenLabs |
+|---------|----------------|--------------|------------|
+| **Cost** | Free (uses local CPU/GPU) | ~$0.024-0.048/min | Per audio hour |
+| **Privacy** | Fully local | Audio sent to Google | Audio sent to ElevenLabs |
+| **Speed** | Depends on hardware | Fast (cloud) | Fast (cloud) |
+| **Diarization Setup** | Requires HuggingFace token + pyannote.audio | Built-in | Built-in |
+| **Accuracy** | Good | Excellent | Excellent |
+| **Max Speakers** | Depends on model | Varies | 32 |
+| **Max File Size** | Memory limited | Chunked via GCS | 2GB |
+| **Network** | Not required | Required | Required |
+
+**Transcript Output Format (all providers):**
 
 ```
 [00:15] [SPEAKER_01] Welcome to the podcast.
 [00:18] [SPEAKER_02] Thanks for having me.
 ```
 
-**Configuration Options (both providers):**
+**Configuration Options (all providers):**
 
 - `ENABLE_DIARIZATION`: Enable/disable speaker identification
 - `MIN_SPEAKERS`: Minimum speakers (leave empty to use provider's internal defaults for best results)
@@ -1072,3 +1102,5 @@ When adding new features or making changes:
 7. **Run pre-commit**: `pre-commit run --all-files` before pushing
 
 **Questions?** Open an issue or start a discussion in the repository.
+
+@AGENTS.md

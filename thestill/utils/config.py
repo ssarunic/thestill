@@ -36,6 +36,10 @@ class Config(BaseModel):
     google_cloud_project_id: str = ""
     google_storage_bucket: str = ""
 
+    # ElevenLabs Configuration (for ElevenLabs Speech-to-Text)
+    elevenlabs_api_key: str = ""
+    elevenlabs_model: str = "scribe_v1"  # scribe_v1 or scribe_v1_experimental
+
     # Storage Paths
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
@@ -152,6 +156,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "google_app_credentials": os.getenv("GOOGLE_APP_CREDENTIALS", ""),
         "google_cloud_project_id": os.getenv("GOOGLE_CLOUD_PROJECT_ID", ""),
         "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
+        "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY", ""),
+        "elevenlabs_model": os.getenv("ELEVENLABS_MODEL", "scribe_v1"),
         "storage_path": storage_path,
         "database_path": database_path,
         # Note: Path operations should use config.path_manager methods
