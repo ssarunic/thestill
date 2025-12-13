@@ -1,6 +1,6 @@
 # MCP Server Usage Guide
 
-This guide explains how to use the thestill.ai MCP server with Claude Desktop, ChatGPT Desktop, and other MCP-compatible clients.
+This guide explains how to use the thestill.me MCP server with Claude Desktop, ChatGPT Desktop, and other MCP-compatible clients.
 
 ## Supported Clients
 

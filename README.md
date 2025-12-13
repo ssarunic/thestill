@@ -1,4 +1,4 @@
-# thestill.ai
+# thestill.me
 
 An automated pipeline that converts podcasts into readable, summarized content to help you consume more content in less time.
 
@@ -11,7 +11,7 @@ An automated pipeline that converts podcasts into readable, summarized content t
 
 ## Overview
 
-thestill.ai is a production-ready podcast transcription and analysis pipeline that converts audio podcasts into clean, readable transcripts with speaker identification. Built with Python and designed for both local and cloud processing.
+thestill.me is a production-ready podcast transcription and analysis pipeline that converts audio podcasts into clean, readable transcripts with speaker identification. Built with Python and designed for both local and cloud processing.
 
 **Key Capabilities:**
 
@@ -188,7 +188,7 @@ Each step is atomic and idempotent, allowing you to:
 
 ## MCP Server (AI Desktop Integration)
 
-thestill.ai includes an MCP (Model Context Protocol) server that lets you interact with your podcast library through Claude Desktop, ChatGPT Desktop, or other MCP-compatible clients using natural language.
+thestill.me includes an MCP (Model Context Protocol) server that lets you interact with your podcast library through Claude Desktop, ChatGPT Desktop, or other MCP-compatible clients using natural language.
 
 **Supported Clients:**
 

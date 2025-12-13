@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.ai
+# Copyright 2025 thestill.me
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ class CLIContext:
 @click.option("--config", "-c", help="Path to config file")
 @click.pass_context
 def main(ctx, config):
-    """thestill.ai - Automated podcast transcription and summarization"""
+    """thestill.me - Automated podcast transcription and summarization"""
     # Initialize logging to stderr (important for MCP server compatibility)
     setup_logger("thestill", log_level="INFO", console_output=True)
 
@@ -997,7 +997,7 @@ def status(ctx):
     config = ctx.obj.config
     stats_service = ctx.obj.stats_service
 
-    click.echo(CLIFormatter.format_header("thestill.ai Status"))
+    click.echo(CLIFormatter.format_header("thestill.me Status"))
 
     # Get statistics from service
     stats = stats_service.get_stats()
