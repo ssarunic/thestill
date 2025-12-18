@@ -38,6 +38,7 @@ def main():
         ollama_model=config.ollama_model,
         gemini_api_key=config.gemini_api_key,
         gemini_model=config.gemini_model,
+        gemini_thinking_level=config.gemini_thinking_level,
         anthropic_api_key=config.anthropic_api_key,
         anthropic_model=config.anthropic_model,
     )

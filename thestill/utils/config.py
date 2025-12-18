@@ -78,14 +78,17 @@ class Config(BaseModel):
 
     # Gemini Configuration
     gemini_model: str = "gemini-3-pro-preview"
+    gemini_thinking_level: Optional[str] = (
+        None  # Thinking level for Gemini 3 models (low/high for Pro, minimal/low/medium/high for Flash)
+    )
 
     # Anthropic Configuration
     anthropic_model: str = "claude-sonnet-4-5-20250929"
 
-    # Transcript Cleaning Configuration
+    # Transcript Cleaning Configuration (legacy - used during transcription step only)
     enable_transcript_cleaning: bool = False  # Enable LLM-based transcript cleaning
-    cleaning_provider: str = "ollama"  # Provider for cleaning (openai, ollama, gemini, or anthropic)
-    cleaning_model: str = "gemma3:4b"  # Model for cleaning (small models recommended)
+    cleaning_provider: str = "gemini"  # Provider for cleaning (openai, ollama, gemini, or anthropic)
+    cleaning_model: str = "gemini-3-flash-preview"  # Model for cleaning (Gemini 3 Flash is fast and cost-effective)
     cleaning_chunk_size: int = 20000  # Max tokens per chunk
     cleaning_overlap_pct: float = 0.15  # Overlap percentage (0.10 = 10%)
     cleaning_extract_entities: bool = True  # Extract entities for consistency
@@ -182,10 +185,12 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),
+        "gemini_thinking_level": os.getenv("GEMINI_THINKING_LEVEL")
+        or None,  # low/high for Pro, minimal/low/medium/high for Flash
         "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
         "enable_transcript_cleaning": os.getenv("ENABLE_TRANSCRIPT_CLEANING", "false").lower() == "true",
-        "cleaning_provider": os.getenv("CLEANING_PROVIDER", "ollama"),
-        "cleaning_model": os.getenv("CLEANING_MODEL", "gemma3:4b"),
+        "cleaning_provider": os.getenv("CLEANING_PROVIDER", "gemini"),
+        "cleaning_model": os.getenv("CLEANING_MODEL", "gemini-3-flash-preview"),
         "cleaning_chunk_size": int(os.getenv("CLEANING_CHUNK_SIZE", "20000")),
         "cleaning_overlap_pct": float(os.getenv("CLEANING_OVERLAP_PCT", "0.15")),
         "cleaning_extract_entities": os.getenv("CLEANING_EXTRACT_ENTITIES", "true").lower() == "true",

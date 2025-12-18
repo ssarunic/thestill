@@ -22,9 +22,10 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, NamedTuple, Optional, Type, TypeVar
 
-import google.generativeai as genai
 import ollama
 from anthropic import Anthropic, APIStatusError, BadRequestError, RateLimitError
+from google import genai
+from google.genai import types as genai_types
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -324,17 +325,31 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=False,
     ),
-    # Google Gemini 3 (November 2025) - supports structured output
+    # Google Gemini 3 (November/December 2025) - supports structured output
     # Uses thinking_level parameter for reasoning depth
+    # Pro supports: "low", "high" (default)
+    # Flash supports: "minimal", "low", "medium", "high" (default)
+    # Pricing: Pro: $2/$12 per 1M tokens (<200k), $4/$18 (>200k)
+    #          Flash: $0.50/$3.00 per 1M tokens
     "gemini-3-pro-preview": ModelLimits(
         tpm=500000,
         rpm=1000,
         tpd=10000000,
-        context_window=1048576,
-        max_output_tokens=65536,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
         supports_temperature=True,
         supports_structured_output=True,
     ),
+    "gemini-3-flash-preview": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    # Note: gemini-3-pro-image-preview has different limits (65k input / 32k output)
     # Google Gemini 2.5 series - supports structured output
     "gemini-2.5-pro": ModelLimits(
         tpm=500000,
@@ -1628,12 +1643,128 @@ class AnthropicProvider(LLMProvider):
 
 
 class GeminiProvider(LLMProvider):
-    """Google Gemini API provider"""
+    """Google Gemini API provider using the new google.genai SDK"""
 
-    def __init__(self, api_key: str, model: str = "gemini-3-pro-preview"):
-        genai.configure(api_key=api_key)
+    # Gemini 3 models that support thinking_level parameter
+    GEMINI_3_MODELS = [
+        "gemini-3-pro",
+        "gemini-3-flash",
+    ]
+
+    # Valid thinking levels per model type
+    # Pro: "low", "high" (default)
+    # Flash: "minimal", "low", "medium", "high" (default)
+    THINKING_LEVELS_PRO = ["low", "high"]
+    THINKING_LEVELS_FLASH = ["minimal", "low", "medium", "high"]
+
+    # Map string thinking levels to SDK enum values
+    THINKING_LEVEL_MAP = {
+        "minimal": genai_types.ThinkingLevel.MINIMAL,
+        "low": genai_types.ThinkingLevel.LOW,
+        "medium": genai_types.ThinkingLevel.MEDIUM,
+        "high": genai_types.ThinkingLevel.HIGH,
+    }
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-3-pro-preview",
+        thinking_level: Optional[str] = None,
+    ):
+        """
+        Initialize Gemini provider.
+
+        Args:
+            api_key: Google Gemini API key
+            model: Model name (e.g., "gemini-3-pro-preview", "gemini-3-flash-preview")
+            thinking_level: Reasoning depth for Gemini 3 models.
+                           Pro: "low", "high" (default)
+                           Flash: "minimal", "low", "medium", "high" (default)
+                           None uses API default (high).
+        """
         self.model = model
-        self.client = genai.GenerativeModel(model)
+        self.thinking_level = thinking_level
+        self.client = genai.Client(api_key=api_key)
+
+    def _is_gemini_3_model(self) -> bool:
+        """Check if the current model is a Gemini 3 model that supports thinking_level"""
+        for model_prefix in self.GEMINI_3_MODELS:
+            if self.model.startswith(model_prefix):
+                return True
+        return False
+
+    def _is_gemini_3_flash(self) -> bool:
+        """Check if the current model is Gemini 3 Flash"""
+        return self.model.startswith("gemini-3-flash")
+
+    def _get_thinking_config(self) -> Optional[genai_types.ThinkingConfig]:
+        """
+        Get thinking configuration for Gemini 3 models.
+
+        Returns:
+            ThinkingConfig object for API, or None if not applicable
+        """
+        if not self._is_gemini_3_model() or not self.thinking_level:
+            return None
+
+        # Validate thinking level for the model type
+        if self._is_gemini_3_flash():
+            valid_levels = self.THINKING_LEVELS_FLASH
+        else:
+            valid_levels = self.THINKING_LEVELS_PRO
+
+        if self.thinking_level not in valid_levels:
+            logger.warning(
+                f"Invalid thinking_level '{self.thinking_level}' for {self.model}. "
+                f"Valid levels: {valid_levels}. Using API default."
+            )
+            return None
+
+        # Convert string to SDK enum
+        thinking_enum = self.THINKING_LEVEL_MAP.get(self.thinking_level)
+        if thinking_enum is None:
+            return None
+
+        return genai_types.ThinkingConfig(thinking_level=thinking_enum)
+
+    def _build_config(
+        self,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        response_schema: Optional[Type] = None,
+    ) -> genai_types.GenerateContentConfig:
+        """Build GenerateContentConfig for API calls"""
+        config_kwargs = {}
+
+        if temperature is not None:
+            config_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            config_kwargs["max_output_tokens"] = max_tokens
+
+        # Handle JSON response format
+        if response_format and response_format.get("type") == "json_object":
+            config_kwargs["response_mime_type"] = "application/json"
+
+        # Handle structured output with schema
+        if response_schema is not None:
+            config_kwargs["response_mime_type"] = "application/json"
+            config_kwargs["response_schema"] = response_schema
+
+        # Add thinking_level for Gemini 3 models
+        thinking_config = self._get_thinking_config()
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+
+        # Configure safety settings to be less restrictive for transcript processing
+        config_kwargs["safety_settings"] = [
+            genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+        ]
+
+        return genai_types.GenerateContentConfig(**config_kwargs)
 
     def chat_completion(
         self,
@@ -1695,39 +1826,25 @@ class GeminiProvider(LLMProvider):
         full_response = ""
         current_messages = messages.copy()
 
-        # Configure safety settings to be less restrictive for transcript processing
-        # This helps avoid false positives when processing podcast content
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
         for attempt in range(max_attempts):
             # Convert OpenAI-style messages to Gemini format
-            gemini_messages = self._convert_messages(current_messages)
+            contents = self._convert_messages(current_messages)
 
-            # Build generation config
-            generation_config = {}
-            if temperature is not None:
-                generation_config["temperature"] = temperature
-            if max_tokens is not None:
-                generation_config["max_output_tokens"] = max_tokens
+            # Build config
+            config = self._build_config(
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
 
-            # Handle JSON response format
-            if response_format and response_format.get("type") == "json_object":
-                generation_config["response_mime_type"] = "application/json"
-
-            # Generate response
-            response = self.client.generate_content(
-                gemini_messages,
-                generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
-                safety_settings=safety_settings,
+            # Generate response using new SDK
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config,
             )
 
             # Handle different finish reasons
-            # See: https://ai.google.dev/api/generate-content#finishreason
             if not response.candidates:
                 raise RuntimeError("Gemini returned no candidates in response")
 
@@ -1750,14 +1867,15 @@ class GeminiProvider(LLMProvider):
             if response_text:
                 full_response += response_text
 
-            # 0 = FINISH_REASON_UNSPECIFIED, 1 = STOP (success), 2 = MAX_TOKENS,
-            # 3 = SAFETY, 4 = RECITATION, 5 = OTHER
-            if finish_reason == 1:  # STOP - normal completion
+            # Check finish reason (new SDK uses string values)
+            # STOP, MAX_TOKENS, SAFETY, RECITATION, OTHER, etc.
+            finish_reason_str = str(finish_reason).upper() if finish_reason else ""
+
+            if "STOP" in finish_reason_str:
                 break
-            elif finish_reason == 2:  # MAX_TOKENS
+            elif "MAX_TOKENS" in finish_reason_str:
                 if enable_continuation and attempt < max_attempts - 1:
                     logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
-                    # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
                         {"role": "user", "content": "Please continue from where you left off."},
@@ -1765,7 +1883,6 @@ class GeminiProvider(LLMProvider):
                     continue
                 else:
                     char_count = len(full_response) if full_response else 0
-                    # Rough estimate: 1 token ≈ 4 characters
                     estimated_tokens = char_count // 4
                     logger.warning(
                         f"Gemini response truncated due to max_tokens limit. "
@@ -1775,12 +1892,11 @@ class GeminiProvider(LLMProvider):
                     if not enable_continuation:
                         logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
                     break
-            elif finish_reason == 3:  # SAFETY
+            elif "SAFETY" in finish_reason_str:
                 raise RuntimeError(
                     f"Gemini blocked response due to safety filters. Safety ratings: {candidate.safety_ratings}"
                 )
-            elif finish_reason == 4:  # RECITATION
-                # We already extracted text above, return it if available
+            elif "RECITATION" in finish_reason_str:
                 if full_response:
                     logger.warning("Gemini flagged potential recitation but returned content")
                     break
@@ -1789,7 +1905,6 @@ class GeminiProvider(LLMProvider):
                     "Try adjusting the prompt or use a different model."
                 )
             else:
-                # For any other finish reason, try to return text if we have it
                 if full_response:
                     logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
                     break
@@ -1804,9 +1919,9 @@ class GeminiProvider(LLMProvider):
 
         return full_response
 
-    def _convert_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Convert OpenAI-style messages to Gemini format"""
-        gemini_messages = []
+    def _convert_messages(self, messages: List[Dict[str, str]]) -> List[genai_types.Content]:
+        """Convert OpenAI-style messages to Gemini Content format"""
+        contents = []
         system_instruction = None
 
         for msg in messages:
@@ -1814,20 +1929,20 @@ class GeminiProvider(LLMProvider):
             content = msg.get("content", "")
 
             if role == "system":
-                # Gemini handles system messages differently
                 system_instruction = content
             elif role == "user":
-                gemini_messages.append({"role": "user", "parts": [content]})
+                contents.append(genai_types.Content(role="user", parts=[genai_types.Part(text=content)]))
             elif role == "assistant":
-                gemini_messages.append({"role": "model", "parts": [content]})
+                contents.append(genai_types.Content(role="model", parts=[genai_types.Part(text=content)]))
 
         # If we have a system instruction, prepend it to the first user message
-        if system_instruction and gemini_messages:
-            first_msg = gemini_messages[0]
-            if first_msg["role"] == "user":
-                first_msg["parts"][0] = f"{system_instruction}\n\n{first_msg['parts'][0]}"
+        if system_instruction and contents:
+            first_content = contents[0]
+            if first_content.role == "user" and first_content.parts:
+                original_text = first_content.parts[0].text
+                first_content.parts[0] = genai_types.Part(text=f"{system_instruction}\n\n{original_text}")
 
-        return gemini_messages
+        return contents
 
     def supports_temperature(self) -> bool:
         """Gemini always supports temperature"""
@@ -1836,9 +1951,11 @@ class GeminiProvider(LLMProvider):
     def health_check(self) -> bool:
         """Check if Gemini API is accessible"""
         try:
-            # Simple test with minimal tokens
-            response = self.client.generate_content(
-                "test", generation_config=genai.GenerationConfig(max_output_tokens=1)
+            config = genai_types.GenerateContentConfig(max_output_tokens=1)
+            self.client.models.generate_content(
+                model=self.model,
+                contents="test",
+                config=config,
             )
             return True
         except Exception as e:
@@ -1870,35 +1987,20 @@ class GeminiProvider(LLMProvider):
         Uses response_schema parameter for schema-validated JSON output.
         Gemini requires manual parsing of the JSON response.
         """
-        # Convert OpenAI-style messages to Gemini format
-        gemini_messages = self._convert_messages(messages)
+        contents = self._convert_messages(messages)
 
-        # Build generation config with response_schema
-        generation_config = {
-            "response_mime_type": "application/json",
-            "response_schema": response_model,
-        }
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        if max_tokens is not None:
-            generation_config["max_output_tokens"] = max_tokens
-
-        # Configure safety settings
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
-        # Generate response
-        response = self.client.generate_content(
-            gemini_messages,
-            generation_config=genai.GenerationConfig(**generation_config),
-            safety_settings=safety_settings,
+        config = self._build_config(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_schema=response_model,
         )
 
-        # Extract and parse the response
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=config,
+        )
+
         if not response.candidates:
             raise RuntimeError("Gemini returned no candidates in response")
 
@@ -1913,7 +2015,6 @@ class GeminiProvider(LLMProvider):
         if not response_text:
             raise ValueError("Gemini returned empty response")
 
-        # Parse JSON and validate with Pydantic
         data = json.loads(response_text)
         return response_model(**data)
 
@@ -1938,38 +2039,20 @@ class GeminiProvider(LLMProvider):
         Returns:
             The complete generated text response
         """
-        # Convert OpenAI-style messages to Gemini format
-        gemini_messages = self._convert_messages(messages)
+        contents = self._convert_messages(messages)
 
-        # Build generation config
-        generation_config = {}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        if max_tokens is not None:
-            generation_config["max_output_tokens"] = max_tokens
-
-        # Handle JSON response format
-        if response_format and response_format.get("type") == "json_object":
-            generation_config["response_mime_type"] = "application/json"
-
-        # Configure safety settings to be less restrictive for transcript processing
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
-        # Generate streaming response
-        full_response = ""
-        response = self.client.generate_content(
-            gemini_messages,
-            generation_config=genai.GenerationConfig(**generation_config) if generation_config else None,
-            safety_settings=safety_settings,
-            stream=True,
+        config = self._build_config(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
         )
 
-        for chunk in response:
+        full_response = ""
+        for chunk in self.client.models.generate_content_stream(
+            model=self.model,
+            contents=contents,
+            config=config,
+        ):
             if chunk.text:
                 full_response += chunk.text
                 if on_chunk:
@@ -1986,6 +2069,7 @@ def create_llm_provider(
     ollama_model: str = "gemma3:4b",
     gemini_api_key: str = "",
     gemini_model: str = "gemini-3-pro-preview",
+    gemini_thinking_level: Optional[str] = None,
     anthropic_api_key: str = "",
     anthropic_model: str = "claude-sonnet-4-5-20250929",
 ) -> LLMProvider:
@@ -2000,6 +2084,9 @@ def create_llm_provider(
         ollama_model: Ollama model name
         gemini_api_key: Google Gemini API key (required if provider_type is "gemini")
         gemini_model: Gemini model name
+        gemini_thinking_level: Thinking level for Gemini 3 models.
+                              Pro: "low", "high" (default)
+                              Flash: "minimal", "low", "medium", "high" (default)
         anthropic_api_key: Anthropic API key (required if provider_type is "anthropic")
         anthropic_model: Anthropic model name
 
@@ -2026,7 +2113,7 @@ def create_llm_provider(
     elif provider_type == "gemini":
         if not gemini_api_key:
             raise ValueError("Gemini API key is required for Gemini provider")
-        return GeminiProvider(api_key=gemini_api_key, model=gemini_model)
+        return GeminiProvider(api_key=gemini_api_key, model=gemini_model, thinking_level=gemini_thinking_level)
     elif provider_type == "anthropic":
         if not anthropic_api_key:
             raise ValueError("Anthropic API key is required for Anthropic provider")

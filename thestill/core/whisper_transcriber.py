@@ -506,18 +506,29 @@ class WhisperTranscriber(Transcriber):
         print("=" * 60)
 
         try:
-            from .llm_provider import OllamaProvider, OpenAIProvider
+            from .llm_provider import AnthropicProvider, GeminiProvider, OllamaProvider, OpenAIProvider
             from .transcript_cleaner import TranscriptCleaner
 
-            provider_type = cleaning_config.get("provider", "ollama")
-            model = cleaning_config.get("model", "gemma3:4b")
+            provider_type = cleaning_config.get("provider", "gemini")
+            model = cleaning_config.get("model", "gemini-3-flash-preview")
+            thinking_level = cleaning_config.get("thinking_level")
 
             if provider_type == "openai":
                 api_key = cleaning_config.get("api_key")
                 if not api_key:
                     raise ValueError("OpenAI API key required for cleaning")
                 provider = OpenAIProvider(api_key=api_key, model=model)
-            else:
+            elif provider_type == "gemini":
+                api_key = cleaning_config.get("gemini_api_key") or cleaning_config.get("api_key")
+                if not api_key:
+                    raise ValueError("Gemini API key required for cleaning")
+                provider = GeminiProvider(api_key=api_key, model=model, thinking_level=thinking_level)
+            elif provider_type == "anthropic":
+                api_key = cleaning_config.get("anthropic_api_key") or cleaning_config.get("api_key")
+                if not api_key:
+                    raise ValueError("Anthropic API key required for cleaning")
+                provider = AnthropicProvider(api_key=api_key, model=model)
+            else:  # ollama
                 base_url = cleaning_config.get("base_url", "http://localhost:11434")
                 provider = OllamaProvider(base_url=base_url, model=model)
 

@@ -525,6 +525,7 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
+            gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
         )
@@ -936,6 +937,7 @@ def facts_extract(ctx, podcast_id, episode_id, force):
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
+            gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
         )
@@ -1257,6 +1259,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             num_speakers=config.max_speakers,  # ElevenLabs uses num_speakers instead of min/max
             path_manager=config.path_manager,
             use_async=True,  # Enable async mode for large files
+            tag_audio_events=True,  # Tag audio events like laughter, applause, etc.
         )
     elif config.transcription_model.lower() == "parakeet":
         from .core.parakeet_transcriber import ParakeetTranscriber
@@ -1300,17 +1303,20 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             # Transcribe
             click.echo(f"📝 Transcribing audio file: {Path(audio_path).name}")
 
-            # Prepare cleaning config if enabled
+            # Prepare cleaning config if enabled (legacy cleaning during transcription)
             cleaning_config = None
             if config.enable_transcript_cleaning:
                 cleaning_config = {
                     "provider": config.cleaning_provider,
                     "model": config.cleaning_model,
+                    "thinking_level": config.gemini_thinking_level,  # Use global Gemini thinking level
                     "chunk_size": config.cleaning_chunk_size,
                     "overlap_pct": config.cleaning_overlap_pct,
                     "extract_entities": config.cleaning_extract_entities,
                     "base_url": config.ollama_base_url,
                     "api_key": config.openai_api_key,
+                    "gemini_api_key": config.gemini_api_key,
+                    "anthropic_api_key": config.anthropic_api_key,
                 }
 
             transcript_data = transcriber.transcribe_audio(
@@ -1480,17 +1486,20 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 # Transcribe
                 click.echo("📝 Transcribing...")
 
-                # Prepare cleaning config if enabled
+                # Prepare cleaning config if enabled (legacy cleaning during transcription)
                 cleaning_config = None
                 if config.enable_transcript_cleaning:
                     cleaning_config = {
                         "provider": config.cleaning_provider,
                         "model": config.cleaning_model,
+                        "thinking_level": config.gemini_thinking_level,  # Use global Gemini thinking level
                         "chunk_size": config.cleaning_chunk_size,
                         "overlap_pct": config.cleaning_overlap_pct,
                         "extract_entities": config.cleaning_extract_entities,
                         "base_url": config.ollama_base_url,
                         "api_key": config.openai_api_key,
+                        "gemini_api_key": config.gemini_api_key,
+                        "anthropic_api_key": config.anthropic_api_key,
                     }
 
                 # Pass episode context for Google Cloud operation persistence
@@ -1578,6 +1587,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
+            gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
         )
@@ -1760,6 +1770,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
+            gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
         )
@@ -1926,6 +1937,7 @@ def evaluate_clean_transcript(
             ollama_model=config.ollama_model,
             gemini_api_key=config.gemini_api_key,
             gemini_model=config.gemini_model,
+            gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
         )
