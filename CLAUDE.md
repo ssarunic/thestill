@@ -102,6 +102,13 @@ thestill list                              # List tracked podcasts
 thestill remove <podcast-id>               # Remove podcast by URL or index
 thestill status                            # Show system status and statistics
 thestill cleanup                           # Clean up old audio files
+
+# Start web server (for webhooks and future API/UI)
+thestill server                            # Start on localhost:8000
+thestill server --port 8080                # Custom port
+thestill server --host 0.0.0.0             # Bind to all interfaces (for external access)
+thestill server --reload                   # Auto-reload for development
+thestill server --workers 4                # Multiple worker processes
 ```
 
 ### Testing and Code Quality
@@ -269,6 +276,101 @@ The project includes an MCP (Model Context Protocol) server for integration with
   - `get_podcast_status`: Get status information
 - **resources.py**: MCP resources for exposing data
 - **utils.py**: MCP utility functions
+
+### Web Server (`thestill/web/`)
+
+FastAPI-based web server for webhooks, REST API, and future web UI:
+
+```
+thestill/web/
+├── __init__.py              # Package init with create_app export
+├── app.py                   # FastAPI application factory
+├── dependencies.py          # Dependency injection (AppState, get_app_state)
+└── routes/
+    ├── __init__.py
+    ├── health.py            # Health check and status endpoints
+    └── webhooks.py          # ElevenLabs webhook handlers
+```
+
+**Key Components:**
+
+- **app.py**: Application factory with lifespan management
+  - Initializes services once at startup (same pattern as CLI)
+  - Stores `AppState` in `app.state` for route access
+  - Registers route modules
+
+- **dependencies.py**: FastAPI dependency injection
+  - `AppState`: Dataclass mirroring `CLIContext` from CLI
+  - `get_app_state()`: Dependency function for routes
+
+- **routes/health.py**: Health and status endpoints
+  - `GET /` - Service identification
+  - `GET /health` - Health check for load balancers
+  - `GET /status` - Detailed system stats (like CLI `status` command)
+
+- **routes/webhooks.py**: ElevenLabs webhook handlers
+  - `POST /webhook/elevenlabs/speech-to-text` - Receive transcription callbacks
+  - `GET /webhook/elevenlabs/results` - List received webhooks
+  - `GET /webhook/elevenlabs/results/{id}` - Get specific result
+  - `DELETE /webhook/elevenlabs/results/{id}` - Delete result
+
+**Architecture:**
+
+```
+CLI (cli.py)                    Web (web/app.py)
+     |                               |
+     v                               v
+  CLIContext                     AppState
+     |                               |
+     +--------> Services <-----------+
+                   |
+          PodcastService
+          StatsService
+          Repository
+          PathManager
+```
+
+**Webhook Security (Dual-Layer):**
+
+1. **HMAC Signature Verification** (Layer 1):
+   - Validates `ElevenLabs-Signature` header
+   - Uses `ELEVENLABS_WEBHOOK_SECRET` from config
+   - Proves request actually came from ElevenLabs
+
+2. **Metadata Validation** (Layer 2):
+   - Requires `episode_id` in `webhook_metadata`
+   - Verifies episode exists in database
+   - Prevents processing webhooks from other apps sharing the same ElevenLabs account
+
+**Configuration:**
+
+```bash
+# .env
+ELEVENLABS_WEBHOOK_SECRET=your_secret_from_elevenlabs_dashboard
+ELEVENLABS_WEBHOOK_REQUIRE_METADATA=true  # default: true
+```
+
+**Starting the Server:**
+
+```bash
+thestill server                    # Start on localhost:8000
+thestill server --host 0.0.0.0     # Expose to network
+thestill server --port 8080        # Custom port
+thestill server --reload           # Development mode with auto-reload
+```
+
+**Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Service identification |
+| `/health` | GET | Health check |
+| `/status` | GET | System statistics |
+| `/docs` | GET | OpenAPI documentation |
+| `/webhook/elevenlabs/speech-to-text` | POST | Receive transcription callback |
+| `/webhook/elevenlabs/results` | GET | List webhook results |
+| `/webhook/elevenlabs/results/{id}` | GET | Get specific result |
+| `/webhook/elevenlabs/results/{id}` | DELETE | Delete result |
 
 ### Identifier System: Internal UUIDs vs External IDs
 
@@ -460,6 +562,12 @@ thestill/
 │   ├── tools.py
 │   ├── resources.py
 │   └── utils.py
+├── web/                   # FastAPI web server
+│   ├── app.py                   # Application factory
+│   ├── dependencies.py          # DI (AppState, get_app_state)
+│   └── routes/
+│       ├── health.py            # Health/status endpoints
+│       └── webhooks.py          # ElevenLabs webhook handlers
 └── utils/                 # Utilities and configuration
     ├── config.py
     ├── path_manager.py
@@ -474,6 +582,7 @@ data/                      # Generated data directory
 ├── summaries/             # Episode summaries and analysis
 ├── podcast_facts/         # Podcast-level facts (hosts, sponsors, keywords)
 ├── episode_facts/         # Episode-level facts (guests, speaker mapping)
+├── webhook_data/          # Received webhook payloads (ElevenLabs callbacks)
 ├── debug_feeds/           # Debug RSS feed snapshots
 └── evaluations/           # Transcript evaluation results
 ```

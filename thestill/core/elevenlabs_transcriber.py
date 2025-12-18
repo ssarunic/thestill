@@ -80,6 +80,8 @@ class ElevenLabsTranscriber(Transcriber):
         tag_audio_events: bool = False,
         path_manager: Optional[PathManager] = None,
         use_async: bool = True,
+        async_threshold_mb: int = 0,
+        wait_for_webhook: bool = False,
     ):
         """
         Initialize ElevenLabs Speech-to-Text transcriber.
@@ -93,6 +95,9 @@ class ElevenLabsTranscriber(Transcriber):
             tag_audio_events: Enable detection of audio events like laughter, applause
             path_manager: PathManager for storing pending operations (required for async mode)
             use_async: Use async mode with polling (default: True). Falls back to sync for small files.
+            async_threshold_mb: File size threshold for async mode (0 = always async when use_async=True)
+            wait_for_webhook: If True, don't poll after submission - wait for webhook callback instead.
+                              The transcript will be saved by the webhook handler. Returns None immediately.
         """
         import os
 
@@ -110,9 +115,18 @@ class ElevenLabsTranscriber(Transcriber):
         self.tag_audio_events = tag_audio_events
         self.path_manager = path_manager
         self.use_async = use_async
+        self.async_threshold_mb = async_threshold_mb
+        self.wait_for_webhook = wait_for_webhook
 
         logger.info(f"Initialized ElevenLabs transcriber with model: {self.model}")
         logger.info(f"Async mode: {'enabled' if self.use_async else 'disabled'}")
+        if self.use_async:
+            if self.async_threshold_mb > 0:
+                logger.info(f"Async threshold: {self.async_threshold_mb} MB")
+            else:
+                logger.info("Async threshold: 0 MB (always use async)")
+            if self.wait_for_webhook:
+                logger.info("Webhook mode: enabled (will not poll, waiting for webhook callback)")
         if self.enable_diarization:
             speakers_info = f"num_speakers={self.num_speakers}" if self.num_speakers else "auto-detect"
             logger.info(f"Diarization enabled ({speakers_info})")
@@ -172,10 +186,12 @@ class ElevenLabsTranscriber(Transcriber):
             logger.warning("ElevenLabs does not support custom prompts. Ignoring custom_prompt parameter.")
 
         # Decide sync vs async based on file size and settings
-        use_async_mode = self.use_async and file_size_mb > ASYNC_THRESHOLD_MB
+        # Use instance threshold (0 = always async when use_async=True)
+        threshold = self.async_threshold_mb if self.async_threshold_mb > 0 else 0
+        use_async_mode = self.use_async and file_size_mb > threshold
 
         if use_async_mode:
-            logger.info(f"Using async mode (file > {ASYNC_THRESHOLD_MB}MB)")
+            logger.info(f"Using async mode (file > {threshold}MB threshold)")
             return self._transcribe_async(
                 audio_path=audio_path,
                 output_path=output_path,
@@ -250,10 +266,21 @@ class ElevenLabsTranscriber(Transcriber):
         """
         start_time = time.time()
 
+        # Build webhook metadata for correlation
+        # This is included in the webhook callback to identify which episode the transcript belongs to
+        webhook_metadata: Optional[Dict[str, Any]] = None
+        if episode_id:
+            webhook_metadata = {
+                "episode_id": episode_id,
+                "podcast_slug": podcast_slug,
+                "episode_slug": episode_slug,
+                "submitted_at": datetime.utcnow().isoformat(),
+            }
+
         try:
             # Step 1: Submit transcription request (async mode)
             try:
-                submit_response = self._submit_async_transcription(audio_path, language)
+                submit_response = self._submit_async_transcription(audio_path, language, webhook_metadata)
             except requests.exceptions.HTTPError as e:
                 # Check for "no webhooks configured" error - fallback to sync
                 if e.response is not None and e.response.status_code == 400:
@@ -288,7 +315,30 @@ class ElevenLabsTranscriber(Transcriber):
                     episode_slug=episode_slug,
                 )
 
-            # Step 3: Poll for completion
+            # Step 3: If waiting for webhook, register with tracker and return None
+            # The webhook handler will save the transcript when the callback arrives
+            if self.wait_for_webhook:
+                # Register this episode as pending so CLI can track completion
+                # Note: We use episode_id (not transcription_id) because ElevenLabs returns
+                # a different request_id in the webhook callback than the transcription_id
+                # from the submission response. episode_id is consistent in both.
+                from thestill.webhook import get_tracker
+
+                tracker = get_tracker()
+                if episode_id:
+                    tracker.add_pending(episode_id)
+                    logger.info(
+                        f"Webhook mode: Transcription {transcription_id} submitted for episode {episode_id}. "
+                        "Waiting for webhook callback to deliver results."
+                    )
+                else:
+                    logger.warning(
+                        f"Webhook mode: Transcription {transcription_id} submitted but no episode_id provided. "
+                        "Cannot track completion - webhook callback may not trigger auto-exit."
+                    )
+                return None
+
+            # Step 3 (polling mode): Poll for completion
             response_data = self._poll_for_transcript(transcription_id)
 
             if response_data is None:
@@ -325,7 +375,12 @@ class ElevenLabsTranscriber(Transcriber):
                         error_msg = f"{error_msg} - Response: {cause.response.text[:500]}"
         logger.error(f"Transcription error: {error_msg}")
 
-    def _build_request_data(self, language: str, async_mode: bool = False) -> Dict[str, Any]:
+    def _build_request_data(
+        self,
+        language: str,
+        async_mode: bool = False,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Build common request data for API calls."""
         data = {
             "model_id": self.model,
@@ -346,6 +401,13 @@ class ElevenLabsTranscriber(Transcriber):
         # Enable async mode (webhook=true returns transcription_id immediately)
         if async_mode:
             data["webhook"] = "true"
+
+            # Include webhook_metadata for correlation when webhook callback is received
+            # This allows the webhook handler to identify which episode the transcript belongs to
+            if webhook_metadata:
+                import json
+
+                data["webhook_metadata"] = json.dumps(webhook_metadata)
 
         return data
 
@@ -396,7 +458,12 @@ class ElevenLabsTranscriber(Transcriber):
         logger.info("ElevenLabs API call successful")
         return response.json()
 
-    def _submit_async_transcription(self, audio_path: str, language: str) -> Dict[str, Any]:
+    def _submit_async_transcription(
+        self,
+        audio_path: str,
+        language: str,
+        webhook_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Submit transcription request in async mode.
 
@@ -409,6 +476,7 @@ class ElevenLabsTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             language: Language code
+            webhook_metadata: Optional metadata to include in webhook callback
 
         Returns:
             API response with transcription_id, message, request_id
@@ -417,7 +485,7 @@ class ElevenLabsTranscriber(Transcriber):
             requests.exceptions.HTTPError: On API errors (including webhook not configured)
         """
         headers = {"xi-api-key": self.api_key}
-        data = self._build_request_data(language, async_mode=True)
+        data = self._build_request_data(language, async_mode=True, webhook_metadata=webhook_metadata)
 
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}

@@ -1252,15 +1252,48 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             click.echo("   Set ELEVENLABS_API_KEY in .env", err=True)
             ctx.exit(1)
 
+        # Start background webhook server for async transcription callbacks
+        # Do this BEFORE creating transcriber so we know if webhook mode is available
+        from .web import BackgroundWebhookServer, ExistingServerInfo, webhook_server_context
+
+        webhook_server = webhook_server_context(
+            config=config,
+            port=config.webhook_server_port,
+        )
+        # Store in ctx.obj for cleanup at end of command
+        ctx.obj.webhook_server_context = webhook_server
+        server = webhook_server.__enter__()
+        ctx.obj.started_webhook_server = isinstance(server, BackgroundWebhookServer)
+
+        # Determine if we have a working webhook server
+        webhook_available = isinstance(server, (BackgroundWebhookServer, ExistingServerInfo))
+
+        if isinstance(server, BackgroundWebhookServer):
+            click.echo(f"🌐 Webhook server started on port {config.webhook_server_port}")
+            click.echo(f"   Webhook URL: {server.webhook_url}")
+        elif isinstance(server, ExistingServerInfo):
+            click.echo(f"✅ thestill server already running on port {config.webhook_server_port}")
+            click.echo(f"   Webhook URL: {server.webhook_url}")
+        else:
+            click.echo(
+                f"⚠️  Port {config.webhook_server_port} in use by another service - "
+                "will use polling mode instead of webhooks",
+                err=True,
+            )
+
         transcriber = ElevenLabsTranscriber(
             api_key=config.elevenlabs_api_key,
             model=config.elevenlabs_model,
             enable_diarization=config.enable_diarization,
             num_speakers=config.max_speakers,  # ElevenLabs uses num_speakers instead of min/max
             path_manager=config.path_manager,
-            use_async=True,  # Enable async mode for large files
+            use_async=True,  # Enable async mode for webhook callbacks
+            async_threshold_mb=config.elevenlabs_async_threshold_mb,  # 0 = always async
             tag_audio_events=True,  # Tag audio events like laughter, applause, etc.
+            wait_for_webhook=webhook_available,  # Don't poll if webhook server is available
         )
+        # Store webhook mode flag for handling transcription results
+        ctx.obj.using_webhook_mode = webhook_available
     elif config.transcription_model.lower() == "parakeet":
         from .core.parakeet_transcriber import ParakeetTranscriber
 
@@ -1333,6 +1366,10 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             if transcript_data:
                 click.echo("✅ Transcription complete!")
                 click.echo(f"📄 Transcript saved to: {output}")
+            elif getattr(ctx.obj, "using_webhook_mode", False):
+                # In webhook mode, None means "submitted, waiting for callback"
+                click.echo("📤 Transcription submitted - waiting for webhook callback")
+                click.echo(f"   Transcript will be saved to: {output}")
             else:
                 click.echo("❌ Transcription failed", err=True)
                 ctx.exit(1)
@@ -1349,6 +1386,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             ctx.exit(1)
         return
 
+    # Helper to cleanup webhook server on any exit path
+    def cleanup_webhook_server():
+        if hasattr(ctx.obj, "webhook_server_context") and ctx.obj.webhook_server_context:
+            ctx.obj.webhook_server_context.__exit__(None, None, None)
+            # Only show "stopped" message if we actually started a server (not if we detected an existing one)
+            if getattr(ctx.obj, "started_webhook_server", False):
+                click.echo("🌐 Webhook server stopped")
+
     # Mode 2: Batch transcription of downloaded episodes
     # Use shared services from context
     podcast_service = ctx.obj.podcast_service
@@ -1357,6 +1402,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     # Validate episode_id requires podcast_id
     if episode_id and not podcast_id:
         click.echo("❌ --episode-id requires --podcast-id", err=True)
+        cleanup_webhook_server()
         ctx.exit(1)
 
     click.echo("🔍 Looking for episodes to transcribe...")
@@ -1366,6 +1412,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
     if not episodes_to_transcribe:
         click.echo("✓ No episodes found that need transcription")
+        cleanup_webhook_server()
         return
 
     # Filter by podcast_id if specified
@@ -1373,12 +1420,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         podcast = podcast_service.get_podcast(podcast_id)
         if not podcast:
             click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            cleanup_webhook_server()
             ctx.exit(1)
 
         episodes_to_transcribe = [(p, ep) for p, ep in episodes_to_transcribe if str(p.rss_url) == str(podcast.rss_url)]
 
         if not episodes_to_transcribe:
             click.echo(f"✓ No episodes need transcription for podcast: {podcast.title}")
+            cleanup_webhook_server()
             return
 
         # Filter by episode_id if specified
@@ -1386,6 +1435,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             target_episode = podcast_service.get_episode(podcast_id, episode_id)
             if not target_episode:
                 click.echo(f"❌ Episode not found: {episode_id}", err=True)
+                cleanup_webhook_server()
                 ctx.exit(1)
 
             # Filter to only the specific episode
@@ -1395,6 +1445,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
             if not episodes_to_transcribe:
                 click.echo(f"✓ Episode already transcribed: {target_episode.title}")
+                cleanup_webhook_server()
                 return
 
     # Apply max_episodes limit (simple slice on sorted list)
@@ -1416,6 +1467,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 f"  • {episode.title} ({episode.pub_date.strftime('%Y-%m-%d') if episode.pub_date else 'no date'})"
             )
         click.echo("\n(Run without --dry-run to actually transcribe)")
+        cleanup_webhook_server()
         return
 
     # Transcribe episodes
@@ -1532,6 +1584,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         total_audio_seconds += episode_duration
 
                     click.echo("✅ Transcription complete!")
+                elif getattr(ctx.obj, "using_webhook_mode", False):
+                    # In webhook mode, None means "submitted, waiting for callback"
+                    # The webhook handler will save the transcript and update the database
+                    click.echo("📤 Transcription submitted - waiting for webhook callback")
+                    transcribed_count += 1  # Count as submitted (will complete async)
                 else:
                     click.echo("❌ Transcription failed")
 
@@ -1543,14 +1600,57 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 continue
 
     total_time = time.time() - start_time
-    click.echo("\n🎉 Transcription complete!")
-    click.echo(f"✓ {transcribed_count} episode(s) transcribed in {format_duration(total_time)} ({total_time:.0f}s)")
 
-    # Show speed statistics if we have audio duration data
-    if total_audio_seconds > 0:
-        click.echo(
-            f"  Audio duration: {format_duration(total_audio_seconds)} | Speed: {format_speed_stats(total_time, total_audio_seconds)}"
-        )
+    # Show completion message based on mode
+    if getattr(ctx.obj, "using_webhook_mode", False):
+        click.echo("\n📤 Transcription submissions complete!")
+        click.echo(f"✓ {transcribed_count} episode(s) submitted in {format_duration(total_time)} ({total_time:.0f}s)")
+        click.echo("")
+
+        # Wait for all webhook callbacks to complete
+        from thestill.webhook import get_tracker
+
+        tracker = get_tracker()
+
+        if tracker.pending_count > 0:
+            click.echo(f"   Waiting for {tracker.pending_count} webhook callback(s)...")
+            click.echo("   (Press Ctrl+C to exit early)")
+            click.echo("")
+
+            try:
+                # Wait for all callbacks with progress updates
+                while not tracker.is_all_done:
+                    remaining = tracker.pending_count
+                    if remaining > 0:
+                        # Show progress every second
+                        if tracker.wait_for_all(timeout=1.0):
+                            break
+                    else:
+                        break
+
+                # All done!
+                click.echo("🎉 All webhook callbacks received!")
+                click.echo(f"✓ {tracker.completed_count} transcript(s) delivered via webhook")
+            except KeyboardInterrupt:
+                click.echo("\n")
+                remaining = tracker.pending_count
+                if remaining > 0:
+                    click.echo(f"⚠️  Exiting with {remaining} pending callback(s)")
+                    click.echo("   Run 'thestill server' to continue receiving callbacks")
+        else:
+            click.echo("   No pending callbacks to wait for.")
+    else:
+        click.echo("\n🎉 Transcription complete!")
+        click.echo(f"✓ {transcribed_count} episode(s) transcribed in {format_duration(total_time)} ({total_time:.0f}s)")
+
+        # Show speed statistics if we have audio duration data
+        if total_audio_seconds > 0:
+            click.echo(
+                f"  Audio duration: {format_duration(total_audio_seconds)} | Speed: {format_speed_stats(total_time, total_audio_seconds)}"
+            )
+
+    # Cleanup background webhook server if started
+    cleanup_webhook_server()
 
 
 @main.command()
@@ -2084,6 +2184,73 @@ def evaluate_clean_transcript(
     total_time = time.time() - start_time
     click.echo("\n🎉 Evaluation complete!")
     click.echo(f"✓ {total_processed} transcript(s) evaluated in {total_time:.1f} seconds")
+
+
+@main.command()
+@click.option("--host", "-h", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+@click.option("--port", "-p", default=8000, type=int, help="Port to bind to (default: 8000)")
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development")
+@click.option("--workers", "-w", default=1, type=int, help="Number of worker processes (default: 1)")
+@click.pass_context
+def server(ctx, host, port, reload, workers):
+    """Start the web server for webhooks and API.
+
+    The web server provides:
+    - Webhook endpoints for receiving transcription callbacks (ElevenLabs)
+    - Health check and status endpoints
+    - REST API for podcast management (future)
+    - Web UI for browsing content (future)
+
+    Examples:
+        thestill server                      # Start on localhost:8000
+        thestill server --port 8080          # Custom port
+        thestill server --host 0.0.0.0       # Bind to all interfaces
+        thestill server --reload             # Auto-reload for development
+    """
+    if ctx.obj is None:
+        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    try:
+        import uvicorn
+
+        from .web.app import create_app
+    except ImportError as e:
+        click.echo(f"❌ Web server dependencies not installed: {e}", err=True)
+        click.echo("   Install with: pip install 'thestill[web]'", err=True)
+        ctx.exit(1)
+
+    config = ctx.obj.config
+
+    click.echo("🌐 Starting thestill web server...")
+    click.echo(f"   Host: {host}")
+    click.echo(f"   Port: {port}")
+    click.echo(f"   Storage: {config.storage_path}")
+    click.echo(f"   Database: {config.database_path}")
+
+    if reload:
+        click.echo("   Mode: Development (auto-reload enabled)")
+    else:
+        click.echo(f"   Workers: {workers}")
+
+    click.echo("")
+    click.echo(f"📡 Webhook URL: http://{host}:{port}/webhook/elevenlabs/speech-to-text")
+    click.echo(f"📊 Status URL: http://{host}:{port}/status")
+    click.echo(f"📚 API Docs: http://{host}:{port}/docs")
+    click.echo("")
+
+    # Create app with existing config to share services
+    app = create_app(config)
+
+    # Run uvicorn
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        reload=reload,
+        workers=workers if not reload else 1,  # Can't use workers with reload
+        log_level="info",
+    )
 
 
 if __name__ == "__main__":

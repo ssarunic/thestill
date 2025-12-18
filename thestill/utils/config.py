@@ -39,6 +39,10 @@ class Config(BaseModel):
     # ElevenLabs Configuration (for ElevenLabs Speech-to-Text)
     elevenlabs_api_key: str = ""
     elevenlabs_model: str = "scribe_v1"  # scribe_v1 or scribe_v1_experimental
+    elevenlabs_webhook_secret: str = ""  # HMAC secret for webhook signature verification
+    elevenlabs_webhook_require_metadata: bool = True  # Require episode_id in webhook callbacks
+    elevenlabs_async_threshold_mb: int = 0  # Use async mode for files > N MB (0 = always async)
+    webhook_server_port: int = 8000  # Port for background webhook server during transcription
 
     # Storage Paths
     storage_path: Path = Path("./data")
@@ -161,6 +165,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
         "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY", ""),
         "elevenlabs_model": os.getenv("ELEVENLABS_MODEL", "scribe_v1"),
+        "elevenlabs_webhook_secret": os.getenv("ELEVENLABS_WEBHOOK_SECRET", ""),
+        "elevenlabs_webhook_require_metadata": os.getenv("ELEVENLABS_WEBHOOK_REQUIRE_METADATA", "true").lower()
+        == "true",
+        "webhook_server_port": int(os.getenv("WEBHOOK_SERVER_PORT", "8000")),
+        "elevenlabs_async_threshold_mb": int(os.getenv("ELEVENLABS_ASYNC_THRESHOLD_MB", "0")),
         "storage_path": storage_path,
         "database_path": database_path,
         # Note: Path operations should use config.path_manager methods

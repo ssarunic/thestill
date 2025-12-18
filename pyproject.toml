@@ -55,6 +55,12 @@ dev = [
     "mypy>=1.7.0",
     "pylint>=3.0.0",
 ]
+web = [
+    # Web server dependencies (FastAPI and uvicorn are in main deps)
+    # Add future web-specific deps here (Jinja2, python-multipart, etc.)
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.6",
+]
 
 [project.scripts]
 thestill = "thestill.cli:main"
