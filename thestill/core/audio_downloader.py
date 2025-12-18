@@ -198,7 +198,7 @@ class AudioDownloader:
         cutoff_time = time.time() - (days * 24 * 60 * 60)
 
         removed_count = 0
-        for file_path in self.storage_path.glob("*"):
+        for file_path in self.storage_path.glob("**/*"):
             if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
                 if dry_run:
                     logger.info(f"Would delete: {file_path.name}")
