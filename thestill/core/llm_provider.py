@@ -66,6 +66,29 @@ class ModelLimits(NamedTuple):
 # - Gemini: Supported via response_schema parameter (all models)
 # - Ollama: No native schema validation, falls back to JSON mode + Pydantic validation
 MODEL_CONFIGS: Dict[str, ModelLimits] = {
+    # OpenAI GPT-5.2 series (December 2025) - adaptive reasoning models
+    # Uses reasoning_effort parameter ('none', 'low', 'medium', 'high', 'xhigh')
+    # Default reasoning_effort is 'none' (unlike 5.1 which defaults to higher)
+    # Reasoning models do NOT support structured outputs
+    # Replaces GPT-5.1 as the flagship model
+    "gpt-5.2": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=16384,
+        supports_temperature=False,  # Only with reasoning_effort='none'
+        supports_structured_output=False,
+    ),
+    "gpt-5.2-pro": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=32768,  # Pro uses more compute
+        supports_temperature=False,
+        supports_structured_output=False,
+    ),
     # OpenAI GPT-5.1 series (November 2025) - adaptive reasoning models
     # Uses reasoning_effort parameter ('none', 'low', 'medium', 'high')
     # Reasoning models do NOT support structured outputs
@@ -598,11 +621,35 @@ class OpenAIProvider(LLMProvider):
         "gpt-5.1-codex",
         "gpt-5.1-codex-mini",
         "gpt-5.1-codex-max",  # GPT-5.1 series (Nov 2025)
+        "gpt-5.2",
+        "gpt-5.2-pro",  # GPT-5.2 series (Dec 2025)
     ]
 
-    def __init__(self, api_key: str, model: str = "gpt-5.1"):
+    # Valid reasoning effort levels for GPT-5.x models
+    # GPT-5.2 supports: 'none' (default), 'low', 'medium', 'high', 'xhigh'
+    # GPT-5.1 supports: 'none', 'low', 'medium', 'high'
+    VALID_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"]
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-5.2",
+        reasoning_effort: Optional[str] = None,
+    ):
+        """
+        Initialize OpenAI provider.
+
+        Args:
+            api_key: OpenAI API key
+            model: Model name (e.g., "gpt-5.2", "gpt-5.2-pro", "gpt-4o")
+            reasoning_effort: Reasoning depth for GPT-5.x models.
+                             GPT-5.2: "none" (default), "low", "medium", "high", "xhigh"
+                             GPT-5.1: "none", "low", "medium", "high"
+                             None uses API default (none for 5.2, varies for others).
+        """
         self.client = OpenAI(api_key=api_key)
         self.model = model
+        self.reasoning_effort = reasoning_effort
 
     def chat_completion(
         self,
@@ -684,6 +731,19 @@ class OpenAIProvider(LLMProvider):
             if response_format is not None and not is_reasoning_model:
                 params["response_format"] = response_format
 
+            # Add reasoning_effort for GPT-5.x models
+            # OpenAI SDK uses flat 'reasoning_effort' parameter (not nested 'reasoning: { effort: ... }')
+            if self._is_gpt5x_model() and self.reasoning_effort:
+                if self.reasoning_effort in self.VALID_REASONING_EFFORTS:
+                    # Check if xhigh is valid for this model (only GPT-5.2+)
+                    effort = self.reasoning_effort
+                    if effort == "xhigh" and not self.model.startswith("gpt-5.2"):
+                        logger.warning(
+                            f"reasoning_effort 'xhigh' is only supported for GPT-5.2 models. " f"Using 'high' instead."
+                        )
+                        effort = "high"
+                    params["reasoning_effort"] = effort
+
             response = self.client.chat.completions.create(**params)
 
             # Extract content
@@ -734,6 +794,10 @@ class OpenAIProvider(LLMProvider):
                 return True
         return False
 
+    def _is_gpt5x_model(self) -> bool:
+        """Check if the current model is a GPT-5.x model that supports reasoning_effort"""
+        return self.model.startswith("gpt-5.1") or self.model.startswith("gpt-5.2")
+
     def supports_temperature(self) -> bool:
         """Check if the current model supports custom temperature"""
         return not self._is_reasoning_model()
@@ -776,14 +840,37 @@ class OpenAIProvider(LLMProvider):
         Falls back to JSON mode + Pydantic validation for reasoning models.
         """
         if self._is_reasoning_model():
-            # Reasoning models don't support structured output, use fallback
+            # Reasoning models don't support structured output or response_format
+            # We rely on prompt engineering to get JSON output
             logger.warning(f"Model {self.model} doesn't support structured output, using JSON mode fallback")
+
+            # Add JSON instruction to the last user message if not already there
+            modified_messages = messages.copy()
+            if modified_messages and modified_messages[-1]["role"] == "user":
+                content = modified_messages[-1]["content"]
+                if "json" not in content.lower():
+                    modified_messages[-1] = {
+                        "role": "user",
+                        "content": f"{content}\n\nRespond with valid JSON only, no markdown formatting or code blocks.",
+                    }
+
             response = self.chat_completion(
-                messages=messages,
+                messages=modified_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                # Don't pass response_format - reasoning models don't support it
             )
+
+            # Clean up response - remove markdown code blocks if present
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response[7:]
+            elif response.startswith("```"):
+                response = response[3:]
+            if response.endswith("```"):
+                response = response[:-3]
+            response = response.strip()
+
             data = json.loads(response)
             return response_model(**data)
 
@@ -851,6 +938,19 @@ class OpenAIProvider(LLMProvider):
         # Only add response_format for non-reasoning models
         if response_format is not None and not is_reasoning_model:
             params["response_format"] = response_format
+
+        # Add reasoning_effort for GPT-5.x models
+        # OpenAI SDK uses flat 'reasoning_effort' parameter (not nested 'reasoning: { effort: ... }')
+        if self._is_gpt5x_model() and self.reasoning_effort:
+            if self.reasoning_effort in self.VALID_REASONING_EFFORTS:
+                # Check if xhigh is valid for this model (only GPT-5.2+)
+                effort = self.reasoning_effort
+                if effort == "xhigh" and not self.model.startswith("gpt-5.2"):
+                    logger.warning(
+                        f"reasoning_effort 'xhigh' is only supported for GPT-5.2 models. " f"Using 'high' instead."
+                    )
+                    effort = "high"
+                params["reasoning_effort"] = effort
 
         full_response = ""
         stream = self.client.chat.completions.create(**params)
@@ -2064,7 +2164,8 @@ class GeminiProvider(LLMProvider):
 def create_llm_provider(
     provider_type: str,
     openai_api_key: str = "",
-    openai_model: str = "gpt-5.1",
+    openai_model: str = "gpt-5.2",
+    openai_reasoning_effort: Optional[str] = None,
     ollama_base_url: str = "http://localhost:11434",
     ollama_model: str = "gemma3:4b",
     gemini_api_key: str = "",
@@ -2080,6 +2181,9 @@ def create_llm_provider(
         provider_type: "openai", "ollama", "gemini", or "anthropic"
         openai_api_key: OpenAI API key (required if provider_type is "openai")
         openai_model: OpenAI model name
+        openai_reasoning_effort: Reasoning effort for GPT-5.x models.
+                                GPT-5.2: "none" (default), "low", "medium", "high", "xhigh"
+                                GPT-5.1: "none", "low", "medium", "high"
         ollama_base_url: Ollama base URL
         ollama_model: Ollama model name
         gemini_api_key: Google Gemini API key (required if provider_type is "gemini")
@@ -2101,7 +2205,11 @@ def create_llm_provider(
     if provider_type == "openai":
         if not openai_api_key:
             raise ValueError("OpenAI API key is required for OpenAI provider")
-        return OpenAIProvider(api_key=openai_api_key, model=openai_model)
+        return OpenAIProvider(
+            api_key=openai_api_key,
+            model=openai_model,
+            reasoning_effort=openai_reasoning_effort,
+        )
     elif provider_type == "ollama":
         provider = OllamaProvider(base_url=ollama_base_url, model=ollama_model)
         # Perform health check on creation

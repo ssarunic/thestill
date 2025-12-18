@@ -74,7 +74,8 @@ class Config(BaseModel):
     llm_provider: str = "openai"  # openai, ollama, gemini, or anthropic
 
     # OpenAI Configuration
-    openai_model: str = "gpt-5.1"
+    openai_model: str = "gpt-5.2"
+    openai_reasoning_effort: Optional[str] = None  # Reasoning effort for GPT-5.x models (none/low/medium/high/xhigh)
 
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
@@ -190,7 +191,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "min_speakers": int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None,
         "max_speakers": int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None,
         "llm_provider": llm_provider,
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-5.1"),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-5.2"),
+        "openai_reasoning_effort": os.getenv("OPENAI_REASONING_EFFORT")
+        or None,  # none/low/medium/high/xhigh for GPT-5.x
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),

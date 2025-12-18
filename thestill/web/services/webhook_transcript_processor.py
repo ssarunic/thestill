@@ -130,20 +130,28 @@ class WebhookTranscriptProcessor:
         )
 
         # Determine output path
-        # Use raw_transcript_file_with_podcast(podcast_slug, episode_filename)
-        output_path = self.path_manager.raw_transcript_file_with_podcast(
-            podcast_slug or "unknown", f"{episode_slug}.json"
-        )
+        # Use raw_transcript_file_with_podcast(podcast_slug, episode_filename) for the full path
+        # Database stores relative path: podcast-slug/episode-slug.json (not the full data/raw_transcripts/...)
+        transcript_filename = f"{episode_slug}.json"
+        output_path = self.path_manager.raw_transcript_file_with_podcast(podcast_slug or "unknown", transcript_filename)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Database relative path (matches CLI transcribe command format)
+        db_relative_path = f"{podcast_slug or 'unknown'}/{transcript_filename}"
 
         # Save transcript
         self._save_transcript(transcript, str(output_path))
 
         # Update episode in database
-        episode.raw_transcript_path = str(output_path)
-        self.repository.update_episode(episode)
+        # The update_episode method requires (podcast_url, episode_external_id, updates)
+        # Note: podcast.rss_url may be a Pydantic HttpUrl, so convert to string
+        self.repository.update_episode(
+            podcast_url=str(podcast.rss_url),
+            episode_external_id=episode.external_id,
+            updates={"raw_transcript_path": db_relative_path},
+        )
 
-        logger.info(f"Saved webhook transcript to {output_path}")
+        logger.info(f"Transcript saved to {output_path}")
 
         # Clean up pending operation file if it exists
         self._cleanup_pending_operation(transcription_id)
