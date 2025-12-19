@@ -1,7 +1,7 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-requests==2.31.0
+fastapi==0.125.0
+uvicorn[standard]==0.38.0
+pydantic==2.12.5
+requests==2.32.5
 feedparser==6.0.10
 openai==2.13.0
 openai-whisper==20250625
@@ -10,6 +10,6 @@ click==8.1.7
 transformers>=4.30.0
 librosa>=0.10.0
 python-dotenv==1.0.0
-aiofiles==23.2.1
-httpx==0.25.2
+aiofiles==25.1.0
+httpx==0.28.1
 yt-dlp>=2025.11.12

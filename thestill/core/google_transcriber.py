@@ -27,7 +27,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1856,7 +1856,7 @@ class GoogleCloudTranscriber(Transcriber):
             if grpc_operation.error.code != 0:
                 operation.state = TranscriptionOperationState.FAILED
                 operation.error = grpc_operation.error.message
-                operation.completed_at = datetime.utcnow()
+                operation.completed_at = datetime.now(timezone.utc)
                 self._save_operation(operation)
                 return operation
 
@@ -1910,7 +1910,7 @@ class GoogleCloudTranscriber(Transcriber):
             if file_result is None:
                 operation.state = TranscriptionOperationState.FAILED
                 operation.error = "No file result in response"
-                operation.completed_at = datetime.utcnow()
+                operation.completed_at = datetime.now(timezone.utc)
                 self._save_operation(operation)
                 return operation
 
@@ -1918,7 +1918,7 @@ class GoogleCloudTranscriber(Transcriber):
             if file_result.error and file_result.error.code != 0:
                 operation.state = TranscriptionOperationState.FAILED
                 operation.error = file_result.error.message
-                operation.completed_at = datetime.utcnow()
+                operation.completed_at = datetime.now(timezone.utc)
                 self._save_operation(operation)
                 return operation
 
@@ -1927,13 +1927,13 @@ class GoogleCloudTranscriber(Transcriber):
             if not transcript_gcs_uri:
                 operation.state = TranscriptionOperationState.FAILED
                 operation.error = "No transcript URI in response"
-                operation.completed_at = datetime.utcnow()
+                operation.completed_at = datetime.now(timezone.utc)
                 self._save_operation(operation)
                 return operation
 
             operation.transcript_gcs_uri = transcript_gcs_uri
             operation.state = TranscriptionOperationState.COMPLETED
-            operation.completed_at = datetime.utcnow()
+            operation.completed_at = datetime.now(timezone.utc)
             self._save_operation(operation)
 
             logger.info(f"Operation {operation.operation_id} completed, transcript at: {transcript_gcs_uri}")

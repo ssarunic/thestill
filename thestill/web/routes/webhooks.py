@@ -31,7 +31,7 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -169,7 +169,7 @@ def _save_webhook_result(webhook_dir: Path, transcription_id: str, data: Dict[st
     webhook_dir.mkdir(parents=True, exist_ok=True)
 
     # Add received timestamp
-    data["_webhook_received_at"] = datetime.utcnow().isoformat()
+    data["_webhook_received_at"] = datetime.now(timezone.utc).isoformat()
 
     file_path = webhook_dir / f"elevenlabs_{transcription_id}.json"
 

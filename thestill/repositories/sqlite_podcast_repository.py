@@ -27,7 +27,7 @@ Design principles:
 import logging
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -320,7 +320,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         Side effects: updated_at set explicitly here (no trigger)
         """
         with self._get_connection() as conn:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Upsert podcast
             conn.execute(
@@ -413,7 +413,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         set_clause = ", ".join(f"{field} = ?" for field in update_fields.keys())
         values = list(update_fields.values())
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         with self._get_connection() as conn:
             cursor = conn.execute(

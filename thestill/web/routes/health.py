@@ -21,7 +21,7 @@ These endpoints are used for:
 - Quick status verification
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 
@@ -54,7 +54,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -76,7 +76,7 @@ async def status(state: AppState = Depends(get_app_state)):
 
     return {
         "status": "ok",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "storage": {
             "path": str(stats.storage_path),
             "audio_files": stats.audio_files_count,

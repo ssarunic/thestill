@@ -25,7 +25,7 @@ Features:
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -274,7 +274,7 @@ class ElevenLabsTranscriber(Transcriber):
                 "episode_id": episode_id,
                 "podcast_slug": podcast_slug,
                 "episode_slug": episode_slug,
-                "submitted_at": datetime.utcnow().isoformat(),
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
             }
 
         try:
@@ -810,7 +810,7 @@ class ElevenLabsTranscriber(Transcriber):
             "episode_id": episode_id,
             "podcast_slug": podcast_slug,
             "episode_slug": episode_slug,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "state": "pending",
         }
 
