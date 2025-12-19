@@ -344,8 +344,6 @@ class WebhookTranscriptProcessor:
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False, default=str)
 
-        logger.info(f"Transcript saved to {output_path}")
-
     def _cleanup_pending_operation(self, transcription_id: Optional[str]) -> None:
         """Clean up pending operation file if it exists."""
         if not transcription_id:
