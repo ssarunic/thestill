@@ -161,14 +161,6 @@ class WhisperTranscriber(Transcriber):
             return
 
         print(f"Loading Whisper model: {self.model_name}")
-        original_load = torch.load
-
-        def safe_load(*args, **kwargs):
-            kwargs["weights_only"] = False
-            kwargs["map_location"] = "cpu"
-            return original_load(*args, **kwargs)
-
-        torch.load = safe_load
         try:
             self._model = whisper.load_model(self.model_name, device=self.device)
             print("Model loaded successfully")
@@ -186,8 +178,6 @@ class WhisperTranscriber(Transcriber):
                 print("Model loaded successfully on CPU")
             else:
                 raise
-        finally:
-            torch.load = original_load
 
     def _clear_model_cache(self) -> None:
         """Clear Whisper model cache to fix compatibility issues"""

@@ -3,8 +3,8 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 requests==2.31.0
 feedparser==6.0.10
-openai==1.3.0
-openai-whisper==20231117
+openai==2.13.0
+openai-whisper==20250625
 pydub==0.25.1
 click==8.1.7
 transformers>=4.30.0
