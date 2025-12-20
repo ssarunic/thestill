@@ -86,12 +86,20 @@ export default function PodcastDetail() {
       ) : podcast ? (
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex gap-6">
-            {/* Artwork placeholder */}
-            <div className="w-24 h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <svg className="w-12 h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </div>
+            {/* Podcast artwork */}
+            {podcast.image_url ? (
+              <img
+                src={podcast.image_url}
+                alt={`${podcast.title} artwork`}
+                className="w-24 h-24 rounded-lg object-cover flex-shrink-0"
+              />
+            ) : (
+              <div className="w-24 h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <svg className="w-12 h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </div>
+            )}
 
             <div className="flex-1">
               <h1 className="text-2xl font-bold text-gray-900">{podcast.title}</h1>

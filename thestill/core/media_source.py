@@ -171,7 +171,7 @@ class RSSMediaSource(MediaSource):
             url: RSS feed URL or Apple Podcasts URL
 
         Returns:
-            Dictionary with 'title', 'description', 'rss_url' or None if extraction fails
+            Dictionary with 'title', 'description', 'rss_url', 'image_url' or None if extraction fails
         """
         try:
             # Resolve Apple Podcasts URLs to RSS first
@@ -186,10 +186,31 @@ class RSSMediaSource(MediaSource):
                 return None
 
             feed = parsed_feed.feed
+
+            # Extract podcast artwork URL
+            # Priority: itunes:image (higher quality) > standard RSS image
+            image_url = None
+            if hasattr(feed, "itunes_image") and feed.itunes_image:
+                # feedparser returns itunes:image as a dict with 'href' key
+                if isinstance(feed.itunes_image, dict):
+                    image_url = feed.itunes_image.get("href")
+                else:
+                    image_url = str(feed.itunes_image)
+            elif hasattr(feed, "image") and feed.image:
+                # Standard RSS image tag
+                if hasattr(feed.image, "href"):
+                    image_url = feed.image.href
+                elif isinstance(feed.image, dict):
+                    image_url = feed.image.get("href") or feed.image.get("url")
+
+            if image_url:
+                logger.debug(f"Extracted podcast artwork: {image_url}")
+
             return {
                 "title": feed.get("title", "Unknown Podcast"),
                 "description": feed.get("description", ""),
                 "rss_url": rss_url,
+                "image_url": image_url,
             }
 
         except Exception as e:

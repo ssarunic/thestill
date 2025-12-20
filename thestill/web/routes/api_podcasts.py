@@ -105,6 +105,7 @@ async def get_podcast(
             "description": podcast.description,
             "rss_url": str(podcast.rss_url),
             "slug": podcast.slug,
+            "image_url": podcast.image_url,
             "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
             "episodes_count": len(podcast.episodes),
             "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,

@@ -74,7 +74,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Create schema (idempotent)
             self._create_schema(conn)
 
+            # Run migrations for existing databases
+            self._run_migrations(conn)
+
             logger.debug("Database schema initialized")
+
+    def _run_migrations(self, conn: sqlite3.Connection):
+        """Run schema migrations for existing databases."""
+        # Check if image_url column exists in podcasts table
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        columns = {row["name"] for row in cursor.fetchall()}
+
+        if "image_url" not in columns:
+            logger.info("Migrating database: adding image_url column to podcasts table")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN image_url TEXT NULL")
+            logger.info("Migration complete: image_url column added")
 
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
@@ -91,6 +105,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 title TEXT NOT NULL,
                 slug TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
+                image_url TEXT NULL,
                 last_processed TIMESTAMP NULL,
                 CHECK (length(id) = 36),
                 CHECK (length(rss_url) > 0)
@@ -233,7 +248,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Fetch all podcasts
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, image_url, last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at ASC
             """
@@ -251,7 +266,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, image_url, last_processed, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -268,7 +283,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, image_url, last_processed, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
             """,
@@ -288,7 +303,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, created_at, rss_url, title, slug, description, last_processed, updated_at
+                SELECT id, created_at, rss_url, title, slug, description, image_url, last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at ASC
                 LIMIT 1 OFFSET ?
@@ -325,12 +340,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Upsert podcast
             conn.execute(
                 """
-                INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, last_processed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, last_processed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rss_url) DO UPDATE SET
                     title = excluded.title,
                     slug = excluded.slug,
                     description = excluded.description,
+                    image_url = excluded.image_url,
                     last_processed = excluded.last_processed,
                     updated_at = ?
             """,
@@ -342,6 +358,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     podcast.title,
                     podcast.slug,
                     podcast.description,
+                    podcast.image_url,
                     podcast.last_processed.isoformat() if podcast.last_processed else None,
                     now.isoformat(),  # Set updated_at explicitly (no trigger)
                 ),
@@ -457,8 +474,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
-                       p.slug as p_slug, p.description as p_description, p.last_processed,
-                       p.updated_at as p_updated_at, e.*
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE e.id = ?
@@ -516,8 +533,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 f"""
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
-                       p.slug as p_slug, p.description as p_description, p.last_processed,
-                       p.updated_at as p_updated_at, e.*
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
@@ -557,6 +574,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 title=row["title"],
                 slug=row["slug"] or "",
                 description=row["description"],
+                image_url=row["image_url"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
                 episodes=episodes,
             )
@@ -573,6 +591,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             title=row["p_title"],
             slug=row["p_slug"] or "",
             description=row["p_description"],
+            image_url=row["p_image_url"],
             last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
             episodes=[],  # Episodes not loaded
         )
@@ -807,7 +826,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description,
-                       p.last_processed, p.updated_at
+                       p.image_url, p.last_processed, p.updated_at
                 FROM podcasts p
                 INNER JOIN episodes e ON e.podcast_id = p.id
                 WHERE e.id = ?

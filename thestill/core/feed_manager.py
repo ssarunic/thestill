@@ -143,6 +143,7 @@ class PodcastFeedManager:
                 title=metadata.get("title", "Unknown Podcast"),
                 description=metadata.get("description", ""),
                 rss_url=metadata.get("rss_url", url),  # type: ignore[arg-type]  # Pydantic validates to HttpUrl
+                image_url=metadata.get("image_url"),
             )
 
             # Save if not already exists

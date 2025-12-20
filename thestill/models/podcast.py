@@ -166,6 +166,7 @@ class Podcast(BaseModel):
     title: str
     slug: str = ""  # URL/filesystem-safe identifier (auto-generated from title if empty)
     description: str
+    image_url: Optional[str] = None  # Podcast artwork URL (from itunes:image or RSS image tag)
 
     # Processing status
     last_processed: Optional[datetime] = None

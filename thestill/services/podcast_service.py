@@ -38,6 +38,7 @@ class PodcastWithIndex(BaseModel):
     title: str
     description: str
     rss_url: str
+    image_url: Optional[str] = None
     last_processed: Optional[datetime] = None
     episodes_count: int = 0
     episodes_processed: int = 0
@@ -175,6 +176,7 @@ class PodcastService:
                     title=podcast.title,
                     description=podcast.description,
                     rss_url=str(podcast.rss_url),
+                    image_url=podcast.image_url,
                     last_processed=podcast.last_processed,
                     episodes_count=len(podcast.episodes),
                     episodes_processed=episodes_processed,
