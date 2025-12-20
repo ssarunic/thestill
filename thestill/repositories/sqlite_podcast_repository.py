@@ -316,6 +316,26 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 return self._row_to_podcast(row, conn)
             return None
 
+    def get_by_slug(self, slug: str) -> Optional[Podcast]:
+        """Find podcast by URL-safe slug."""
+        if not slug:
+            return None
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, created_at, rss_url, title, slug, description, image_url, last_processed, updated_at
+                FROM podcasts
+                WHERE slug = ?
+            """,
+                (slug,),
+            )
+
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_podcast(row, conn)
+            return None
+
     def exists(self, url: str) -> bool:
         """Check if podcast exists."""
         with self._get_connection() as conn:
@@ -507,6 +527,32 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             row = cursor.fetchone()
             return self._row_to_episode(row) if row else None
+
+    def get_episode_by_slug(self, podcast_slug: str, episode_slug: str) -> Optional[Tuple[Podcast, Episode]]:
+        """Get episode by podcast slug and episode slug."""
+        if not podcast_slug or not episode_slug:
+            return None
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.last_processed, p.updated_at as p_updated_at, e.*
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE p.slug = ? AND e.slug = ?
+            """,
+                (podcast_slug, episode_slug),
+            )
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            podcast = self._row_to_podcast_minimal(row)
+            episode = self._row_to_episode(row)
+            return (podcast, episode)
 
     def get_unprocessed_episodes(self, state: str) -> List[Tuple[Podcast, Episode]]:
         """

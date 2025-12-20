@@ -47,6 +47,7 @@ export interface PodcastSummary {
   title: string
   description: string
   rss_url: string
+  slug: string
   image_url: string | null
   last_processed: string | null
   episodes_count: number
@@ -87,8 +88,10 @@ export interface PodcastDetailResponse {
 export interface Episode {
   id: string
   podcast_index: number
+  podcast_slug: string
   episode_index: number
   title: string
+  slug: string
   description: string
   pub_date: string | null
   audio_url: string
@@ -114,6 +117,7 @@ export interface EpisodesResponse {
 export interface EpisodeDetail {
   id: string
   podcast_id: string
+  podcast_slug: string
   podcast_title: string
   title: string
   description: string

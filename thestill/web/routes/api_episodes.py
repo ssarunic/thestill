@@ -55,6 +55,7 @@ async def get_episode(
         "episode": {
             "id": episode.id,
             "podcast_id": podcast.id,
+            "podcast_slug": podcast.slug,
             "podcast_title": podcast.title,
             "title": episode.title,
             "description": episode.description,

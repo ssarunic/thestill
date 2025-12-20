@@ -38,6 +38,7 @@ class PodcastWithIndex(BaseModel):
     title: str
     description: str
     rss_url: str
+    slug: str
     image_url: Optional[str] = None
     last_processed: Optional[datetime] = None
     episodes_count: int = 0
@@ -49,8 +50,10 @@ class EpisodeWithIndex(BaseModel):
 
     id: str  # Internal UUID for direct access
     podcast_index: int
+    podcast_slug: str
     episode_index: int
     title: str
+    slug: str
     description: str
     pub_date: Optional[datetime] = None
     audio_url: str
@@ -176,6 +179,7 @@ class PodcastService:
                     title=podcast.title,
                     description=podcast.description,
                     rss_url=str(podcast.rss_url),
+                    slug=podcast.slug,
                     image_url=podcast.image_url,
                     last_processed=podcast.last_processed,
                     episodes_count=len(podcast.episodes),
@@ -190,7 +194,7 @@ class PodcastService:
         Get a podcast by ID.
 
         Args:
-            podcast_id: Integer index (1-based), RSS URL string, or UUID string
+            podcast_id: Integer index (1-based), slug, RSS URL string, or UUID string
 
         Returns:
             Podcast object or None if not found
@@ -214,6 +218,13 @@ class PodcastService:
             for podcast in podcasts:
                 if podcast.id == podcast_id:
                     logger.debug(f"Retrieved podcast by UUID: {podcast.title}")
+                    return podcast
+
+        # Check if it's a slug (URL-safe identifier)
+        if isinstance(podcast_id, str):
+            for podcast in podcasts:
+                if podcast.slug == podcast_id:
+                    logger.debug(f"Retrieved podcast by slug: {podcast.title}")
                     return podcast
 
         # Otherwise, treat as RSS URL
@@ -343,8 +354,10 @@ class PodcastService:
                 EpisodeWithIndex(
                     id=episode.id,
                     podcast_index=podcast_index,
+                    podcast_slug=podcast.slug,
                     episode_index=idx,
                     title=episode.title,
+                    slug=episode.slug,
                     description=episode.description,
                     pub_date=episode.pub_date,
                     audio_url=str(episode.audio_url),

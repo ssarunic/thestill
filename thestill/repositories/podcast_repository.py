@@ -68,6 +68,19 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def get_by_slug(self, slug: str) -> Optional[Podcast]:
+        """
+        Get podcast by URL-safe slug.
+
+        Args:
+            slug: URL-safe slug identifier
+
+        Returns:
+            Podcast if found, None otherwise
+        """
+        pass
+
+    @abstractmethod
     def exists(self, url: str) -> bool:
         """
         Check if podcast with given URL exists.
@@ -180,6 +193,20 @@ class EpisodeRepository(ABC):
 
         Returns:
             Episode if found, None otherwise
+        """
+        pass
+
+    @abstractmethod
+    def get_episode_by_slug(self, podcast_slug: str, episode_slug: str) -> Optional[tuple[Podcast, Episode]]:
+        """
+        Get episode by podcast slug and episode slug.
+
+        Args:
+            podcast_slug: URL-safe slug of the podcast
+            episode_slug: URL-safe slug of the episode
+
+        Returns:
+            Tuple of (Podcast, Episode) if found, None otherwise
         """
         pass
 

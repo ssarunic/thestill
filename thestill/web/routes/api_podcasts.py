@@ -163,3 +163,124 @@ async def get_podcast_episodes(
         "has_more": has_more,
         "next_offset": next_offset,
     }
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}")
+async def get_episode_by_slugs(
+    podcast_slug: str,
+    episode_slug: str,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """
+    Get a specific episode by podcast slug and episode slug.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+        episode_slug: URL-safe episode identifier
+
+    Returns:
+        Episode details with metadata.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    podcast, episode = result
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "episode": {
+            "id": episode.id,
+            "podcast_id": podcast.id,
+            "podcast_slug": podcast.slug,
+            "podcast_title": podcast.title,
+            "title": episode.title,
+            "description": episode.description,
+            "slug": episode.slug,
+            "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
+            "audio_url": str(episode.audio_url),
+            "duration": episode.duration,
+            "external_id": episode.external_id,
+            "state": episode.state.value,
+            "has_transcript": bool(episode.clean_transcript_path),
+            "has_summary": bool(episode.summary_path),
+        },
+    }
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/transcript")
+async def get_episode_transcript_by_slugs(
+    podcast_slug: str,
+    episode_slug: str,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """
+    Get the cleaned transcript for an episode by slugs.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+        episode_slug: URL-safe episode identifier
+
+    Returns:
+        Cleaned Markdown transcript content.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    podcast, episode = result
+
+    transcript = state.podcast_service.get_transcript(podcast.id, episode.id)
+
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "episode_id": episode.id,
+        "episode_title": episode.title,
+        "content": transcript,
+        "available": not transcript.startswith("N/A"),
+    }
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
+async def get_episode_summary_by_slugs(
+    podcast_slug: str,
+    episode_slug: str,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """
+    Get the summary for an episode by slugs.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+        episode_slug: URL-safe episode identifier
+
+    Returns:
+        Summary Markdown content.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    podcast, episode = result
+
+    summary = state.podcast_service.get_summary(podcast.id, episode.id)
+
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "episode_id": episode.id,
+        "episode_title": episode.title,
+        "content": summary,
+        "available": not summary.startswith("N/A"),
+    }
