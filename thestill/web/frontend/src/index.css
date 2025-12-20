@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Base styles */
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+/* Transcript styling */
+.transcript-content {
+  @apply font-serif leading-relaxed;
+}
+
+.transcript-content p {
+  @apply mb-4;
+}
+
+.transcript-content .speaker {
+  @apply font-sans font-semibold text-primary-700;
+}
+
+.transcript-content .timestamp {
+  @apply font-mono text-xs text-gray-400;
+}
+
+/* Summary styling */
+.summary-content {
+  @apply prose prose-slate max-w-none;
+}
+
+.summary-content h1,
+.summary-content h2,
+.summary-content h3 {
+  @apply text-primary-900;
+}
+
+.summary-content blockquote {
+  @apply border-l-4 border-secondary-400 bg-secondary-50 py-2 italic;
+}

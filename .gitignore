@@ -180,3 +180,4 @@ data/
 feeds.json
 .env.bak
 .env.bak2
+thestill/web/frontend/node_modules/

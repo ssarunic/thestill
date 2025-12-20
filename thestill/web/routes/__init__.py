@@ -18,10 +18,11 @@ Route modules for thestill.me web server.
 This package contains FastAPI routers for different endpoint groups:
 - health: Health check and status endpoints
 - webhooks: Webhook endpoints for external service callbacks (ElevenLabs)
-- podcasts: Podcast management API (future)
-- pages: Web UI page routes (future)
+- api_dashboard: Dashboard statistics and activity
+- api_podcasts: Podcast listing and details
+- api_episodes: Episode content (transcripts, summaries)
 """
 
-from . import health, webhooks
+from . import api_dashboard, api_episodes, api_podcasts, health, webhooks
 
-__all__ = ["health", "webhooks"]
+__all__ = ["health", "webhooks", "api_dashboard", "api_podcasts", "api_episodes"]

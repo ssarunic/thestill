@@ -30,20 +30,6 @@ from ..dependencies import AppState, get_app_state
 router = APIRouter()
 
 
-@router.get("/")
-async def root():
-    """
-    Root endpoint - basic service identification.
-
-    Returns:
-        Service name and status indicator.
-    """
-    return {
-        "service": "thestill.me",
-        "status": "ok",
-    }
-
-
 @router.get("/health")
 async def health_check():
     """

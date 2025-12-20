@@ -28,16 +28,20 @@ Usage:
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .routes import health, webhooks
+from .routes import api_dashboard, api_episodes, api_podcasts, health, webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +103,52 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         redoc_url="/redoc",
     )
 
+    # Add CORS middleware for frontend development
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",  # Vite dev server
+            "http://localhost:3000",  # Alternative dev port
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # Register routes
     app.include_router(health.router, tags=["health"])
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
+
+    # API routes for web UI
+    app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+    app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+    app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+
+    # Serve static frontend files
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        # Mount static assets (JS, CSS)
+        assets_dir = static_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        # Catch-all route for SPA - must be after API routes
+        @app.get("/{full_path:path}")
+        async def serve_spa(request: Request, full_path: str):
+            """Serve the SPA index.html for all non-API routes."""
+            # Skip if it's an API or known route
+            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health", "status")):
+                return None
+            index_file = static_dir / "index.html"
+            if index_file.exists():
+                return FileResponse(str(index_file))
+            return FileResponse(str(static_dir / "index.html"))
+
+        logger.info(f"Serving static frontend from: {static_dir}")
+    else:
+        logger.warning(f"Static directory not found: {static_dir} - frontend not available")
 
     logger.info("FastAPI application created successfully")
 

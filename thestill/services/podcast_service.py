@@ -46,6 +46,7 @@ class PodcastWithIndex(BaseModel):
 class EpisodeWithIndex(BaseModel):
     """Episode with human-friendly index numbers"""
 
+    id: str  # Internal UUID for direct access
     podcast_index: int
     episode_index: int
     title: str
@@ -150,9 +151,9 @@ class PodcastService:
         logger.info(f"Removing podcast: {podcast.title}")
         return self.feed_manager.remove_podcast(rss_url)
 
-    def list_podcasts(self) -> List[PodcastWithIndex]:
+    def get_podcasts(self) -> List[PodcastWithIndex]:
         """
-        List all tracked podcasts with index numbers.
+        Get all tracked podcasts with index numbers.
 
         Returns:
             List of podcasts with human-friendly indices
@@ -292,15 +293,20 @@ class PodcastService:
         logger.warning(f"Episode not found: {episode_id}")
         return None
 
-    def list_episodes(
-        self, podcast_id: Union[str, int], limit: int = 10, since_hours: Optional[int] = None
+    def get_episodes(
+        self,
+        podcast_id: Union[str, int],
+        limit: int = 100,
+        offset: int = 0,
+        since_hours: Optional[int] = None,
     ) -> Optional[List[EpisodeWithIndex]]:
         """
-        List episodes for a podcast with optional filtering.
+        Get episodes for a podcast with optional filtering and pagination.
 
         Args:
             podcast_id: Podcast index or RSS URL
-            limit: Maximum number of episodes to return
+            limit: Maximum number of episodes to return (default 100)
+            offset: Number of episodes to skip (default 0)
             since_hours: Only include episodes published in last N hours
 
         Returns:
@@ -313,7 +319,7 @@ class PodcastService:
             return None
 
         # Get podcast index for response
-        podcasts = self.list_podcasts()
+        podcasts = self.get_podcasts()
         podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
         # Sort episodes by pub_date descending (latest first)
@@ -325,14 +331,15 @@ class PodcastService:
             sorted_episodes = [ep for ep in sorted_episodes if ep.pub_date and ep.pub_date >= cutoff_time]
             logger.debug(f"Filtered to {len(sorted_episodes)} episodes from last {since_hours}h")
 
-        # Apply limit
-        sorted_episodes = sorted_episodes[:limit]
+        # Apply offset and limit
+        sorted_episodes = sorted_episodes[offset : offset + limit]
 
-        # Build result with indices
+        # Build result with indices (account for offset in indexing)
         result = []
-        for idx, episode in enumerate(sorted_episodes, start=1):
+        for idx, episode in enumerate(sorted_episodes, start=offset + 1):
             result.append(
                 EpisodeWithIndex(
+                    id=episode.id,
                     podcast_index=podcast_index,
                     episode_index=idx,
                     title=episode.title,
@@ -354,6 +361,27 @@ class PodcastService:
 
         logger.debug(f"Listed {len(result)} episodes from: {podcast.title}")
         return result
+
+    def get_episodes_count(self, podcast_id: Union[str, int], since_hours: Optional[int] = None) -> Optional[int]:
+        """
+        Get total count of episodes for a podcast.
+
+        Args:
+            podcast_id: Podcast index or RSS URL
+            since_hours: Only count episodes published in last N hours
+
+        Returns:
+            Total episode count, or None if podcast not found
+        """
+        podcast = self.get_podcast(podcast_id)
+        if not podcast:
+            return None
+
+        if since_hours is not None:
+            cutoff_time = datetime.now() - timedelta(hours=since_hours)
+            return sum(1 for ep in podcast.episodes if ep.pub_date and ep.pub_date >= cutoff_time)
+
+        return len(podcast.episodes)
 
     def get_transcript(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
