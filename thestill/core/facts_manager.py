@@ -26,25 +26,8 @@ from typing import Optional
 
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 from thestill.utils.path_manager import PathManager
-from thestill.utils.slug import generate_slug
 
 logger = logging.getLogger(__name__)
-
-
-# Backwards compatibility alias - use generate_slug from thestill.utils.slug instead
-def slugify(text: str) -> str:
-    """
-    Convert text to a URL/filesystem-safe slug.
-
-    DEPRECATED: Use generate_slug from thestill.utils.slug instead.
-
-    Args:
-        text: Text to slugify (e.g., podcast title)
-
-    Returns:
-        Lowercase string with spaces replaced by hyphens, special chars removed
-    """
-    return generate_slug(text)
 
 
 class FactsManager:

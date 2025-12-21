@@ -184,27 +184,6 @@ class Podcast(BaseModel):
         return self
 
 
-class Word(BaseModel):
-    word: str
-    start: float
-    end: float
-    probability: float
-    speaker: Optional[str] = None
-
-
-class Segment(BaseModel):
-    id: int
-    start: float
-    end: float
-    text: str
-    words: List[Word] = []
-    speaker: Optional[str] = None
-    # Enhanced metadata from Google Speech-to-Text V2 (optional)
-    confidence: Optional[float] = None  # Alternative-level confidence (0.0-1.0)
-    language_code: Optional[str] = None  # Per-segment detected language
-    result_end_offset: Optional[float] = None  # End offset for alignment verification
-
-
 class GoogleTranscriptMetadata(BaseModel):
     """Metadata from Google Cloud Speech-to-Text API response."""
 

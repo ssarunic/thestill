@@ -27,7 +27,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..models.podcast import Segment
+from ..models.transcript import Segment
 from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)

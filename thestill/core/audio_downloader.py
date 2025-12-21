@@ -174,14 +174,6 @@ class AudioDownloader:
                     # Progress updates are handled by CLI progress bar
                     # Removed per-chunk logging to avoid terminal spam
 
-    def get_file_size(self, file_path: str) -> int:
-        """Get file size in bytes"""
-        try:
-            return os.path.getsize(file_path)
-        except (OSError, FileNotFoundError, TypeError) as e:
-            logger.debug(f"Failed to get file size for {file_path}: {e}")
-            return 0
-
     def cleanup_old_files(self, days: int = 30, dry_run: bool = False) -> int:
         """
         Remove audio files older than specified days.
