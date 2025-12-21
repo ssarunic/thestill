@@ -15,7 +15,7 @@ import pytest
 import requests
 
 from thestill.core.audio_downloader import AudioDownloader
-from thestill.models.podcast import Episode
+from thestill.models.podcast import Episode, Podcast
 
 
 @pytest.fixture
@@ -49,6 +49,17 @@ def sample_episode():
     )
 
 
+@pytest.fixture
+def sample_podcast(sample_episode):
+    """Create sample podcast for testing."""
+    return Podcast(
+        title="Test Podcast",
+        description="A test podcast",
+        rss_url="https://example.com/feed.xml",
+        episodes=[sample_episode],
+    )
+
+
 class TestAudioDownloaderInitialization:
     """Test AudioDownloader initialization."""
 
@@ -74,7 +85,7 @@ class TestDownloadEpisode:
     """Test download_episode method."""
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_success(self, mock_get, audio_downloader, sample_episode, temp_storage):
+    def test_download_success(self, mock_get, audio_downloader, sample_episode, sample_podcast, temp_storage):
         """Should download episode successfully."""
         # Setup mock response
         mock_response = Mock()
@@ -85,16 +96,16 @@ class TestDownloadEpisode:
         mock_get.return_value = mock_response
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
-        # Verify - result is relative path like "Test_Podcast/test-episode-123_hash.mp3"
+        # Verify - result is relative path like "test-podcast/test-episode-123_hash.mp3"
         assert result is not None
         # Build full path to verify file exists
         full_path = temp_storage / result
         assert full_path.exists()
         # Now uses podcast subdirectory structure
         assert "/" in result  # Contains subdirectory
-        assert result.startswith("Test_Podcast/")  # Podcast slug is directory
+        assert result.startswith("test-podcast/")  # Podcast slug is directory
         assert "test-episode-123" in result.lower()  # Episode slug in filename
         assert result.endswith(".mp3")
 
@@ -111,11 +122,11 @@ class TestDownloadEpisode:
         assert "User-Agent" in call_args[1]["headers"]
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_already_exists(self, mock_get, audio_downloader, sample_episode, temp_storage):
+    def test_download_already_exists(self, mock_get, audio_downloader, sample_episode, sample_podcast, temp_storage):
         """Should return existing file path without downloading."""
         # Create existing file with subdirectory structure (matches what downloader generates)
         # Episode slug is auto-generated from "Test Episode 123" -> "test-episode-123"
-        podcast_dir = temp_storage / "Test_Podcast"
+        podcast_dir = temp_storage / "test-podcast"
         podcast_dir.mkdir(parents=True, exist_ok=True)
         existing_file = podcast_dir / "test-episode-123_12345678.mp3"
         existing_file.write_text("existing content")
@@ -126,40 +137,40 @@ class TestDownloadEpisode:
             mock_hash.hexdigest.return_value = "1234567890abcdef"
             mock_md5.return_value = mock_hash
 
-            result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+            result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should return existing file without calling requests
         assert result is not None
         mock_get.assert_not_called()
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_network_error(self, mock_get, audio_downloader, sample_episode):
+    def test_download_network_error(self, mock_get, audio_downloader, sample_episode, sample_podcast):
         """Should handle network errors gracefully after retries."""
         # Setup mock to raise exception (will retry 3 times)
         mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should fail after 3 retry attempts
         assert result is None
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_timeout(self, mock_get, audio_downloader, sample_episode):
+    def test_download_timeout(self, mock_get, audio_downloader, sample_episode, sample_podcast):
         """Should handle timeout errors after retries."""
         # Setup mock to raise timeout (will retry 3 times)
         mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should fail after 3 retry attempts
         assert result is None
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_http_error(self, mock_get, audio_downloader, sample_episode):
+    def test_download_http_error(self, mock_get, audio_downloader, sample_episode, sample_podcast):
         """Should handle HTTP errors (404, 500, etc) after retries."""
         # Setup mock to raise HTTP error (will retry 3 times)
         mock_response = Mock()
@@ -167,14 +178,16 @@ class TestDownloadEpisode:
         mock_get.return_value = mock_response
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should fail after 3 retry attempts
         assert result is None
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_retry_succeeds_on_second_attempt(self, mock_get, audio_downloader, sample_episode, temp_storage):
+    def test_download_retry_succeeds_on_second_attempt(
+        self, mock_get, audio_downloader, sample_episode, sample_podcast, temp_storage
+    ):
         """Should succeed if retry attempt succeeds."""
         # Setup mock to fail first time, succeed second time
         mock_response = Mock()
@@ -188,7 +201,7 @@ class TestDownloadEpisode:
         ]
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should succeed on second attempt
         assert result is not None
@@ -197,7 +210,9 @@ class TestDownloadEpisode:
         assert mock_get.call_count == 2  # Failed once, succeeded on retry
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_retry_succeeds_on_third_attempt(self, mock_get, audio_downloader, sample_episode, temp_storage):
+    def test_download_retry_succeeds_on_third_attempt(
+        self, mock_get, audio_downloader, sample_episode, sample_podcast, temp_storage
+    ):
         """Should succeed if final retry attempt succeeds."""
         # Setup mock to fail twice, succeed on third attempt
         mock_response = Mock()
@@ -212,7 +227,7 @@ class TestDownloadEpisode:
         ]
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should succeed on third attempt
         assert result is not None
@@ -230,6 +245,12 @@ class TestDownloadEpisode:
             pub_date=datetime(2025, 1, 15),
             description="YouTube video",
         )
+        youtube_podcast = Podcast(
+            title="YouTube Channel",
+            description="A YouTube channel",
+            rss_url="https://www.youtube.com/@channel",
+            episodes=[youtube_episode],
+        )
 
         # Mock YouTube source to handle download
         mock_youtube_source = Mock()
@@ -237,7 +258,7 @@ class TestDownloadEpisode:
         audio_downloader.media_source_factory.detect_source.return_value = mock_youtube_source
 
         # Execute
-        result = audio_downloader.download_episode(youtube_episode, "YouTube Channel")
+        result = audio_downloader.download_episode(youtube_episode, youtube_podcast)
 
         # Verify
         assert result == "/path/to/youtube.m4a"
@@ -262,6 +283,12 @@ class TestDownloadEpisode:
                 pub_date=datetime(2025, 1, 15),
                 description="Test",
             )
+            podcast = Podcast(
+                title="Podcast",
+                description="Test podcast",
+                rss_url="https://example.com/feed.xml",
+                episodes=[episode],
+            )
 
             # Setup mock
             mock_response = Mock()
@@ -271,13 +298,13 @@ class TestDownloadEpisode:
             mock_get.return_value = mock_response
 
             # Execute
-            result = audio_downloader.download_episode(episode, "Podcast")
+            result = audio_downloader.download_episode(episode, podcast)
 
             # Verify extension is preserved
             assert result.endswith(ext)
 
     @patch("thestill.core.audio_downloader.requests.get")
-    def test_download_no_content_length(self, mock_get, audio_downloader, sample_episode, temp_storage):
+    def test_download_no_content_length(self, mock_get, audio_downloader, sample_episode, sample_podcast, temp_storage):
         """Should handle missing Content-Length header."""
         # Setup mock without content-length
         mock_response = Mock()
@@ -287,7 +314,7 @@ class TestDownloadEpisode:
         mock_get.return_value = mock_response
 
         # Execute
-        result = audio_downloader.download_episode(sample_episode, "Test Podcast")
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
 
         # Verify - should still work
         assert result is not None
@@ -363,34 +390,6 @@ class TestGetFileExtension:
         """Should default to .mp3 if no extension."""
         result = audio_downloader._get_file_extension("/path/to/file")
         assert result == ".mp3"
-
-
-class TestGetFileSize:
-    """Test get_file_size method."""
-
-    def test_get_file_size_existing_file(self, audio_downloader, temp_storage):
-        """Should return file size for existing file."""
-        # Create test file
-        test_file = temp_storage / "test.txt"
-        test_file.write_text("Hello, World!")
-
-        # Execute
-        size = audio_downloader.get_file_size(str(test_file))
-
-        # Verify
-        assert size == 13  # "Hello, World!" is 13 bytes
-
-    def test_get_file_size_nonexistent_file(self, audio_downloader):
-        """Should return 0 for nonexistent file."""
-        size = audio_downloader.get_file_size("/nonexistent/file.txt")
-
-        assert size == 0
-
-    def test_get_file_size_invalid_path(self, audio_downloader):
-        """Should return 0 for invalid path."""
-        size = audio_downloader.get_file_size(None)
-
-        assert size == 0
 
 
 class TestCleanupOldFiles:
@@ -531,6 +530,12 @@ class TestEdgeCases:
             pub_date=datetime(2025, 1, 15),
             description="Test",
         )
+        podcast = Podcast(
+            title="Podcast: The <Best> / Show",
+            description="Test podcast",
+            rss_url="https://example.com/feed.xml",
+            episodes=[episode],
+        )
 
         # Setup mock
         mock_response = Mock()
@@ -540,7 +545,7 @@ class TestEdgeCases:
         mock_get.return_value = mock_response
 
         # Execute
-        result = audio_downloader.download_episode(episode, "Podcast: The <Best> / Show")
+        result = audio_downloader.download_episode(episode, podcast)
 
         # Verify - should work without errors
         assert result is not None
@@ -562,6 +567,12 @@ class TestEdgeCases:
             pub_date=datetime(2025, 1, 15),
             description="Test",
         )
+        podcast = Podcast(
+            title="Test Podcast",
+            description="Test podcast",
+            rss_url="https://example.com/feed.xml",
+            episodes=[episode],
+        )
 
         # Setup mock
         mock_response = Mock()
@@ -572,7 +583,7 @@ class TestEdgeCases:
 
         # Mock open to raise exception
         with patch("builtins.open", side_effect=IOError("Disk full")):
-            result = audio_downloader.download_episode(episode, "Test Podcast")
+            result = audio_downloader.download_episode(episode, podcast)
 
         # Verify
         assert result is None

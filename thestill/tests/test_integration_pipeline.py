@@ -122,7 +122,7 @@ class TestPipelineAddAndRefresh:
         assert podcast.title == "Test Podcast"
 
         # Verify podcast was saved
-        podcasts = podcast_service.list_podcasts()
+        podcasts = podcast_service.get_podcasts()
         assert len(podcasts) == 1
         assert podcasts[0].title == "Test Podcast"
 
@@ -241,7 +241,7 @@ class TestPipelineDownload:
 
         # Download first episode
         downloader = AudioDownloader(str(path_manager.original_audio_dir()))
-        audio_path = downloader.download_episode(episodes[0], podcast.title)
+        audio_path = downloader.download_episode(episodes[0], podcast)
 
         assert audio_path is not None
         # audio_path is relative (e.g., "Test_Podcast/episode_hash.mp3"), so build full path
@@ -299,7 +299,7 @@ class TestPipelineDownsample:
         podcast, episodes = episodes_to_download[0]
 
         downloader = AudioDownloader(str(path_manager.original_audio_dir()))
-        audio_path = downloader.download_episode(episodes[0], podcast.title)
+        audio_path = downloader.download_episode(episodes[0], podcast)
         feed_manager.mark_episode_downloaded(str(podcast.rss_url), episodes[0].external_id, audio_path)
 
         # Get episodes to downsample
@@ -441,7 +441,7 @@ class TestFullPipelineIntegration:
 
         # Step 3: Download
         downloader = AudioDownloader(str(path_manager.original_audio_dir()))
-        audio_path = downloader.download_episode(episode, podcast.title)
+        audio_path = downloader.download_episode(episode, podcast)
         feed_manager.mark_episode_downloaded(str(podcast.rss_url), episode.external_id, audio_path)
 
         podcast = podcast_service.get_podcast(1)
@@ -552,7 +552,7 @@ class TestFullPipelineIntegration:
         assert podcast2.title == "Podcast 2"
 
         # Verify both podcasts exist
-        all_podcasts = podcast_service.list_podcasts()
+        all_podcasts = podcast_service.get_podcasts()
         assert len(all_podcasts) == 2
 
         # Refresh to discover episodes

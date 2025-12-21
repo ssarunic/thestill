@@ -189,27 +189,27 @@ class TestRemovePodcast:
         podcast_service.feed_manager.remove_podcast.assert_not_called()
 
 
-class TestListPodcasts:
-    """Test list_podcasts method."""
+class TestGetPodcasts:
+    """Test get_podcasts method."""
 
-    def test_list_podcasts_empty(self, podcast_service):
+    def test_get_podcasts_empty(self, podcast_service):
         """Should return empty list when no podcasts."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = []
 
         # Execute
-        result = podcast_service.list_podcasts()
+        result = podcast_service.get_podcasts()
 
         # Verify
         assert result == []
 
-    def test_list_podcasts_with_data(self, podcast_service, sample_podcasts):
+    def test_get_podcasts_with_data(self, podcast_service, sample_podcasts):
         """Should return podcasts with index numbers."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
 
         # Execute
-        result = podcast_service.list_podcasts()
+        result = podcast_service.get_podcasts()
 
         # Verify
         assert len(result) == 2
@@ -380,10 +380,10 @@ class TestGetEpisode:
         assert result is None
 
 
-class TestListEpisodes:
-    """Test list_episodes method."""
+class TestGetEpisodes:
+    """Test get_episodes method."""
 
-    def test_list_episodes_basic(self, podcast_service, sample_podcasts, mock_path_manager):
+    def test_get_episodes_basic(self, podcast_service, sample_podcasts, mock_path_manager):
         """Should list episodes with indices."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
@@ -393,7 +393,7 @@ class TestListEpisodes:
         mock_path_manager.summary_file = Mock(return_value=Path("/nonexistent"))
 
         # Execute
-        result = podcast_service.list_episodes(1)
+        result = podcast_service.get_episodes(1)
 
         # Verify
         assert len(result) == 2
@@ -403,13 +403,13 @@ class TestListEpisodes:
         assert result[0].title == "Episode 1"
         assert result[0].state == "cleaned"
 
-    def test_list_episodes_podcast_not_found(self, podcast_service, sample_podcasts):
+    def test_get_episodes_podcast_not_found(self, podcast_service, sample_podcasts):
         """Should return None if podcast not found."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
 
         # Execute
-        result = podcast_service.list_episodes(999)
+        result = podcast_service.get_episodes(999)
 
         # Verify
         assert result is None

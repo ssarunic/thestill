@@ -115,9 +115,9 @@ class TestPodcastServiceContract:
         result2 = podcast_service.remove_podcast("https://example.com/feed.xml")
         assert isinstance(result2, bool)
 
-    def test_list_podcasts_signature(self, podcast_service):
-        """Contract: list_podcasts() -> List[PodcastWithIndex]."""
-        result = podcast_service.list_podcasts()
+    def test_get_podcasts_signature(self, podcast_service):
+        """Contract: get_podcasts() -> List[PodcastWithIndex]."""
+        result = podcast_service.get_podcasts()
 
         # Return type contract
         assert isinstance(result, list)
@@ -127,7 +127,7 @@ class TestPodcastServiceContract:
 
     def test_podcast_with_index_structure(self, podcast_service, sample_podcast):
         """Contract: PodcastWithIndex has required fields."""
-        podcasts = podcast_service.list_podcasts()
+        podcasts = podcast_service.get_podcasts()
         assert len(podcasts) > 0
 
         podcast = podcasts[0]
@@ -173,18 +173,18 @@ class TestPodcastServiceContract:
         result2 = podcast_service.get_episode(1, "latest")
         assert result2 is None or isinstance(result2, Episode)
 
-    def test_list_episodes_signature(self, podcast_service, sample_podcast):
-        """Contract: list_episodes(podcast_id, limit=10, since_hours=None) -> Optional[List[EpisodeWithIndex]]."""
+    def test_get_episodes_signature(self, podcast_service, sample_podcast):
+        """Contract: get_episodes(podcast_id, limit=10, since_hours=None) -> Optional[List[EpisodeWithIndex]]."""
         # Basic call
-        result1 = podcast_service.list_episodes(1)
+        result1 = podcast_service.get_episodes(1)
         assert result1 is None or isinstance(result1, list)
 
         # With limit
-        result2 = podcast_service.list_episodes(1, limit=5)
+        result2 = podcast_service.get_episodes(1, limit=5)
         assert result2 is None or isinstance(result2, list)
 
         # With since_hours
-        result3 = podcast_service.list_episodes(1, since_hours=24)
+        result3 = podcast_service.get_episodes(1, since_hours=24)
         assert result3 is None or isinstance(result3, list)
 
     def test_episode_with_index_structure(self, podcast_service, repository, sample_podcast):
@@ -200,7 +200,7 @@ class TestPodcastServiceContract:
         sample_podcast.episodes.append(episode)
         repository.save(sample_podcast)
 
-        episodes = podcast_service.list_episodes(1)
+        episodes = podcast_service.get_episodes(1)
         assert episodes is not None
         assert len(episodes) > 0
 
@@ -468,10 +468,10 @@ class TestServiceContractStability:
         expected_methods = [
             "add_podcast",
             "remove_podcast",
-            "list_podcasts",
+            "get_podcasts",
             "get_podcast",
             "get_episode",
-            "list_episodes",
+            "get_episodes",
             "get_transcript",
         ]
 
