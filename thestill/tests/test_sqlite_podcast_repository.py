@@ -603,3 +603,214 @@ def test_foreign_key_constraints_enabled(temp_db):
         cursor = conn.execute("PRAGMA foreign_keys")
         result = cursor.fetchone()
         assert result[0] == 1  # Foreign keys are ON
+
+
+# ============================================================================
+# save_podcast() Tests - Idempotent podcast metadata updates
+# ============================================================================
+
+
+def test_save_podcast_inserts_new_podcast(temp_db, sample_podcast):
+    """Test save_podcast() inserts a new podcast."""
+    temp_db.save_podcast(sample_podcast)
+
+    found = temp_db.get_by_url("https://example.com/feed.xml")
+    assert found is not None
+    assert found.title == "Test Podcast"
+    assert found.description == "Test description"
+
+
+def test_save_podcast_does_not_touch_episodes(temp_db, sample_podcast, sample_episode):
+    """Test save_podcast() does not modify episodes."""
+    # First save podcast with episode using full save()
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    # Get the episode's updated_at
+    episode_before = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    updated_at_before = episode_before.updated_at
+
+    # Update podcast metadata using save_podcast()
+    import time
+
+    time.sleep(0.1)  # Ensure timestamp difference
+    sample_podcast.title = "Updated Title"
+    temp_db.save_podcast(sample_podcast)
+
+    # Verify episode updated_at is unchanged
+    episode_after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert episode_after.updated_at == updated_at_before
+
+
+def test_save_podcast_idempotent_no_change(temp_db, sample_podcast):
+    """Test save_podcast() does not update updated_at if nothing changed."""
+    temp_db.save_podcast(sample_podcast)
+
+    # Get initial state
+    with temp_db._get_connection() as conn:
+        cursor = conn.execute("SELECT updated_at FROM podcasts WHERE rss_url = ?", (str(sample_podcast.rss_url),))
+        updated_at_before = cursor.fetchone()["updated_at"]
+
+    import time
+
+    time.sleep(0.1)
+
+    # Save again with no changes
+    temp_db.save_podcast(sample_podcast)
+
+    # Verify updated_at is unchanged
+    with temp_db._get_connection() as conn:
+        cursor = conn.execute("SELECT updated_at FROM podcasts WHERE rss_url = ?", (str(sample_podcast.rss_url),))
+        updated_at_after = cursor.fetchone()["updated_at"]
+
+    assert updated_at_after == updated_at_before
+
+
+def test_save_podcast_updates_when_changed(temp_db, sample_podcast):
+    """Test save_podcast() updates updated_at when data changes."""
+    temp_db.save_podcast(sample_podcast)
+
+    # Get initial state
+    with temp_db._get_connection() as conn:
+        cursor = conn.execute("SELECT updated_at FROM podcasts WHERE rss_url = ?", (str(sample_podcast.rss_url),))
+        updated_at_before = cursor.fetchone()["updated_at"]
+
+    import time
+
+    time.sleep(0.1)
+
+    # Change title and save
+    sample_podcast.title = "New Title"
+    temp_db.save_podcast(sample_podcast)
+
+    # Verify updated_at changed
+    with temp_db._get_connection() as conn:
+        cursor = conn.execute("SELECT updated_at FROM podcasts WHERE rss_url = ?", (str(sample_podcast.rss_url),))
+        updated_at_after = cursor.fetchone()["updated_at"]
+
+    assert updated_at_after != updated_at_before
+
+
+# ============================================================================
+# save_episode() Tests - Idempotent episode updates
+# ============================================================================
+
+
+def test_save_episode_inserts_new_episode(temp_db, sample_podcast, sample_episode):
+    """Test save_episode() inserts a new episode."""
+    # First create the podcast
+    temp_db.save_podcast(sample_podcast)
+
+    # Set podcast_id on episode
+    sample_episode.podcast_id = sample_podcast.id
+
+    # Save episode
+    temp_db.save_episode(sample_episode)
+
+    # Verify
+    episode = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert episode is not None
+    assert episode.title == "Test Episode"
+
+
+def test_save_episode_requires_podcast_id(temp_db, sample_episode):
+    """Test save_episode() raises error if podcast_id not set."""
+    sample_episode.podcast_id = None
+
+    with pytest.raises(ValueError, match="podcast_id must be set"):
+        temp_db.save_episode(sample_episode)
+
+
+def test_save_episode_idempotent_no_change(temp_db, sample_podcast, sample_episode):
+    """Test save_episode() does not update updated_at if nothing changed."""
+    temp_db.save_podcast(sample_podcast)
+    sample_episode.podcast_id = sample_podcast.id
+    temp_db.save_episode(sample_episode)
+
+    # Get initial updated_at
+    episode_before = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    updated_at_before = episode_before.updated_at
+
+    import time
+
+    time.sleep(0.1)
+
+    # Save again with no changes
+    temp_db.save_episode(sample_episode)
+
+    # Verify updated_at unchanged
+    episode_after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert episode_after.updated_at == updated_at_before
+
+
+def test_save_episode_updates_when_changed(temp_db, sample_podcast, sample_episode):
+    """Test save_episode() updates updated_at when data changes."""
+    temp_db.save_podcast(sample_podcast)
+    sample_episode.podcast_id = sample_podcast.id
+    temp_db.save_episode(sample_episode)
+
+    # Get initial updated_at
+    episode_before = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    updated_at_before = episode_before.updated_at
+
+    import time
+
+    time.sleep(0.1)
+
+    # Change data and save
+    sample_episode.raw_transcript_path = "new_transcript.json"
+    temp_db.save_episode(sample_episode)
+
+    # Verify updated_at changed
+    episode_after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert episode_after.updated_at != updated_at_before
+    assert episode_after.raw_transcript_path == "new_transcript.json"
+
+
+# ============================================================================
+# save_episodes() Tests - Batch episode updates
+# ============================================================================
+
+
+def test_save_episodes_batch_insert(temp_db, sample_podcast):
+    """Test save_episodes() inserts multiple episodes."""
+    temp_db.save_podcast(sample_podcast)
+
+    episodes = [
+        Episode(
+            id="660e8400-e29b-41d4-a716-446655440101",
+            external_id="guid-1",
+            title="Episode 1",
+            description="Description 1",
+            audio_url="https://example.com/audio1.mp3",
+            podcast_id=sample_podcast.id,
+        ),
+        Episode(
+            id="660e8400-e29b-41d4-a716-446655440102",
+            external_id="guid-2",
+            title="Episode 2",
+            description="Description 2",
+            audio_url="https://example.com/audio2.mp3",
+            podcast_id=sample_podcast.id,
+        ),
+    ]
+
+    temp_db.save_episodes(episodes)
+
+    # Verify both episodes saved
+    all_episodes = temp_db.get_episodes_by_podcast("https://example.com/feed.xml")
+    assert len(all_episodes) == 2
+
+
+def test_save_episodes_empty_list(temp_db):
+    """Test save_episodes() handles empty list."""
+    result = temp_db.save_episodes([])
+    assert result == []
+
+
+def test_save_episodes_requires_podcast_id(temp_db, sample_episode):
+    """Test save_episodes() raises error if any episode missing podcast_id."""
+    sample_episode.podcast_id = None
+
+    with pytest.raises(ValueError, match="podcast_id must be set"):
+        temp_db.save_episodes([sample_episode])

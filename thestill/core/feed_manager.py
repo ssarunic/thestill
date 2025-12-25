@@ -227,12 +227,16 @@ class PodcastFeedManager:
                         if most_recent_date:
                             podcast.last_processed = most_recent_date
 
-                # Save podcast with new episodes
-                self.repository.save(podcast)
+                    # Save new episodes and update podcast metadata
+                    # Use targeted saves to avoid updating unchanged episode timestamps
+                    for episode in episodes:
+                        episode.podcast_id = podcast.id
+                    self.repository.save_episodes(episodes)
+                    self.repository.save_podcast(podcast)
 
-                # Extract and save transcript links for RSS sources (Podcasting 2.0)
-                if isinstance(source, RSSMediaSource) and episodes:
-                    self._save_transcript_links_for_episodes(podcast, episodes, source)
+                    # Extract and save transcript links for RSS sources (Podcasting 2.0)
+                    if isinstance(source, RSSMediaSource):
+                        self._save_transcript_links_for_episodes(podcast, episodes, source)
 
             except Exception as e:
                 logger.error(f"Error checking feed {podcast.rss_url}: {e}")
@@ -451,25 +455,27 @@ class PodcastFeedManager:
                                     audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                                     duration=entry.get("itunes_duration"),
                                     external_id=entry_external_id,
-                                    processed=True,
                                     raw_transcript_path=raw_transcript_path,
                                     clean_transcript_path=clean_transcript_path,
                                     summary_path=summary_path,
+                                    podcast_id=podcast.id,
                                 )
-                                podcast.episodes.append(episode)
+                                # Use targeted save methods instead of full save()
+                                self.repository.save_episode(episode)
                                 podcast.last_processed = datetime.now()
-                                self.repository.save(podcast)
+                                self.repository.save_podcast(podcast)
                                 logger.info(f"Added and marked new episode as processed: {episode.title}")
                                 return
                 except Exception as e:
                     logger.error(f"Error fetching episode info for {episode_external_id}: {e}")
                     return
 
-            # Update podcast last_processed timestamp
+            # Episode update succeeded - just update podcast last_processed timestamp
+            # Use save_podcast() to avoid touching episode updated_at timestamps
             podcast = self.repository.get_by_url(podcast_rss_url)
             if podcast:
                 podcast.last_processed = datetime.now()
-                self.repository.save(podcast)
+                self.repository.save_podcast(podcast)
                 logger.info(f"Marked episode as processed: {episode_external_id}")
 
     def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:

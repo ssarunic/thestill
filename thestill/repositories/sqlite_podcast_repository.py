@@ -349,10 +349,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def save(self, podcast: Podcast) -> Podcast:
         """
-        Save or update podcast.
+        Save or update podcast with ALL episodes (destructive).
 
-        Strategy: UPSERT using INSERT ... ON CONFLICT
-        Side effects: updated_at set explicitly here (no trigger)
+        WARNING: This method DELETES all existing episodes and re-inserts them.
+        Use save_podcast() + save_episode()/save_episodes() for targeted updates.
+
+        Strategy: UPSERT podcast, then DELETE + INSERT all episodes
+        Side effects: updated_at set on podcast and ALL episodes
         """
         with self._get_connection() as conn:
             now = datetime.now(timezone.utc)
@@ -398,6 +401,240 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             logger.debug(f"Saved podcast: {podcast.title} ({len(podcast.episodes)} episodes)")
             return podcast
+
+    def save_podcast(self, podcast: Podcast) -> Podcast:
+        """
+        Save or update podcast metadata only. Does NOT touch episodes.
+
+        Idempotent: Only updates updated_at if data actually changed.
+
+        Args:
+            podcast: Podcast model with metadata to save
+
+        Returns:
+            The saved podcast (with updated timestamps if changed)
+        """
+        with self._get_connection() as conn:
+            now = datetime.now(timezone.utc)
+
+            # Check if podcast exists and if data changed
+            cursor = conn.execute(
+                """
+                SELECT id, title, slug, description, image_url, last_processed
+                FROM podcasts WHERE rss_url = ?
+                """,
+                (str(podcast.rss_url),),
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                # Compare fields to see if anything changed
+                last_processed_str = podcast.last_processed.isoformat() if podcast.last_processed else None
+                existing_last_processed = existing["last_processed"]
+
+                changed = (
+                    existing["title"] != podcast.title
+                    or existing["slug"] != podcast.slug
+                    or existing["description"] != podcast.description
+                    or existing["image_url"] != podcast.image_url
+                    or existing_last_processed != last_processed_str
+                )
+
+                if changed:
+                    # Update with new updated_at
+                    conn.execute(
+                        """
+                        UPDATE podcasts
+                        SET title = ?, slug = ?, description = ?, image_url = ?, last_processed = ?, updated_at = ?
+                        WHERE rss_url = ?
+                        """,
+                        (
+                            podcast.title,
+                            podcast.slug,
+                            podcast.description,
+                            podcast.image_url,
+                            last_processed_str,
+                            now.isoformat(),
+                            str(podcast.rss_url),
+                        ),
+                    )
+                    logger.debug(f"Updated podcast metadata: {podcast.title}")
+                else:
+                    logger.debug(f"Podcast metadata unchanged: {podcast.title}")
+            else:
+                # Insert new podcast
+                conn.execute(
+                    """
+                    INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, last_processed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        podcast.id,
+                        podcast.created_at.isoformat(),
+                        now.isoformat(),
+                        str(podcast.rss_url),
+                        podcast.title,
+                        podcast.slug,
+                        podcast.description,
+                        podcast.image_url,
+                        podcast.last_processed.isoformat() if podcast.last_processed else None,
+                    ),
+                )
+                logger.debug(f"Inserted new podcast: {podcast.title}")
+
+            return podcast
+
+    def save_episode(self, episode: Episode) -> Episode:
+        """
+        Save or update a single episode.
+
+        Idempotent: Only updates updated_at if data actually changed.
+        Requires: episode.podcast_id must be set.
+
+        Args:
+            episode: Episode model to save
+
+        Returns:
+            The saved episode
+
+        Raises:
+            ValueError: If episode.podcast_id is not set
+        """
+        if not episode.podcast_id:
+            raise ValueError("episode.podcast_id must be set before saving")
+
+        with self._get_connection() as conn:
+            return self._save_episode_idempotent(conn, episode)
+
+    def save_episodes(self, episodes: List[Episode]) -> List[Episode]:
+        """
+        Save or update multiple episodes in a single transaction.
+
+        Idempotent: Only updates updated_at for episodes with actual changes.
+        Requires: Each episode.podcast_id must be set.
+
+        Args:
+            episodes: List of Episode models to save
+
+        Returns:
+            List of saved episodes
+
+        Raises:
+            ValueError: If any episode.podcast_id is not set
+        """
+        if not episodes:
+            return []
+
+        # Validate all episodes have podcast_id
+        for ep in episodes:
+            if not ep.podcast_id:
+                raise ValueError(f"episode.podcast_id must be set for episode: {ep.title}")
+
+        with self._get_connection() as conn:
+            return [self._save_episode_idempotent(conn, ep) for ep in episodes]
+
+    def _save_episode_idempotent(self, conn: sqlite3.Connection, episode: Episode) -> Episode:
+        """
+        Internal: Save episode with idempotent updated_at handling.
+
+        Only updates updated_at if data actually changed.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check if episode exists (by podcast_id + external_id)
+        cursor = conn.execute(
+            """
+            SELECT id, title, slug, description, pub_date, audio_url, duration,
+                   audio_path, downsampled_audio_path, raw_transcript_path,
+                   clean_transcript_path, summary_path
+            FROM episodes
+            WHERE podcast_id = ? AND external_id = ?
+            """,
+            (episode.podcast_id, episode.external_id),
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            # Compare fields to see if anything changed
+            pub_date_str = episode.pub_date.isoformat() if episode.pub_date else None
+
+            changed = (
+                existing["title"] != episode.title
+                or existing["slug"] != episode.slug
+                or existing["description"] != episode.description
+                or existing["pub_date"] != pub_date_str
+                or existing["audio_url"] != str(episode.audio_url)
+                or existing["duration"] != episode.duration
+                or existing["audio_path"] != episode.audio_path
+                or existing["downsampled_audio_path"] != episode.downsampled_audio_path
+                or existing["raw_transcript_path"] != episode.raw_transcript_path
+                or existing["clean_transcript_path"] != episode.clean_transcript_path
+                or existing["summary_path"] != episode.summary_path
+            )
+
+            if changed:
+                # Update with new updated_at
+                conn.execute(
+                    """
+                    UPDATE episodes
+                    SET title = ?, slug = ?, description = ?, pub_date = ?, audio_url = ?,
+                        duration = ?, audio_path = ?, downsampled_audio_path = ?,
+                        raw_transcript_path = ?, clean_transcript_path = ?, summary_path = ?,
+                        updated_at = ?
+                    WHERE podcast_id = ? AND external_id = ?
+                    """,
+                    (
+                        episode.title,
+                        episode.slug,
+                        episode.description,
+                        pub_date_str,
+                        str(episode.audio_url),
+                        episode.duration,
+                        episode.audio_path,
+                        episode.downsampled_audio_path,
+                        episode.raw_transcript_path,
+                        episode.clean_transcript_path,
+                        episode.summary_path,
+                        now.isoformat(),
+                        episode.podcast_id,
+                        episode.external_id,
+                    ),
+                )
+                logger.debug(f"Updated episode: {episode.title}")
+            else:
+                logger.debug(f"Episode unchanged: {episode.title}")
+        else:
+            # Insert new episode
+            conn.execute(
+                """
+                INSERT INTO episodes (
+                    id, podcast_id, created_at, updated_at, external_id, title, slug, description,
+                    pub_date, audio_url, duration, audio_path, downsampled_audio_path,
+                    raw_transcript_path, clean_transcript_path, summary_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    episode.id,
+                    episode.podcast_id,
+                    episode.created_at.isoformat(),
+                    now.isoformat(),
+                    episode.external_id,
+                    episode.title,
+                    episode.slug,
+                    episode.description,
+                    episode.pub_date.isoformat() if episode.pub_date else None,
+                    str(episode.audio_url),
+                    episode.duration,
+                    episode.audio_path,
+                    episode.downsampled_audio_path,
+                    episode.raw_transcript_path,
+                    episode.clean_transcript_path,
+                    episode.summary_path,
+                ),
+            )
+            logger.debug(f"Inserted new episode: {episode.title}")
+
+        return episode
 
     def delete(self, url: str) -> bool:
         """
