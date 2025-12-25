@@ -43,25 +43,25 @@ export default function EpisodeCard({ episode }: EpisodeCardProps) {
   const isProcessed = episode.state === 'cleaned' || episode.state === 'summarized'
 
   const content = (
-    <div className="flex items-start gap-4">
+    <div className="flex items-start gap-3 sm:gap-4">
       {/* Episode number */}
-      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0">
-        <span className="text-sm font-medium text-gray-600">#{episode.episode_index}</span>
+      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0">
+        <span className="text-xs sm:text-sm font-medium text-gray-600">#{episode.episode_index}</span>
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="font-medium text-gray-900 line-clamp-2">{episode.title}</h3>
-          <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${stateColors[episode.state]}`}>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-2">
+          <h3 className="font-medium text-gray-900 line-clamp-2 text-sm sm:text-base">{episode.title}</h3>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 self-start ${stateColors[episode.state]}`}>
             {stateLabels[episode.state]}
           </span>
         </div>
 
-        <div className="flex items-center gap-3 mt-2 text-sm text-gray-500">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-xs sm:text-sm text-gray-500">
           <span>{formatDate(episode.pub_date)}</span>
           {episode.duration && (
             <>
-              <span>•</span>
+              <span className="hidden sm:inline">•</span>
               <span>{formatDuration(episode.duration)}</span>
             </>
           )}
@@ -95,7 +95,7 @@ export default function EpisodeCard({ episode }: EpisodeCardProps) {
   return (
     <Link
       to={`/episodes/${episode.id}`}
-      className="block p-4 bg-white rounded-lg border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all"
+      className="block p-3 sm:p-4 bg-white rounded-lg border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all"
     >
       {content}
     </Link>

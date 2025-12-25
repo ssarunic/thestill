@@ -55,38 +55,38 @@ export default function EpisodeDetail() {
   return (
     <div className="space-y-6">
       {/* Breadcrumb */}
-      <nav className="text-sm">
+      <nav className="text-sm flex flex-wrap items-center gap-1">
         <Link to="/podcasts" className="text-gray-500 hover:text-gray-700">Podcasts</Link>
-        <span className="mx-2 text-gray-400">/</span>
-        <span className="text-gray-500">{episodeLoading ? '...' : episode?.podcast_title}</span>
-        <span className="mx-2 text-gray-400">/</span>
-        <span className="text-gray-900 truncate">{episodeLoading ? '...' : episode?.title}</span>
+        <span className="text-gray-400">/</span>
+        <span className="text-gray-500 truncate max-w-[120px] sm:max-w-none">{episodeLoading ? '...' : episode?.podcast_title}</span>
+        <span className="text-gray-400 hidden sm:inline">/</span>
+        <span className="text-gray-900 truncate max-w-[150px] sm:max-w-none hidden sm:inline">{episodeLoading ? '...' : episode?.title}</span>
       </nav>
 
       {/* Header */}
       {episodeLoading ? (
-        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-6 space-y-4">
-          <div className="h-6 bg-gray-200 rounded w-3/4" />
-          <div className="h-4 bg-gray-200 rounded w-1/2" />
+        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
+          <div className="h-6 bg-gray-200 rounded w-full sm:w-3/4" />
+          <div className="h-4 bg-gray-200 rounded w-2/3 sm:w-1/2" />
           <div className="h-10 bg-gray-200 rounded" />
         </div>
       ) : episode ? (
-        <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{episode.title}</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{episode.title}</h1>
               <p className="text-gray-600 mt-1">{episode.podcast_title}</p>
             </div>
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${stateColors[episode.state]}`}>
+            <span className={`px-3 py-1 rounded-full text-sm font-medium self-start ${stateColors[episode.state]}`}>
               {episode.state === 'summarized' ? 'Ready' : episode.state.charAt(0).toUpperCase() + episode.state.slice(1)}
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-sm text-gray-500">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-sm text-gray-500">
             <span>{formatDate(episode.pub_date)}</span>
             {episode.duration && (
               <>
-                <span>•</span>
+                <span className="hidden sm:inline">•</span>
                 <span>{episode.duration}</span>
               </>
             )}
@@ -112,7 +112,7 @@ export default function EpisodeDetail() {
           <nav className="flex">
             <button
               onClick={() => setActiveTab('summary')}
-              className={`px-6 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab === 'summary'
                   ? 'border-primary-600 text-primary-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -125,7 +125,7 @@ export default function EpisodeDetail() {
             </button>
             <button
               onClick={() => setActiveTab('transcript')}
-              className={`px-6 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab === 'transcript'
                   ? 'border-primary-600 text-primary-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -140,7 +140,7 @@ export default function EpisodeDetail() {
         </div>
 
         {/* Tab Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {activeTab === 'summary' ? (
             <SummaryViewer
               content={summaryData?.content ?? ''}

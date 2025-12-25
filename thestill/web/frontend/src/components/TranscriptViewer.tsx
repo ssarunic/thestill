@@ -1,4 +1,6 @@
 import { useMemo } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 interface TranscriptViewerProps {
   content: string
@@ -7,20 +9,33 @@ interface TranscriptViewerProps {
   episodeState?: string
 }
 
-// Parse transcript markdown to identify speakers, timestamps, etc.
+// Parse transcript to separate speaker segments from regular markdown
 function parseTranscript(content: string) {
   const lines = content.split('\n')
   const segments: Array<{
-    type: 'speaker' | 'text' | 'timestamp' | 'heading'
+    type: 'speaker' | 'markdown'
     content: string
     speaker?: string
     timestamp?: string
   }> = []
 
+  let markdownBuffer: string[] = []
+
+  const flushMarkdown = () => {
+    if (markdownBuffer.length > 0) {
+      segments.push({
+        type: 'markdown',
+        content: markdownBuffer.join('\n'),
+      })
+      markdownBuffer = []
+    }
+  }
+
   for (const line of lines) {
-    // Check for speaker line: [00:00] [SPEAKER_01] or **Speaker Name:**
+    // Check for speaker line: [00:00] [SPEAKER_01] or [00:00:00] [SPEAKER_01]
     const speakerMatch = line.match(/^\[(\d{2}:\d{2}(?::\d{2})?)\]\s*\[([^\]]+)\]\s*(.*)/)
     if (speakerMatch) {
+      flushMarkdown()
       segments.push({
         type: 'speaker',
         timestamp: speakerMatch[1],
@@ -33,6 +48,7 @@ function parseTranscript(content: string) {
     // Check for bold speaker: **Name:**
     const boldSpeakerMatch = line.match(/^\*\*([^*]+)\*\*:\s*(.*)/)
     if (boldSpeakerMatch) {
+      flushMarkdown()
       segments.push({
         type: 'speaker',
         speaker: boldSpeakerMatch[1],
@@ -41,24 +57,11 @@ function parseTranscript(content: string) {
       continue
     }
 
-    // Check for heading
-    if (line.startsWith('#')) {
-      segments.push({
-        type: 'heading',
-        content: line.replace(/^#+\s*/, ''),
-      })
-      continue
-    }
-
-    // Regular text
-    if (line.trim()) {
-      segments.push({
-        type: 'text',
-        content: line,
-      })
-    }
+    // Accumulate as markdown
+    markdownBuffer.push(line)
   }
 
+  flushMarkdown()
   return segments
 }
 
@@ -154,14 +157,6 @@ export default function TranscriptViewer({ content, isLoading, available, episod
   return (
     <div className="transcript-content font-serif leading-relaxed space-y-4">
       {segments.map((segment, index) => {
-        if (segment.type === 'heading') {
-          return (
-            <h3 key={index} className="font-sans font-semibold text-lg text-gray-900 mt-6 mb-2">
-              {segment.content}
-            </h3>
-          )
-        }
-
         if (segment.type === 'speaker') {
           return (
             <div key={index} className="mb-4">
@@ -180,10 +175,13 @@ export default function TranscriptViewer({ content, isLoading, available, episod
           )
         }
 
+        // Render markdown sections with prose styling
         return (
-          <p key={index} className="text-gray-700">
-            {segment.content}
-          </p>
+          <div key={index} className="prose prose-gray max-w-none prose-headings:font-sans prose-h1:text-xl prose-h1:font-semibold prose-h2:text-lg prose-h2:font-semibold prose-h3:text-base prose-h3:font-semibold prose-p:text-gray-700 prose-p:my-2">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {segment.content}
+            </ReactMarkdown>
+          </div>
         )
       })}
     </div>

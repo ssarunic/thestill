@@ -5,12 +5,12 @@ interface AudioPlayerProps {
 
 export default function AudioPlayer({ audioUrl, title }: AudioPlayerProps) {
   return (
-    <div className="bg-gray-100 rounded-lg p-4">
-      <div className="flex items-center gap-4">
+    <div className="bg-gray-100 rounded-lg p-3 sm:p-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         {/* Play button / audio element */}
         <audio
           controls
-          className="flex-1 h-10"
+          className="w-full sm:flex-1 h-10"
           src={audioUrl}
           preload="none"
         >
@@ -24,13 +24,13 @@ export default function AudioPlayer({ audioUrl, title }: AudioPlayerProps) {
           href={audioUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700"
+          className="flex items-center justify-center gap-1 text-sm text-primary-600 hover:text-primary-700 py-2 sm:py-0"
           title="Open in new tab"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
-          Open
+          <span>Open in new tab</span>
         </a>
       </div>
       <p className="text-xs text-gray-500 mt-2 truncate">{title}</p>

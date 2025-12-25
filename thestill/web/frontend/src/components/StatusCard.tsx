@@ -22,14 +22,18 @@ export default function StatusCard({
   subtitle,
 }: StatusCardProps) {
   return (
-    <div className={`rounded-lg border p-6 ${colorClasses[color]}`}>
+    <div className={`rounded-lg border p-4 sm:p-6 ${colorClasses[color]}`}>
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-sm font-medium opacity-80">{label}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
-          {subtitle && <p className="text-sm opacity-60 mt-1">{subtitle}</p>}
+          <p className="text-xs sm:text-sm font-medium opacity-80">{label}</p>
+          <p className="text-2xl sm:text-3xl font-bold mt-1">{value}</p>
+          {subtitle && <p className="text-xs sm:text-sm opacity-60 mt-1">{subtitle}</p>}
         </div>
-        {icon && <div className="opacity-50">{icon}</div>}
+        {icon && (
+          <div className="opacity-50 [&>svg]:w-6 [&>svg]:h-6 sm:[&>svg]:w-8 sm:[&>svg]:h-8">
+            {icon}
+          </div>
+        )}
       </div>
     </div>
   )

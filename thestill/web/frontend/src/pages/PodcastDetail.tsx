@@ -73,36 +73,36 @@ export default function PodcastDetail() {
 
       {/* Header */}
       {podcastLoading ? (
-        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-6">
-          <div className="flex gap-6">
-            <div className="w-24 h-24 bg-gray-200 rounded-lg" />
+        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
+            <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gray-200 rounded-lg mx-auto sm:mx-0 flex-shrink-0" />
             <div className="flex-1 space-y-4">
-              <div className="h-6 bg-gray-200 rounded w-1/2" />
-              <div className="h-4 bg-gray-200 rounded w-3/4" />
-              <div className="h-4 bg-gray-200 rounded w-1/4" />
+              <div className="h-6 bg-gray-200 rounded w-3/4 sm:w-1/2" />
+              <div className="h-4 bg-gray-200 rounded w-full sm:w-3/4" />
+              <div className="h-4 bg-gray-200 rounded w-1/2 sm:w-1/4" />
             </div>
           </div>
         </div>
       ) : podcast ? (
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <div className="flex gap-6">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
             {/* Podcast artwork */}
             {podcast.image_url ? (
               <img
                 src={podcast.image_url}
                 alt={`${podcast.title} artwork`}
-                className="w-24 h-24 rounded-lg object-cover flex-shrink-0"
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0"
               />
             ) : (
-              <div className="w-24 h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                <svg className="w-12 h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0">
+                <svg className="w-10 h-10 sm:w-12 sm:h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
               </div>
             )}
 
-            <div className="flex-1">
-              <h1 className="text-2xl font-bold text-gray-900">{podcast.title}</h1>
+            <div className="flex-1 text-center sm:text-left">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
               {podcast.description ? (
                 <div className="mt-2">
                   <ExpandableDescription html={podcast.description} maxLines={3} />
@@ -111,7 +111,7 @@ export default function PodcastDetail() {
                 <p className="text-gray-600 mt-2">No description</p>
               )}
 
-              <div className="flex items-center gap-6 mt-4 text-sm">
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 sm:gap-6 mt-4 text-sm">
                 <div className="flex items-center gap-1 text-gray-600">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />

@@ -1,121 +1,11 @@
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
 interface SummaryViewerProps {
   content: string
   isLoading?: boolean
   available?: boolean
   episodeState?: string
-}
-
-// Simple markdown renderer for summary content
-function renderMarkdown(content: string) {
-  const lines = content.split('\n')
-  const elements: JSX.Element[] = []
-  let currentList: string[] = []
-  let inBlockquote = false
-  let blockquoteContent: string[] = []
-
-  const flushList = () => {
-    if (currentList.length > 0) {
-      elements.push(
-        <ul key={`list-${elements.length}`} className="list-disc list-inside space-y-1 mb-4 text-gray-700">
-          {currentList.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
-      )
-      currentList = []
-    }
-  }
-
-  const flushBlockquote = () => {
-    if (blockquoteContent.length > 0) {
-      elements.push(
-        <blockquote key={`quote-${elements.length}`} className="border-l-4 border-secondary-400 bg-secondary-50 py-3 px-4 my-4 italic text-gray-700">
-          {blockquoteContent.join(' ')}
-        </blockquote>
-      )
-      blockquoteContent = []
-      inBlockquote = false
-    }
-  }
-
-  for (const line of lines) {
-    // Heading
-    if (line.startsWith('# ')) {
-      flushList()
-      flushBlockquote()
-      elements.push(
-        <h2 key={`h1-${elements.length}`} className="text-xl font-bold text-primary-900 mt-6 mb-3">
-          {line.slice(2)}
-        </h2>
-      )
-      continue
-    }
-    if (line.startsWith('## ')) {
-      flushList()
-      flushBlockquote()
-      elements.push(
-        <h3 key={`h2-${elements.length}`} className="text-lg font-semibold text-primary-800 mt-5 mb-2">
-          {line.slice(3)}
-        </h3>
-      )
-      continue
-    }
-    if (line.startsWith('### ')) {
-      flushList()
-      flushBlockquote()
-      elements.push(
-        <h4 key={`h3-${elements.length}`} className="text-base font-semibold text-primary-700 mt-4 mb-2">
-          {line.slice(4)}
-        </h4>
-      )
-      continue
-    }
-
-    // Blockquote
-    if (line.startsWith('> ')) {
-      flushList()
-      inBlockquote = true
-      blockquoteContent.push(line.slice(2))
-      continue
-    } else if (inBlockquote && line.trim() === '') {
-      flushBlockquote()
-      continue
-    } else if (inBlockquote) {
-      blockquoteContent.push(line)
-      continue
-    }
-
-    // List item
-    if (line.match(/^[-*]\s+/)) {
-      flushBlockquote()
-      currentList.push(line.replace(/^[-*]\s+/, ''))
-      continue
-    }
-
-    // Regular paragraph
-    if (line.trim()) {
-      flushList()
-      flushBlockquote()
-
-      // Handle bold and italic
-      let text = line
-      text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>')
-
-      elements.push(
-        <p
-          key={`p-${elements.length}`}
-          className="text-gray-700 mb-3"
-          dangerouslySetInnerHTML={{ __html: text }}
-        />
-      )
-    }
-  }
-
-  flushList()
-  flushBlockquote()
-
-  return elements
 }
 
 // Get status message based on episode state
@@ -198,8 +88,10 @@ export default function SummaryViewer({ content, isLoading, available, episodeSt
   }
 
   return (
-    <div className="summary-content">
-      {renderMarkdown(content)}
+    <div className="prose prose-gray max-w-none prose-headings:text-primary-900 prose-h2:text-xl prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-lg prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {content}
+      </ReactMarkdown>
     </div>
   )
 }
