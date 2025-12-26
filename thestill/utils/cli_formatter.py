@@ -18,9 +18,13 @@ CLI output formatting utilities.
 Centralizes formatting logic for CLI commands to improve consistency and testability.
 """
 
-from typing import List
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, List
 
 from ..services.podcast_service import EpisodeWithIndex, PodcastWithIndex
+
+if TYPE_CHECKING:
+    from ..services.stats_service import ActivityItem
 
 
 class CLIFormatter:
@@ -80,7 +84,8 @@ class CLIFormatter:
                 "downloaded": "↓",  # Downloaded
                 "downsampled": "♪",  # Audio ready
                 "transcribed": "✎",  # Transcribed (pencil writing)
-                "cleaned": "✓",  # Fully processed
+                "cleaned": "✓",  # Cleaned
+                "summarized": "★",  # Fully processed
             }
             status_icon = state_icons.get(episode.state, "?")
 
@@ -136,3 +141,90 @@ class CLIFormatter:
     def format_completion(message: str) -> str:
         """Format completion message with checkmark."""
         return f"✅ {message}"
+
+    @staticmethod
+    def format_activity_log(items: List["ActivityItem"]) -> str:
+        """
+        Format activity log for display.
+
+        Args:
+            items: List of ActivityItem objects sorted by timestamp descending
+
+        Returns:
+            Formatted string ready for display
+        """
+        if not items:
+            return "No recent activity."
+
+        # State icons (same as format_episode_list)
+        state_icons = {
+            "discovered": "○",  # Not downloaded
+            "downloaded": "↓",  # Downloaded
+            "downsampled": "♪",  # Audio ready
+            "transcribed": "✎",  # Transcribed
+            "cleaned": "✓",  # Cleaned
+            "summarized": "★",  # Fully processed
+        }
+
+        lines = [
+            f"\nRecent Activity ({len(items)} episodes)",
+            "─" * 80,
+            "",
+        ]
+
+        for item in items:
+            icon = state_icons.get(item.state, "?")
+            state_display = item.state.upper()
+
+            # Calculate relative time
+            time_ago = CLIFormatter._format_relative_time(item.timestamp)
+
+            # Truncate long episode titles
+            title = item.episode_title[:50]
+            if len(item.episode_title) > 50:
+                title = title + "..."
+
+            lines.append(f"  {icon} {state_display:12} | {item.podcast_title} > {title}")
+            lines.append(f"     {time_ago}")
+            if item.pub_date:
+                lines.append(f"     Published: {item.pub_date.strftime('%Y-%m-%d')}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_relative_time(timestamp: datetime) -> str:
+        """
+        Format timestamp as relative time (e.g., '2 hours ago').
+
+        Args:
+            timestamp: Datetime to format
+
+        Returns:
+            Relative time string
+        """
+        # Ensure timestamp is timezone-aware
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        delta = now - timestamp
+
+        seconds = int(delta.total_seconds())
+
+        if seconds < 0:
+            return "just now"
+        elif seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        elif seconds < 86400:
+            hours = seconds // 3600
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif seconds < 604800:
+            days = seconds // 86400
+            return f"{days} day{'s' if days != 1 else ''} ago"
+        else:
+            weeks = seconds // 604800
+            return f"{weeks} week{'s' if weeks != 1 else ''} ago"

@@ -36,12 +36,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..core.feed_manager import PodcastFeedManager
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .routes import api_dashboard, api_episodes, api_podcasts, health, webhooks
+from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, health, webhooks
+from .task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +68,22 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize shared services (same pattern as CLI)
     path_manager = PathManager(str(config.storage_path))
     repository = SqlitePodcastRepository(db_path=config.database_path)
+    feed_manager = PodcastFeedManager(repository, path_manager)
     podcast_service = PodcastService(config.storage_path, repository, path_manager)
+    refresh_service = RefreshService(feed_manager, podcast_service)
     stats_service = StatsService(config.storage_path, repository, path_manager)
+    task_manager = get_task_manager()
 
     # Create application state for dependency injection
     app_state = AppState(
         config=config,
         path_manager=path_manager,
         repository=repository,
+        feed_manager=feed_manager,
         podcast_service=podcast_service,
+        refresh_service=refresh_service,
         stats_service=stats_service,
+        task_manager=task_manager,
     )
 
     @asynccontextmanager
@@ -125,6 +133,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+    app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"

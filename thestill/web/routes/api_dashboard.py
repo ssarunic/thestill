@@ -107,33 +107,30 @@ async def get_recent_activity(
     Returns:
         List of recently processed episodes with pagination info.
     """
-    from ...models.podcast import EpisodeState
-
     podcasts = state.repository.get_all()
 
-    # Collect all processed episodes with their podcast info
-    processed_episodes = []
+    # Collect all episodes with their podcast info (all states)
+    all_episodes = []
     for podcast in podcasts:
         for episode in podcast.episodes:
-            if episode.state in (EpisodeState.CLEANED, EpisodeState.SUMMARIZED):
-                processed_episodes.append(
-                    {
-                        "episode_id": episode.id,
-                        "episode_title": episode.title,
-                        "podcast_title": podcast.title,
-                        "podcast_id": podcast.id,
-                        "action": "summarized" if episode.state == EpisodeState.SUMMARIZED else "cleaned",
-                        "timestamp": episode.updated_at,
-                        "pub_date": episode.pub_date,
-                    }
-                )
+            all_episodes.append(
+                {
+                    "episode_id": episode.id,
+                    "episode_title": episode.title,
+                    "podcast_title": podcast.title,
+                    "podcast_id": podcast.id,
+                    "action": episode.state.value,  # discovered, downloaded, downsampled, transcribed, cleaned, summarized
+                    "timestamp": episode.updated_at,
+                    "pub_date": episode.pub_date,
+                }
+            )
 
     # Sort by updated_at descending
-    processed_episodes.sort(key=lambda x: x["timestamp"] or datetime.min, reverse=True)
-    total = len(processed_episodes)
+    all_episodes.sort(key=lambda x: x["timestamp"] or datetime.min, reverse=True)
+    total = len(all_episodes)
 
     # Apply pagination
-    items = processed_episodes[offset : offset + limit]
+    items = all_episodes[offset : offset + limit]
 
     has_more = offset + len(items) < total
     next_offset = offset + limit if has_more else None

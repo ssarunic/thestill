@@ -2,6 +2,7 @@ import { useDashboardStats, useRecentActivityInfinite } from '../hooks/useApi'
 import StatusCard from '../components/StatusCard'
 import ActivityFeed from '../components/ActivityFeed'
 import PipelineStatus from '../components/PipelineStatus'
+import RefreshButton from '../components/RefreshButton'
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats()
@@ -30,9 +31,12 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 mt-1">Overview of your podcast processing pipeline</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-500 mt-1">Overview of your podcast processing pipeline</p>
+        </div>
+        <RefreshButton />
       </div>
 
       {/* Stats Grid */}

@@ -33,10 +33,12 @@ from typing import TYPE_CHECKING
 from fastapi import Request
 
 if TYPE_CHECKING:
+    from ..core.feed_manager import PodcastFeedManager
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
-    from ..services import PodcastService, StatsService
+    from ..services import PodcastService, RefreshService, StatsService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
+    from .task_manager import TaskManager
 
 
 @dataclass
@@ -51,15 +53,21 @@ class AppState:
         config: Application configuration
         path_manager: Centralized path management
         repository: SQLite podcast repository
+        feed_manager: Feed manager for RSS operations
         podcast_service: Podcast management service
+        refresh_service: Refresh service for feed discovery
         stats_service: Statistics service
+        task_manager: Task manager for long-running operations
     """
 
     config: "Config"
     path_manager: "PathManager"
     repository: "SqlitePodcastRepository"
+    feed_manager: "PodcastFeedManager"
     podcast_service: "PodcastService"
+    refresh_service: "RefreshService"
     stats_service: "StatsService"
+    task_manager: "TaskManager"
 
 
 def get_app_state(request: Request) -> AppState:

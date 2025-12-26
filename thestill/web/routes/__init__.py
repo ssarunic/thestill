@@ -21,8 +21,9 @@ This package contains FastAPI routers for different endpoint groups:
 - api_dashboard: Dashboard statistics and activity
 - api_podcasts: Podcast listing and details
 - api_episodes: Episode content (transcripts, summaries)
+- api_commands: Command execution (refresh, download, etc.)
 """
 
-from . import api_dashboard, api_episodes, api_podcasts, health, webhooks
+from . import api_commands, api_dashboard, api_episodes, api_podcasts, health, webhooks
 
-__all__ = ["health", "webhooks", "api_dashboard", "api_podcasts", "api_episodes"]
+__all__ = ["health", "webhooks", "api_dashboard", "api_podcasts", "api_episodes", "api_commands"]

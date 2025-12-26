@@ -1,4 +1,4 @@
-import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getDashboardStats,
   getRecentActivity,
@@ -8,7 +8,12 @@ import {
   getEpisode,
   getEpisodeTranscript,
   getEpisodeSummary,
+  startRefresh,
+  getRefreshStatus,
+  addPodcast,
+  getAddPodcastStatus,
 } from '../api/client'
+import type { RefreshRequest, AddPodcastRequest } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -105,5 +110,67 @@ export function useEpisodeSummary(episodeId: string) {
     // Don't poll summary content
     refetchInterval: false,
     staleTime: 60000, // 1 minute
+  })
+}
+
+// Commands hooks
+export function useRefreshStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['commands', 'refresh', 'status'],
+    queryFn: getRefreshStatus,
+    enabled,
+    refetchInterval: (query) => {
+      // Poll every 1 second while running, stop when complete
+      const status = query.state.data?.status
+      return status === 'running' ? 1000 : false
+    },
+  })
+}
+
+export function useStartRefresh() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (request: RefreshRequest = {}) => startRefresh(request),
+    onSuccess: () => {
+      // Start polling the status
+      queryClient.invalidateQueries({ queryKey: ['commands', 'refresh', 'status'] })
+    },
+    onSettled: () => {
+      // When refresh completes, invalidate dashboard data to show new episodes
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+    },
+  })
+}
+
+// Add Podcast hooks
+export function useAddPodcastStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['commands', 'add', 'status'],
+    queryFn: getAddPodcastStatus,
+    enabled,
+    refetchInterval: (query) => {
+      // Poll every 1 second while running, stop when complete
+      const status = query.state.data?.status
+      return status === 'running' ? 1000 : false
+    },
+  })
+}
+
+export function useAddPodcast() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (request: AddPodcastRequest) => addPodcast(request),
+    onSuccess: () => {
+      // Start polling the status
+      queryClient.invalidateQueries({ queryKey: ['commands', 'add', 'status'] })
+    },
+    onSettled: () => {
+      // When add completes, invalidate podcasts list to show new podcast
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 }

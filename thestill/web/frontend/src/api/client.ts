@@ -6,6 +6,12 @@ import type {
   EpisodesResponse,
   EpisodeDetailResponse,
   ContentResponse,
+  RefreshRequest,
+  RefreshResponse,
+  RefreshTaskStatus,
+  AddPodcastRequest,
+  AddPodcastResponse,
+  AddPodcastTaskStatus,
 } from './types'
 
 const API_BASE = '/api'
@@ -55,4 +61,48 @@ export async function getEpisodeTranscript(episodeId: string): Promise<ContentRe
 
 export async function getEpisodeSummary(episodeId: string): Promise<ContentResponse> {
   return fetchApi<ContentResponse>(`/episodes/${episodeId}/summary`)
+}
+
+// Commands API
+export async function startRefresh(request: RefreshRequest = {}): Promise<RefreshResponse> {
+  const response = await fetch(`${API_BASE}/commands/refresh`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail?.error || `API error: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function getRefreshStatus(): Promise<RefreshTaskStatus> {
+  return fetchApi<RefreshTaskStatus>('/commands/refresh/status')
+}
+
+// Add Podcast API
+export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcastResponse> {
+  const response = await fetch(`${API_BASE}/commands/add`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail?.error || `API error: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function getAddPodcastStatus(): Promise<AddPodcastTaskStatus> {
+  return fetchApi<AddPodcastTaskStatus>('/commands/add/status')
 }

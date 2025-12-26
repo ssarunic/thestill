@@ -19,7 +19,7 @@ Stats service - System statistics and status information
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Union
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -27,6 +27,18 @@ from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
+
+
+class ActivityItem(BaseModel):
+    """Recent activity item for tracking episode state changes."""
+
+    episode_id: str
+    episode_title: str
+    podcast_title: str
+    podcast_id: str
+    state: str  # EpisodeState value (discovered, downloaded, etc.)
+    timestamp: datetime  # episode.updated_at
+    pub_date: Optional[datetime] = None
 
 
 class SystemStats(BaseModel):
@@ -163,3 +175,46 @@ class StatsService:
         )
 
         return stats
+
+    def get_recent_activity(self, limit: int = 20) -> List[ActivityItem]:
+        """
+        Get recent processing activity across all episodes.
+
+        Returns episodes sorted by updated_at descending (most recent first).
+        Uses updated_at as a proxy for when the episode transitioned to
+        its current state.
+
+        Args:
+            limit: Maximum number of items to return (default 20)
+
+        Returns:
+            List of ActivityItem objects sorted by timestamp descending
+        """
+        logger.debug(f"Gathering recent activity (limit={limit})")
+
+        podcasts = self.repository.get_all()
+
+        # Collect all episodes with their podcast info
+        activity_items: List[ActivityItem] = []
+        for podcast in podcasts:
+            for episode in podcast.episodes:
+                activity_items.append(
+                    ActivityItem(
+                        episode_id=episode.id,
+                        episode_title=episode.title,
+                        podcast_title=podcast.title,
+                        podcast_id=podcast.id,
+                        state=episode.state.value,
+                        timestamp=episode.updated_at,
+                        pub_date=episode.pub_date,
+                    )
+                )
+
+        # Sort by updated_at descending (most recent first)
+        activity_items.sort(key=lambda x: x.timestamp, reverse=True)
+
+        # Apply limit
+        result = activity_items[:limit]
+
+        logger.info(f"Found {len(activity_items)} total episodes, returning {len(result)}")
+        return result

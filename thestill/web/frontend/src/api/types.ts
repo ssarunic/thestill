@@ -145,3 +145,70 @@ export interface ContentResponse {
   content: string
   available: boolean
 }
+
+// Commands API Types
+export interface RefreshRequest {
+  podcast_id?: string
+  max_episodes?: number
+  dry_run?: boolean
+}
+
+export interface RefreshResponse {
+  status: string
+  message: string
+  task_type: string
+}
+
+export interface RefreshTaskStatus {
+  task_type: string
+  status: 'none' | 'pending' | 'running' | 'completed' | 'failed'
+  started_at: string | null
+  completed_at: string | null
+  progress: number
+  message: string
+  result: {
+    total_episodes: number
+    podcasts_refreshed: number
+    dry_run: boolean
+    episodes_by_podcast: Array<{
+      podcast: string
+      new_episodes: number
+    }>
+    podcast_filter?: string
+  } | null
+  error: string | null
+}
+
+export interface RefreshError {
+  error: string
+  started_at: string | null
+  progress: number
+  message: string
+}
+
+// Add Podcast API Types
+export interface AddPodcastRequest {
+  url: string
+}
+
+export interface AddPodcastResponse {
+  status: string
+  message: string
+  task_type: string
+}
+
+export interface AddPodcastTaskStatus {
+  task_type: string
+  status: 'none' | 'pending' | 'running' | 'completed' | 'failed'
+  started_at: string | null
+  completed_at: string | null
+  progress: number
+  message: string
+  result: {
+    podcast_title: string
+    podcast_id: string
+    rss_url: string
+    episodes_count: number
+  } | null
+  error: string | null
+}

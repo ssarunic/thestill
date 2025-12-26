@@ -1126,6 +1126,23 @@ def status(ctx):
 
 
 @main.command()
+@click.option("--limit", "-l", type=int, default=20, help="Number of items to show (default: 20)")
+@click.pass_context
+def activity(ctx, limit):
+    """Show recent processing activity log"""
+    if ctx.obj is None:
+        click.echo("Configuration not loaded. Please check your setup.", err=True)
+        ctx.exit(1)
+
+    # Get activity from service
+    items = ctx.obj.stats_service.get_recent_activity(limit=limit)
+
+    # Format and display
+    output = CLIFormatter.format_activity_log(items)
+    click.echo(output)
+
+
+@main.command()
 @click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
 @click.pass_context
 def cleanup(ctx, dry_run):

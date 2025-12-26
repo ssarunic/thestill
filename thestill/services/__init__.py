@@ -21,7 +21,7 @@ presentation layers (CLI, MCP server, web API, etc.)
 
 from .podcast_service import EpisodeWithIndex, PodcastService, PodcastWithIndex
 from .refresh_service import RefreshResult, RefreshService
-from .stats_service import StatsService, SystemStats
+from .stats_service import ActivityItem, StatsService, SystemStats
 
 __all__ = [
     "PodcastService",
@@ -31,4 +31,5 @@ __all__ = [
     "RefreshResult",
     "StatsService",
     "SystemStats",
+    "ActivityItem",
 ]

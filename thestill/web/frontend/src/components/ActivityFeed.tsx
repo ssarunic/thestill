@@ -27,10 +27,12 @@ function formatTimestamp(timestamp: string): string {
 
 function ActionBadge({ action }: { action: string }) {
   const colors: Record<string, string> = {
-    summarized: 'bg-green-100 text-green-700',
-    cleaned: 'bg-blue-100 text-blue-700',
+    discovered: 'bg-gray-100 text-gray-600',
+    downloaded: 'bg-yellow-100 text-yellow-700',
+    downsampled: 'bg-orange-100 text-orange-700',
     transcribed: 'bg-purple-100 text-purple-700',
-    downloaded: 'bg-gray-100 text-gray-700',
+    cleaned: 'bg-blue-100 text-blue-700',
+    summarized: 'bg-green-100 text-green-700',
   }
 
   return (
