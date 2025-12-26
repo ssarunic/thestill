@@ -38,29 +38,29 @@ export async function getPodcasts(limit = 12, offset = 0): Promise<PodcastsRespo
   return fetchApi<PodcastsResponse>(`/podcasts?limit=${limit}&offset=${offset}`)
 }
 
-export async function getPodcast(podcastId: string): Promise<PodcastDetailResponse> {
-  return fetchApi<PodcastDetailResponse>(`/podcasts/${podcastId}`)
+export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResponse> {
+  return fetchApi<PodcastDetailResponse>(`/podcasts/${podcastSlug}`)
 }
 
 export async function getPodcastEpisodes(
-  podcastId: string,
+  podcastSlug: string,
   limit = 20,
   offset = 0
 ): Promise<EpisodesResponse> {
-  return fetchApi<EpisodesResponse>(`/podcasts/${podcastId}/episodes?limit=${limit}&offset=${offset}`)
+  return fetchApi<EpisodesResponse>(`/podcasts/${podcastSlug}/episodes?limit=${limit}&offset=${offset}`)
 }
 
-// Episodes API
-export async function getEpisode(episodeId: string): Promise<EpisodeDetailResponse> {
-  return fetchApi<EpisodeDetailResponse>(`/episodes/${episodeId}`)
+// Episodes API (accessed via podcast slug + episode slug)
+export async function getEpisode(podcastSlug: string, episodeSlug: string): Promise<EpisodeDetailResponse> {
+  return fetchApi<EpisodeDetailResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}`)
 }
 
-export async function getEpisodeTranscript(episodeId: string): Promise<ContentResponse> {
-  return fetchApi<ContentResponse>(`/episodes/${episodeId}/transcript`)
+export async function getEpisodeTranscript(podcastSlug: string, episodeSlug: string): Promise<ContentResponse> {
+  return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/transcript`)
 }
 
-export async function getEpisodeSummary(episodeId: string): Promise<ContentResponse> {
-  return fetchApi<ContentResponse>(`/episodes/${episodeId}/summary`)
+export async function getEpisodeSummary(podcastSlug: string, episodeSlug: string): Promise<ContentResponse> {
+  return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/summary`)
 }
 
 // Commands API

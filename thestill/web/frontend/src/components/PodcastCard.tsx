@@ -12,7 +12,7 @@ export default function PodcastCard({ podcast }: PodcastCardProps) {
 
   return (
     <Link
-      to={`/podcasts/${podcast.index}`}
+      to={`/podcasts/${podcast.slug}`}
       className="block bg-white rounded-lg border border-gray-200 hover:border-gray-300 hover:shadow-md transition-all overflow-hidden"
     >
       <div className="p-6">

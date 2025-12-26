@@ -66,27 +66,21 @@ async def get_podcasts(
     }
 
 
-@router.get("/{podcast_id}")
+@router.get("/{podcast_slug}")
 async def get_podcast(
-    podcast_id: str,
+    podcast_slug: str,
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """
-    Get a specific podcast by ID.
+    Get a specific podcast by slug.
 
     Args:
-        podcast_id: Podcast index (1-based), UUID, or RSS URL
+        podcast_slug: URL-safe podcast identifier
 
     Returns:
         Podcast details with episode count.
     """
-    # Try to parse as int for index-based lookup
-    try:
-        pid = int(podcast_id)
-    except ValueError:
-        pid = podcast_id
-
-    podcast = state.podcast_service.get_podcast(pid)
+    podcast = state.repository.get_by_slug(podcast_slug)
 
     if not podcast:
         raise HTTPException(status_code=404, detail="Podcast not found")
@@ -113,9 +107,9 @@ async def get_podcast(
     }
 
 
-@router.get("/{podcast_id}/episodes")
+@router.get("/{podcast_slug}/episodes")
 async def get_podcast_episodes(
-    podcast_id: str,
+    podcast_slug: str,
     limit: int = 20,
     offset: int = 0,
     since_hours: Optional[int] = None,
@@ -125,7 +119,7 @@ async def get_podcast_episodes(
     Get episodes for a specific podcast with pagination.
 
     Args:
-        podcast_id: Podcast index (1-based), UUID, or RSS URL
+        podcast_slug: URL-safe podcast identifier
         limit: Maximum number of episodes to return (default 20)
         offset: Number of episodes to skip for pagination (default 0)
         since_hours: Only include episodes published in last N hours
@@ -133,18 +127,16 @@ async def get_podcast_episodes(
     Returns:
         List of episodes with their metadata, processing status, and pagination info.
     """
-    # Try to parse as int for index-based lookup
-    try:
-        pid = int(podcast_id)
-    except ValueError:
-        pid = podcast_id
+    podcast = state.repository.get_by_slug(podcast_slug)
+    if not podcast:
+        raise HTTPException(status_code=404, detail="Podcast not found")
 
     # Get total count for pagination
-    total = state.podcast_service.get_episodes_count(pid, since_hours=since_hours)
+    total = state.podcast_service.get_episodes_count(podcast.id, since_hours=since_hours)
     if total is None:
         raise HTTPException(status_code=404, detail="Podcast not found")
 
-    episodes = state.podcast_service.get_episodes(pid, limit=limit, offset=offset, since_hours=since_hours)
+    episodes = state.podcast_service.get_episodes(podcast.id, limit=limit, offset=offset, since_hours=since_hours)
 
     if episodes is None:
         raise HTTPException(status_code=404, detail="Podcast not found")

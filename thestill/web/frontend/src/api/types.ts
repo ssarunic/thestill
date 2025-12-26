@@ -23,8 +23,10 @@ export interface DashboardStats {
 export interface ActivityItem {
   episode_id: string
   episode_title: string
+  episode_slug: string
   podcast_title: string
   podcast_id: string
+  podcast_slug: string
   action: string
   timestamp: string
   pub_date: string | null

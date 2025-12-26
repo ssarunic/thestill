@@ -56,57 +56,57 @@ export function usePodcastsInfinite(limit = 12) {
   })
 }
 
-export function usePodcast(podcastId: string) {
+export function usePodcast(podcastSlug: string) {
   return useQuery({
-    queryKey: ['podcasts', podcastId],
-    queryFn: () => getPodcast(podcastId),
-    enabled: !!podcastId,
+    queryKey: ['podcasts', podcastSlug],
+    queryFn: () => getPodcast(podcastSlug),
+    enabled: !!podcastSlug,
   })
 }
 
-export function usePodcastEpisodes(podcastId: string, limit = 20) {
+export function usePodcastEpisodes(podcastSlug: string, limit = 20) {
   return useQuery({
-    queryKey: ['podcasts', podcastId, 'episodes', limit],
-    queryFn: () => getPodcastEpisodes(podcastId, limit),
-    enabled: !!podcastId,
+    queryKey: ['podcasts', podcastSlug, 'episodes', limit],
+    queryFn: () => getPodcastEpisodes(podcastSlug, limit),
+    enabled: !!podcastSlug,
   })
 }
 
-export function usePodcastEpisodesInfinite(podcastId: string, limit = 20) {
+export function usePodcastEpisodesInfinite(podcastSlug: string, limit = 20) {
   return useInfiniteQuery({
-    queryKey: ['podcasts', podcastId, 'episodes', 'infinite', limit],
-    queryFn: ({ pageParam = 0 }) => getPodcastEpisodes(podcastId, limit, pageParam),
-    enabled: !!podcastId,
+    queryKey: ['podcasts', podcastSlug, 'episodes', 'infinite', limit],
+    queryFn: ({ pageParam = 0 }) => getPodcastEpisodes(podcastSlug, limit, pageParam),
+    enabled: !!podcastSlug,
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
   })
 }
 
 // Episode hooks
-export function useEpisode(episodeId: string) {
+export function useEpisode(podcastSlug: string, episodeSlug: string) {
   return useQuery({
-    queryKey: ['episodes', episodeId],
-    queryFn: () => getEpisode(episodeId),
-    enabled: !!episodeId,
+    queryKey: ['episodes', podcastSlug, episodeSlug],
+    queryFn: () => getEpisode(podcastSlug, episodeSlug),
+    enabled: !!podcastSlug && !!episodeSlug,
   })
 }
 
-export function useEpisodeTranscript(episodeId: string) {
+export function useEpisodeTranscript(podcastSlug: string, episodeSlug: string) {
   return useQuery({
-    queryKey: ['episodes', episodeId, 'transcript'],
-    queryFn: () => getEpisodeTranscript(episodeId),
-    enabled: !!episodeId,
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'transcript'],
+    queryFn: () => getEpisodeTranscript(podcastSlug, episodeSlug),
+    enabled: !!podcastSlug && !!episodeSlug,
     // Don't poll transcript content
     refetchInterval: false,
     staleTime: 60000, // 1 minute
   })
 }
 
-export function useEpisodeSummary(episodeId: string) {
+export function useEpisodeSummary(podcastSlug: string, episodeSlug: string) {
   return useQuery({
-    queryKey: ['episodes', episodeId, 'summary'],
-    queryFn: () => getEpisodeSummary(episodeId),
-    enabled: !!episodeId,
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'summary'],
+    queryFn: () => getEpisodeSummary(podcastSlug, episodeSlug),
+    enabled: !!podcastSlug && !!episodeSlug,
     // Don't poll summary content
     refetchInterval: false,
     staleTime: 60000, // 1 minute

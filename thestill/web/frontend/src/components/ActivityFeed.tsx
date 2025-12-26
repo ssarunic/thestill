@@ -108,7 +108,7 @@ export default function ActivityFeed({
       {items.map((item) => (
         <Link
           key={item.episode_id}
-          to={`/episodes/${item.episode_id}`}
+          to={`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`}
           className="flex items-start gap-4 p-4 bg-white rounded-lg border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all"
         >
           <div className="w-10 h-10 bg-secondary-100 rounded-full flex items-center justify-center flex-shrink-0">

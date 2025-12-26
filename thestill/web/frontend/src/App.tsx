@@ -11,8 +11,8 @@ function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="podcasts" element={<Podcasts />} />
-        <Route path="podcasts/:podcastId" element={<PodcastDetail />} />
-        <Route path="episodes/:episodeId" element={<EpisodeDetail />} />
+        <Route path="podcasts/:podcastSlug" element={<PodcastDetail />} />
+        <Route path="podcasts/:podcastSlug/episodes/:episodeSlug" element={<EpisodeDetail />} />
       </Route>
     </Routes>
   )

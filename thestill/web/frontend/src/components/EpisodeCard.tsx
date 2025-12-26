@@ -94,7 +94,7 @@ export default function EpisodeCard({ episode }: EpisodeCardProps) {
 
   return (
     <Link
-      to={`/episodes/${episode.id}`}
+      to={`/podcasts/${episode.podcast_slug}/episodes/${episode.slug}`}
       className="block p-3 sm:p-4 bg-white rounded-lg border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all"
     >
       {content}

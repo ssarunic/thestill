@@ -5,15 +5,15 @@ import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
 
 export default function PodcastDetail() {
-  const { podcastId } = useParams<{ podcastId: string }>()
-  const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastId!)
+  const { podcastSlug } = useParams<{ podcastSlug: string }>()
+  const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastSlug!)
   const {
     data: episodesData,
     isLoading: episodesLoading,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = usePodcastEpisodesInfinite(podcastId!)
+  } = usePodcastEpisodesInfinite(podcastSlug!)
 
   // Intersection Observer for infinite scroll
   const loadMoreRef = useRef<HTMLDivElement>(null)

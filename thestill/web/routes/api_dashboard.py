@@ -117,8 +117,10 @@ async def get_recent_activity(
                 {
                     "episode_id": episode.id,
                     "episode_title": episode.title,
+                    "episode_slug": episode.slug,
                     "podcast_title": podcast.title,
                     "podcast_id": podcast.id,
+                    "podcast_slug": podcast.slug,
                     "action": episode.state.value,  # discovered, downloaded, downsampled, transcribed, cleaned, summarized
                     "timestamp": episode.updated_at,
                     "pub_date": episode.pub_date,

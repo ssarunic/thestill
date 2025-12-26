@@ -19,11 +19,10 @@ This package contains FastAPI routers for different endpoint groups:
 - health: Health check and status endpoints
 - webhooks: Webhook endpoints for external service callbacks (ElevenLabs)
 - api_dashboard: Dashboard statistics and activity
-- api_podcasts: Podcast listing and details
-- api_episodes: Episode content (transcripts, summaries)
+- api_podcasts: Podcast and episode listing/details (slug-based URLs)
 - api_commands: Command execution (refresh, download, etc.)
 """
 
-from . import api_commands, api_dashboard, api_episodes, api_podcasts, health, webhooks
+from . import api_commands, api_dashboard, api_podcasts, health, webhooks
 
-__all__ = ["health", "webhooks", "api_dashboard", "api_podcasts", "api_episodes", "api_commands"]
+__all__ = ["health", "webhooks", "api_dashboard", "api_podcasts", "api_commands"]

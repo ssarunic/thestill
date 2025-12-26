@@ -29,12 +29,12 @@ function formatDate(dateStr: string | null): string {
 }
 
 export default function EpisodeDetail() {
-  const { episodeId } = useParams<{ episodeId: string }>()
+  const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
 
-  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(episodeId!)
-  const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(episodeId!)
-  const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(episodeId!)
+  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
+  const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
+  const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(podcastSlug!, episodeSlug!)
 
   if (episodeError) {
     return (
@@ -58,7 +58,7 @@ export default function EpisodeDetail() {
       <nav className="text-sm flex flex-wrap items-center gap-1">
         <Link to="/podcasts" className="text-gray-500 hover:text-gray-700">Podcasts</Link>
         <span className="text-gray-400">/</span>
-        <span className="text-gray-500 truncate max-w-[120px] sm:max-w-none">{episodeLoading ? '...' : episode?.podcast_title}</span>
+        <Link to={`/podcasts/${podcastSlug}`} className="text-gray-500 hover:text-gray-700 truncate max-w-[120px] sm:max-w-none">{episodeLoading ? '...' : episode?.podcast_title}</Link>
         <span className="text-gray-400 hidden sm:inline">/</span>
         <span className="text-gray-900 truncate max-w-[150px] sm:max-w-none hidden sm:inline">{episodeLoading ? '...' : episode?.title}</span>
       </nav>
