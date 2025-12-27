@@ -195,6 +195,10 @@ class WhisperTranscriber(Transcriber):
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
         cleaning_config: Optional[Dict] = None,
+        podcast_title: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file with optional custom prompt for better accuracy.
@@ -208,7 +212,13 @@ class WhisperTranscriber(Transcriber):
                 WARNING: Causes timestamp drift - transcripts won't align with original
             clean_transcript: Whether to clean transcript with LLM
             cleaning_config: Configuration dict for transcript cleaning
+            podcast_title: Not used for local transcription (API compatibility)
+            episode_id: Not used for local transcription (API compatibility)
+            podcast_slug: Not used for local transcription (API compatibility)
+            episode_slug: Not used for local transcription (API compatibility)
         """
+        # Note: podcast_title, episode_id, podcast_slug, episode_slug are unused
+        # They exist for API compatibility with cloud transcribers (Google, ElevenLabs)
         try:
             self.load_model()
 
@@ -612,6 +622,10 @@ class WhisperXTranscriber(Transcriber):
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
         cleaning_config: Optional[Dict] = None,
+        podcast_title: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
     ) -> Optional[Transcript]:
         """
         Transcribe audio with optional speaker diarization.
@@ -624,7 +638,13 @@ class WhisperXTranscriber(Transcriber):
             preprocess_audio: Whether to preprocess audio
             clean_transcript: Whether to clean transcript with LLM
             cleaning_config: Configuration for transcript cleaning
+            podcast_title: Not used for local transcription (API compatibility)
+            episode_id: Not used for local transcription (API compatibility)
+            podcast_slug: Not used for local transcription (API compatibility)
+            episode_slug: Not used for local transcription (API compatibility)
         """
+        # Note: podcast_title, episode_id, podcast_slug, episode_slug are unused
+        # They exist for API compatibility with cloud transcribers (Google, ElevenLabs)
         try:
             if not WHISPERX_AVAILABLE:
                 self._load_whisper_fallback()
@@ -636,6 +656,10 @@ class WhisperXTranscriber(Transcriber):
                     preprocess_audio,
                     clean_transcript,
                     cleaning_config,
+                    podcast_title,
+                    episode_id,
+                    podcast_slug,
+                    episode_slug,
                 )
 
             self.load_model()
@@ -650,6 +674,10 @@ class WhisperXTranscriber(Transcriber):
                     preprocess_audio,
                     clean_transcript,
                     cleaning_config,
+                    podcast_title,
+                    episode_id,
+                    podcast_slug,
+                    episode_slug,
                 )
 
             print(f"Starting transcription of: {Path(audio_path).name}")

@@ -21,7 +21,7 @@ custom prompts or word-level timestamps like Whisper does.
 
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 
@@ -73,6 +73,13 @@ class ParakeetTranscriber(Transcriber):
         output_path: Optional[str] = None,
         language: str = "en",
         custom_prompt: Optional[str] = None,
+        preprocess_audio: bool = False,
+        clean_transcript: bool = False,
+        cleaning_config: Optional[Dict] = None,
+        podcast_title: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using Parakeet model.
@@ -82,10 +89,18 @@ class ParakeetTranscriber(Transcriber):
             output_path: Path to save transcript JSON
             language: Language code (ignored - Parakeet is English-only)
             custom_prompt: Custom prompt (ignored - Parakeet doesn't support prompts)
+            preprocess_audio: Not used (API compatibility)
+            clean_transcript: Not used (API compatibility)
+            cleaning_config: Not used (API compatibility)
+            podcast_title: Not used (API compatibility)
+            episode_id: Not used (API compatibility)
+            podcast_slug: Not used (API compatibility)
+            episode_slug: Not used (API compatibility)
 
         Returns:
             Transcript object or None on error
         """
+        # Note: Extra parameters are unused - they exist for API compatibility
         try:
             self.load_model()
 

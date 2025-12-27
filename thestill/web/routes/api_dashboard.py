@@ -19,11 +19,12 @@ Provides statistics and recent activity for the dashboard.
 """
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 
 router = APIRouter()
@@ -124,6 +125,8 @@ async def get_recent_activity(
                     "action": episode.state.value,  # discovered, downloaded, downsampled, transcribed, cleaned, summarized
                     "timestamp": episode.updated_at,
                     "pub_date": episode.pub_date,
+                    "duration": episode.duration,
+                    "duration_formatted": format_duration(episode.duration) if episode.duration else None,
                 }
             )
 

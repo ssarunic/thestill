@@ -25,6 +25,12 @@ function formatTimestamp(timestamp: string): string {
   return date.toLocaleDateString()
 }
 
+function formatPubDate(pubDate: string | null): string | null {
+  if (!pubDate) return null
+  const date = new Date(pubDate)
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 function ActionBadge({ action }: { action: string }) {
   const colors: Record<string, string> = {
     discovered: 'bg-gray-100 text-gray-600',
@@ -121,7 +127,21 @@ export default function ActivityFeed({
               <h4 className="font-medium text-gray-900 truncate">{item.episode_title}</h4>
               <ActionBadge action={item.action} />
             </div>
-            <p className="text-sm text-gray-500 truncate">{item.podcast_title}</p>
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <span className="truncate">{item.podcast_title}</span>
+              {(item.pub_date || item.duration_formatted) && (
+                <span className="text-gray-300">•</span>
+              )}
+              {item.pub_date && (
+                <span className="flex-shrink-0">{formatPubDate(item.pub_date)}</span>
+              )}
+              {item.pub_date && item.duration_formatted && (
+                <span className="text-gray-300">•</span>
+              )}
+              {item.duration_formatted && (
+                <span className="flex-shrink-0">{item.duration_formatted}</span>
+              )}
+            </div>
           </div>
           <div className="text-xs text-gray-400 flex-shrink-0">
             {formatTimestamp(item.timestamp)}
