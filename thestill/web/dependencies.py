@@ -34,6 +34,8 @@ from fastapi import Request
 
 if TYPE_CHECKING:
     from ..core.feed_manager import PodcastFeedManager
+    from ..core.queue_manager import QueueManager
+    from ..core.task_worker import TaskWorker
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..services import PodcastService, RefreshService, StatsService
     from ..utils.config import Config
@@ -58,6 +60,8 @@ class AppState:
         refresh_service: Refresh service for feed discovery
         stats_service: Statistics service
         task_manager: Task manager for long-running operations
+        queue_manager: SQLite task queue manager
+        task_worker: Background task worker
     """
 
     config: "Config"
@@ -68,6 +72,8 @@ class AppState:
     refresh_service: "RefreshService"
     stats_service: "StatsService"
     task_manager: "TaskManager"
+    queue_manager: "QueueManager"
+    task_worker: "TaskWorker"
 
 
 def get_app_state(request: Request) -> AppState:

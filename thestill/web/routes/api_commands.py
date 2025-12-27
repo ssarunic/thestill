@@ -26,6 +26,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
+from ...core.queue_manager import QueueManager, Task, TaskStage
+from ...core.queue_manager import TaskStatus as QueueTaskStatus
+from ...models.podcast import EpisodeState
 from ..dependencies import AppState, get_app_state
 from ..task_manager import TaskStatus, TaskType
 
@@ -391,3 +394,310 @@ async def get_add_podcast_status(
         result=task.result,
         error=task.error,
     )
+
+
+# ============================================================================
+# Queue-based Pipeline Task Endpoints
+# ============================================================================
+
+
+class QueueTaskRequest(BaseModel):
+    """Request body for queuing a pipeline task."""
+
+    podcast_slug: str
+    episode_slug: str
+
+
+class QueueTaskResponse(BaseModel):
+    """Response for task queue operations."""
+
+    task_id: str
+    status: str
+    message: str
+    stage: str
+    episode_id: str
+    episode_title: str
+
+
+class QueuedTaskStatusResponse(BaseModel):
+    """Response for queued task status queries."""
+
+    task_id: str
+    episode_id: str
+    stage: str
+    status: str
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class QueueStatusResponse(BaseModel):
+    """Response for queue status queries."""
+
+    pending_count: int
+    worker_running: bool
+    current_task: Optional[Dict[str, Any]] = None
+    stats: Dict[str, int]
+
+
+def _validate_episode_for_stage(
+    state: AppState, podcast_slug: str, episode_slug: str, required_state: EpisodeState, stage: TaskStage
+) -> tuple:
+    """
+    Validate episode exists and is in the correct state for the requested stage.
+
+    Args:
+        state: Application state
+        podcast_slug: Podcast slug
+        episode_slug: Episode slug
+        required_state: Required episode state for this operation
+        stage: Pipeline stage being requested
+
+    Returns:
+        Tuple of (podcast, episode)
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    # Get podcast and episode by slugs
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {podcast_slug}/{episode_slug}")
+
+    podcast, episode = result
+
+    # Validate state
+    if episode.state != required_state:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Episode is in {episode.state.value} state, expected {required_state.value} for {stage.value}",
+        )
+
+    # Check for existing pending/processing task
+    if state.queue_manager.has_pending_task(episode.id, stage):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {stage.value} task is already queued or processing for this episode",
+        )
+
+    return podcast, episode
+
+
+@router.post("/download", response_model=QueueTaskResponse)
+async def queue_download(
+    request: QueueTaskRequest,
+    state: AppState = Depends(get_app_state),
+) -> QueueTaskResponse:
+    """
+    Queue a download task for an episode.
+
+    The episode must be in DISCOVERED state.
+
+    Args:
+        request: Podcast and episode slugs
+        state: Application state
+
+    Returns:
+        QueueTaskResponse with task ID
+
+    Raises:
+        HTTPException 404: If podcast or episode not found
+        HTTPException 400: If episode is not in DISCOVERED state
+        HTTPException 409: If task already queued
+    """
+    podcast, episode = _validate_episode_for_stage(
+        state, request.podcast_slug, request.episode_slug, EpisodeState.DISCOVERED, TaskStage.DOWNLOAD
+    )
+
+    task = state.queue_manager.add_task(episode.id, TaskStage.DOWNLOAD)
+
+    return QueueTaskResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Download queued for {episode.title}",
+        stage=TaskStage.DOWNLOAD.value,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.post("/downsample", response_model=QueueTaskResponse)
+async def queue_downsample(
+    request: QueueTaskRequest,
+    state: AppState = Depends(get_app_state),
+) -> QueueTaskResponse:
+    """
+    Queue a downsample task for an episode.
+
+    The episode must be in DOWNLOADED state.
+    """
+    podcast, episode = _validate_episode_for_stage(
+        state, request.podcast_slug, request.episode_slug, EpisodeState.DOWNLOADED, TaskStage.DOWNSAMPLE
+    )
+
+    task = state.queue_manager.add_task(episode.id, TaskStage.DOWNSAMPLE)
+
+    return QueueTaskResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Downsample queued for {episode.title}",
+        stage=TaskStage.DOWNSAMPLE.value,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.post("/transcribe", response_model=QueueTaskResponse)
+async def queue_transcribe(
+    request: QueueTaskRequest,
+    state: AppState = Depends(get_app_state),
+) -> QueueTaskResponse:
+    """
+    Queue a transcription task for an episode.
+
+    The episode must be in DOWNSAMPLED state.
+    """
+    podcast, episode = _validate_episode_for_stage(
+        state, request.podcast_slug, request.episode_slug, EpisodeState.DOWNSAMPLED, TaskStage.TRANSCRIBE
+    )
+
+    task = state.queue_manager.add_task(episode.id, TaskStage.TRANSCRIBE)
+
+    return QueueTaskResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Transcription queued for {episode.title}",
+        stage=TaskStage.TRANSCRIBE.value,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.post("/clean", response_model=QueueTaskResponse)
+async def queue_clean(
+    request: QueueTaskRequest,
+    state: AppState = Depends(get_app_state),
+) -> QueueTaskResponse:
+    """
+    Queue a transcript cleaning task for an episode.
+
+    The episode must be in TRANSCRIBED state.
+    """
+    podcast, episode = _validate_episode_for_stage(
+        state, request.podcast_slug, request.episode_slug, EpisodeState.TRANSCRIBED, TaskStage.CLEAN
+    )
+
+    task = state.queue_manager.add_task(episode.id, TaskStage.CLEAN)
+
+    return QueueTaskResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Transcript cleaning queued for {episode.title}",
+        stage=TaskStage.CLEAN.value,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.post("/summarize", response_model=QueueTaskResponse)
+async def queue_summarize(
+    request: QueueTaskRequest,
+    state: AppState = Depends(get_app_state),
+) -> QueueTaskResponse:
+    """
+    Queue a summarization task for an episode.
+
+    The episode must be in CLEANED state.
+    """
+    podcast, episode = _validate_episode_for_stage(
+        state, request.podcast_slug, request.episode_slug, EpisodeState.CLEANED, TaskStage.SUMMARIZE
+    )
+
+    task = state.queue_manager.add_task(episode.id, TaskStage.SUMMARIZE)
+
+    return QueueTaskResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Summarization queued for {episode.title}",
+        stage=TaskStage.SUMMARIZE.value,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.get("/task/{task_id}", response_model=QueuedTaskStatusResponse)
+async def get_queued_task_status(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> QueuedTaskStatusResponse:
+    """
+    Get the status of a queued task.
+
+    Args:
+        task_id: ID of the task to check
+
+    Returns:
+        QueuedTaskStatusResponse with task details
+
+    Raises:
+        HTTPException 404: If task not found
+    """
+    task = state.queue_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    return QueuedTaskStatusResponse(
+        task_id=task.id,
+        episode_id=task.episode_id,
+        stage=task.stage.value,
+        status=task.status.value,
+        error_message=task.error_message,
+        created_at=task.created_at.isoformat() if task.created_at else None,
+        updated_at=task.updated_at.isoformat() if task.updated_at else None,
+        started_at=task.started_at.isoformat() if task.started_at else None,
+        completed_at=task.completed_at.isoformat() if task.completed_at else None,
+    )
+
+
+@router.get("/queue/status", response_model=QueueStatusResponse)
+async def get_queue_status(
+    state: AppState = Depends(get_app_state),
+) -> QueueStatusResponse:
+    """
+    Get the overall queue and worker status.
+
+    Returns:
+        QueueStatusResponse with queue statistics and worker info
+    """
+    current_task = state.task_worker.get_current_task()
+
+    return QueueStatusResponse(
+        pending_count=state.queue_manager.get_pending_count(),
+        worker_running=state.task_worker.is_running(),
+        current_task=current_task.to_dict() if current_task else None,
+        stats=state.queue_manager.get_queue_stats(),
+    )
+
+
+@router.get("/episode/{episode_id}/tasks")
+async def get_episode_tasks(
+    episode_id: str,
+    state: AppState = Depends(get_app_state),
+) -> Dict[str, Any]:
+    """
+    Get all tasks for a specific episode.
+
+    Args:
+        episode_id: ID of the episode
+
+    Returns:
+        Dictionary with episode tasks
+    """
+    tasks = state.queue_manager.get_tasks_for_episode(episode_id)
+
+    return {
+        "episode_id": episode_id,
+        "tasks": [task.to_dict() for task in tasks],
+    }

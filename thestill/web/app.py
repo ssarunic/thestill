@@ -37,6 +37,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..core.feed_manager import PodcastFeedManager
+from ..core.queue_manager import QueueManager
+from ..core.task_handlers import create_task_handlers
+from ..core.task_worker import TaskWorker
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import Config, load_config
@@ -74,7 +77,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     stats_service = StatsService(config.storage_path, repository, path_manager)
     task_manager = get_task_manager()
 
-    # Create application state for dependency injection
+    # Initialize task queue and worker
+    queue_manager = QueueManager(config.database_path)
+
+    # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
         path_manager=path_manager,
@@ -84,7 +90,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         refresh_service=refresh_service,
         stats_service=stats_service,
         task_manager=task_manager,
+        queue_manager=queue_manager,
+        task_worker=None,  # type: ignore  # Will be set after creation
     )
+
+    # Create task worker with handlers that have access to app_state
+    task_handlers = create_task_handlers(app_state)
+    task_worker = TaskWorker(queue_manager, task_handlers)
+    app_state.task_worker = task_worker
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -96,10 +109,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # Store state in app for access in routes
         app.state.app_state = app_state
 
+        # Start background task worker
+        task_worker.start()
+        logger.info("Task worker started")
+
         yield
 
         # Cleanup on shutdown
         logger.info("Shutting down thestill web server...")
+
+        # Stop task worker gracefully
+        task_worker.stop()
+        logger.info("Task worker stopped")
 
     # Create FastAPI application
     app = FastAPI(

@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
 import TranscriptViewer from '../components/TranscriptViewer'
 import SummaryViewer from '../components/SummaryViewer'
 import AudioPlayer from '../components/AudioPlayer'
 import ExpandableDescription from '../components/ExpandableDescription'
+import PipelineActionButton from '../components/PipelineActionButton'
+import type { PipelineStage } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
 
@@ -31,10 +34,27 @@ function formatDate(dateStr: string | null): string {
 export default function EpisodeDetail() {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
+  const queryClient = useQueryClient()
 
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
   const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(podcastSlug!, episodeSlug!)
+
+  // Handle task completion - refresh relevant data
+  const handleTaskComplete = useCallback((stage: PipelineStage) => {
+    // Always refresh episode data to get updated state
+    queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
+
+    // Refresh transcript after clean stage completes
+    if (stage === 'clean') {
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'transcript'] })
+    }
+
+    // Refresh summary after summarize stage completes
+    if (stage === 'summarize') {
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'summary'] })
+    }
+  }, [queryClient, podcastSlug, episodeSlug])
 
   if (episodeError) {
     return (
@@ -90,6 +110,17 @@ export default function EpisodeDetail() {
                 <span>{episode.duration_formatted}</span>
               </>
             )}
+          </div>
+
+          {/* Pipeline Action Button */}
+          <div className="border-t border-gray-100 pt-4">
+            <PipelineActionButton
+              podcastSlug={podcastSlug!}
+              episodeSlug={episodeSlug!}
+              episodeId={episode.id}
+              episodeState={episode.state}
+              onTaskComplete={handleTaskComplete}
+            />
           </div>
 
           {/* Audio Player */}

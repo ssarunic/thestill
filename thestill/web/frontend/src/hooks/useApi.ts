@@ -12,8 +12,11 @@ import {
   getRefreshStatus,
   addPodcast,
   getAddPodcastStatus,
+  queuePipelineTask,
+  getPipelineTaskStatus,
+  getEpisodeTasks,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -171,6 +174,49 @@ export function useAddPodcast() {
       // When add completes, invalidate podcasts list to show new podcast
       queryClient.invalidateQueries({ queryKey: ['podcasts'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// Pipeline Task hooks (Queue-based)
+export function useQueuePipelineTask(podcastSlug: string, episodeSlug: string) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (stage: PipelineStage) =>
+      queuePipelineTask(stage, { podcast_slug: podcastSlug, episode_slug: episodeSlug }),
+    onSuccess: () => {
+      // Invalidate episode data to refresh state
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
+      // Also invalidate episode tasks
+      queryClient.invalidateQueries({ queryKey: ['episodes', 'tasks'] })
+    },
+  })
+}
+
+export function usePipelineTaskStatus(taskId: string | null) {
+  return useQuery({
+    queryKey: ['commands', 'pipeline', 'task', taskId],
+    queryFn: () => getPipelineTaskStatus(taskId!),
+    enabled: !!taskId,
+    refetchInterval: (query) => {
+      // Poll while task is pending or processing
+      const status = query.state.data?.status
+      return status === 'pending' || status === 'processing' ? 2000 : false
+    },
+  })
+}
+
+export function useEpisodeTasks(episodeId: string | null) {
+  return useQuery({
+    queryKey: ['episodes', 'tasks', episodeId],
+    queryFn: () => getEpisodeTasks(episodeId!),
+    enabled: !!episodeId,
+    refetchInterval: (query) => {
+      // Poll if any task is pending or processing
+      const tasks = query.state.data?.tasks || []
+      const hasActiveTask = tasks.some((t) => t.status === 'pending' || t.status === 'processing')
+      return hasActiveTask ? 2000 : false
     },
   })
 }

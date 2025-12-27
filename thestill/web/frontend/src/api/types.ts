@@ -30,6 +30,8 @@ export interface ActivityItem {
   action: string
   timestamp: string
   pub_date: string | null
+  duration: number | null  // Duration in seconds
+  duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
 }
 
 export interface ActivityResponse {
@@ -215,4 +217,50 @@ export interface AddPodcastTaskStatus {
     episodes_count: number
   } | null
   error: string | null
+}
+
+// Pipeline Task Types (Queue-based)
+export type PipelineStage = 'download' | 'downsample' | 'transcribe' | 'clean' | 'summarize'
+export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+export interface PipelineTaskRequest {
+  podcast_slug: string
+  episode_slug: string
+}
+
+export interface PipelineTaskResponse {
+  task_id: string
+  status: string
+  message: string
+  stage: PipelineStage
+  episode_id: string
+  episode_title: string
+}
+
+export interface PipelineTaskStatusResponse {
+  task_id: string
+  episode_id: string
+  stage: PipelineStage
+  status: PipelineTaskStatus
+  error_message: string | null
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface EpisodeTasksResponse {
+  episode_id: string
+  tasks: Array<{
+    id: string
+    episode_id: string
+    stage: PipelineStage
+    status: PipelineTaskStatus
+    priority: number
+    error_message: string | null
+    created_at: string | null
+    updated_at: string | null
+    started_at: string | null
+    completed_at: string | null
+  }>
 }

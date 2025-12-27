@@ -12,6 +12,11 @@ import type {
   AddPodcastRequest,
   AddPodcastResponse,
   AddPodcastTaskStatus,
+  PipelineStage,
+  PipelineTaskRequest,
+  PipelineTaskResponse,
+  PipelineTaskStatusResponse,
+  EpisodeTasksResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -105,4 +110,37 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
 
 export async function getAddPodcastStatus(): Promise<AddPodcastTaskStatus> {
   return fetchApi<AddPodcastTaskStatus>('/commands/add/status')
+}
+
+// Pipeline Task API (Queue-based)
+export async function queuePipelineTask(
+  stage: PipelineStage,
+  request: PipelineTaskRequest
+): Promise<PipelineTaskResponse> {
+  const response = await fetch(`${API_BASE}/commands/${stage}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    // Handle various error formats from FastAPI
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || error.detail?.msg || JSON.stringify(error.detail) || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function getPipelineTaskStatus(taskId: string): Promise<PipelineTaskStatusResponse> {
+  return fetchApi<PipelineTaskStatusResponse>(`/commands/task/${taskId}`)
+}
+
+export async function getEpisodeTasks(episodeId: string): Promise<EpisodeTasksResponse> {
+  return fetchApi<EpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
 }
