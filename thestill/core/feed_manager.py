@@ -22,6 +22,7 @@ import feedparser
 
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
+from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
 from .media_source import MediaSourceFactory, RSSMediaSource
 
@@ -299,7 +300,7 @@ class PodcastFeedManager:
         podcast_rss_url: str,
         episode_external_id: str,
         audio_path: str,
-        duration: Optional[str] = None,
+        duration: Optional[int] = None,
     ) -> None:
         """
         Mark an episode as downloaded with audio file path.
@@ -308,7 +309,7 @@ class PodcastFeedManager:
             podcast_rss_url: RSS URL of the podcast
             episode_external_id: External ID (from RSS feed) of the episode
             audio_path: Path to the downloaded audio file
-            duration: Optional duration in seconds (as string) from ffprobe
+            duration: Optional duration in seconds from ffprobe
         """
         if self._in_transaction:
             # Update in-memory cache
@@ -340,7 +341,7 @@ class PodcastFeedManager:
         podcast_rss_url: str,
         episode_external_id: str,
         downsampled_audio_path: str,
-        duration: Optional[str] = None,
+        duration: Optional[int] = None,
     ) -> None:
         """
         Mark an episode as downsampled with downsampled audio file path.
@@ -349,7 +350,7 @@ class PodcastFeedManager:
             podcast_rss_url: RSS URL of the podcast
             episode_external_id: External ID (from RSS feed) of the episode
             downsampled_audio_path: Path to the downsampled audio file
-            duration: Optional duration in seconds (as string) from ffprobe
+            duration: Optional duration in seconds from ffprobe
         """
         if self._in_transaction:
             # Update in-memory cache
@@ -453,7 +454,7 @@ class PodcastFeedManager:
                                     description=entry.get("description", ""),
                                     pub_date=episode_date,
                                     audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
-                                    duration=entry.get("itunes_duration"),
+                                    duration=parse_duration(entry.get("itunes_duration")),
                                     external_id=entry_external_id,
                                     raw_transcript_path=raw_transcript_path,
                                     clean_transcript_path=clean_transcript_path,

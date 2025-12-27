@@ -84,10 +84,10 @@ export default function EpisodeDetail() {
 
           <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-sm text-gray-500">
             <span>{formatDate(episode.pub_date)}</span>
-            {episode.duration && (
+            {episode.duration_formatted && (
               <>
                 <span className="hidden sm:inline">•</span>
-                <span>{episode.duration}</span>
+                <span>{episode.duration_formatted}</span>
               </>
             )}
           </div>

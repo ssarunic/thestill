@@ -23,6 +23,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 
 router = APIRouter()
@@ -194,6 +195,7 @@ async def get_episode_by_slugs(
             "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
             "audio_url": str(episode.audio_url),
             "duration": episode.duration,
+            "duration_formatted": format_duration(episode.duration) if episode.duration else None,
             "external_id": episode.external_id,
             "state": episode.state.value,
             "has_transcript": bool(episode.clean_transcript_path),

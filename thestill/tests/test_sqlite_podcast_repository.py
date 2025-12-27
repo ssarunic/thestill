@@ -57,7 +57,7 @@ def sample_episode():
         description="Episode description",
         pub_date=datetime(2025, 1, 15, 10, 30),
         audio_url="https://example.com/audio.mp3",
-        duration="00:10:30",
+        duration=630,  # 10 minutes 30 seconds
     )
 
 
@@ -250,7 +250,7 @@ def test_update_episode(temp_db, sample_podcast, sample_episode):
     temp_db.save(sample_podcast)
 
     # Update episode fields
-    updates = {"audio_path": "episode_audio.mp3", "duration": "00:12:00"}
+    updates = {"audio_path": "episode_audio.mp3", "duration": 720}  # 12 minutes
     result = temp_db.update_episode("https://example.com/feed.xml", "episode-guid-789", updates)
 
     assert result is True
@@ -258,7 +258,7 @@ def test_update_episode(temp_db, sample_podcast, sample_episode):
     # Verify updates
     episode = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
     assert episode.audio_path == "episode_audio.mp3"
-    assert episode.duration == "00:12:00"
+    assert episode.duration == 720
 
 
 def test_update_episode_returns_false_for_invalid_fields(temp_db, sample_podcast, sample_episode):

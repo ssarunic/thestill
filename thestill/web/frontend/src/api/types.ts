@@ -97,7 +97,8 @@ export interface Episode {
   description: string
   pub_date: string | null
   audio_url: string
-  duration: string | null
+  duration: number | null  // Duration in seconds
+  duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
   external_id: string
   state: 'discovered' | 'downloaded' | 'downsampled' | 'transcribed' | 'cleaned' | 'summarized'
   transcript_available: boolean
@@ -126,7 +127,8 @@ export interface EpisodeDetail {
   slug: string
   pub_date: string | null
   audio_url: string
-  duration: string | null
+  duration: number | null  // Duration in seconds
+  duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
   external_id: string
   state: string
   has_transcript: boolean

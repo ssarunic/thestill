@@ -311,11 +311,10 @@ def download(ctx, podcast_id, max_episodes, dry_run):
                     # Get accurate duration from the downloaded file
                     full_audio_path = path_manager.original_audio_file(audio_path)
                     duration_seconds = get_audio_duration(full_audio_path)
-                    duration_str = str(duration_seconds) if duration_seconds else None
 
                     # Store the relative path (includes podcast subdirectory)
                     feed_manager.mark_episode_downloaded(
-                        str(podcast.rss_url), episode.external_id, audio_path, duration=duration_str
+                        str(podcast.rss_url), episode.external_id, audio_path, duration=duration_seconds
                     )
                     downloaded_count += 1
                     click.echo("✅ Downloaded successfully")
@@ -472,10 +471,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
 
                     # Get accurate duration from the downsampled file
                     duration_seconds = get_audio_duration(downsampled_path)
-                    duration_str = str(duration_seconds) if duration_seconds else None
 
                     feed_manager.mark_episode_downsampled(
-                        str(podcast.rss_url), episode.external_id, relative_path, duration=duration_str
+                        str(podcast.rss_url), episode.external_id, relative_path, duration=duration_seconds
                     )
                     downsampled_count += 1
                     click.echo("✅ Downsampled successfully")
@@ -1482,8 +1480,9 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             if current_podcast != podcast.title:
                 click.echo(f"\n📻 {podcast.title}")
                 current_podcast = podcast.title
+            duration_str = f" [{format_duration(episode.duration)}]" if episode.duration else ""
             click.echo(
-                f"  • {episode.title} ({episode.pub_date.strftime('%Y-%m-%d') if episode.pub_date else 'no date'})"
+                f"  • {episode.title}{duration_str} ({episode.pub_date.strftime('%Y-%m-%d') if episode.pub_date else 'no date'})"
             )
         click.echo("\n(Run without --dry-run to actually transcribe)")
         cleanup_webhook_server()
@@ -1511,7 +1510,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 click.echo("─" * 50)
                 current_podcast = podcast.title
 
-            click.echo(f"\n🎧 {episode.title}")
+            duration_str = f" [{format_duration(episode.duration)}]" if episode.duration else ""
+            click.echo(f"\n🎧 {episode.title}{duration_str}")
 
             try:
                 # Only use downsampled audio - fail if not available

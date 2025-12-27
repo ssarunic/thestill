@@ -41,6 +41,7 @@ import feedparser
 import requests
 
 from ..models.podcast import Episode, TranscriptLink
+from ..utils.duration import parse_duration
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -278,7 +279,7 @@ class RSSMediaSource(MediaSource):
                             description=entry.get("description", ""),
                             pub_date=episode_date,
                             audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
-                            duration=entry.get("itunes_duration"),
+                            duration=parse_duration(entry.get("itunes_duration")),
                             external_id=episode_external_id,
                         )
                         episodes.append(episode)

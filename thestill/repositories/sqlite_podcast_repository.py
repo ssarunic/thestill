@@ -129,7 +129,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 description TEXT NOT NULL DEFAULT '',
                 pub_date TIMESTAMP NULL,
                 audio_url TEXT NOT NULL,
-                duration TEXT NULL,
+                duration INTEGER NULL,
                 audio_path TEXT NULL,
                 downsampled_audio_path TEXT NULL,
                 raw_transcript_path TEXT NULL,

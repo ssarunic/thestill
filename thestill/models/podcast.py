@@ -105,7 +105,7 @@ class Episode(BaseModel):
     description: str
     pub_date: Optional[datetime] = None
     audio_url: HttpUrl
-    duration: Optional[str] = None
+    duration: Optional[int] = None  # Duration in seconds (parsed from RSS itunes:duration)
 
     # File paths (filenames only, relative to storage directories)
     audio_path: Optional[str] = None  # Filename of the original downloaded audio file (in original_audio/)

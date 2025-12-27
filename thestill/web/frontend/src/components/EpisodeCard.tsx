@@ -33,11 +33,6 @@ function formatDate(dateStr: string | null): string {
   })
 }
 
-function formatDuration(duration: string | null): string {
-  if (!duration) return ''
-  // Duration might be in various formats, just display as-is for now
-  return duration
-}
 
 export default function EpisodeCard({ episode }: EpisodeCardProps) {
   const isProcessed = episode.state === 'cleaned' || episode.state === 'summarized'
@@ -59,10 +54,10 @@ export default function EpisodeCard({ episode }: EpisodeCardProps) {
 
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-xs sm:text-sm text-gray-500">
           <span>{formatDate(episode.pub_date)}</span>
-          {episode.duration && (
+          {episode.duration_formatted && (
             <>
               <span className="hidden sm:inline">•</span>
-              <span>{formatDuration(episode.duration)}</span>
+              <span>{episode.duration_formatted}</span>
             </>
           )}
         </div>

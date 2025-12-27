@@ -21,11 +21,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
+from ..utils.duration import format_duration
 from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
@@ -57,11 +58,19 @@ class EpisodeWithIndex(BaseModel):
     description: str
     pub_date: Optional[datetime] = None
     audio_url: str
-    duration: Optional[str] = None
+    duration: Optional[int] = None  # Duration in seconds
     external_id: str  # External ID from RSS feed (publisher's GUID)
     state: str  # Processing state (discovered, downloaded, downsampled, transcribed, cleaned)
     transcript_available: bool = False
     summary_available: bool = False
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def duration_formatted(self) -> Optional[str]:
+        """Human-readable duration (e.g., '1:08:01' or '45:30')"""
+        if self.duration is None:
+            return None
+        return format_duration(self.duration)
 
 
 class PodcastService:
