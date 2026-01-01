@@ -29,7 +29,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from ..models.podcast import Episode, EpisodeState, Podcast, TranscriptLink
 from .podcast_repository import EpisodeRepository, PodcastRepository
@@ -832,6 +832,97 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 results.append((podcast, episode))
 
             return results
+
+    def get_all_episodes(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        search: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        state: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        sort_by: str = "pub_date",
+        sort_order: str = "desc",
+    ) -> Tuple[List[Tuple[Podcast, Episode]], int]:
+        """
+        Get episodes across all podcasts with filtering and pagination.
+
+        Returns (episodes_with_podcasts, total_count).
+        """
+        # Build WHERE conditions
+        conditions = []
+        params: List[Any] = []
+
+        if search:
+            conditions.append("e.title LIKE ?")
+            params.append(f"%{search}%")
+
+        if podcast_id:
+            conditions.append("e.podcast_id = ?")
+            params.append(podcast_id)
+
+        if state:
+            # Map state to SQL condition (same logic as get_unprocessed_episodes)
+            state_conditions = {
+                EpisodeState.DISCOVERED.value: "e.audio_path IS NULL",
+                EpisodeState.DOWNLOADED.value: "e.audio_path IS NOT NULL AND e.downsampled_audio_path IS NULL",
+                EpisodeState.DOWNSAMPLED.value: "e.downsampled_audio_path IS NOT NULL AND e.raw_transcript_path IS NULL",
+                EpisodeState.TRANSCRIBED.value: "e.raw_transcript_path IS NOT NULL AND e.clean_transcript_path IS NULL",
+                EpisodeState.CLEANED.value: "e.clean_transcript_path IS NOT NULL AND e.summary_path IS NULL",
+                EpisodeState.SUMMARIZED.value: "e.summary_path IS NOT NULL",
+            }
+            condition = state_conditions.get(state)
+            if condition:
+                conditions.append(f"({condition})")
+
+        if date_from:
+            conditions.append("e.pub_date >= ?")
+            params.append(date_from.isoformat())
+
+        if date_to:
+            conditions.append("e.pub_date <= ?")
+            params.append(date_to.isoformat())
+
+        # Build WHERE clause
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Validate and build ORDER BY clause
+        valid_sort_fields = {"pub_date": "e.pub_date", "title": "e.title", "updated_at": "e.updated_at"}
+        sort_field = valid_sort_fields.get(sort_by, "e.pub_date")
+        order_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+
+        with self._get_connection() as conn:
+            # Get total count
+            count_query = f"""
+                SELECT COUNT(*) as total
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE {where_clause}
+            """
+            cursor = conn.execute(count_query, params)
+            total = cursor.fetchone()["total"]
+
+            # Get paginated results
+            query = f"""
+                SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.last_processed, p.updated_at as p_updated_at, e.*
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE {where_clause}
+                ORDER BY {sort_field} {order_direction}
+                LIMIT ? OFFSET ?
+            """
+            cursor = conn.execute(query, params + [limit, offset])
+
+            results = []
+            for row in cursor.fetchall():
+                podcast = self._row_to_podcast_minimal(row)
+                episode = self._row_to_episode(row)
+                results.append((podcast, episode))
+
+            return results, total
 
     # ============================================================================
     # Helper Methods

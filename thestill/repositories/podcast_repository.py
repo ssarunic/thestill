@@ -6,7 +6,8 @@ enabling easy swapping between different storage backends (JSON, SQLite, Postgre
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from ..models.podcast import Episode, Podcast
 
@@ -233,5 +234,45 @@ class EpisodeRepository(ABC):
             episodes_to_download = repository.get_unprocessed_episodes('discovered')
             for podcast, episode in episodes_to_download:
                 download_audio(podcast, episode)
+        """
+        pass
+
+    @abstractmethod
+    def get_all_episodes(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        search: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        state: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        sort_by: str = "pub_date",
+        sort_order: str = "desc",
+    ) -> Tuple[List[Tuple[Podcast, Episode]], int]:
+        """
+        Get episodes across all podcasts with filtering and pagination.
+
+        Args:
+            limit: Maximum number of episodes to return (default 20)
+            offset: Number of episodes to skip for pagination (default 0)
+            search: Case-insensitive title search (optional)
+            podcast_id: Filter by podcast UUID (optional)
+            state: Filter by processing state (optional)
+            date_from: Only include episodes published on/after this date (optional)
+            date_to: Only include episodes published on/before this date (optional)
+            sort_by: Sort field - 'pub_date', 'title', or 'updated_at' (default 'pub_date')
+            sort_order: Sort direction - 'asc' or 'desc' (default 'desc')
+
+        Returns:
+            Tuple of:
+                - List of (Podcast, Episode) tuples matching criteria
+                - Total count of matching episodes (for pagination)
+
+        Example:
+            # Get first page of transcribed episodes
+            episodes, total = repository.get_all_episodes(
+                limit=20, offset=0, state='transcribed'
+            )
         """
         pass

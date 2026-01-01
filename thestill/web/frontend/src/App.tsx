@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Podcasts from './pages/Podcasts'
 import PodcastDetail from './pages/PodcastDetail'
 import EpisodeDetail from './pages/EpisodeDetail'
+import Episodes from './pages/Episodes'
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
         <Route path="podcasts" element={<Podcasts />} />
         <Route path="podcasts/:podcastSlug" element={<PodcastDetail />} />
         <Route path="podcasts/:podcastSlug/episodes/:episodeSlug" element={<EpisodeDetail />} />
+        <Route path="episodes" element={<Episodes />} />
       </Route>
     </Routes>
   )

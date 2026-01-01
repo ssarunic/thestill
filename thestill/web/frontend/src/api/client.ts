@@ -17,6 +17,9 @@ import type {
   PipelineTaskResponse,
   PipelineTaskStatusResponse,
   EpisodeTasksResponse,
+  AllEpisodesResponse,
+  EpisodeFilters,
+  BulkProcessResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -143,4 +146,47 @@ export async function getPipelineTaskStatus(taskId: string): Promise<PipelineTas
 
 export async function getEpisodeTasks(episodeId: string): Promise<EpisodeTasksResponse> {
   return fetchApi<EpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
+}
+
+// Episode Browser API (cross-podcast)
+export async function getAllEpisodes(
+  limit: number = 20,
+  offset: number = 0,
+  filters?: EpisodeFilters
+): Promise<AllEpisodesResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', limit.toString())
+  params.set('offset', offset.toString())
+
+  if (filters) {
+    if (filters.search) params.set('search', filters.search)
+    if (filters.podcast_slug) params.set('podcast_slug', filters.podcast_slug)
+    if (filters.state) params.set('state', filters.state)
+    if (filters.date_from) params.set('date_from', filters.date_from)
+    if (filters.date_to) params.set('date_to', filters.date_to)
+    if (filters.sort_by) params.set('sort_by', filters.sort_by)
+    if (filters.sort_order) params.set('sort_order', filters.sort_order)
+  }
+
+  return fetchApi<AllEpisodesResponse>(`/episodes?${params.toString()}`)
+}
+
+export async function bulkProcessEpisodes(episodeIds: string[]): Promise<BulkProcessResponse> {
+  const response = await fetch(`${API_BASE}/episodes/bulk/process`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ episode_ids: episodeIds }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || error.detail?.msg || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
 }

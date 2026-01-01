@@ -45,7 +45,7 @@ from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .routes import api_commands, api_dashboard, api_podcasts, health, webhooks
+from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, health, webhooks
 from .task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # API routes for web UI
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+    app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files

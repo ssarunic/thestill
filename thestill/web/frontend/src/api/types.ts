@@ -264,3 +264,50 @@ export interface EpisodeTasksResponse {
     completed_at: string | null
   }>
 }
+
+// Episode Browser Types
+export type EpisodeState = 'discovered' | 'downloaded' | 'downsampled' | 'transcribed' | 'cleaned' | 'summarized'
+
+export interface EpisodeWithPodcast extends Episode {
+  podcast_title: string
+  podcast_image_url: string | null
+}
+
+export interface AllEpisodesResponse {
+  status: string
+  timestamp: string
+  episodes: EpisodeWithPodcast[]
+  count: number
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+  next_offset: number | null
+}
+
+export interface EpisodeFilters {
+  search?: string
+  podcast_slug?: string
+  state?: EpisodeState
+  date_from?: string
+  date_to?: string
+  sort_by?: 'pub_date' | 'title' | 'updated_at'
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface BulkProcessRequest {
+  episode_ids: string[]
+}
+
+export interface BulkProcessTaskInfo {
+  episode_id: string
+  task_id: string
+  stage: PipelineStage
+}
+
+export interface BulkProcessResponse {
+  status: string
+  queued: number
+  skipped: number
+  tasks: BulkProcessTaskInfo[]
+}

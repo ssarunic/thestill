@@ -15,8 +15,10 @@ import {
   queuePipelineTask,
   getPipelineTaskStatus,
   getEpisodeTasks,
+  getAllEpisodes,
+  bulkProcessEpisodes,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -217,6 +219,30 @@ export function useEpisodeTasks(episodeId: string | null) {
       const tasks = query.state.data?.tasks || []
       const hasActiveTask = tasks.some((t) => t.status === 'pending' || t.status === 'processing')
       return hasActiveTask ? 2000 : false
+    },
+  })
+}
+
+// Episode Browser hooks (cross-podcast)
+export function useAllEpisodesInfinite(filters: EpisodeFilters, limit = 20) {
+  return useInfiniteQuery({
+    queryKey: ['episodes', 'all', 'infinite', filters, limit],
+    queryFn: ({ pageParam = 0 }) => getAllEpisodes(limit, pageParam, filters),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset,
+  })
+}
+
+export function useBulkProcess() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (episodeIds: string[]) => bulkProcessEpisodes(episodeIds),
+    onSuccess: () => {
+      // Invalidate all episode-related queries to refresh states
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
     },
   })
 }
