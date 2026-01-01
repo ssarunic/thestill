@@ -17,8 +17,16 @@ export default function ExpandableDescription({
   const [measured, setMeasured] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
 
+  // Check if content has HTML tags (excluding just whitespace/newlines)
+  const hasHtmlTags = /<[a-z][\s\S]*>/i.test(html)
+
+  // If no HTML tags, convert newlines to <br> for proper rendering
+  const processedHtml = hasHtmlTags
+    ? html
+    : html.replace(/\n\n+/g, '<br><br>').replace(/\n/g, '<br>')
+
   // Sanitize HTML - allow safe tags only
-  const cleanHtml = DOMPurify.sanitize(html, {
+  const cleanHtml = DOMPurify.sanitize(processedHtml, {
     ALLOWED_TAGS: ['p', 'br', 'strong', 'b', 'em', 'i', 'a', 'ul', 'ol', 'li'],
     ALLOWED_ATTR: ['href', 'target', 'rel'],
   })

@@ -15,5 +15,6 @@
 """Utility modules for Thestill application."""
 
 from .exceptions import ThestillError
+from .html_utils import extract_links_from_html, html_to_plain_text
 
-__all__ = ["ThestillError"]
+__all__ = ["ThestillError", "html_to_plain_text", "extract_links_from_html"]

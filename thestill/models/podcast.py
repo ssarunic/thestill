@@ -151,6 +151,37 @@ class Episode(BaseModel):
             return EpisodeState.DOWNLOADED
         return EpisodeState.DISCOVERED
 
+    @property
+    def description_text(self) -> str:
+        """
+        Get episode description as plain text.
+
+        The description field may contain HTML from RSS feeds. This property
+        converts it to readable plain text while preserving structure:
+        - Paragraph breaks become double newlines
+        - Links are formatted as "text (url)"
+        - Lists become bullet points
+        - HTML entities are decoded
+
+        Returns:
+            Plain text version of the description
+        """
+        from thestill.utils.html_utils import html_to_plain_text
+
+        return html_to_plain_text(self.description)
+
+    @property
+    def description_links(self) -> list[dict[str, str]]:
+        """
+        Extract all links from the episode description.
+
+        Returns:
+            List of dicts with 'text' and 'url' keys
+        """
+        from thestill.utils.html_utils import extract_links_from_html
+
+        return extract_links_from_html(self.description)
+
 
 class Podcast(BaseModel):
     # Internal identifiers (auto-generated)
