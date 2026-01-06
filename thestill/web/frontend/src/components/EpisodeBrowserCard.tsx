@@ -85,10 +85,10 @@ export default function EpisodeBrowserCard({ episode, isSelected, onSelect }: Ep
           />
         </div>
 
-        {/* Podcast thumbnail */}
-        {episode.podcast_image_url ? (
+        {/* Episode/Podcast thumbnail - prioritize episode artwork, fall back to podcast artwork */}
+        {(episode.image_url || episode.podcast_image_url) ? (
           <img
-            src={episode.podcast_image_url}
+            src={episode.image_url || episode.podcast_image_url || ''}
             alt=""
             className="w-10 h-10 rounded-md object-cover flex-shrink-0"
           />

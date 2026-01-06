@@ -105,6 +105,7 @@ export interface Episode {
   state: 'discovered' | 'downloaded' | 'downsampled' | 'transcribed' | 'cleaned' | 'summarized'
   transcript_available: boolean
   summary_available: boolean
+  image_url: string | null  // Episode-specific artwork
 }
 
 export interface EpisodesResponse {
@@ -135,6 +136,8 @@ export interface EpisodeDetail {
   state: string
   has_transcript: boolean
   has_summary: boolean
+  image_url: string | null  // Episode-specific artwork
+  podcast_image_url: string | null  // Fallback: podcast artwork
 }
 
 export interface EpisodeDetailResponse {
@@ -270,7 +273,7 @@ export type EpisodeState = 'discovered' | 'downloaded' | 'downsampled' | 'transc
 
 export interface EpisodeWithPodcast extends Episode {
   podcast_title: string
-  podcast_image_url: string | null
+  podcast_image_url: string | null  // Fallback: podcast artwork (use image_url first)
 }
 
 export interface AllEpisodesResponse {

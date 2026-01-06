@@ -200,6 +200,8 @@ async def get_episode_by_slugs(
             "state": episode.state.value,
             "has_transcript": bool(episode.clean_transcript_path),
             "has_summary": bool(episode.summary_path),
+            "image_url": episode.image_url,
+            "podcast_image_url": podcast.image_url,
         },
     }
 

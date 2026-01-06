@@ -147,6 +147,7 @@ async def get_all_episodes(
                 "podcast_slug": podcast.slug,
                 "podcast_title": podcast.title,
                 "podcast_image_url": podcast.image_url,
+                "image_url": episode.image_url,
                 "title": episode.title,
                 "slug": episode.slug,
                 "description": episode.description,

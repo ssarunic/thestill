@@ -83,12 +83,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """Run schema migrations for existing databases."""
         # Check if image_url column exists in podcasts table
         cursor = conn.execute("PRAGMA table_info(podcasts)")
-        columns = {row["name"] for row in cursor.fetchall()}
+        podcast_columns = {row["name"] for row in cursor.fetchall()}
 
-        if "image_url" not in columns:
+        if "image_url" not in podcast_columns:
             logger.info("Migrating database: adding image_url column to podcasts table")
             conn.execute("ALTER TABLE podcasts ADD COLUMN image_url TEXT NULL")
-            logger.info("Migration complete: image_url column added")
+            logger.info("Migration complete: image_url column added to podcasts")
+
+        # Check if image_url column exists in episodes table
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns = {row["name"] for row in cursor.fetchall()}
+
+        if "image_url" not in episode_columns:
+            logger.info("Migrating database: adding image_url column to episodes table")
+            conn.execute("ALTER TABLE episodes ADD COLUMN image_url TEXT NULL")
+            logger.info("Migration complete: image_url column added to episodes")
 
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
@@ -130,6 +139,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 pub_date TIMESTAMP NULL,
                 audio_url TEXT NOT NULL,
                 duration INTEGER NULL,
+                image_url TEXT NULL,
                 audio_path TEXT NULL,
                 downsampled_audio_path TEXT NULL,
                 raw_transcript_path TEXT NULL,
@@ -544,7 +554,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         # Check if episode exists (by podcast_id + external_id)
         cursor = conn.execute(
             """
-            SELECT id, title, slug, description, pub_date, audio_url, duration,
+            SELECT id, title, slug, description, pub_date, audio_url, duration, image_url,
                    audio_path, downsampled_audio_path, raw_transcript_path,
                    clean_transcript_path, summary_path
             FROM episodes
@@ -565,6 +575,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 or existing["pub_date"] != pub_date_str
                 or existing["audio_url"] != str(episode.audio_url)
                 or existing["duration"] != episode.duration
+                or existing["image_url"] != episode.image_url
                 or existing["audio_path"] != episode.audio_path
                 or existing["downsampled_audio_path"] != episode.downsampled_audio_path
                 or existing["raw_transcript_path"] != episode.raw_transcript_path
@@ -578,7 +589,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                     UPDATE episodes
                     SET title = ?, slug = ?, description = ?, pub_date = ?, audio_url = ?,
-                        duration = ?, audio_path = ?, downsampled_audio_path = ?,
+                        duration = ?, image_url = ?, audio_path = ?, downsampled_audio_path = ?,
                         raw_transcript_path = ?, clean_transcript_path = ?, summary_path = ?,
                         updated_at = ?
                     WHERE podcast_id = ? AND external_id = ?
@@ -590,6 +601,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         pub_date_str,
                         str(episode.audio_url),
                         episode.duration,
+                        episode.image_url,
                         episode.audio_path,
                         episode.downsampled_audio_path,
                         episode.raw_transcript_path,
@@ -609,9 +621,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 INSERT INTO episodes (
                     id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                    pub_date, audio_url, duration, audio_path, downsampled_audio_path,
+                    pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
                     raw_transcript_path, clean_transcript_path, summary_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     episode.id,
@@ -625,6 +637,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode.pub_date.isoformat() if episode.pub_date else None,
                     str(episode.audio_url),
                     episode.duration,
+                    episode.image_url,
                     episode.audio_path,
                     episode.downsampled_audio_path,
                     episode.raw_transcript_path,
@@ -678,6 +691,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "slug",
             "description",
             "duration",
+            "image_url",
         }
 
         update_fields = {k: v for k, v in updates.items() if k in valid_fields}
@@ -984,6 +998,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             pub_date=datetime.fromisoformat(row["pub_date"]) if row["pub_date"] else None,
             audio_url=row["audio_url"],
             duration=row["duration"],
+            image_url=row["image_url"],
             audio_path=row["audio_path"],
             downsampled_audio_path=row["downsampled_audio_path"],
             raw_transcript_path=row["raw_transcript_path"],
@@ -997,9 +1012,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             """
             INSERT INTO episodes (
                 id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                pub_date, audio_url, duration, audio_path, downsampled_audio_path,
+                pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
                 raw_transcript_path, clean_transcript_path, summary_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -1013,6 +1028,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.pub_date.isoformat() if episode.pub_date else None,
                 str(episode.audio_url),
                 episode.duration,
+                episode.image_url,
                 episode.audio_path,
                 episode.downsampled_audio_path,
                 episode.raw_transcript_path,

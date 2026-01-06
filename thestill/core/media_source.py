@@ -281,6 +281,7 @@ class RSSMediaSource(MediaSource):
                             audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                             duration=parse_duration(entry.get("itunes_duration")),
                             external_id=episode_external_id,
+                            image_url=self._extract_episode_image(entry),
                         )
                         episodes.append(episode)
 
@@ -490,6 +491,48 @@ class RSSMediaSource(MediaSource):
             if enclosure.get("type", "").startswith("audio/"):
                 href = enclosure.get("href")
                 return str(href) if href else None
+
+        return None
+
+    def _extract_episode_image(self, entry: Any) -> Optional[str]:
+        """
+        Extract episode-specific artwork from RSS entry.
+
+        Priority:
+        1. itunes:image on the item (higher quality)
+        2. Standard RSS image within item
+
+        Args:
+            entry: Feedparser entry object
+
+        Returns:
+            Image URL if found, None otherwise (will fall back to podcast artwork)
+        """
+        # Priority 1: itunes:image (higher quality, podcast-specific)
+        if hasattr(entry, "itunes_image") and entry.itunes_image:
+            if isinstance(entry.itunes_image, dict):
+                image_url = entry.itunes_image.get("href")
+                if image_url:
+                    logger.debug(f"Found episode iTunes artwork: {image_url[:80]}...")
+                    return image_url
+            else:
+                image_url = str(entry.itunes_image)
+                if image_url:
+                    logger.debug(f"Found episode iTunes artwork: {image_url[:80]}...")
+                    return image_url
+
+        # Priority 2: Standard RSS image within item
+        if hasattr(entry, "image") and entry.image:
+            if hasattr(entry.image, "href"):
+                image_url = entry.image.href
+                if image_url:
+                    logger.debug(f"Found episode RSS artwork: {image_url[:80]}...")
+                    return image_url
+            elif isinstance(entry.image, dict):
+                image_url = entry.image.get("href") or entry.image.get("url")
+                if image_url:
+                    logger.debug(f"Found episode RSS artwork: {image_url[:80]}...")
+                    return image_url
 
         return None
 
