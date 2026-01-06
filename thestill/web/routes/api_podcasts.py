@@ -213,14 +213,16 @@ async def get_episode_transcript_by_slugs(
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """
-    Get the cleaned transcript for an episode by slugs.
+    Get the transcript for an episode by slugs.
+
+    Returns cleaned transcript if available, otherwise falls back to raw transcript.
 
     Args:
         podcast_slug: URL-safe podcast identifier
         episode_slug: URL-safe episode identifier
 
     Returns:
-        Cleaned Markdown transcript content.
+        Markdown transcript content with type indicator ("cleaned" or "raw").
     """
     result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
 
@@ -229,9 +231,9 @@ async def get_episode_transcript_by_slugs(
 
     podcast, episode = result
 
-    transcript = state.podcast_service.get_transcript(podcast.id, episode.id)
+    transcript_result = state.podcast_service.get_transcript(podcast.id, episode.id)
 
-    if transcript is None:
+    if transcript_result is None:
         raise HTTPException(status_code=404, detail="Episode not found")
 
     return {
@@ -239,8 +241,9 @@ async def get_episode_transcript_by_slugs(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "episode_id": episode.id,
         "episode_title": episode.title,
-        "content": transcript,
-        "available": not transcript.startswith("N/A"),
+        "content": transcript_result.content,
+        "available": transcript_result.transcript_type is not None,
+        "transcript_type": transcript_result.transcript_type,
     }
 
 

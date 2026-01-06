@@ -146,6 +146,8 @@ export interface EpisodeDetailResponse {
   episode: EpisodeDetail
 }
 
+export type TranscriptType = 'cleaned' | 'raw'
+
 export interface ContentResponse {
   status: string
   timestamp: string
@@ -153,6 +155,7 @@ export interface ContentResponse {
   episode_title: string
   content: string
   available: boolean
+  transcript_type?: TranscriptType  // 'cleaned' or 'raw', undefined if not available
 }
 
 // Commands API Types

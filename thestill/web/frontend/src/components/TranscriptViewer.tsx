@@ -1,12 +1,14 @@
 import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { TranscriptType } from '../api/types'
 
 interface TranscriptViewerProps {
   content: string
   isLoading?: boolean
   available?: boolean
   episodeState?: string
+  transcriptType?: TranscriptType
 }
 
 // Parse transcript to separate speaker segments from regular markdown
@@ -45,7 +47,20 @@ function parseTranscript(content: string) {
       continue
     }
 
-    // Check for bold speaker: **Name:**
+    // Check for timestamped bold speaker: [00:00] **Name:** text
+    const timestampedBoldMatch = line.match(/^\[(\d{2}:\d{2}(?::\d{2})?)\]\s*\*\*([^*]+)\*\*:\s*(.*)/)
+    if (timestampedBoldMatch) {
+      flushMarkdown()
+      segments.push({
+        type: 'speaker',
+        timestamp: timestampedBoldMatch[1],
+        speaker: timestampedBoldMatch[2],
+        content: timestampedBoldMatch[3],
+      })
+      continue
+    }
+
+    // Check for bold speaker without timestamp: **Name:**
     const boldSpeakerMatch = line.match(/^\*\*([^*]+)\*\*:\s*(.*)/)
     if (boldSpeakerMatch) {
       flushMarkdown()
@@ -118,7 +133,7 @@ function getTranscriptStatus(state?: string): { title: string; description: stri
   }
 }
 
-export default function TranscriptViewer({ content, isLoading, available, episodeState }: TranscriptViewerProps) {
+export default function TranscriptViewer({ content, isLoading, available, episodeState, transcriptType }: TranscriptViewerProps) {
   const segments = useMemo(() => parseTranscript(content), [content])
 
   if (isLoading) {
@@ -156,6 +171,23 @@ export default function TranscriptViewer({ content, isLoading, available, episod
 
   return (
     <div className="transcript-content font-serif leading-relaxed space-y-4">
+      {/* Raw transcript notice */}
+      {transcriptType === 'raw' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <p className="text-amber-800 font-medium text-sm">Raw Transcript</p>
+              <p className="text-amber-700 text-sm mt-1">
+                This is the raw transcript from speech-to-text. It hasn't been cleaned yet, so it may contain
+                transcription errors, speaker labeling issues, or formatting inconsistencies.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       {segments.map((segment, index) => {
         if (segment.type === 'speaker') {
           return (

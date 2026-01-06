@@ -199,7 +199,7 @@ class TranscriptCleaningProcessor:
 
         # Format JSON to markdown (much smaller than raw JSON for LLM)
         logger.info("Formatting transcript JSON to markdown...")
-        formatted_markdown = self.formatter.format_transcript(transcript_data, episode_title)
+        formatted_markdown = self.formatter.format_transcript(transcript_data)
 
         # Save debug artifacts if output_path provided
         if output_path:

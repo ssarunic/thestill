@@ -201,6 +201,7 @@ export default function EpisodeDetail() {
               isLoading={transcriptLoading}
               available={transcriptData?.available}
               episodeState={episode?.state}
+              transcriptType={transcriptData?.transcript_type}
             />
           )}
         </div>

@@ -19,7 +19,7 @@ Podcast service - Business logic for podcast and episode management
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, computed_field
 
@@ -30,6 +30,16 @@ from ..utils.duration import format_duration
 from ..utils.path_manager import PathManager
 
 logger = logging.getLogger(__name__)
+
+# Type alias for transcript type
+TranscriptType = Literal["cleaned", "raw"]
+
+
+class TranscriptResult(NamedTuple):
+    """Result from get_transcript with type information"""
+
+    content: str
+    transcript_type: Optional[TranscriptType]  # None if N/A message
 
 
 class PodcastWithIndex(BaseModel):
@@ -407,16 +417,16 @@ class PodcastService:
 
         return len(podcast.episodes)
 
-    def get_transcript(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
+    def get_transcript(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[TranscriptResult]:
         """
-        Get the cleaned transcript for an episode.
+        Get the transcript for an episode, preferring cleaned over raw.
 
         Args:
             podcast_id: Podcast index or RSS URL
             episode_id: Episode index, 'latest', date, or GUID
 
         Returns:
-            Cleaned Markdown transcript, "N/A" message, or None if episode not found
+            TranscriptResult with content and type, or None if episode not found
         """
         episode = self.get_episode(podcast_id, episode_id)
         if not episode:
@@ -425,31 +435,44 @@ class PodcastService:
 
         from ..models.podcast import EpisodeState
 
-        # Check if processed and has clean transcript
-        # Episodes in CLEANED or SUMMARIZED state have transcripts
-        if episode.state not in (EpisodeState.CLEANED, EpisodeState.SUMMARIZED) or not episode.clean_transcript_path:
-            logger.info(f"Episode not yet processed: {episode.title}")
-            return "N/A - Episode not yet processed"
+        # Try cleaned transcript first (preferred)
+        if episode.clean_transcript_path:
+            md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
+            try:
+                self.path_manager.require_file_exists(md_path, "Cleaned transcript file not found")
+                with open(md_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                logger.info(f"Retrieved cleaned transcript for: {episode.title}")
+                return TranscriptResult(content=content, transcript_type="cleaned")
+            except FileNotFoundError:
+                logger.warning(f"Cleaned transcript file not found: {md_path}")
+            except Exception as e:
+                logger.error(f"Error reading cleaned transcript file: {e}")
 
-        # Build full path to the cleaned Markdown file using PathManager
-        # clean_transcript_path is just the filename (e.g., "episode_cleaned.md")
-        md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
+        # Fall back to raw transcript if available
+        if episode.raw_transcript_path:
+            json_path = self.path_manager.raw_transcript_file(episode.raw_transcript_path)
+            try:
+                import json
 
-        # Verify transcript file exists
-        try:
-            self.path_manager.require_file_exists(md_path, "Cleaned transcript file not found")
-        except FileNotFoundError:
-            logger.warning(f"Cleaned transcript file not found: {md_path}")
-            return "N/A - Transcript file not found"
+                from ..core.transcript_formatter import TranscriptFormatter
 
-        try:
-            with open(md_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            logger.info(f"Retrieved transcript for: {episode.title}")
-            return content
-        except Exception as e:
-            logger.error(f"Error reading transcript file: {e}")
-            return f"N/A - Error reading transcript: {e}"
+                self.path_manager.require_file_exists(json_path, "Raw transcript file not found")
+                with open(json_path, "r", encoding="utf-8") as f:
+                    transcript_data = json.load(f)
+                # Convert raw JSON to Markdown for display
+                formatter = TranscriptFormatter()
+                content = formatter.format_transcript(transcript_data)
+                logger.info(f"Retrieved raw transcript for: {episode.title}")
+                return TranscriptResult(content=content, transcript_type="raw")
+            except FileNotFoundError:
+                logger.warning(f"Raw transcript file not found: {json_path}")
+            except Exception as e:
+                logger.error(f"Error reading raw transcript file: {e}")
+
+        # No transcript available
+        logger.info(f"No transcript available for: {episode.title}")
+        return TranscriptResult(content="N/A - No transcript available", transcript_type=None)
 
     def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
