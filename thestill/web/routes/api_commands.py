@@ -19,11 +19,14 @@ Provides endpoints for executing CLI-like commands (refresh, download, etc.)
 with concurrency protection and progress tracking.
 """
 
+import asyncio
+import json
 import logging
 import threading
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ...core.queue_manager import QueueManager, Task, TaskStage
@@ -700,4 +703,136 @@ async def get_episode_tasks(
     return {
         "episode_id": episode_id,
         "tasks": [task.to_dict() for task in tasks],
+    }
+
+
+@router.get("/task/{task_id}/progress")
+async def stream_task_progress(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> StreamingResponse:
+    """
+    Stream real-time progress updates for a task via Server-Sent Events (SSE).
+
+    This endpoint provides real-time progress updates during transcription
+    tasks. It's particularly useful for WhisperX transcription where
+    progress can be tracked through multiple stages (loading, transcribing,
+    aligning, diarizing, formatting).
+
+    Args:
+        task_id: ID of the task to monitor
+
+    Returns:
+        StreamingResponse with SSE events in the format:
+        ```
+        data: {"stage": "diarizing", "progress_pct": 75, "message": "..."}
+        ```
+
+    Raises:
+        HTTPException 404: If task not found
+
+    Example client usage (JavaScript):
+        ```javascript
+        const eventSource = new EventSource('/api/commands/task/{task_id}/progress');
+        eventSource.onmessage = (event) => {
+            const progress = JSON.parse(event.data);
+            updateProgressBar(progress.progress_pct);
+            updateStageLabel(progress.stage);
+        };
+        ```
+    """
+    # Verify task exists
+    task = state.queue_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    async def event_generator():
+        """Generate SSE events for progress updates."""
+        queue = state.progress_store.subscribe(task_id)
+
+        try:
+            while True:
+                try:
+                    # Wait for progress update with timeout for keepalive
+                    progress = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                    # Send progress event
+                    event_data = json.dumps(progress.to_dict())
+                    yield f"data: {event_data}\n\n"
+
+                    # Check if task is complete or failed
+                    if progress.stage in ("completed", "failed"):
+                        break
+
+                except asyncio.TimeoutError:
+                    # Send keepalive comment to maintain connection
+                    yield ": keepalive\n\n"
+
+                    # Check if task is still processing
+                    current_task = state.queue_manager.get_task(task_id)
+                    if current_task and current_task.status.value in ("completed", "failed"):
+                        # Task finished but we didn't get the final progress update
+                        yield f"data: {json.dumps({'stage': current_task.status.value, 'progress_pct': 100 if current_task.status.value == 'completed' else 0, 'message': current_task.error_message or 'Task finished'})}\n\n"
+                        break
+
+        except asyncio.CancelledError:
+            # Client disconnected
+            logger.debug(f"SSE connection closed for task {task_id}")
+
+        finally:
+            state.progress_store.unsubscribe(task_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+@router.get("/task/{task_id}/progress/current")
+async def get_current_progress(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> Dict[str, Any]:
+    """
+    Get the current progress for a task (non-streaming).
+
+    This is a fallback endpoint for clients that don't support SSE.
+    It returns the latest known progress for a task.
+
+    Args:
+        task_id: ID of the task
+
+    Returns:
+        Dictionary with current progress or task status
+
+    Raises:
+        HTTPException 404: If task not found
+    """
+    task = state.queue_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    # Try to get progress from store
+    progress = state.progress_store.get(task_id)
+
+    if progress:
+        return {
+            "task_id": task_id,
+            "has_progress": True,
+            **progress.to_dict(),
+        }
+
+    # No progress available - return task status
+    return {
+        "task_id": task_id,
+        "has_progress": False,
+        "stage": task.status.value,
+        "progress_pct": 100 if task.status.value == "completed" else 0,
+        "message": task.error_message or f"Task status: {task.status.value}",
+        "estimated_remaining_seconds": None,
     }

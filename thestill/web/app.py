@@ -37,6 +37,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..core.feed_manager import PodcastFeedManager
+from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
@@ -80,6 +81,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize task queue and worker
     queue_manager = QueueManager(config.database_path)
 
+    # Initialize progress store for real-time progress updates
+    progress_store = ProgressStore()
+
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
@@ -92,22 +96,44 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_manager=task_manager,
         queue_manager=queue_manager,
         task_worker=None,  # type: ignore  # Will be set after creation
+        progress_store=progress_store,
     )
 
     # Create task worker with handlers that have access to app_state
     task_handlers = create_task_handlers(app_state)
-    task_worker = TaskWorker(queue_manager, task_handlers)
+    task_worker = TaskWorker(queue_manager, task_handlers, progress_store=progress_store)
     app_state.task_worker = task_worker
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan manager for startup/shutdown."""
+        import asyncio
+
         logger.info("Starting thestill web server...")
         logger.info(f"Storage path: {config.storage_path}")
         logger.info(f"Database: {config.database_path}")
 
+        # Recover any tasks that were interrupted by a previous server restart
+        # Exclude transcribe tasks if using cloud providers (they may still be running)
+        from ..core.queue_manager import TaskStage
+
+        excluded_stages = []
+        if config.transcription_provider.lower() in ("google", "elevenlabs"):
+            excluded_stages.append(TaskStage.TRANSCRIBE)
+            logger.info(
+                f"Using cloud transcription provider ({config.transcription_provider}), "
+                "transcribe tasks will not be auto-recovered"
+            )
+
+        recovered = queue_manager.recover_interrupted_tasks(excluded_stages=excluded_stages)
+        if recovered > 0:
+            logger.info(f"Recovered {recovered} interrupted task(s) from previous session")
+
         # Store state in app for access in routes
         app.state.app_state = app_state
+
+        # Set event loop in progress store for cross-thread async operations
+        progress_store.set_event_loop(asyncio.get_event_loop())
 
         # Start background task worker
         task_worker.start()

@@ -34,6 +34,7 @@ from fastapi import Request
 
 if TYPE_CHECKING:
     from ..core.feed_manager import PodcastFeedManager
+    from ..core.progress_store import ProgressStore
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -62,6 +63,7 @@ class AppState:
         task_manager: Task manager for long-running operations
         queue_manager: SQLite task queue manager
         task_worker: Background task worker
+        progress_store: In-memory progress store for real-time updates
     """
 
     config: "Config"
@@ -74,6 +76,7 @@ class AppState:
     task_manager: "TaskManager"
     queue_manager: "QueueManager"
     task_worker: "TaskWorker"
+    progress_store: "ProgressStore"
 
 
 def get_app_state(request: Request) -> AppState:

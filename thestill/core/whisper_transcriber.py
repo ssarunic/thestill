@@ -33,6 +33,7 @@ from pydub.effects import normalize
 
 from thestill.models.transcript import Segment, Transcript, Word
 
+from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
 
 try:
@@ -55,11 +56,34 @@ class DiarizationProgressMonitor:
     Monitor and display progress for speaker diarization process.
     Uses audio duration and empirical ratios to estimate completion time.
     Adapts estimate based on actual performance.
+
+    Supports both console output (for CLI) and callback-based progress
+    reporting (for web UI).
     """
 
-    def __init__(self, audio_duration_seconds: float, device: str = "cpu"):
+    def __init__(
+        self,
+        audio_duration_seconds: float,
+        device: str = "cpu",
+        progress_callback: Optional[ProgressCallback] = None,
+        progress_base_pct: int = 10,
+        progress_range_pct: int = 80,
+    ):
+        """
+        Initialize the progress monitor.
+
+        Args:
+            audio_duration_seconds: Total duration of audio being processed
+            device: Device type (cuda, cpu, mps) for time estimation
+            progress_callback: Optional callback for progress updates
+            progress_base_pct: Base percentage for diarization stage (default 10%)
+            progress_range_pct: Range of percentage for diarization (default 80%, so 10-90%)
+        """
         self.audio_duration = audio_duration_seconds
         self.device = device
+        self.progress_callback = progress_callback
+        self.progress_base_pct = progress_base_pct
+        self.progress_range_pct = progress_range_pct
         self.start_time: Optional[float] = None
         self.stop_event = threading.Event()
         self.monitor_thread: Optional[threading.Thread] = None
@@ -95,7 +119,9 @@ class DiarizationProgressMonitor:
         """Background thread that updates progress display"""
         while not self.stop_event.is_set():
             if self.start_time is None:
+                self.stop_event.wait(0.1)
                 continue
+
             elapsed = time.time() - self.start_time
             estimated_duration = self._get_estimated_duration()
 
@@ -105,16 +131,35 @@ class DiarizationProgressMonitor:
                 if current_ratio > 0.1:
                     self.estimated_duration = (elapsed / 0.2) * 1.2
 
-            progress_pct = min(99, int((elapsed / estimated_duration) * 100))
+            # Calculate progress within diarization stage (0-100%)
+            diarization_progress_pct = min(99, int((elapsed / estimated_duration) * 100))
+
+            # Calculate remaining time
+            remaining_seconds = max(0, estimated_duration - elapsed)
+
+            # Report via callback if available
+            if self.progress_callback:
+                # Scale to overall progress range (e.g., 50-95%)
+                overall_pct = self.progress_base_pct + int(diarization_progress_pct * self.progress_range_pct / 100)
+                self.progress_callback(
+                    ProgressUpdate(
+                        stage=TranscriptionStage.DIARIZING,
+                        progress_pct=overall_pct,
+                        message=f"Identifying speakers: {diarization_progress_pct}%",
+                        estimated_remaining_seconds=remaining_seconds,
+                    )
+                )
+
+            # Also print to console for CLI usage
             elapsed_str = self._format_time(elapsed)
             estimated_str = self._format_time(estimated_duration)
 
             bar_width = 30
-            filled = int(bar_width * progress_pct / 100)
+            filled = int(bar_width * diarization_progress_pct / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
 
             print(
-                f"\r  Progress: [{bar}] {progress_pct}% | {elapsed_str} / ~{estimated_str}",
+                f"\r  Progress: [{bar}] {diarization_progress_pct}% | {elapsed_str} / ~{estimated_str}",
                 end="",
                 flush=True,
             )
@@ -560,6 +605,7 @@ class WhisperXTranscriber(Transcriber):
     - Enhanced word-level timestamp alignment
     - Speaker diarization via pyannote.audio
     - Fallback to standard Whisper if WhisperX fails
+    - Progress callback support for real-time progress tracking
     """
 
     def __init__(
@@ -571,6 +617,7 @@ class WhisperXTranscriber(Transcriber):
         min_speakers: Optional[int] = None,
         max_speakers: Optional[int] = None,
         diarization_model: str = "pyannote/speaker-diarization-3.1",
+        progress_callback: Optional[ProgressCallback] = None,
     ):
         self.model_name = model_name
         self.device = self._resolve_device(device)
@@ -579,6 +626,7 @@ class WhisperXTranscriber(Transcriber):
         self.min_speakers = min_speakers
         self.max_speakers = max_speakers
         self.diarization_model = diarization_model
+        self.progress_callback = progress_callback
         self._model = None
         self._whisper_fallback: Optional[WhisperTranscriber] = None
 
@@ -612,6 +660,24 @@ class WhisperXTranscriber(Transcriber):
         """Load standard Whisper as fallback"""
         if self._whisper_fallback is None:
             self._whisper_fallback = WhisperTranscriber(model_name=self.model_name, device=self.device)
+
+    def _report_progress(
+        self,
+        stage: TranscriptionStage,
+        progress_pct: int,
+        message: str,
+        estimated_remaining_seconds: Optional[float] = None,
+    ) -> None:
+        """Report progress via callback if available."""
+        if self.progress_callback:
+            self.progress_callback(
+                ProgressUpdate(
+                    stage=stage,
+                    progress_pct=progress_pct,
+                    message=message,
+                    estimated_remaining_seconds=estimated_remaining_seconds,
+                )
+            )
 
     def transcribe_audio(
         self,
@@ -662,6 +728,15 @@ class WhisperXTranscriber(Transcriber):
                     episode_slug,
                 )
 
+            # Report loading model progress
+            # Progress scale: loading=2%, transcribing=5%, aligning=8%, diarizing=10-90%, formatting=95%
+            # Diarization takes ~80% of the total time, so it gets 80% of the progress bar
+            self._report_progress(
+                TranscriptionStage.LOADING_MODEL,
+                2,
+                "Loading WhisperX model...",
+            )
+
             self.load_model()
 
             if self._model is None:
@@ -689,6 +764,11 @@ class WhisperXTranscriber(Transcriber):
                 processed_audio_path = self._whisper_fallback._preprocess_audio(audio_path)
 
             # Step 1: Transcribe with WhisperX
+            self._report_progress(
+                TranscriptionStage.TRANSCRIBING,
+                5,
+                "Transcribing audio with WhisperX...",
+            )
             print("Step 1: Transcribing audio with WhisperX...")
             result = self._model.transcribe(
                 processed_audio_path,
@@ -698,6 +778,11 @@ class WhisperXTranscriber(Transcriber):
             )
 
             # Step 2: Align for word-level timestamps
+            self._report_progress(
+                TranscriptionStage.ALIGNING,
+                8,
+                f"Aligning timestamps for {len(result.get('segments', []))} segments...",
+            )
             print("Step 2: Aligning timestamps for word-level accuracy...")
             print(f"  - Loading alignment model for {result['language']}...")
             model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
@@ -715,6 +800,11 @@ class WhisperXTranscriber(Transcriber):
             # Step 3: Speaker diarization
             speakers_detected = None
             if self.enable_diarization:
+                self._report_progress(
+                    TranscriptionStage.DIARIZING,
+                    10,
+                    "Starting speaker diarization...",
+                )
                 speakers_detected = self._perform_diarization(result, processed_audio_path)
 
             if preprocess_audio and processed_audio_path != audio_path:
@@ -722,6 +812,13 @@ class WhisperXTranscriber(Transcriber):
                     os.remove(processed_audio_path)
                 except OSError:
                     pass
+
+            # Step 4: Format transcript
+            self._report_progress(
+                TranscriptionStage.FORMATTING,
+                95,
+                "Formatting transcript output...",
+            )
 
             processing_time = time.time() - start_time
             print(f"\n✓ Transcription completed in {processing_time:.1f} seconds")
@@ -734,6 +831,13 @@ class WhisperXTranscriber(Transcriber):
             if clean_transcript and cleaning_config:
                 self._load_whisper_fallback()
                 transcript = self._whisper_fallback._clean_transcript_with_llm(transcript, cleaning_config)
+
+            # Report completion
+            self._report_progress(
+                TranscriptionStage.COMPLETED,
+                100,
+                f"Transcription complete ({len(result.get('segments', []))} segments)",
+            )
 
             if output_path:
                 self._save_transcript(transcript, output_path)
@@ -772,6 +876,7 @@ class WhisperXTranscriber(Transcriber):
             progress_monitor = DiarizationProgressMonitor(
                 audio_duration_seconds=audio_duration_seconds,
                 device=self.device,
+                progress_callback=self.progress_callback,
             )
             progress_monitor.start()
 

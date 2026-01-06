@@ -38,9 +38,13 @@ Usage:
 import logging
 import threading
 import time
-from typing import Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Optional
 
+from .progress import ProgressCallback, ProgressUpdate
 from .queue_manager import QueueManager, Task, TaskStage
+
+if TYPE_CHECKING:
+    from .progress_store import ProgressStore
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +64,10 @@ class TaskWorker:
     def __init__(
         self,
         queue_manager: QueueManager,
-        task_handlers: Dict[TaskStage, Callable[[Task], None]],
+        task_handlers: Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]],
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         stale_timeout_minutes: int = DEFAULT_STALE_TIMEOUT,
+        progress_store: Optional["ProgressStore"] = None,
     ):
         """
         Initialize task worker.
@@ -72,11 +77,13 @@ class TaskWorker:
             task_handlers: Dict mapping TaskStage to handler function
             poll_interval: Seconds between queue polls when idle
             stale_timeout_minutes: Minutes before resetting stale tasks
+            progress_store: Optional progress store for real-time progress updates
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
         self.poll_interval = poll_interval
         self.stale_timeout_minutes = stale_timeout_minutes
+        self.progress_store = progress_store
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -187,9 +194,16 @@ class TaskWorker:
 
         logger.info(f"Processing task {task.id}: {task.stage.value} for episode {task.episode_id}")
 
+        # Create progress callback if progress store is available
+        progress_callback: ProgressCallback | None = None
+        if self.progress_store:
+
+            def progress_callback(update: ProgressUpdate) -> None:
+                self.progress_store.update_from_callback(task.id, update)
+
         try:
-            # Execute the handler
-            handler(task)
+            # Execute the handler with optional progress callback
+            handler(task, progress_callback)
 
             # Handler completed successfully - mark task complete
             self.queue_manager.complete_task(task.id)
@@ -201,8 +215,29 @@ class TaskWorker:
             logger.exception(f"Task {task.id} failed: {error_msg}")
             self.queue_manager.fail_task(task.id, error_msg)
 
+            # Report failure via progress store
+            if self.progress_store:
+                from .progress import TranscriptionStage
+
+                self.progress_store.update_from_callback(
+                    task.id,
+                    ProgressUpdate(
+                        stage=TranscriptionStage.FAILED,
+                        progress_pct=0,
+                        message=f"Task failed: {error_msg}",
+                    ),
+                )
+
         finally:
             self._current_task = None
+            # Clean up progress store after a delay to allow final updates to be delivered
+            if self.progress_store:
+                # Schedule cleanup in a separate thread to avoid blocking
+                def cleanup():
+                    time.sleep(5.0)  # Allow 5 seconds for clients to receive final update
+                    self.progress_store.cleanup(task.id)
+
+                threading.Thread(target=cleanup, daemon=True).start()
 
     def _reset_stale_tasks(self) -> None:
         """Reset any stale processing tasks from previous runs."""

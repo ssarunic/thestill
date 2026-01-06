@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Callable, Dict
 
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
+from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .queue_manager import Task, TaskStage
 
 if TYPE_CHECKING:
@@ -143,18 +144,33 @@ def handle_downsample(task: Task, state: "AppState") -> None:
     logger.info(f"Downsample completed for episode: {episode.title}")
 
 
-def handle_transcribe(task: Task, state: "AppState") -> None:
+def handle_transcribe(
+    task: Task,
+    state: "AppState",
+    progress_callback: ProgressCallback | None = None,
+) -> None:
     """
     Transcribe episode audio using configured provider.
 
     Args:
         task: Task containing episode_id
         state: Application state with services
+        progress_callback: Optional callback for progress reporting
 
     Raises:
         RuntimeError: If transcription fails
     """
     logger.info(f"Processing transcribe task for episode {task.episode_id}")
+
+    # Report initial progress
+    if progress_callback:
+        progress_callback(
+            ProgressUpdate(
+                stage=TranscriptionStage.PENDING,
+                progress_pct=0,
+                message="Starting transcription...",
+            )
+        )
 
     # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
     result = state.repository.get_episode(task.episode_id)
@@ -172,8 +188,8 @@ def handle_transcribe(task: Task, state: "AppState") -> None:
     audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
     config.path_manager.require_file_exists(audio_file, "Downsampled audio file not found")
 
-    # Create transcriber based on config
-    transcriber = _create_transcriber(config, config.path_manager)
+    # Create transcriber based on config (with progress callback if available)
+    transcriber = _create_transcriber(config, config.path_manager, progress_callback)
 
     # Determine output path
     path_parts = Path(episode.downsampled_audio_path).parts
@@ -403,13 +419,18 @@ def handle_summarize(task: Task, state: "AppState") -> None:
     logger.info(f"Summarization completed for episode: {episode.title}")
 
 
-def _create_transcriber(config, path_manager):
+def _create_transcriber(
+    config,
+    path_manager,
+    progress_callback: ProgressCallback | None = None,
+):
     """
     Create transcriber based on configuration.
 
     Args:
         config: Application configuration
         path_manager: Path manager for file access
+        progress_callback: Optional callback for progress reporting
 
     Returns:
         Configured transcriber instance
@@ -449,6 +470,7 @@ def _create_transcriber(config, path_manager):
             min_speakers=config.min_speakers,
             max_speakers=config.max_speakers,
             diarization_model=config.diarization_model,
+            progress_callback=progress_callback,
         )
     else:
         from .whisper_transcriber import WhisperTranscriber
@@ -456,7 +478,9 @@ def _create_transcriber(config, path_manager):
         return WhisperTranscriber(config.whisper_model, config.whisper_device)
 
 
-def create_task_handlers(state: "AppState") -> Dict[TaskStage, Callable[[Task], None]]:
+def create_task_handlers(
+    state: "AppState",
+) -> Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]]:
     """
     Create task handlers dictionary with AppState closure.
 
@@ -464,12 +488,13 @@ def create_task_handlers(state: "AppState") -> Dict[TaskStage, Callable[[Task], 
         state: Application state with services
 
     Returns:
-        Dictionary mapping TaskStage to handler function
+        Dictionary mapping TaskStage to handler function.
+        Handlers accept (task, progress_callback) where progress_callback is optional.
     """
     return {
-        TaskStage.DOWNLOAD: lambda task: handle_download(task, state),
-        TaskStage.DOWNSAMPLE: lambda task: handle_downsample(task, state),
-        TaskStage.TRANSCRIBE: lambda task: handle_transcribe(task, state),
-        TaskStage.CLEAN: lambda task: handle_clean(task, state),
-        TaskStage.SUMMARIZE: lambda task: handle_summarize(task, state),
+        TaskStage.DOWNLOAD: lambda task, cb=None: handle_download(task, state),
+        TaskStage.DOWNSAMPLE: lambda task, cb=None: handle_downsample(task, state),
+        TaskStage.TRANSCRIBE: lambda task, cb=None: handle_transcribe(task, state, cb),
+        TaskStage.CLEAN: lambda task, cb=None: handle_clean(task, state),
+        TaskStage.SUMMARIZE: lambda task, cb=None: handle_summarize(task, state),
     }

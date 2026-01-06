@@ -506,3 +506,62 @@ class QueueManager:
                 logger.warning(f"Reset {reset} stale tasks back to pending")
 
             return reset
+
+    def recover_interrupted_tasks(self, excluded_stages: Optional[List[TaskStage]] = None) -> int:
+        """
+        Mark tasks left in 'processing' status as failed.
+
+        This should be called on server startup to handle tasks that were
+        interrupted by a server restart or crash. Unlike reset_stale_tasks,
+        this marks them as failed rather than pending, since:
+        1. The work may have partially completed (e.g., partial transcription)
+        2. It's safer to let the user manually retry than auto-retry
+        3. It provides visibility that something went wrong
+
+        Args:
+            excluded_stages: Stages to NOT recover (e.g., cloud tasks that may
+                           still be running remotely). Tasks in these stages
+                           will be left in 'processing' status.
+
+        Returns:
+            Number of tasks marked as failed
+        """
+        now = datetime.utcnow().isoformat()
+        excluded_stages = excluded_stages or []
+
+        with self._get_connection() as conn:
+            if excluded_stages:
+                # Build placeholders for excluded stages
+                placeholders = ",".join("?" * len(excluded_stages))
+                excluded_values = [s.value for s in excluded_stages]
+
+                cursor = conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET status = 'failed',
+                        error_message = 'Task interrupted by server restart',
+                        completed_at = ?,
+                        updated_at = ?
+                    WHERE status = 'processing'
+                    AND stage NOT IN ({placeholders})
+                """,
+                    (now, now, *excluded_values),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'failed',
+                        error_message = 'Task interrupted by server restart',
+                        completed_at = ?,
+                        updated_at = ?
+                    WHERE status = 'processing'
+                """,
+                    (now, now),
+                )
+
+            count = cursor.rowcount
+            if count > 0:
+                logger.warning(f"Recovered {count} interrupted task(s) - marked as failed")
+
+            return count

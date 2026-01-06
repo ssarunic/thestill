@@ -10,6 +10,14 @@ interface PipelineActionButtonProps {
   onTaskComplete?: (stage: PipelineStage) => void
 }
 
+// Progress update from SSE
+interface ProgressUpdate {
+  stage: string
+  progress_pct: number
+  message: string
+  estimated_remaining_seconds: number | null
+}
+
 // Map episode state to the next action
 const stateToAction: Record<string, { stage: PipelineStage; label: string; icon: string }> = {
   discovered: { stage: 'download', label: 'Download', icon: 'download' },
@@ -19,6 +27,19 @@ const stateToAction: Record<string, { stage: PipelineStage; label: string; icon:
   cleaned: { stage: 'summarize', label: 'Summarize', icon: 'document' },
 }
 
+// Human-readable labels for transcription stages
+const STAGE_LABELS: Record<string, string> = {
+  pending: 'Starting...',
+  loading_model: 'Loading model...',
+  transcribing: 'Transcribing...',
+  aligning: 'Aligning timestamps...',
+  diarizing: 'Identifying speakers...',
+  formatting: 'Formatting...',
+  completed: 'Complete!',
+  failed: 'Failed',
+  processing: 'Processing...',
+}
+
 // Color scheme for different states
 const stageColors: Record<PipelineStage, string> = {
   download: 'bg-blue-600 hover:bg-blue-700',
@@ -26,6 +47,21 @@ const stageColors: Record<PipelineStage, string> = {
   transcribe: 'bg-purple-600 hover:bg-purple-700',
   clean: 'bg-amber-600 hover:bg-amber-700',
   summarize: 'bg-green-600 hover:bg-green-700',
+}
+
+// Format seconds into human-readable time string
+function formatTimeRemaining(seconds: number): string {
+  if (seconds < 60) {
+    return `~${Math.ceil(seconds)}s remaining`
+  }
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.ceil(seconds % 60)
+    return secs > 0 ? `~${mins}m ${secs}s remaining` : `~${mins}m remaining`
+  }
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.ceil((seconds % 3600) / 60)
+  return mins > 0 ? `~${hours}h ${mins}m remaining` : `~${hours}h remaining`
 }
 
 function getIcon(iconType: string) {
@@ -85,6 +121,17 @@ function SpinnerIcon() {
   )
 }
 
+function ProgressBar({ percent }: { percent: number }) {
+  return (
+    <div className="w-32 h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div
+        className="h-full bg-purple-600 transition-all duration-300 ease-out"
+        style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+      />
+    </div>
+  )
+}
+
 export default function PipelineActionButton({
   podcastSlug,
   episodeSlug,
@@ -93,8 +140,10 @@ export default function PipelineActionButton({
   onTaskComplete,
 }: PipelineActionButtonProps) {
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const { mutate: queueTask, isPending } = useQueuePipelineTask(podcastSlug, episodeSlug)
   const { data: tasksData } = useEpisodeTasks(episodeId)
+  const eventSourceRef = useRef<EventSource | null>(null)
 
   // Track previous active task to detect completion
   const prevActiveTaskRef = useRef<{ id: string; stage: PipelineStage } | null>(null)
@@ -106,6 +155,47 @@ export default function PipelineActionButton({
   const activeTask = tasksData?.tasks?.find(
     (t) => t.status === 'pending' || t.status === 'processing'
   )
+
+  // Connect to SSE when there's an active transcribe task
+  useEffect(() => {
+    if (activeTask && activeTask.stage === 'transcribe' && activeTask.status === 'processing') {
+      // Connect to SSE for progress updates
+      const taskId = activeTask.id
+      const eventSource = new EventSource(`/api/commands/task/${taskId}/progress`)
+      eventSourceRef.current = eventSource
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data: ProgressUpdate = JSON.parse(event.data)
+          setProgress(data)
+
+          // Check if task completed or failed
+          if (data.stage === 'completed' || data.stage === 'failed') {
+            eventSource.close()
+            eventSourceRef.current = null
+            // Clear progress after a short delay
+            setTimeout(() => setProgress(null), 2000)
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE data:', e)
+        }
+      }
+
+      eventSource.onerror = () => {
+        // Connection error - close and rely on polling
+        eventSource.close()
+        eventSourceRef.current = null
+      }
+
+      return () => {
+        eventSource.close()
+        eventSourceRef.current = null
+      }
+    } else {
+      // Clear progress when no active transcribe task
+      setProgress(null)
+    }
+  }, [activeTask?.id, activeTask?.stage, activeTask?.status])
 
   // Detect when a task completes and notify parent
   useEffect(() => {
@@ -182,10 +272,42 @@ export default function PipelineActionButton({
   const isDisabled = isPending || !!activeTask
   const isProcessing = activeTask?.status === 'processing'
 
-  // Show processing/pending status
+  // Show processing/pending status with progress for transcribe
   if (activeTask) {
-    const statusLabel = isProcessing ? 'Processing...' : 'Queued...'
     const stageLabel = activeTask.stage.charAt(0).toUpperCase() + activeTask.stage.slice(1)
+
+    // For transcribe with progress, show detailed progress
+    if (activeTask.stage === 'transcribe' && progress) {
+      const progressLabel = STAGE_LABELS[progress.stage] || progress.message
+      const eta = progress.estimated_remaining_seconds
+        ? formatTimeRemaining(progress.estimated_remaining_seconds)
+        : null
+
+      return (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-purple-50 text-purple-700 border border-purple-200">
+              <SpinnerIcon />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">
+                  {stageLabel}: {progressLabel}
+                </span>
+                <div className="flex items-center gap-2 mt-1">
+                  <ProgressBar percent={progress.progress_pct} />
+                  <span className="text-xs text-purple-600">{progress.progress_pct}%</span>
+                </div>
+                {eta && (
+                  <span className="text-xs text-purple-500 mt-0.5">{eta}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // Default processing display (non-transcribe or no progress yet)
+    const statusLabel = isProcessing ? 'Processing...' : 'Queued...'
 
     return (
       <div className="flex items-center gap-3">
