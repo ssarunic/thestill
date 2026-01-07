@@ -93,7 +93,7 @@ class DiarizationProgressMonitor:
         self.processing_ratios = {
             "cuda": 0.5,  # GPU: ~0.5x audio duration (very fast)
             "cpu": 1.0,  # CPU: ~1.0x audio duration (real-time)
-            "mps": 0.7,  # Apple Silicon: ~0.7x audio duration
+            "mps": 0.08,  # Apple Silicon MPS: ~0.08x audio duration (measured: 32min audio → 2.5min)
         }
 
     def _get_estimated_duration(self) -> float:
@@ -606,6 +606,8 @@ class WhisperXTranscriber(Transcriber):
     - Speaker diarization via pyannote.audio
     - Fallback to standard Whisper if WhisperX fails
     - Progress callback support for real-time progress tracking
+    - Hybrid device support: uses optimal device per stage on Mac (CPU for
+      transcription, MPS for alignment/diarization)
     """
 
     def __init__(
@@ -620,7 +622,10 @@ class WhisperXTranscriber(Transcriber):
         progress_callback: Optional[ProgressCallback] = None,
     ):
         self.model_name = model_name
-        self.device = self._resolve_device(device)
+        # Resolve devices for each stage (hybrid approach for Mac)
+        self.transcription_device, self.alignment_device, self.diarization_device = self._resolve_hybrid_devices(device)
+        # Keep self.device for backward compatibility (used by fallback and progress monitor)
+        self.device = self.transcription_device
         self.enable_diarization = enable_diarization and WHISPERX_AVAILABLE
         self.hf_token = hf_token
         self.min_speakers = min_speakers
@@ -638,17 +643,69 @@ class WhisperXTranscriber(Transcriber):
             print("WARNING: Diarization enabled but no HuggingFace token provided. Diarization will be disabled.")
             self.enable_diarization = False
 
+    def _resolve_hybrid_devices(self, device: str) -> tuple:
+        """
+        Resolve device setting into per-stage devices for optimal performance.
+
+        On Mac with MPS available:
+        - Transcription: CPU (Faster-Whisper/CTranslate2 has MPS issues)
+        - Alignment: MPS (Wav2Vec2 works well with Metal)
+        - Diarization: MPS (pyannote benefits from GPU parallelism)
+
+        On CUDA systems: all stages use CUDA.
+        On CPU-only systems: all stages use CPU.
+
+        Returns:
+            tuple: (transcription_device, alignment_device, diarization_device)
+        """
+        # Check for MPS availability
+        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        cuda_available = torch.cuda.is_available()
+
+        if device == "auto":
+            if cuda_available:
+                # CUDA: use GPU for everything
+                return ("cuda", "cuda", "cuda")
+            elif mps_available:
+                # Mac with MPS: hybrid approach
+                print(
+                    "🍎 Mac detected: using hybrid device strategy (CPU for transcription, MPS for alignment/diarization)"
+                )
+                return ("cpu", "mps", "mps")
+            else:
+                # CPU only
+                return ("cpu", "cpu", "cpu")
+        elif device == "mps":
+            if mps_available:
+                # Explicit MPS: use hybrid approach (transcription on CPU due to Faster-Whisper issues)
+                print(
+                    "🍎 MPS requested: using hybrid device strategy (CPU for transcription, MPS for alignment/diarization)"
+                )
+                return ("cpu", "mps", "mps")
+            else:
+                print("WARNING: MPS requested but not available, falling back to CPU")
+                return ("cpu", "cpu", "cpu")
+        elif device == "cuda":
+            if cuda_available:
+                return ("cuda", "cuda", "cuda")
+            else:
+                print("WARNING: CUDA requested but not available, falling back to CPU")
+                return ("cpu", "cpu", "cpu")
+        else:
+            # Explicit device (e.g., "cpu")
+            return (device, device, device)
+
     def load_model(self) -> None:
-        """Load WhisperX model"""
+        """Load WhisperX model on transcription device"""
         if self._model is not None or not WHISPERX_AVAILABLE:
             return
 
-        print(f"Loading WhisperX model: {self.model_name}")
+        print(f"Loading WhisperX model: {self.model_name} (device: {self.transcription_device})")
         try:
             self._model = whisperx.load_model(
                 self.model_name,
-                device=self.device,
-                compute_type="float16" if self.device == "cuda" else "int8",
+                device=self.transcription_device,
+                compute_type="float16" if self.transcription_device == "cuda" else "int8",
             )
             print("WhisperX model loaded successfully")
         except Exception as e:
@@ -784,15 +841,17 @@ class WhisperXTranscriber(Transcriber):
                 f"Aligning timestamps for {len(result.get('segments', []))} segments...",
             )
             print("Step 2: Aligning timestamps for word-level accuracy...")
-            print(f"  - Loading alignment model for {result['language']}...")
-            model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
+            print(f"  - Loading alignment model for {result['language']} (device: {self.alignment_device})...")
+            model_a, metadata = whisperx.load_align_model(
+                language_code=result["language"], device=self.alignment_device
+            )
             print(f"  - Running alignment on {len(result.get('segments', []))} segments...")
             result = whisperx.align(
                 result["segments"],
                 model_a,
                 metadata,
                 processed_audio_path,
-                self.device,
+                self.alignment_device,
                 return_char_alignments=False,
             )
             print("  ✓ Alignment complete")
@@ -853,18 +912,18 @@ class WhisperXTranscriber(Transcriber):
             )
 
     def _perform_diarization(self, result: Dict, audio_path: str) -> Optional[int]:
-        """Perform speaker diarization and update result"""
+        """Perform speaker diarization and update result using diarization_device"""
         try:
             print("Step 3: Performing speaker diarization...")
-            print(f"  - Loading diarization model ({self.diarization_model})...")
+            print(f"  - Loading diarization model ({self.diarization_model}) on {self.diarization_device}...")
 
             if not PYANNOTE_AVAILABLE:
                 raise ImportError("pyannote.audio is required for speaker diarization")
 
             diarize_model = Pipeline.from_pretrained(self.diarization_model, use_auth_token=self.hf_token)
 
-            if self.device != "cpu":
-                diarize_model.to(torch.device(self.device))
+            if self.diarization_device != "cpu":
+                diarize_model.to(torch.device(self.diarization_device))
 
             print("  - Analyzing audio for speaker patterns...")
             if self.min_speakers or self.max_speakers:
@@ -875,7 +934,7 @@ class WhisperXTranscriber(Transcriber):
 
             progress_monitor = DiarizationProgressMonitor(
                 audio_duration_seconds=audio_duration_seconds,
-                device=self.device,
+                device=self.diarization_device,
                 progress_callback=self.progress_callback,
             )
             progress_monitor.start()
