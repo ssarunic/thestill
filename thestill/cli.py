@@ -38,7 +38,7 @@ from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
 from .utils.cli_formatter import CLIFormatter
 from .utils.config import load_config
-from .utils.duration import format_duration, format_speed_stats, get_audio_duration, parse_duration
+from .utils.duration import format_duration, format_speed_stats, get_audio_duration
 from .utils.logger import setup_logger
 from .utils.path_manager import PathManager
 
@@ -1598,9 +1598,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     transcribed_count += 1
 
                     # Track audio duration for speed calculation
-                    episode_duration = parse_duration(episode.duration)
-                    if episode_duration:
-                        total_audio_seconds += episode_duration
+                    if episode.duration:
+                        total_audio_seconds += episode.duration
 
                     click.echo("✅ Transcription complete!")
                 elif getattr(ctx.obj, "using_webhook_mode", False):
