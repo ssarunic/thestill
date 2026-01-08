@@ -252,6 +252,15 @@ mypy thestill/
 13. **Models** (`thestill/models/podcast.py`, `thestill/models/facts.py`)
     - Pydantic models for type safety
     - Episode, Podcast, Quote, ProcessedContent, CleanedTranscript, PodcastFacts, EpisodeFacts schemas
+    - **Episode failure tracking fields**:
+      - `failed_at_stage`: Which pipeline stage failed (download, transcribe, etc.)
+      - `failure_reason`: Human-readable error message
+      - `failure_type`: `transient` or `fatal` (FailureType enum)
+      - `failed_at`: Timestamp of failure
+    - **Episode computed properties**:
+      - `is_failed`: True if episode has failure recorded
+      - `can_retry`: True if failure is transient (can be retried)
+      - `last_successful_state`: State before failure occurred
 
 14. **Path Manager** (`thestill/utils/path_manager.py`)
     - **Centralized path management** for all file artifacts
@@ -260,6 +269,39 @@ mypy thestill/
     - Methods for all artifact types (audio, transcripts, summaries, etc.)
     - Integrated into Config and FeedManager
     - **Reduces errors** when directory structures change
+
+15. **Task Queue System** (`thestill/core/queue_manager.py`, `thestill/core/task_worker.py`)
+    - **QueueManager**: SQLite-backed task queue for processing jobs
+      - Task states: `pending`, `processing`, `completed`, `retry_scheduled`, `failed`, `dead`
+      - Task metadata for pipeline chaining (`run_full_pipeline` flag)
+      - Retry scheduling with `next_retry_at` timestamp
+    - **TaskWorker**: Background worker that processes tasks
+      - Picks up pending/retry-ready tasks
+      - Executes stage-specific handlers
+      - Handles error classification and retry logic
+      - Chain-enqueues next stage for full pipeline runs
+    - **Task Handlers** (`thestill/core/task_handlers.py`):
+      - `handle_download()`, `handle_downsample()`, `handle_transcribe()`
+      - `handle_clean()`, `handle_summarize()`
+      - Each handler raises `TransientError` or `FatalError` for classification
+
+16. **Error Classification** (`thestill/core/error_classifier.py`)
+    - Classifies exceptions as transient (retryable) or fatal
+    - **Transient errors** (auto-retry with backoff):
+      - HTTP 502, 503, 504, 429 (rate limit)
+      - Network timeouts, connection resets
+      - LLM API 500 errors, invalid JSON responses
+      - Database locked errors
+    - **Fatal errors** (moved to DLQ):
+      - HTTP 404, 403, 401
+      - Corrupt audio files, unsupported formats
+      - Episode/podcast not found
+      - Disk full, invalid configuration
+
+17. **Exponential Backoff** (`thestill/core/queue_manager.py`)
+    - Retry delays: ~5s → ~30s → ~3min → give up
+    - Jitter (±20%) to prevent thundering herd
+    - Max 3 retries before marking as `failed` (transient) or `dead` (fatal)
 
 ### MCP Server (`thestill/mcp/`)
 
@@ -279,17 +321,40 @@ The project includes an MCP (Model Context Protocol) server for integration with
 
 ### Web Server (`thestill/web/`)
 
-FastAPI-based web server for webhooks, REST API, and future web UI:
+FastAPI-based web server with REST API, React frontend, and webhook handlers:
 
 ```
 thestill/web/
 ├── __init__.py              # Package init with create_app export
 ├── app.py                   # FastAPI application factory
 ├── dependencies.py          # Dependency injection (AppState, get_app_state)
-└── routes/
-    ├── __init__.py
-    ├── health.py            # Health check and status endpoints
-    └── webhooks.py          # ElevenLabs webhook handlers
+├── routes/
+│   ├── __init__.py
+│   ├── health.py            # Health check and status endpoints
+│   ├── webhooks.py          # ElevenLabs webhook handlers
+│   ├── api_podcasts.py      # Podcast CRUD endpoints
+│   ├── api_episodes.py      # Episode content endpoints
+│   └── api_commands.py      # Processing commands (pipeline, DLQ)
+├── frontend/                # React SPA
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── pages/
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── Podcasts.tsx
+│   │   │   ├── Episodes.tsx
+│   │   │   ├── EpisodeDetail.tsx
+│   │   │   └── FailedTasks.tsx     # DLQ dashboard
+│   │   ├── components/
+│   │   │   ├── Layout.tsx
+│   │   │   ├── EpisodeCard.tsx
+│   │   │   ├── PipelineActionButton.tsx
+│   │   │   ├── FailureBanner.tsx
+│   │   │   └── FailureDetailsModal.tsx
+│   │   └── api/
+│   │       ├── client.ts
+│   │       └── types.ts
+│   └── package.json
+└── static/                  # Built frontend assets
 ```
 
 **Key Components:**
@@ -367,6 +432,41 @@ thestill server --reload           # Development mode with auto-reload
 | `/health` | GET | Health check |
 | `/status` | GET | System statistics |
 | `/docs` | GET | OpenAPI documentation |
+
+**Podcast Endpoints (`/api/podcasts`):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/podcasts` | GET | List all podcasts |
+| `/api/podcasts` | POST | Add new podcast `{url}` |
+| `/api/podcasts/{slug}` | GET | Get podcast details |
+| `/api/podcasts/{slug}` | DELETE | Remove podcast |
+| `/api/podcasts/{slug}/refresh` | POST | Trigger feed refresh |
+
+**Episode Endpoints (`/api/episodes`):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/podcasts/{podcast_slug}/episodes` | GET | List episodes (filterable) |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details |
+| `/api/episodes/{id}/transcript` | GET | Get transcript content |
+| `/api/episodes/{id}/summary` | GET | Get summary content |
+| `/api/episodes/{id}/failure` | GET | Get failure details |
+| `/api/episodes/{id}/retry` | POST | Clear failure and retry |
+
+**Command Endpoints (`/api/commands`):**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/commands/run-pipeline` | POST | Run full pipeline for episode |
+| `/api/commands/dlq` | GET | List dead letter queue tasks |
+| `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
+| `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
+
+**Webhook Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/webhook/elevenlabs/speech-to-text` | POST | Receive transcription callback |
 | `/webhook/elevenlabs/results` | GET | List webhook results |
 | `/webhook/elevenlabs/results/{id}` | GET | Get specific result |
@@ -518,6 +618,16 @@ Each step is an atomic operation that can be run independently and scaled horizo
 - `transcribed` → raw_transcript_path set
 - `cleaned` → clean_transcript_path set
 - `summarized` → summary_path set (final state)
+- `failed` → processing failed at some stage (has `failed_at_stage` set)
+
+**Full Pipeline Execution (Web UI):**
+
+When "Run Full Pipeline" is triggered from the Web UI:
+
+1. Task is created with `metadata.run_full_pipeline = true`
+2. Each stage completion automatically enqueues the next stage
+3. Pipeline continues until summarization or failure
+4. Progress is tracked in real-time via polling
 
 **Pipeline Design:**
 
@@ -545,6 +655,10 @@ thestill/
 │   ├── transcript_formatter.py   # JSON to Markdown conversion
 │   ├── post_processor.py         # Summarization and analysis
 │   ├── evaluator.py              # Transcript quality evaluation
+│   ├── queue_manager.py          # Task queue management (SQLite-backed)
+│   ├── task_worker.py            # Background task worker
+│   ├── task_handlers.py          # Stage-specific task handlers
+│   ├── error_classifier.py       # Transient vs fatal error classification
 │   ├── llm_provider.py           # Multi-provider LLM abstraction
 │   ├── media_source.py           # Strategy pattern for RSS/YouTube
 │   └── transcript_cleaning_processor.py  # Legacy three-phase cleaner
@@ -562,12 +676,20 @@ thestill/
 │   ├── tools.py
 │   ├── resources.py
 │   └── utils.py
-├── web/                   # FastAPI web server
+├── web/                   # FastAPI web server + React frontend
 │   ├── app.py                   # Application factory
 │   ├── dependencies.py          # DI (AppState, get_app_state)
-│   └── routes/
-│       ├── health.py            # Health/status endpoints
-│       └── webhooks.py          # ElevenLabs webhook handlers
+│   ├── routes/
+│   │   ├── health.py            # Health/status endpoints
+│   │   ├── webhooks.py          # ElevenLabs webhook handlers
+│   │   ├── api_podcasts.py      # Podcast CRUD endpoints
+│   │   ├── api_episodes.py      # Episode content endpoints
+│   │   └── api_commands.py      # Pipeline/DLQ command endpoints
+│   ├── frontend/                # React SPA source
+│   │   └── src/
+│   │       ├── pages/           # Dashboard, Episodes, EpisodeDetail, FailedTasks
+│   │       └── components/      # EpisodeCard, PipelineActionButton, FailureBanner
+│   └── static/                  # Built frontend assets
 └── utils/                 # Utilities and configuration
     ├── config.py
     ├── path_manager.py

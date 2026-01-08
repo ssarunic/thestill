@@ -21,6 +21,7 @@ thestill.me is a production-ready podcast transcription and analysis pipeline th
 - **Multiple Sources**: RSS feeds, Apple Podcasts, YouTube channels/playlists
 - **Flexible LLM Backend**: OpenAI, Ollama (local), Google Gemini, or Anthropic Claude
 - **SQLite Storage**: Fast indexed queries with ACID transactions
+- **Web UI**: Modern React-based interface for managing podcasts and viewing content
 - **MCP Server**: Integrate with Claude Desktop and other MCP-compatible clients
 
 **Processing Pipeline:**
@@ -29,7 +30,7 @@ thestill.me is a production-ready podcast transcription and analysis pipeline th
 Refresh → Download → Downsample → Transcribe → Clean → Summarize
 ```
 
-Each step is atomic and can be run independently for horizontal scaling.
+Each step is atomic and can be run independently, or run the **full pipeline** with a single action. Robust failure handling with automatic retries for transient errors and a Dead Letter Queue (DLQ) for manual intervention.
 
 ## Features
 
@@ -44,10 +45,20 @@ Each step is atomic and can be run independently for horizontal scaling.
 - **Multiple LLM Providers**: OpenAI GPT-4, Ollama (local), Google Gemini, Anthropic Claude
 - **SQLite Database**: Indexed queries (O(log n)), row-level locking, ACID transactions
 - **Atomic Pipeline**: Each processing step is independent and idempotent
+- **Full Pipeline Execution**: Run entire pipeline (download → summarize) with one click via Web UI
+- **Robust Failure Handling**:
+  - Automatic error classification (transient vs fatal)
+  - Exponential backoff with retries for transient errors (network timeouts, rate limits)
+  - Dead Letter Queue (DLQ) for failed tasks requiring manual intervention
+  - Episode failure tracking with detailed error information
+- **Web UI**: React-based dashboard with:
+  - Podcast and episode management
+  - Real-time processing queue with progress tracking
+  - Transcript and summary viewing
+  - DLQ dashboard for failed task management
 - **CLI Interface**: Simple command-line tool with comprehensive options
 - **MCP Server**: Natural language interface via Claude Desktop
 - **Episode Management**: Configurable limits per podcast to keep data manageable
-- **Robust Error Handling**: Retry logic with exponential backoff, structured logging
 
 ## Quick Start
 
@@ -205,6 +216,55 @@ thestill.me includes an MCP (Model Context Protocol) server that lets you intera
 
 For setup instructions and detailed usage, see **[MCP Server Guide](docs/MCP_USAGE.md)**.
 
+## Web UI
+
+thestill.me includes a modern React-based web interface for managing your podcast library and viewing processed content.
+
+### Starting the Web Server
+
+```bash
+# Start the web server
+thestill server                    # Start on localhost:8000
+thestill server --host 0.0.0.0     # Expose to network
+thestill server --port 8080        # Custom port
+thestill server --reload           # Development mode with auto-reload
+```
+
+Then open `http://localhost:8000` in your browser.
+
+### Features
+
+- **Dashboard**: Overview of podcasts, episodes, and processing status
+- **Podcast Management**: Add, view, and manage podcast feeds
+- **Episode Browser**: Browse episodes with filtering by podcast and state
+- **Content Viewer**: View transcripts and summaries with speaker labels
+- **Processing Queue**: Real-time view of processing jobs with progress
+- **Full Pipeline Execution**: Run the entire pipeline with one click
+- **DLQ Dashboard**: View and manage failed tasks
+
+### Full Pipeline Execution
+
+From the episode detail page, you can run the entire processing pipeline with a single action:
+
+1. Click the dropdown arrow on the action button
+2. Select "Run Full Pipeline"
+3. The system will automatically progress through: Download → Downsample → Transcribe → Clean → Summarize
+
+Progress is displayed in real-time, and you can cancel the pipeline at any point.
+
+### Failure Handling
+
+The web UI provides visibility into processing failures:
+
+- **Transient Errors** (network timeouts, rate limits): Automatically retried with exponential backoff
+- **Fatal Errors** (404, corrupt files): Moved to Dead Letter Queue for manual review
+
+The DLQ dashboard (`/failed-tasks`) shows all failed tasks with:
+
+- Error details and classification
+- Retry and skip actions
+- Bulk retry for transient errors
+
 ## Commands Reference
 
 ### Feed Management
@@ -304,6 +364,7 @@ Episodes progress through states tracked in `podcasts.db`:
 4. **transcribed** - Transcription complete, has `raw_transcript_path`
 5. **cleaned** - Transcript cleaned (optional), has `clean_transcript_path`
 6. **summarized** - Summary generated (optional), has `summary_path`
+7. **failed** - Processing failed at some stage (see failure details for which stage)
 
 ### Transcript Format
 
@@ -678,10 +739,11 @@ For detailed development guidelines, see [docs/CODE_GUIDELINES.md](docs/CODE_GUI
 
 - Blog post generation from processed content
 - Social media post creation
-- Web interface
 - Multi-language support
 - Direct publishing integrations
-- User authentication system
+- User authentication system (multi-user support)
+- Email/webhook notifications for completed processing
+- Spotify and SoundCloud podcast support
 
 ## License
 
