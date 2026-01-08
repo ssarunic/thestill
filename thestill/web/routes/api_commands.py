@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from ...core.queue_manager import QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
+from ...core.queue_manager import get_next_stage
 from ...models.podcast import EpisodeState
 from ..dependencies import AppState, get_app_state
 from ..task_manager import TaskStatus, TaskType
@@ -97,7 +98,8 @@ def run_add_podcast_task(
     Execute the add podcast task in the background.
 
     This function runs in a separate thread and updates the task manager
-    with progress and results.
+    with progress and results. After adding the podcast, it automatically
+    refreshes the feed to discover episodes.
 
     Args:
         state: Application state with services
@@ -119,18 +121,32 @@ def run_add_podcast_task(
             )
             return
 
+        task_manager.update_progress(TaskType.ADD_PODCAST, 60, "Discovering episodes...")
+
+        # Refresh the newly added podcast to discover episodes
+        max_episodes_per_podcast = state.config.max_episodes_per_podcast
+        result = state.refresh_service.refresh(
+            podcast_id=str(podcast.rss_url),
+            max_episodes_per_podcast=max_episodes_per_podcast,
+        )
+
         task_manager.update_progress(TaskType.ADD_PODCAST, 90, "Finalizing...")
+
+        # Re-fetch podcast to get updated episode count
+        updated_podcast = state.repository.get_by_url(str(podcast.rss_url))
+        episodes_count = len(updated_podcast.episodes) if updated_podcast else 0
 
         # Build result summary
         result_data = {
             "podcast_title": podcast.title,
             "podcast_id": podcast.id,
             "rss_url": str(podcast.rss_url),
-            "episodes_count": len(podcast.episodes),
+            "episodes_count": episodes_count,
+            "episodes_discovered": result.total_episodes,
         }
 
         # Complete the task
-        message = f"Added podcast: {podcast.title}"
+        message = f"Added podcast: {podcast.title} ({episodes_count} episodes)"
         task_manager.complete_task(TaskType.ADD_PODCAST, result=result_data, message=message)
 
     except ValueError as e:
@@ -445,6 +461,47 @@ class QueueStatusResponse(BaseModel):
     stats: Dict[str, int]
 
 
+class RunPipelineRequest(BaseModel):
+    """Request body for running the full pipeline."""
+
+    podcast_slug: str
+    episode_slug: str
+    target_state: str = "summarized"  # Target state to reach (default: full pipeline)
+
+
+class RunPipelineResponse(BaseModel):
+    """Response for pipeline execution."""
+
+    task_id: str
+    status: str
+    message: str
+    starting_stage: str
+    target_state: str
+    episode_id: str
+    episode_title: str
+
+
+def _get_starting_stage(episode_state: EpisodeState) -> Optional[TaskStage]:
+    """
+    Get the next pipeline stage for an episode based on its current state.
+
+    Args:
+        episode_state: Current episode state
+
+    Returns:
+        Next TaskStage to execute, or None if episode is already summarized
+    """
+    state_to_stage = {
+        EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
+        EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
+        EpisodeState.DOWNSAMPLED: TaskStage.TRANSCRIBE,
+        EpisodeState.TRANSCRIBED: TaskStage.CLEAN,
+        EpisodeState.CLEANED: TaskStage.SUMMARIZE,
+        EpisodeState.SUMMARIZED: None,  # Already at final state
+    }
+    return state_to_stage.get(episode_state)
+
+
 def _validate_episode_for_stage(
     state: AppState, podcast_slug: str, episode_slug: str, required_state: EpisodeState, stage: TaskStage
 ) -> tuple:
@@ -627,6 +684,155 @@ async def queue_summarize(
         stage=TaskStage.SUMMARIZE.value,
         episode_id=episode.id,
         episode_title=episode.title,
+    )
+
+
+class CancelPipelineResponse(BaseModel):
+    """Response for pipeline cancellation."""
+
+    status: str
+    message: str
+    episode_id: str
+    cancelled_tasks: int
+
+
+@router.post("/run-pipeline", response_model=RunPipelineResponse)
+async def run_pipeline(
+    request: RunPipelineRequest,
+    state: AppState = Depends(get_app_state),
+) -> RunPipelineResponse:
+    """
+    Run the full pipeline for an episode from its current state to completion.
+
+    This endpoint queues the next required stage for an episode and sets metadata
+    to automatically chain-enqueue subsequent stages until the target state is reached.
+
+    For example, if an episode is in DISCOVERED state with target_state="summarized":
+    - Queues DOWNLOAD task with run_full_pipeline=True
+    - When DOWNLOAD completes, automatically queues DOWNSAMPLE
+    - Continues until SUMMARIZE completes or a task fails
+
+    Args:
+        request: Podcast slug, episode slug, and optional target state
+        state: Application state
+
+    Returns:
+        RunPipelineResponse with first task ID and pipeline info
+
+    Raises:
+        HTTPException 404: If podcast or episode not found
+        HTTPException 400: If episode is already at or past target state
+        HTTPException 409: If a task is already queued/processing for this episode
+    """
+    # Get podcast and episode by slugs
+    result = state.repository.get_episode_by_slug(request.podcast_slug, request.episode_slug)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {request.podcast_slug}/{request.episode_slug}")
+
+    podcast, episode = result
+
+    # Determine starting stage based on current episode state
+    starting_stage = _get_starting_stage(episode.state)
+
+    if starting_stage is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Episode is already in {episode.state.value} state (fully processed)",
+        )
+
+    # Validate target_state
+    valid_target_states = ["downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
+    if request.target_state not in valid_target_states:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid target_state: {request.target_state}. Must be one of: {valid_target_states}",
+        )
+
+    # Check if target state is achievable (not before current state)
+    state_order = ["discovered", "downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
+    current_idx = state_order.index(episode.state.value)
+    target_idx = state_order.index(request.target_state)
+
+    if target_idx <= current_idx:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Episode is already at {episode.state.value} state, cannot reach {request.target_state}",
+        )
+
+    # Check for existing pending/processing task for starting stage
+    if state.queue_manager.has_pending_task(episode.id, starting_stage):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {starting_stage.value} task is already queued or processing for this episode",
+        )
+
+    # Create task with run_full_pipeline metadata
+    metadata = {
+        "run_full_pipeline": True,
+        "target_state": request.target_state,
+        "initiated_by": "api",
+    }
+
+    task = state.queue_manager.add_task(
+        episode_id=episode.id,
+        stage=starting_stage,
+        metadata=metadata,
+    )
+
+    return RunPipelineResponse(
+        task_id=task.id,
+        status="queued",
+        message=f"Pipeline started for {episode.title}: {starting_stage.value} → {request.target_state}",
+        starting_stage=starting_stage.value,
+        target_state=request.target_state,
+        episode_id=episode.id,
+        episode_title=episode.title,
+    )
+
+
+@router.post("/episode/{episode_id}/cancel-pipeline", response_model=CancelPipelineResponse)
+async def cancel_pipeline(
+    episode_id: str,
+    state: AppState = Depends(get_app_state),
+) -> CancelPipelineResponse:
+    """
+    Cancel all pending/scheduled pipeline tasks for an episode.
+
+    This stops any running pipeline by cancelling all pending and retry_scheduled tasks.
+    Tasks that are currently processing will complete, but no further stages will be queued.
+
+    Args:
+        episode_id: ID of the episode whose pipeline to cancel
+
+    Returns:
+        CancelPipelineResponse with count of cancelled tasks
+
+    Raises:
+        HTTPException 404: If episode not found
+    """
+    # Verify episode exists
+    result = state.repository.get_episode(episode_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_id}")
+
+    _, episode = result
+
+    # Get all tasks for this episode
+    tasks = state.queue_manager.get_tasks_for_episode(episode_id)
+
+    # Cancel pending and retry_scheduled tasks
+    cancelled_count = 0
+    for task in tasks:
+        if task.status in (QueueTaskStatus.PENDING, QueueTaskStatus.RETRY_SCHEDULED):
+            # Mark as failed with cancellation message
+            state.queue_manager.fail_task(task.id, "Pipeline cancelled by user")
+            cancelled_count += 1
+
+    return CancelPipelineResponse(
+        status="ok",
+        message=f"Cancelled {cancelled_count} pending task(s) for {episode.title}",
+        episode_id=episode_id,
+        cancelled_tasks=cancelled_count,
     )
 
 
@@ -836,3 +1042,264 @@ async def get_current_progress(
         "message": task.error_message or f"Task status: {task.status.value}",
         "estimated_remaining_seconds": None,
     }
+
+
+# ============================================================================
+# Dead Letter Queue (DLQ) Endpoints
+# ============================================================================
+
+
+class DLQTaskResponse(BaseModel):
+    """Response for a single DLQ task with episode info."""
+
+    task_id: str
+    episode_id: str
+    episode_title: str
+    episode_slug: str
+    podcast_title: str
+    podcast_slug: str
+    stage: str
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+    retry_count: int
+    max_retries: int
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class DLQListResponse(BaseModel):
+    """Response for listing DLQ tasks."""
+
+    status: str
+    tasks: list[DLQTaskResponse]
+    count: int
+
+
+class DLQActionResponse(BaseModel):
+    """Response for DLQ actions (retry, skip)."""
+
+    status: str
+    message: str
+    task_id: str
+    new_status: str
+
+
+class DLQBulkRetryRequest(BaseModel):
+    """Request body for bulk retry of DLQ tasks."""
+
+    task_ids: Optional[list[str]] = None  # If None, retry all
+
+
+class DLQBulkRetryResponse(BaseModel):
+    """Response for bulk retry of DLQ tasks."""
+
+    status: str
+    retried: int
+    skipped: int
+    task_ids: list[str]
+
+
+@router.get("/dlq", response_model=DLQListResponse)
+async def list_dlq_tasks(
+    limit: int = 100,
+    state: AppState = Depends(get_app_state),
+) -> DLQListResponse:
+    """
+    List tasks in the Dead Letter Queue (status='dead').
+
+    These are tasks that failed with fatal errors that will not automatically retry.
+    They need manual intervention - either retry after fixing the issue, or skip.
+
+    Args:
+        limit: Maximum number of tasks to return (default 100)
+
+    Returns:
+        DLQListResponse with list of dead tasks and their episode info
+    """
+    dead_tasks = state.queue_manager.get_dead_tasks(limit=limit)
+
+    tasks_with_info = []
+    for task in dead_tasks:
+        # Get episode and podcast info
+        result = state.repository.get_episode(task.episode_id)
+        if result:
+            podcast, episode = result
+            tasks_with_info.append(
+                DLQTaskResponse(
+                    task_id=task.id,
+                    episode_id=task.episode_id,
+                    episode_title=episode.title,
+                    episode_slug=episode.slug,
+                    podcast_title=podcast.title,
+                    podcast_slug=podcast.slug,
+                    stage=task.stage.value,
+                    error_message=task.error_message,
+                    error_type=task.error_type.value if task.error_type else None,
+                    retry_count=task.retry_count,
+                    max_retries=task.max_retries,
+                    created_at=task.created_at.isoformat() if task.created_at else None,
+                    completed_at=task.completed_at.isoformat() if task.completed_at else None,
+                )
+            )
+        else:
+            # Episode not found - still include task but with placeholder info
+            tasks_with_info.append(
+                DLQTaskResponse(
+                    task_id=task.id,
+                    episode_id=task.episode_id,
+                    episode_title="[Episode not found]",
+                    episode_slug="",
+                    podcast_title="[Unknown]",
+                    podcast_slug="",
+                    stage=task.stage.value,
+                    error_message=task.error_message,
+                    error_type=task.error_type.value if task.error_type else None,
+                    retry_count=task.retry_count,
+                    max_retries=task.max_retries,
+                    created_at=task.created_at.isoformat() if task.created_at else None,
+                    completed_at=task.completed_at.isoformat() if task.completed_at else None,
+                )
+            )
+
+    return DLQListResponse(
+        status="ok",
+        tasks=tasks_with_info,
+        count=len(tasks_with_info),
+    )
+
+
+@router.post("/dlq/{task_id}/retry", response_model=DLQActionResponse)
+async def retry_dlq_task(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> DLQActionResponse:
+    """
+    Retry a task from the Dead Letter Queue.
+
+    This moves the task back to 'pending' status and clears the episode's failure state,
+    allowing it to be picked up by the worker again.
+
+    Args:
+        task_id: ID of the dead task to retry
+
+    Returns:
+        DLQActionResponse with new task status
+
+    Raises:
+        HTTPException 404: If task not found
+        HTTPException 400: If task is not in 'dead' status
+    """
+    task = state.queue_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    if task.status != QueueTaskStatus.DEAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not in DLQ (status={task.status.value}). Only dead tasks can be retried from DLQ.",
+        )
+
+    # Move task back to pending
+    updated_task = state.queue_manager.retry_dead_task(task_id)
+    if not updated_task:
+        raise HTTPException(status_code=500, detail="Failed to retry task")
+
+    # Clear episode failure state
+    state.repository.clear_episode_failure(task.episode_id)
+
+    return DLQActionResponse(
+        status="ok",
+        message=f"Task {task_id} moved back to pending queue",
+        task_id=task_id,
+        new_status=updated_task.status.value,
+    )
+
+
+@router.post("/dlq/{task_id}/skip", response_model=DLQActionResponse)
+async def skip_dlq_task(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> DLQActionResponse:
+    """
+    Skip (resolve) a task from the Dead Letter Queue.
+
+    This marks the task as 'completed' without actually processing it.
+    Use this when you've manually resolved the issue or determined the episode
+    shouldn't be processed.
+
+    Note: This does NOT clear the episode's failure state. The episode will remain
+    marked as failed unless you explicitly clear it.
+
+    Args:
+        task_id: ID of the dead task to skip
+
+    Returns:
+        DLQActionResponse with new task status
+
+    Raises:
+        HTTPException 404: If task not found
+        HTTPException 400: If task is not in 'dead' status
+    """
+    task = state.queue_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+
+    if task.status != QueueTaskStatus.DEAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not in DLQ (status={task.status.value}). Only dead tasks can be skipped.",
+        )
+
+    # Mark task as completed (skipped)
+    state.queue_manager.complete_task(task_id)
+
+    return DLQActionResponse(
+        status="ok",
+        message=f"Task {task_id} marked as skipped/resolved",
+        task_id=task_id,
+        new_status="completed",
+    )
+
+
+@router.post("/dlq/retry-all", response_model=DLQBulkRetryResponse)
+async def retry_all_dlq_tasks(
+    request: Optional[DLQBulkRetryRequest] = None,
+    state: AppState = Depends(get_app_state),
+) -> DLQBulkRetryResponse:
+    """
+    Retry multiple tasks from the Dead Letter Queue.
+
+    If task_ids is provided, only those tasks are retried.
+    If task_ids is None or empty, all dead tasks are retried.
+
+    Args:
+        request: Optional list of task IDs to retry
+
+    Returns:
+        DLQBulkRetryResponse with count of retried and skipped tasks
+    """
+    dead_tasks = state.queue_manager.get_dead_tasks(limit=1000)
+
+    # Filter to specific task_ids if provided
+    if request and request.task_ids:
+        task_ids_set = set(request.task_ids)
+        dead_tasks = [t for t in dead_tasks if t.id in task_ids_set]
+
+    retried_ids = []
+    skipped = 0
+
+    for task in dead_tasks:
+        updated_task = state.queue_manager.retry_dead_task(task.id)
+        if updated_task:
+            # Clear episode failure state
+            state.repository.clear_episode_failure(task.episode_id)
+            retried_ids.append(task.id)
+        else:
+            skipped += 1
+
+    return DLQBulkRetryResponse(
+        status="ok",
+        retried=len(retried_ids),
+        skipped=skipped,
+        task_ids=retried_ids,
+    )
