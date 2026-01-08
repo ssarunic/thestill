@@ -108,6 +108,16 @@ class ProgressStore:
             self._progress[task_id] = progress
             subscribers = list(self._subscribers.get(task_id, []))
 
+        # Log at INFO level during diarizing stage for debugging, DEBUG for others
+        log_msg = (
+            f"Progress update for {task_id}: {progress.stage} {progress.progress_pct}% "
+            f"(ETA: {progress.estimated_remaining_seconds}s, {len(subscribers)} subscribers)"
+        )
+        if progress.stage == "diarizing":
+            logger.info(log_msg)
+        else:
+            logger.debug(log_msg)
+
         # Notify subscribers outside the lock
         for queue in subscribers:
             try:
@@ -118,16 +128,17 @@ class ProgressStore:
                         try:
                             q.put_nowait(p)
                         except asyncio.QueueFull:
-                            pass
+                            logger.warning(f"Queue full for task {task_id}, dropped progress update")
 
                     self._loop.call_soon_threadsafe(put_to_queue, queue, progress)
                 else:
                     # Fallback: try direct put (may fail if queue is full)
+                    logger.warning(f"No event loop for task {task_id}, using direct put")
                     queue.put_nowait(progress)
             except asyncio.QueueFull:
                 logger.debug(f"Dropped progress update for task {task_id}: queue full")
             except Exception as e:
-                logger.debug(f"Failed to notify subscriber for task {task_id}: {e}")
+                logger.warning(f"Failed to notify subscriber for task {task_id}: {e}")
 
     def update_from_callback(self, task_id: str, update: ProgressUpdate) -> None:
         """

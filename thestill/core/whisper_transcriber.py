@@ -123,19 +123,22 @@ class DiarizationProgressMonitor:
                 continue
 
             elapsed = time.time() - self.start_time
-            estimated_duration = self._get_estimated_duration()
+            initial_estimate = self._get_estimated_duration()
 
-            # Adaptive estimation after 10 seconds
-            if elapsed > 10 and self.estimated_duration is None:
-                current_ratio = elapsed / self.audio_duration
-                if current_ratio > 0.1:
-                    self.estimated_duration = (elapsed / 0.2) * 1.2
+            # Use initial estimate for progress calculation
+            # Progress is simply elapsed/estimated, capped at 99%
+            diarization_progress_pct = min(99, int((elapsed / initial_estimate) * 100))
 
-            # Calculate progress within diarization stage (0-100%)
-            diarization_progress_pct = min(99, int((elapsed / estimated_duration) * 100))
-
-            # Calculate remaining time
-            remaining_seconds = max(0, estimated_duration - elapsed)
+            # For remaining time, we have two modes:
+            # 1. Before we exceed initial estimate: show (initial_estimate - elapsed)
+            # 2. After we exceed initial estimate: show "finishing up" with 0 remaining
+            if elapsed < initial_estimate:
+                remaining_seconds = max(0, initial_estimate - elapsed)
+            else:
+                # We've exceeded the estimate - diarization is taking longer than expected
+                # Show 0 remaining but cap progress at 95% until actually complete
+                remaining_seconds = 0
+                diarization_progress_pct = min(95, diarization_progress_pct)
 
             # Report via callback if available
             if self.progress_callback:
@@ -152,14 +155,15 @@ class DiarizationProgressMonitor:
 
             # Also print to console for CLI usage
             elapsed_str = self._format_time(elapsed)
-            estimated_str = self._format_time(estimated_duration)
+            estimated_str = self._format_time(initial_estimate)
+            remaining_str = self._format_time(remaining_seconds) if remaining_seconds > 0 else "finishing..."
 
             bar_width = 30
             filled = int(bar_width * diarization_progress_pct / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
 
             print(
-                f"\r  Progress: [{bar}] {diarization_progress_pct}% | {elapsed_str} / ~{estimated_str}",
+                f"\r  Progress: [{bar}] {diarization_progress_pct}% | {elapsed_str} / ~{estimated_str} | ~{remaining_str}",
                 end="",
                 flush=True,
             )
