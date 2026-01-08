@@ -7,7 +7,8 @@ import SummaryViewer from '../components/SummaryViewer'
 import AudioPlayer from '../components/AudioPlayer'
 import ExpandableDescription from '../components/ExpandableDescription'
 import PipelineActionButton from '../components/PipelineActionButton'
-import type { PipelineStage } from '../api/types'
+import FailureBanner from '../components/FailureBanner'
+import type { PipelineStage, FailureType } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
 
@@ -128,16 +129,34 @@ export default function EpisodeDetail() {
             )}
           </div>
 
+          {/* Failure Banner */}
+          {episode.is_failed && episode.failed_at_stage && (
+            <div className="border-t border-gray-100 pt-4">
+              <FailureBanner
+                episodeId={episode.id}
+                failedAtStage={episode.failed_at_stage}
+                failureReason={episode.failure_reason ?? null}
+                failureType={(episode.failure_type as FailureType) ?? null}
+                failedAt={episode.failed_at ?? null}
+                onRetrySuccess={() => {
+                  queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
+                }}
+              />
+            </div>
+          )}
+
           {/* Pipeline Action Button */}
-          <div className="border-t border-gray-100 pt-4">
-            <PipelineActionButton
-              podcastSlug={podcastSlug!}
-              episodeSlug={episodeSlug!}
-              episodeId={episode.id}
-              episodeState={episode.state}
-              onTaskComplete={handleTaskComplete}
-            />
-          </div>
+          {!episode.is_failed && (
+            <div className="border-t border-gray-100 pt-4">
+              <PipelineActionButton
+                podcastSlug={podcastSlug!}
+                episodeSlug={episodeSlug!}
+                episodeId={episode.id}
+                episodeState={episode.state}
+                onTaskComplete={handleTaskComplete}
+              />
+            </div>
+          )}
 
           {/* Audio Player */}
           <div className="border-t border-gray-100 pt-4">

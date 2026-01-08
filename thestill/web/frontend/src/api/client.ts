@@ -20,6 +20,16 @@ import type {
   AllEpisodesResponse,
   EpisodeFilters,
   BulkProcessResponse,
+  DLQListResponse,
+  DLQActionResponse,
+  DLQBulkRetryResponse,
+  EpisodeFailure,
+  FailedEpisodesResponse,
+  EpisodeRetryResponse,
+  RunPipelineRequest,
+  RunPipelineResponse,
+  CancelPipelineResponse,
+  ExtendedEpisodeTasksResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -189,4 +199,136 @@ export async function bulkProcessEpisodes(episodeIds: string[]): Promise<BulkPro
   }
 
   return response.json()
+}
+
+// ============================================================================
+// Dead Letter Queue (DLQ) API
+// ============================================================================
+
+export async function getDLQTasks(limit: number = 100): Promise<DLQListResponse> {
+  return fetchApi<DLQListResponse>(`/commands/dlq?limit=${limit}`)
+}
+
+export async function retryDLQTask(taskId: string): Promise<DLQActionResponse> {
+  const response = await fetch(`${API_BASE}/commands/dlq/${taskId}/retry`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function skipDLQTask(taskId: string): Promise<DLQActionResponse> {
+  const response = await fetch(`${API_BASE}/commands/dlq/${taskId}/skip`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function retryAllDLQTasks(taskIds?: string[]): Promise<DLQBulkRetryResponse> {
+  const response = await fetch(`${API_BASE}/commands/dlq/retry-all`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: taskIds ? JSON.stringify({ task_ids: taskIds }) : '{}',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+// ============================================================================
+// Episode Failure API
+// ============================================================================
+
+export async function getFailedEpisodes(limit: number = 100): Promise<FailedEpisodesResponse> {
+  return fetchApi<FailedEpisodesResponse>(`/episodes/failed?limit=${limit}`)
+}
+
+export async function getEpisodeFailure(episodeId: string): Promise<EpisodeFailure> {
+  return fetchApi<EpisodeFailure>(`/episodes/${episodeId}/failure`)
+}
+
+export async function retryFailedEpisode(episodeId: string): Promise<EpisodeRetryResponse> {
+  const response = await fetch(`${API_BASE}/episodes/${episodeId}/retry`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+// ============================================================================
+// Full Pipeline API
+// ============================================================================
+
+export async function runPipeline(request: RunPipelineRequest): Promise<RunPipelineResponse> {
+  const response = await fetch(`${API_BASE}/commands/run-pipeline`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function cancelPipeline(episodeId: string): Promise<CancelPipelineResponse> {
+  const response = await fetch(`${API_BASE}/commands/episode/${episodeId}/cancel-pipeline`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function getEpisodeTasksExtended(episodeId: string): Promise<ExtendedEpisodeTasksResponse> {
+  return fetchApi<ExtendedEpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
 }

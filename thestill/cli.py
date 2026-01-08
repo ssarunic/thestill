@@ -149,7 +149,7 @@ def list(ctx):
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
-    podcasts = ctx.obj.podcast_service.list_podcasts()
+    podcasts = ctx.obj.podcast_service.get_podcasts()
     output = CLIFormatter.format_podcast_list(podcasts)
     click.echo(output)
 

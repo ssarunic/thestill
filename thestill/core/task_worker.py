@@ -40,10 +40,13 @@ import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 
+from thestill.utils.exceptions import FatalError, TransientError
+
 from .progress import ProgressCallback, ProgressUpdate
-from .queue_manager import QueueManager, Task, TaskStage
+from .queue_manager import QueueManager, Task, TaskStage, get_next_stage
 
 if TYPE_CHECKING:
+    from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from .progress_store import ProgressStore
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,7 @@ class TaskWorker:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         stale_timeout_minutes: int = DEFAULT_STALE_TIMEOUT,
         progress_store: Optional["ProgressStore"] = None,
+        repository: Optional["SqlitePodcastRepository"] = None,
     ):
         """
         Initialize task worker.
@@ -78,12 +82,14 @@ class TaskWorker:
             poll_interval: Seconds between queue polls when idle
             stale_timeout_minutes: Minutes before resetting stale tasks
             progress_store: Optional progress store for real-time progress updates
+            repository: Optional repository for episode failure tracking
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
         self.poll_interval = poll_interval
         self.stale_timeout_minutes = stale_timeout_minutes
         self.progress_store = progress_store
+        self.repository = repository
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -179,6 +185,13 @@ class TaskWorker:
         """
         Process a single task using the appropriate handler.
 
+        Error handling:
+        - TransientError: Schedule retry with exponential backoff
+        - FatalError: Move to Dead Letter Queue (DLQ)
+        - Other exceptions: Treat as transient (schedule retry)
+
+        On success, if task has run_full_pipeline metadata, enqueue next stage.
+
         Args:
             task: Task to process
         """
@@ -188,7 +201,7 @@ class TaskWorker:
         if not handler:
             error_msg = f"No handler registered for stage: {task.stage.value}"
             logger.error(error_msg)
-            self.queue_manager.fail_task(task.id, error_msg)
+            self.queue_manager.mark_dead(task.id, error_msg)
             self._current_task = None
             return
 
@@ -209,24 +222,36 @@ class TaskWorker:
             self.queue_manager.complete_task(task.id)
             logger.info(f"Task {task.id} completed successfully")
 
-        except Exception as e:
-            # Handler failed - mark task as failed
+            # Chain enqueue next stage if running full pipeline
+            self._maybe_enqueue_next_stage(task)
+
+        except FatalError as e:
+            # Fatal error - move to DLQ, no retry
             error_msg = str(e)
-            logger.exception(f"Task {task.id} failed: {error_msg}")
-            self.queue_manager.fail_task(task.id, error_msg)
+            logger.error(f"Task {task.id} fatal error (DLQ): {error_msg}")
+            self.queue_manager.mark_dead(task.id, error_msg)
+            self._mark_episode_failed(task, error_msg, "fatal")
+            self._report_failure(task.id, error_msg)
 
-            # Report failure via progress store
-            if self.progress_store:
-                from .progress import TranscriptionStage
+        except TransientError as e:
+            # Transient error - schedule retry with backoff
+            error_msg = str(e)
+            logger.warning(f"Task {task.id} transient error (will retry): {error_msg}")
+            updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+            # Check if retries exhausted (task marked as failed)
+            if updated_task and updated_task.status.value == "failed":
+                self._mark_episode_failed(task, error_msg, "transient")
+            self._report_failure(task.id, error_msg)
 
-                self.progress_store.update_from_callback(
-                    task.id,
-                    ProgressUpdate(
-                        stage=TranscriptionStage.FAILED,
-                        progress_pct=0,
-                        message=f"Task failed: {error_msg}",
-                    ),
-                )
+        except Exception as e:
+            # Unknown exception - treat as transient and retry
+            error_msg = str(e)
+            logger.exception(f"Task {task.id} failed with unexpected error: {error_msg}")
+            updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+            # Check if retries exhausted (task marked as failed)
+            if updated_task and updated_task.status.value == "failed":
+                self._mark_episode_failed(task, error_msg, "transient")
+            self._report_failure(task.id, error_msg)
 
         finally:
             self._current_task = None
@@ -238,6 +263,87 @@ class TaskWorker:
                     self.progress_store.cleanup(task.id)
 
                 threading.Thread(target=cleanup, daemon=True).start()
+
+    def _maybe_enqueue_next_stage(self, task: Task) -> None:
+        """
+        If task has run_full_pipeline metadata, enqueue the next stage.
+
+        Args:
+            task: The completed task
+        """
+        if not task.metadata.get("run_full_pipeline"):
+            return
+
+        next_stage = get_next_stage(task.stage)
+        if next_stage is None:
+            logger.info(f"Pipeline complete for episode {task.episode_id}")
+            return
+
+        # Check if we've reached the target state
+        # Map stage (verb) to resulting episode state (past participle)
+        STAGE_TO_STATE = {
+            "download": "downloaded",
+            "downsample": "downsampled",
+            "transcribe": "transcribed",
+            "clean": "cleaned",
+            "summarize": "summarized",
+        }
+        target_state = task.metadata.get("target_state", "summarized")
+        resulting_state = STAGE_TO_STATE.get(task.stage.value)
+        if resulting_state == target_state:
+            logger.info(f"Pipeline reached target state '{target_state}' for episode {task.episode_id}")
+            return
+
+        # Enqueue next stage with same metadata
+        logger.info(f"Chain enqueueing {next_stage.value} for episode {task.episode_id}")
+        self.queue_manager.add_task(
+            episode_id=task.episode_id,
+            stage=next_stage,
+            priority=task.priority,
+            metadata=task.metadata,
+        )
+
+    def _report_failure(self, task_id: str, error_msg: str) -> None:
+        """Report task failure via progress store if available."""
+        if self.progress_store:
+            from .progress import TranscriptionStage
+
+            self.progress_store.update_from_callback(
+                task_id,
+                ProgressUpdate(
+                    stage=TranscriptionStage.FAILED,
+                    progress_pct=0,
+                    message=f"Task failed: {error_msg}",
+                ),
+            )
+
+    def _mark_episode_failed(self, task: Task, error_msg: str, failure_type: str) -> None:
+        """
+        Mark the episode as failed when a task reaches final failure.
+
+        This is called when:
+        - A task encounters a fatal error (immediately marked dead)
+        - A task exhausts all retries (transient errors)
+
+        Args:
+            task: The failed task
+            error_msg: Human-readable error message
+            failure_type: 'transient' (exhausted retries) or 'fatal' (permanent)
+        """
+        if not self.repository:
+            logger.debug("No repository configured, skipping episode failure tracking")
+            return
+
+        try:
+            self.repository.mark_episode_failed(
+                episode_id=task.episode_id,
+                failed_at_stage=task.stage.value,
+                failure_reason=error_msg,
+                failure_type=failure_type,
+            )
+        except Exception as e:
+            # Don't fail the entire operation if episode marking fails
+            logger.error(f"Failed to mark episode {task.episode_id} as failed: {e}")
 
     def _reset_stale_tasks(self) -> None:
         """Reset any stale processing tasks from previous runs."""

@@ -1,5 +1,8 @@
 // API Response Types
 
+// Failure type (used in Episode and other types)
+export type FailureType = 'transient' | 'fatal'
+
 export interface DashboardStats {
   status: string
   timestamp: string
@@ -106,6 +109,12 @@ export interface Episode {
   transcript_available: boolean
   summary_available: boolean
   image_url: string | null  // Episode-specific artwork
+  // Failure info (optional - only present when episode has failed)
+  is_failed?: boolean
+  failed_at_stage?: string | null
+  failure_reason?: string | null
+  failure_type?: FailureType | null
+  failed_at?: string | null
 }
 
 export interface EpisodesResponse {
@@ -138,6 +147,12 @@ export interface EpisodeDetail {
   has_summary: boolean
   image_url: string | null  // Episode-specific artwork
   podcast_image_url: string | null  // Fallback: podcast artwork
+  // Failure info
+  is_failed?: boolean
+  failed_at_stage?: string | null
+  failure_reason?: string | null
+  failure_type?: FailureType | null
+  failed_at?: string | null
 }
 
 export interface EpisodeDetailResponse {
@@ -229,6 +244,19 @@ export interface AddPodcastTaskStatus {
 export type PipelineStage = 'download' | 'downsample' | 'transcribe' | 'clean' | 'summarize'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
+// Extended pipeline task status to include new states
+export type ExtendedPipelineTaskStatus =
+  | PipelineTaskStatus
+  | 'retry_scheduled'
+  | 'dead'
+
+export interface PipelineTaskMetadata {
+  run_full_pipeline?: boolean
+  target_state?: string
+  initiated_at?: string
+  initiated_by?: string
+}
+
 export interface PipelineTaskRequest {
   podcast_slug: string
   episode_slug: string
@@ -261,13 +289,19 @@ export interface EpisodeTasksResponse {
     id: string
     episode_id: string
     stage: PipelineStage
-    status: PipelineTaskStatus
+    status: PipelineTaskStatus | ExtendedPipelineTaskStatus
     priority: number
     error_message: string | null
     created_at: string | null
     updated_at: string | null
     started_at: string | null
     completed_at: string | null
+    retry_count: number
+    max_retries: number
+    next_retry_at: string | null
+    error_type: 'transient' | 'fatal' | null
+    last_error: string | null
+    metadata: PipelineTaskMetadata | null
   }>
 }
 
@@ -316,4 +350,150 @@ export interface BulkProcessResponse {
   queued: number
   skipped: number
   tasks: BulkProcessTaskInfo[]
+}
+
+// ============================================================================
+// Dead Letter Queue (DLQ) Types
+// ============================================================================
+
+export interface DLQTask {
+  task_id: string
+  episode_id: string
+  episode_title: string
+  episode_slug: string
+  podcast_title: string
+  podcast_slug: string
+  stage: PipelineStage
+  error_message: string | null
+  error_type: 'transient' | 'fatal' | null
+  retry_count: number
+  max_retries: number
+  created_at: string | null
+  completed_at: string | null
+}
+
+export interface DLQListResponse {
+  status: string
+  tasks: DLQTask[]
+  count: number
+}
+
+export interface DLQActionResponse {
+  status: string
+  message: string
+  task_id: string
+  new_status: string
+}
+
+export interface DLQBulkRetryRequest {
+  task_ids?: string[]
+}
+
+export interface DLQBulkRetryResponse {
+  status: string
+  retried: number
+  skipped: number
+  task_ids: string[]
+}
+
+// ============================================================================
+// Episode Failure Types
+// ============================================================================
+
+export interface EpisodeFailure {
+  status: string
+  episode_id: string
+  episode_title: string
+  episode_slug: string
+  podcast_title: string
+  podcast_slug: string
+  is_failed: boolean
+  failed_at_stage: string | null
+  failure_reason: string | null
+  failure_type: FailureType | null
+  failed_at: string | null
+  last_successful_state: EpisodeState
+  can_retry: boolean
+}
+
+export interface FailedEpisodesResponse {
+  status: string
+  episodes: EpisodeFailure[]
+  count: number
+}
+
+export interface EpisodeRetryResponse {
+  status: string
+  message: string
+  episode_id: string
+  task_id: string | null
+  stage: string | null
+}
+
+// Extend Episode type to include failure info
+export interface EpisodeWithFailure extends Episode {
+  is_failed?: boolean
+  failed_at_stage?: string | null
+  failure_reason?: string | null
+  failure_type?: FailureType | null
+  failed_at?: string | null
+}
+
+// ============================================================================
+// Full Pipeline Types
+// ============================================================================
+
+export interface ExtendedPipelineTask {
+  id: string
+  episode_id: string
+  stage: PipelineStage
+  status: ExtendedPipelineTaskStatus
+  priority: number
+  error_message: string | null
+  error_type: 'transient' | 'fatal' | null
+  retry_count: number
+  max_retries: number
+  next_retry_at: string | null
+  last_error: string | null
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  metadata: PipelineTaskMetadata | null
+}
+
+export interface RunPipelineRequest {
+  podcast_slug: string
+  episode_slug: string
+  target_state?: string // defaults to 'summarized'
+}
+
+export interface RunPipelineResponse {
+  task_id: string
+  status: string
+  message: string
+  starting_stage: PipelineStage
+  target_state: string
+  episode_id: string
+  episode_title: string
+}
+
+export interface CancelPipelineResponse {
+  status: string
+  message: string
+  episode_id: string
+  cancelled_tasks: number
+}
+
+// Extended episode tasks response with retry info
+export interface ExtendedEpisodeTasksResponse {
+  episode_id: string
+  tasks: ExtendedPipelineTask[]
+  pipeline_status?: {
+    is_running: boolean
+    target_state: string | null
+    current_stage: PipelineStage | null
+    completed_stages: PipelineStage[]
+    pending_stages: PipelineStage[]
+  }
 }

@@ -237,3 +237,202 @@ async def bulk_process_episodes(
         skipped=skipped,
         tasks=tasks,
     )
+
+
+# ============================================================================
+# Episode Failure Endpoints
+# ============================================================================
+
+
+class EpisodeFailureResponse(BaseModel):
+    """Response for episode failure details."""
+
+    status: str
+    episode_id: str
+    episode_title: str
+    episode_slug: str
+    podcast_title: str
+    podcast_slug: str
+    is_failed: bool
+    failed_at_stage: Optional[str] = None
+    failure_reason: Optional[str] = None
+    failure_type: Optional[str] = None  # 'transient' or 'fatal'
+    failed_at: Optional[str] = None
+    last_successful_state: str
+    can_retry: bool
+
+
+class EpisodeRetryResponse(BaseModel):
+    """Response for episode retry action."""
+
+    status: str
+    message: str
+    episode_id: str
+    task_id: Optional[str] = None
+    stage: Optional[str] = None
+
+
+class FailedEpisodeListResponse(BaseModel):
+    """Response for listing failed episodes."""
+
+    status: str
+    episodes: List[EpisodeFailureResponse]
+    count: int
+
+
+@router.get("/failed", response_model=FailedEpisodeListResponse)
+async def list_failed_episodes(
+    limit: int = 100,
+    app_state: AppState = Depends(get_app_state),
+) -> FailedEpisodeListResponse:
+    """
+    List all episodes in failed state.
+
+    This returns episodes that have failed_at_stage set, regardless of whether
+    they have an associated task in the DLQ.
+
+    Args:
+        limit: Maximum number of episodes to return (default 100)
+
+    Returns:
+        FailedEpisodeListResponse with list of failed episodes
+    """
+    failed_episodes = app_state.repository.get_failed_episodes(limit=limit)
+
+    episodes = []
+    for podcast, episode in failed_episodes:
+        episodes.append(
+            EpisodeFailureResponse(
+                status="ok",
+                episode_id=episode.id,
+                episode_title=episode.title,
+                episode_slug=episode.slug,
+                podcast_title=podcast.title,
+                podcast_slug=podcast.slug,
+                is_failed=episode.is_failed,
+                failed_at_stage=episode.failed_at_stage,
+                failure_reason=episode.failure_reason,
+                failure_type=episode.failure_type.value if episode.failure_type else None,
+                failed_at=episode.failed_at.isoformat() if episode.failed_at else None,
+                last_successful_state=episode.last_successful_state.value,
+                can_retry=episode.can_retry,
+            )
+        )
+
+    return FailedEpisodeListResponse(
+        status="ok",
+        episodes=episodes,
+        count=len(episodes),
+    )
+
+
+@router.get("/{episode_id}/failure", response_model=EpisodeFailureResponse)
+async def get_episode_failure(
+    episode_id: str,
+    app_state: AppState = Depends(get_app_state),
+) -> EpisodeFailureResponse:
+    """
+    Get failure details for an episode.
+
+    Args:
+        episode_id: ID of the episode
+
+    Returns:
+        EpisodeFailureResponse with failure details
+
+    Raises:
+        HTTPException 404: If episode not found
+    """
+    result = app_state.repository.get_episode(episode_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_id}")
+
+    podcast, episode = result
+
+    return EpisodeFailureResponse(
+        status="ok",
+        episode_id=episode.id,
+        episode_title=episode.title,
+        episode_slug=episode.slug,
+        podcast_title=podcast.title,
+        podcast_slug=podcast.slug,
+        is_failed=episode.is_failed,
+        failed_at_stage=episode.failed_at_stage,
+        failure_reason=episode.failure_reason,
+        failure_type=episode.failure_type.value if episode.failure_type else None,
+        failed_at=episode.failed_at.isoformat() if episode.failed_at else None,
+        last_successful_state=episode.last_successful_state.value,
+        can_retry=episode.can_retry,
+    )
+
+
+@router.post("/{episode_id}/retry", response_model=EpisodeRetryResponse)
+async def retry_failed_episode(
+    episode_id: str,
+    app_state: AppState = Depends(get_app_state),
+) -> EpisodeRetryResponse:
+    """
+    Retry a failed episode.
+
+    This clears the episode's failure state and queues a new task for the
+    stage where it failed.
+
+    Args:
+        episode_id: ID of the failed episode
+
+    Returns:
+        EpisodeRetryResponse with task details
+
+    Raises:
+        HTTPException 404: If episode not found
+        HTTPException 400: If episode is not in failed state
+    """
+    result = app_state.repository.get_episode(episode_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_id}")
+
+    podcast, episode = result
+
+    if not episode.is_failed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Episode is not in failed state (state={episode.state.value})",
+        )
+
+    # Determine the stage to retry based on where it failed
+    failed_stage = episode.failed_at_stage
+    if not failed_stage:
+        raise HTTPException(
+            status_code=400,
+            detail="Episode has no recorded failed_at_stage",
+        )
+
+    # Map failed_at_stage to TaskStage
+    try:
+        retry_stage = TaskStage(failed_stage)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown stage: {failed_stage}",
+        )
+
+    # Check for existing pending/processing task
+    if app_state.queue_manager.has_pending_task(episode_id, retry_stage):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {retry_stage.value} task is already queued or processing for this episode",
+        )
+
+    # Clear the failure state
+    app_state.repository.clear_episode_failure(episode_id)
+
+    # Queue a new task
+    task = app_state.queue_manager.add_task(episode_id, retry_stage)
+
+    return EpisodeRetryResponse(
+        status="ok",
+        message=f"Episode {episode.title} queued for retry at {retry_stage.value} stage",
+        episode_id=episode_id,
+        task_id=task.id,
+        stage=retry_stage.value,
+    )

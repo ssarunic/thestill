@@ -2125,38 +2125,115 @@ class GeminiProvider(LLMProvider):
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
         on_chunk: Optional[callable] = None,
+        max_continuation_attempts: int = 3,
     ) -> str:
         """
-        Generate a chat completion with streaming support.
+        Generate a chat completion with streaming support and automatic continuation.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
             temperature: Sampling temperature (0-1)
-            max_tokens: Maximum tokens to generate
+            max_tokens: Maximum tokens to generate per attempt
             response_format: Response format specification
             on_chunk: Optional callback function(chunk_text) called for each chunk
+            max_continuation_attempts: Maximum continuation attempts if truncated (default: 3)
 
         Returns:
             The complete generated text response
+
+        Raises:
+            RuntimeError: If response is blocked due to safety filters, recitation, or other errors
         """
-        contents = self._convert_messages(messages)
-
-        config = self._build_config(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-        )
-
         full_response = ""
-        for chunk in self.client.models.generate_content_stream(
-            model=self.model,
-            contents=contents,
-            config=config,
-        ):
-            if chunk.text:
-                full_response += chunk.text
-                if on_chunk:
-                    on_chunk(chunk.text)
+        current_messages = messages.copy()
+
+        for attempt in range(max_continuation_attempts):
+            contents = self._convert_messages(current_messages)
+
+            config = self._build_config(
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+
+            attempt_response = ""
+            last_chunk = None
+
+            for chunk in self.client.models.generate_content_stream(
+                model=self.model,
+                contents=contents,
+                config=config,
+            ):
+                last_chunk = chunk
+                if chunk.text:
+                    attempt_response += chunk.text
+                    if on_chunk:
+                        on_chunk(chunk.text)
+
+            # Accumulate response
+            full_response += attempt_response
+
+            # Check finish reason from the final chunk
+            finish_reason_str = ""
+            if last_chunk and last_chunk.candidates:
+                candidate = last_chunk.candidates[0]
+                finish_reason = candidate.finish_reason
+                finish_reason_str = str(finish_reason).upper() if finish_reason else ""
+
+                if "SAFETY" in finish_reason_str:
+                    safety_info = ""
+                    if hasattr(candidate, "safety_ratings") and candidate.safety_ratings:
+                        safety_info = f" Safety ratings: {candidate.safety_ratings}"
+                    raise RuntimeError(f"Gemini blocked response due to safety filters.{safety_info}")
+                elif "RECITATION" in finish_reason_str:
+                    if not full_response:
+                        raise RuntimeError(
+                            "Gemini blocked response due to potential recitation (copyrighted content). "
+                            "Try adjusting the prompt or use a different model."
+                        )
+                    logger.warning("Gemini flagged potential recitation but returned content")
+                    break  # Got content, stop here
+                elif "MAX_TOKENS" in finish_reason_str:
+                    # Response truncated - continue if we have more attempts
+                    if attempt < max_continuation_attempts - 1:
+                        char_count = len(full_response)
+                        estimated_tokens = char_count // 4
+                        logger.info(
+                            f"Streaming response truncated at ~{estimated_tokens} tokens ({char_count} chars), "
+                            f"continuing (attempt {attempt + 2}/{max_continuation_attempts})..."
+                        )
+                        # Build continuation messages
+                        current_messages = messages + [
+                            {"role": "assistant", "content": full_response},
+                            {"role": "user", "content": "Please continue from where you left off."},
+                        ]
+                        continue  # Continue to next attempt
+                    else:
+                        char_count = len(full_response)
+                        estimated_tokens = char_count // 4
+                        logger.warning(
+                            f"Gemini streaming response truncated after {max_continuation_attempts} attempts. "
+                            f"Total generated: ~{estimated_tokens} tokens ({char_count} characters)."
+                        )
+                        break  # Max attempts reached
+                elif "STOP" in finish_reason_str:
+                    break  # Normal completion
+                elif finish_reason_str:
+                    if not full_response:
+                        raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
+                    logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
+                    break
+
+            # If we didn't hit MAX_TOKENS, we're done
+            if "MAX_TOKENS" not in finish_reason_str:
+                break
+
+        # Final validation - if we got no content and no specific error was raised
+        if not full_response.strip():
+            raise RuntimeError(
+                "Gemini streaming returned empty response with no error status. "
+                "This may indicate an API issue. Check input content and try again."
+            )
 
         return full_response
 

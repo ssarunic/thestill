@@ -310,26 +310,30 @@ class TranscriptCleaner:
 
             # Use streaming if callback provided and supported
             # Temperature 0 for deterministic timestamp handling
-            if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
-                response = self.provider.chat_completion_streaming(
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=max_tokens,
-                    on_chunk=self.on_stream_chunk,
-                )
-            elif hasattr(self.provider, "chat_completion_with_continuation"):
-                # Use continuation to handle truncated responses
-                response = self.provider.chat_completion_with_continuation(
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=max_tokens,
-                )
-            else:
-                response = self.provider.chat_completion(
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=max_tokens,
-                )
+            try:
+                if self.on_stream_chunk and hasattr(self.provider, "chat_completion_streaming"):
+                    response = self.provider.chat_completion_streaming(
+                        messages=messages,
+                        temperature=0,
+                        max_tokens=max_tokens,
+                        on_chunk=self.on_stream_chunk,
+                    )
+                elif hasattr(self.provider, "chat_completion_with_continuation"):
+                    # Use continuation to handle truncated responses
+                    response = self.provider.chat_completion_with_continuation(
+                        messages=messages,
+                        temperature=0,
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    response = self.provider.chat_completion(
+                        messages=messages,
+                        temperature=0,
+                        max_tokens=max_tokens,
+                    )
+            except (RuntimeError, ValueError) as e:
+                # Re-raise with chunk context for easier debugging
+                raise RuntimeError(f"Failed to process chunk {i + 1}/{len(chunks)} ({len(chunk)} chars): {e}") from e
 
             cleaned_chunks.append(response.strip())
 
@@ -362,7 +366,15 @@ class TranscriptCleaner:
 
     def _build_cleanup_system_prompt(self) -> str:
         """Build system prompt for transcript cleanup."""
-        return """You are an expert podcast editor and proofreader. Your goal is to polish a transcript into a readable Markdown document.
+        return """You are an expert podcast transcript editor. Your job is to LIGHTLY EDIT an existing transcript - NOT rewrite it.
+
+CRITICAL RULE - VERBATIM PRESERVATION:
+- You MUST preserve the speaker's ACTUAL WORDS. This is a transcript of what was said.
+- DO NOT paraphrase, summarise, or rewrite sentences.
+- DO NOT add content that wasn't in the original.
+- DO NOT remove content except filler words and ads.
+- If the speaker said something awkwardly, KEEP IT AWKWARD - that's how they spoke.
+- Your output should be 95%+ identical to the input, with only minor corrections.
 
 The transcript has already been formatted with speaker names and timestamps. Your tasks:
 
@@ -378,6 +390,7 @@ The transcript has already been formatted with speaker names and timestamps. You
    - DO NOT invent timestamps or adjust for ad duration.
    - If you merge two segments, use the timestamp of the FIRST segment.
    - Copy timestamps character-for-character from the input.
+   - The FIRST timestamp in your output MUST match the FIRST timestamp in the input.
 
 3. ENTITY & PHONETIC REPAIR:
    - Fix proper nouns using the Keywords list provided (includes common mishearings)
@@ -386,11 +399,13 @@ The transcript has already been formatted with speaker names and timestamps. You
      - Names read quickly at the end are often mangled - check the facts carefully
    - If a word sounds like a name but doesn't match any known entity, flag it with [?] rather than guessing
 
-4. EDITING:
-   - Fix spelling and grammar while PRESERVING the speakers' original voice and style
-   - Convert all spelling to British English (e.g., 'labour', 'programme', 'realise', 'colour')
-   - Remove filler words (um, uh, like, you know) ONLY if they disrupt readability
-   - Keep the banter and personality natural - don't over-edit
+4. MINIMAL EDITING (light touch only):
+   - Fix ONLY obvious transcription errors (e.g., "their" vs "there", garbled words)
+   - Convert spelling to British English (e.g., 'labour', 'programme', 'realise', 'colour')
+   - Remove filler words (um, uh, like, you know) ONLY if excessive
+   - DO NOT restructure sentences
+   - DO NOT improve eloquence or clarity
+   - DO NOT add transitions or summaries
 
 5. FORMATTING:
    - Output strictly in Markdown
@@ -401,8 +416,9 @@ The transcript has already been formatted with speaker names and timestamps. You
 IMPORTANT:
 - Do NOT add any preamble or explanation
 - Do NOT wrap output in code blocks
-- Output ONLY the cleaned transcript
-- Maintain the exact speaker names provided (already substituted)"""
+- Output ONLY the cleaned transcript starting from the FIRST timestamp in the input
+- Maintain the exact speaker names provided (already substituted)
+- Your output MUST start with the same timestamp as the input starts with"""
 
     def _build_cleanup_user_prompt(
         self,

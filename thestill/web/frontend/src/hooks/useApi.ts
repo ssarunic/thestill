@@ -17,8 +17,17 @@ import {
   getEpisodeTasks,
   getAllEpisodes,
   bulkProcessEpisodes,
+  getDLQTasks,
+  retryDLQTask,
+  skipDLQTask,
+  retryAllDLQTasks,
+  getFailedEpisodes,
+  getEpisodeFailure,
+  retryFailedEpisode,
+  runPipeline,
+  cancelPipeline,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -243,6 +252,128 @@ export function useBulkProcess() {
       queryClient.invalidateQueries({ queryKey: ['episodes'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+    },
+  })
+}
+
+// ============================================================================
+// Dead Letter Queue (DLQ) hooks
+// ============================================================================
+
+export function useDLQTasks(limit = 100) {
+  return useQuery({
+    queryKey: ['dlq', 'tasks', limit],
+    queryFn: () => getDLQTasks(limit),
+    refetchInterval: 10000, // Poll every 10 seconds
+  })
+}
+
+export function useRetryDLQTask() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (taskId: string) => retryDLQTask(taskId),
+    onSuccess: () => {
+      // Invalidate DLQ and episode data
+      queryClient.invalidateQueries({ queryKey: ['dlq'] })
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+export function useSkipDLQTask() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (taskId: string) => skipDLQTask(taskId),
+    onSuccess: () => {
+      // Invalidate DLQ data
+      queryClient.invalidateQueries({ queryKey: ['dlq'] })
+    },
+  })
+}
+
+export function useRetryAllDLQTasks() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (taskIds?: string[]) => retryAllDLQTasks(taskIds),
+    onSuccess: () => {
+      // Invalidate DLQ and episode data
+      queryClient.invalidateQueries({ queryKey: ['dlq'] })
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// ============================================================================
+// Episode Failure hooks
+// ============================================================================
+
+export function useFailedEpisodes(limit = 100) {
+  return useQuery({
+    queryKey: ['episodes', 'failed', limit],
+    queryFn: () => getFailedEpisodes(limit),
+    refetchInterval: 10000, // Poll every 10 seconds
+  })
+}
+
+export function useEpisodeFailure(episodeId: string | null) {
+  return useQuery({
+    queryKey: ['episodes', episodeId, 'failure'],
+    queryFn: () => getEpisodeFailure(episodeId!),
+    enabled: !!episodeId,
+  })
+}
+
+export function useRetryFailedEpisode() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (episodeId: string) => retryFailedEpisode(episodeId),
+    onSuccess: () => {
+      // Invalidate episode and failure data
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+      queryClient.invalidateQueries({ queryKey: ['dlq'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// ============================================================================
+// Full Pipeline hooks
+// ============================================================================
+
+export function useRunPipeline(podcastSlug: string, episodeSlug: string) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (targetState?: string) =>
+      runPipeline({
+        podcast_slug: podcastSlug,
+        episode_slug: episodeSlug,
+        target_state: targetState,
+      } as RunPipelineRequest),
+    onSuccess: () => {
+      // Invalidate episode data to refresh state
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
+      // Also invalidate episode tasks
+      queryClient.invalidateQueries({ queryKey: ['episodes', 'tasks'] })
+    },
+  })
+}
+
+export function useCancelPipeline() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (episodeId: string) => cancelPipeline(episodeId),
+    onSuccess: () => {
+      // Invalidate episode and task data
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }

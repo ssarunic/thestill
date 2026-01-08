@@ -31,6 +31,7 @@ class EpisodeState(str, Enum):
     - TRANSCRIBED: Transcript generated (has raw_transcript_path)
     - CLEANED: Final cleaned transcript created (has clean_transcript_path)
     - SUMMARIZED: Summary generated (has summary_path)
+    - FAILED: Processing failed at some stage (has failed_at_stage set)
     """
 
     DISCOVERED = "discovered"
@@ -39,6 +40,19 @@ class EpisodeState(str, Enum):
     TRANSCRIBED = "transcribed"
     CLEANED = "cleaned"
     SUMMARIZED = "summarized"
+    FAILED = "failed"
+
+
+class FailureType(str, Enum):
+    """
+    Classification of episode processing failures.
+
+    - TRANSIENT: Temporary failure that exhausted retries (network, rate limits)
+    - FATAL: Permanent failure that cannot be retried (404, corrupt file)
+    """
+
+    TRANSIENT = "transient"
+    FATAL = "fatal"
 
 
 class TranscriptLink(BaseModel):
@@ -115,6 +129,12 @@ class Episode(BaseModel):
     clean_transcript_path: Optional[str] = None  # Filename of the cleaned transcript MD (corrected, formatted)
     summary_path: Optional[str] = None  # Filename of the summary (future use)
 
+    # Failure tracking (set when processing fails after exhausting retries or hits a fatal error)
+    failed_at_stage: Optional[str] = None  # Stage where failure occurred ('download', 'transcribe', etc.)
+    failure_reason: Optional[str] = None  # Human-readable error message
+    failure_type: Optional[FailureType] = None  # 'transient' (exhausted retries) or 'fatal' (permanent)
+    failed_at: Optional[datetime] = None  # When the failure occurred
+
     @model_validator(mode="after")
     def ensure_slug(self) -> "Episode":
         """Auto-generate slug from title if not provided."""
@@ -128,17 +148,56 @@ class Episode(BaseModel):
     @property
     def state(self) -> EpisodeState:
         """
-        Compute current episode state from file paths.
+        Compute current episode state from file paths and failure status.
 
-        The state is determined by checking which paths are set, from most
-        progressed to least progressed. This ensures we always return the
-        furthest state reached.
+        The state is determined by:
+        1. First checking if the episode has failed (failed_at_stage is set)
+        2. Then checking which paths are set, from most progressed to least
 
         This is a computed property that dynamically reflects the current
         processing state based on which file paths are set.
 
         Returns:
             EpisodeState: Current processing state
+        """
+        # Check for failure state first
+        if self.failed_at_stage:
+            return EpisodeState.FAILED
+
+        # Normal progression states
+        if self.summary_path:
+            return EpisodeState.SUMMARIZED
+        if self.clean_transcript_path:
+            return EpisodeState.CLEANED
+        if self.raw_transcript_path:
+            return EpisodeState.TRANSCRIBED
+        if self.downsampled_audio_path:
+            return EpisodeState.DOWNSAMPLED
+        if self.audio_path:
+            return EpisodeState.DOWNLOADED
+        return EpisodeState.DISCOVERED
+
+    @property
+    def is_failed(self) -> bool:
+        """Check if this episode is in a failed state."""
+        return self.failed_at_stage is not None
+
+    @property
+    def can_retry(self) -> bool:
+        """
+        Check if this failed episode can be retried.
+
+        Transient failures (exhausted retries) can always be retried.
+        Fatal failures may also be retried after manual intervention.
+        """
+        return self.is_failed
+
+    @property
+    def last_successful_state(self) -> EpisodeState:
+        """
+        Get the last successfully completed state (ignoring failure).
+
+        This is useful for understanding where an episode was before failure.
         """
         if self.summary_path:
             return EpisodeState.SUMMARIZED

@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from ..models.podcast import Episode, EpisodeState, Podcast, TranscriptLink
+from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Migrating database: adding image_url column to episodes table")
             conn.execute("ALTER TABLE episodes ADD COLUMN image_url TEXT NULL")
             logger.info("Migration complete: image_url column added to episodes")
+
+        # Migration: Add failure tracking columns (idempotent)
+        if "failed_at_stage" not in episode_columns:
+            logger.info("Migrating database: adding failure tracking columns to episodes table")
+            conn.execute("ALTER TABLE episodes ADD COLUMN failed_at_stage TEXT NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN failure_reason TEXT NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN failure_type TEXT NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN failed_at TIMESTAMP NULL")
+            logger.info("Migration complete: failure tracking columns added to episodes")
 
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
@@ -692,6 +701,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "description",
             "duration",
             "image_url",
+            # Failure tracking fields
+            "failed_at_stage",
+            "failure_reason",
+            "failure_type",
+            "failed_at",
         }
 
         update_fields = {k: v for k, v in updates.items() if k in valid_fields}
@@ -718,6 +732,118 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             if updated:
                 logger.debug(f"Updated episode {episode_external_id}: {list(update_fields.keys())}")
             return updated
+
+    def mark_episode_failed(
+        self,
+        episode_id: str,
+        failed_at_stage: str,
+        failure_reason: str,
+        failure_type: str,
+    ) -> bool:
+        """
+        Mark an episode as failed at a specific stage.
+
+        This is called when a task exhausts its retries (transient) or hits a fatal error.
+
+        Args:
+            episode_id: Episode UUID
+            failed_at_stage: Stage where failure occurred ('download', 'transcribe', etc.)
+            failure_reason: Human-readable error message
+            failure_type: 'transient' (exhausted retries) or 'fatal' (permanent)
+
+        Returns:
+            True if episode was updated, False if not found
+        """
+        now = datetime.now(timezone.utc)
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET failed_at_stage = ?,
+                    failure_reason = ?,
+                    failure_type = ?,
+                    failed_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+            """,
+                (failed_at_stage, failure_reason, failure_type, now.isoformat(), now.isoformat(), episode_id),
+            )
+
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(f"Marked episode {episode_id} as failed at stage '{failed_at_stage}' ({failure_type})")
+            else:
+                logger.warning(f"Failed to mark episode {episode_id} as failed: not found")
+            return updated
+
+    def clear_episode_failure(self, episode_id: str) -> bool:
+        """
+        Clear failure state from an episode, allowing retry.
+
+        This is called when manually retrying a failed episode from the DLQ.
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            True if episode was updated, False if not found
+        """
+        now = datetime.now(timezone.utc)
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET failed_at_stage = NULL,
+                    failure_reason = NULL,
+                    failure_type = NULL,
+                    failed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+            """,
+                (now.isoformat(), episode_id),
+            )
+
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(f"Cleared failure state for episode {episode_id}")
+            else:
+                logger.warning(f"Failed to clear failure for episode {episode_id}: not found")
+            return updated
+
+    def get_failed_episodes(self, limit: int = 100) -> List[Tuple[Podcast, Episode]]:
+        """
+        Get episodes in failed state.
+
+        Args:
+            limit: Maximum number of episodes to return
+
+        Returns:
+            List of (Podcast, Episode) tuples for failed episodes, ordered by most recent first
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.last_processed, p.updated_at as p_updated_at, e.*
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE e.failed_at_stage IS NOT NULL
+                ORDER BY e.failed_at DESC
+                LIMIT ?
+            """,
+                (limit,),
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                podcast = self._row_to_podcast_without_episodes(row)
+                episode = self._row_to_episode(row)
+                results.append((podcast, episode))
+
+            return results
 
     # ============================================================================
     # EpisodeRepository Interface Implementation
@@ -986,6 +1112,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def _row_to_episode(self, row: sqlite3.Row) -> Episode:
         """Convert database row to Episode model."""
+        # Parse failure_type enum if present
+        failure_type = None
+        if row["failure_type"]:
+            try:
+                failure_type = FailureType(row["failure_type"])
+            except ValueError:
+                logger.warning(f"Unknown failure_type '{row['failure_type']}' for episode {row['id']}")
+
         return Episode(
             id=row["id"],
             podcast_id=row["podcast_id"],
@@ -1004,6 +1138,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             raw_transcript_path=row["raw_transcript_path"],
             clean_transcript_path=row["clean_transcript_path"],
             summary_path=row["summary_path"],
+            # Failure tracking fields
+            failed_at_stage=row["failed_at_stage"],
+            failure_reason=row["failure_reason"],
+            failure_type=failure_type,
+            failed_at=datetime.fromisoformat(row["failed_at"]) if row["failed_at"] else None,
         )
 
     def _save_episode(self, conn: sqlite3.Connection, podcast_id: str, episode: Episode, now: datetime):
@@ -1013,8 +1152,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             INSERT INTO episodes (
                 id, podcast_id, created_at, updated_at, external_id, title, slug, description,
                 pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
-                raw_transcript_path, clean_transcript_path, summary_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                raw_transcript_path, clean_transcript_path, summary_path,
+                failed_at_stage, failure_reason, failure_type, failed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -1034,6 +1174,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.raw_transcript_path,
                 episode.clean_transcript_path,
                 episode.summary_path,
+                episode.failed_at_stage,
+                episode.failure_reason,
+                episode.failure_type.value if episode.failure_type else None,
+                episode.failed_at.isoformat() if episode.failed_at else None,
             ),
         )
 

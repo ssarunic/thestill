@@ -117,4 +117,56 @@ class TranscriptCleaningError(ThestillError):
     pass
 
 
-__all__ = ["ThestillError", "TranscriptCleaningError"]
+class TransientError(ThestillError):
+    """
+    Exception for transient errors that may succeed on retry.
+
+    Use this for temporary failures that are likely to resolve:
+    - Network timeouts
+    - HTTP 502, 503, 504 (server temporarily unavailable)
+    - HTTP 429 (rate limited)
+    - Connection reset errors
+    - LLM rate limits
+    - Database lock errors
+
+    The task worker will schedule automatic retries with exponential backoff
+    when this exception is raised.
+
+    Example:
+        raise TransientError(
+            "API rate limit exceeded",
+            status_code=429,
+            retry_after=60
+        )
+    """
+
+    pass
+
+
+class FatalError(ThestillError):
+    """
+    Exception for fatal errors that will never succeed on retry.
+
+    Use this for permanent failures that require manual intervention:
+    - HTTP 404 (resource not found)
+    - HTTP 401, 403 (authentication/permission errors)
+    - Corrupt audio files
+    - Unsupported file formats
+    - Invalid configuration
+    - Data integrity errors (episode not found in database)
+
+    The task worker will move tasks to the Dead Letter Queue (DLQ)
+    when this exception is raised.
+
+    Example:
+        raise FatalError(
+            "Audio file is corrupt and cannot be processed",
+            file_path="/path/to/audio.mp3",
+            error_details="Invalid MP3 header"
+        )
+    """
+
+    pass
+
+
+__all__ = ["ThestillError", "TranscriptCleaningError", "TransientError", "FatalError"]

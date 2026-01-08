@@ -5,6 +5,7 @@ import Podcasts from './pages/Podcasts'
 import PodcastDetail from './pages/PodcastDetail'
 import EpisodeDetail from './pages/EpisodeDetail'
 import Episodes from './pages/Episodes'
+import FailedTasks from './pages/FailedTasks'
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="podcasts/:podcastSlug" element={<PodcastDetail />} />
         <Route path="podcasts/:podcastSlug/episodes/:episodeSlug" element={<EpisodeDetail />} />
         <Route path="episodes" element={<Episodes />} />
+        <Route path="failed" element={<FailedTasks />} />
       </Route>
     </Routes>
   )

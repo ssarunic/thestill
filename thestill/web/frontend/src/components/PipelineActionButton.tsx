@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
-import { useQueuePipelineTask, useEpisodeTasks } from '../hooks/useApi'
-import type { PipelineStage } from '../api/types'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useQueuePipelineTask, useEpisodeTasks, useRunPipeline, useCancelPipeline } from '../hooks/useApi'
+import type { PipelineStage, ExtendedPipelineTaskStatus } from '../api/types'
+import PipelineStepper from './PipelineStepper'
 
 interface PipelineActionButtonProps {
   podcastSlug: string
@@ -26,6 +27,7 @@ const stateToAction: Record<string, { stage: PipelineStage; label: string; icon:
   transcribed: { stage: 'clean', label: 'Clean', icon: 'sparkles' },
   cleaned: { stage: 'summarize', label: 'Summarize', icon: 'document' },
 }
+
 
 // Human-readable labels for transcription stages
 const STAGE_LABELS: Record<string, string> = {
@@ -62,6 +64,15 @@ function formatTimeRemaining(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const mins = Math.ceil((seconds % 3600) / 60)
   return mins > 0 ? `~${hours}h ${mins}m remaining` : `~${hours}h remaining`
+}
+
+// Format countdown time (e.g., "4m 30s")
+function formatCountdown(seconds: number): string {
+  if (seconds <= 0) return 'now'
+  if (seconds < 60) return `${Math.ceil(seconds)}s`
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.ceil(seconds % 60)
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`
 }
 
 function getIcon(iconType: string) {
@@ -121,6 +132,14 @@ function SpinnerIcon() {
   )
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+    </svg>
+  )
+}
+
 function ProgressBar({ percent }: { percent: number }) {
   return (
     <div className="w-32 h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -128,6 +147,78 @@ function ProgressBar({ percent }: { percent: number }) {
         className="h-full bg-purple-600 transition-all duration-300 ease-out"
         style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
       />
+    </div>
+  )
+}
+
+
+// Retry countdown component
+function RetryCountdown({
+  nextRetryAt,
+  retryCount,
+  maxRetries,
+  lastError,
+  onCancel,
+}: {
+  nextRetryAt: string
+  retryCount: number
+  maxRetries: number
+  lastError: string | null
+  onCancel: () => void
+}) {
+  const [secondsRemaining, setSecondsRemaining] = useState(0)
+
+  useEffect(() => {
+    const calculateRemaining = () => {
+      const retryTime = new Date(nextRetryAt).getTime()
+      const now = Date.now()
+      return Math.max(0, Math.floor((retryTime - now) / 1000))
+    }
+
+    setSecondsRemaining(calculateRemaining())
+
+    const interval = setInterval(() => {
+      const remaining = calculateRemaining()
+      setSecondsRemaining(remaining)
+      if (remaining <= 0) {
+        clearInterval(interval)
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [nextRetryAt])
+
+  return (
+    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          <div className="text-yellow-500 mt-0.5">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+            </svg>
+          </div>
+          <div>
+            <div className="text-sm font-medium text-yellow-800">
+              Retry scheduled
+            </div>
+            <div className="text-sm text-yellow-700">
+              Attempt {retryCount + 1}/{maxRetries} in{' '}
+              <span className="font-mono font-medium">{formatCountdown(secondsRemaining)}</span>
+            </div>
+            {lastError && (
+              <div className="text-xs text-yellow-600 mt-1" title={lastError}>
+                Last error: {lastError.length > 50 ? lastError.slice(0, 50) + '...' : lastError}
+              </div>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={onCancel}
+          className="text-xs px-2 py-1 text-yellow-700 hover:text-yellow-900 hover:bg-yellow-100 rounded transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }
@@ -141,7 +232,12 @@ export default function PipelineActionButton({
 }: PipelineActionButtonProps) {
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
   const { mutate: queueTask, isPending } = useQueuePipelineTask(podcastSlug, episodeSlug)
+  const { mutate: runFullPipeline, isPending: isPipelinePending } = useRunPipeline(podcastSlug, episodeSlug)
+  const { mutate: cancelPipelineMutation } = useCancelPipeline()
   const { data: tasksData } = useEpisodeTasks(episodeId)
   const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -156,39 +252,80 @@ export default function PipelineActionButton({
     (t) => t.status === 'pending' || t.status === 'processing'
   )
 
+  // Check for retry_scheduled task
+  const retryScheduledTask = tasksData?.tasks?.find(
+    (t) => (t.status as ExtendedPipelineTaskStatus) === 'retry_scheduled'
+  )
+
+  // Check if running a full pipeline (has metadata.run_full_pipeline)
+  const isPipelineRunning = tasksData?.tasks?.some(
+    (t) =>
+      (t.status === 'pending' || t.status === 'processing') &&
+      (t as any).metadata?.run_full_pipeline
+  )
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   // Connect to SSE when there's an active transcribe task
   useEffect(() => {
     if (activeTask && activeTask.stage === 'transcribe' && activeTask.status === 'processing') {
       // Connect to SSE for progress updates
       const taskId = activeTask.id
-      const eventSource = new EventSource(`/api/commands/task/${taskId}/progress`)
-      eventSourceRef.current = eventSource
+      let reconnectAttempts = 0
+      const maxReconnectAttempts = 5
+      let eventSource: EventSource | null = null
 
-      eventSource.onmessage = (event) => {
-        try {
-          const data: ProgressUpdate = JSON.parse(event.data)
-          setProgress(data)
+      const connect = () => {
+        eventSource = new EventSource(`/api/commands/task/${taskId}/progress`)
+        eventSourceRef.current = eventSource
 
-          // Check if task completed or failed
-          if (data.stage === 'completed' || data.stage === 'failed') {
-            eventSource.close()
-            eventSourceRef.current = null
-            // Clear progress after a short delay
-            setTimeout(() => setProgress(null), 2000)
+        eventSource.onmessage = (event) => {
+          try {
+            const data: ProgressUpdate = JSON.parse(event.data)
+            setProgress(data)
+            // Reset reconnect attempts on successful message
+            reconnectAttempts = 0
+
+            // Check if task completed or failed
+            if (data.stage === 'completed' || data.stage === 'failed') {
+              eventSource?.close()
+              eventSourceRef.current = null
+              // Clear progress after a short delay
+              setTimeout(() => setProgress(null), 2000)
+            }
+          } catch (e) {
+            console.error('Failed to parse SSE data:', e)
           }
-        } catch (e) {
-          console.error('Failed to parse SSE data:', e)
+        }
+
+        eventSource.onerror = () => {
+          // Close current connection
+          eventSource?.close()
+          eventSourceRef.current = null
+
+          // Retry connection if not max attempts
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            const delay = Math.pow(2, reconnectAttempts - 1) * 1000
+            setTimeout(connect, delay)
+          }
         }
       }
 
-      eventSource.onerror = () => {
-        // Connection error - close and rely on polling
-        eventSource.close()
-        eventSourceRef.current = null
-      }
+      connect()
 
       return () => {
-        eventSource.close()
+        eventSource?.close()
         eventSourceRef.current = null
       }
     } else {
@@ -243,6 +380,35 @@ export default function PipelineActionButton({
     }
   }, [error])
 
+  const handleSingleStep = useCallback(() => {
+    if (!action) return
+    setError(null)
+    setDropdownOpen(false)
+    queueTask(action.stage, {
+      onError: (err: Error) => {
+        setError(err.message)
+      },
+    })
+  }, [action, queueTask])
+
+  const handleFullPipeline = useCallback(() => {
+    setError(null)
+    setDropdownOpen(false)
+    runFullPipeline('summarized', {
+      onError: (err: Error) => {
+        setError(err.message)
+      },
+    })
+  }, [runFullPipeline])
+
+  const handleCancelPipeline = useCallback(() => {
+    cancelPipelineMutation(episodeId, {
+      onError: (err: Error) => {
+        setError(err.message)
+      },
+    })
+  }, [cancelPipelineMutation, episodeId])
+
   // If already summarized, don't show any action
   if (episodeState === 'summarized') {
     return (
@@ -260,19 +426,61 @@ export default function PipelineActionButton({
     return null
   }
 
-  const handleClick = () => {
-    setError(null)
-    queueTask(action.stage, {
-      onError: (err: Error) => {
-        setError(err.message)
-      },
-    })
-  }
-
-  const isDisabled = isPending || !!activeTask
+  const isDisabled = isPending || isPipelinePending || !!activeTask || !!retryScheduledTask
   const isProcessing = activeTask?.status === 'processing'
 
-  // Show processing/pending status with progress for transcribe
+  // Show retry countdown if task is scheduled for retry
+  if (retryScheduledTask) {
+    const task = retryScheduledTask as any
+    return (
+      <div className="flex flex-col gap-2">
+        <RetryCountdown
+          nextRetryAt={task.next_retry_at}
+          retryCount={task.retry_count}
+          maxRetries={task.max_retries}
+          lastError={task.last_error || task.error_message}
+          onCancel={handleCancelPipeline}
+        />
+        {error && (
+          <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">
+            {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Show pipeline progress visualization during full pipeline run
+  if (isPipelineRunning && activeTask) {
+    // Determine starting stage from episode state
+    const startingStage = stateToAction[episodeState]?.stage || 'download'
+
+    return (
+      <div className="flex flex-col gap-3">
+        <PipelineStepper
+          currentStage={activeTask.stage}
+          startingStage={startingStage}
+          progress={progress}
+        />
+        <button
+          onClick={handleCancelPipeline}
+          className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1 self-start"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+          Cancel Pipeline
+        </button>
+        {error && (
+          <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">
+            {error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Show processing/pending status with progress for transcribe (single step mode)
   if (activeTask) {
     const stageLabel = activeTask.stage.charAt(0).toUpperCase() + activeTask.stage.slice(1)
 
@@ -324,18 +532,62 @@ export default function PipelineActionButton({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-3">
-        <button
-          onClick={handleClick}
-          disabled={isDisabled}
-          className={`
-            inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm text-white
-            transition-all duration-200 shadow-sm hover:shadow
-            ${isDisabled ? 'bg-gray-400 cursor-not-allowed' : stageColors[action.stage]}
-          `}
-        >
-          {isPending ? <SpinnerIcon /> : getIcon(action.icon)}
-          <span>{action.label}</span>
-        </button>
+        {/* Split button */}
+        <div className="relative inline-flex" ref={dropdownRef}>
+          {/* Main button - runs next step */}
+          <button
+            onClick={handleSingleStep}
+            disabled={isDisabled}
+            className={`
+              inline-flex items-center gap-2 px-4 py-2 rounded-l-lg font-medium text-sm text-white
+              transition-all duration-200 shadow-sm hover:shadow
+              ${isDisabled ? 'bg-gray-400 cursor-not-allowed' : stageColors[action.stage]}
+            `}
+          >
+            {isPending ? <SpinnerIcon /> : getIcon(action.icon)}
+            <span>{action.label}</span>
+          </button>
+
+          {/* Dropdown trigger */}
+          <button
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            disabled={isDisabled}
+            className={`
+              inline-flex items-center px-2 py-2 rounded-r-lg font-medium text-sm text-white
+              border-l border-white/20
+              transition-all duration-200 shadow-sm hover:shadow
+              ${isDisabled ? 'bg-gray-400 cursor-not-allowed' : stageColors[action.stage]}
+            `}
+            aria-label="More options"
+          >
+            <ChevronDownIcon />
+          </button>
+
+          {/* Dropdown menu */}
+          {dropdownOpen && !isDisabled && (
+            <div className="absolute top-full left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+              <div className="py-1">
+                <button
+                  onClick={handleSingleStep}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
+                >
+                  {getIcon(action.icon)}
+                  <span>{action.label} (next step)</span>
+                </button>
+                <button
+                  onClick={handleFullPipeline}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                  </svg>
+                  <span>Run Full Pipeline</span>
+                  <span className="ml-auto text-xs text-gray-400">→ Ready</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {recentFailedTask && !error && (
           <span className="text-sm text-red-600" title={recentFailedTask.error_message || undefined}>

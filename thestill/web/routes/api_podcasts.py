@@ -202,6 +202,12 @@ async def get_episode_by_slugs(
             "has_summary": bool(episode.summary_path),
             "image_url": episode.image_url,
             "podcast_image_url": podcast.image_url,
+            # Failure info
+            "is_failed": episode.is_failed,
+            "failed_at_stage": episode.failed_at_stage,
+            "failure_reason": episode.failure_reason,
+            "failure_type": episode.failure_type.value if episode.failure_type else None,
+            "failed_at": episode.failed_at.isoformat() if episode.failed_at else None,
         },
     }
 
