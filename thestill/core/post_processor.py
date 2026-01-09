@@ -71,10 +71,22 @@ Look for INTERPERSONAL tension, not just intellectual disagreement:
 * **Uncomfortable moments:** Silences, subject changes, someone talking over another
 * **Corporate hedging vs. straight talk:** Is someone giving PR answers when pressed?
 
-**Format your findings:**
-* [Timestamp] **What happened:** Describe the moment factually (who said what to whom)
-* **Why it matters:** What does this reveal? Insecurity? Genuine disagreement? PR mode?
-* **The temperature:** Was this awkward? Hostile? Just tense?
+**Format your findings (IMPORTANT: separate each drama moment clearly):**
+
+If there are multiple drama moments, format them like this:
+
+* **Round 1: [Short descriptive title]** [Timestamp]
+  * **What happened:** Describe the moment factually (who said what to whom)
+  * **Why it matters:** What does this reveal? Insecurity? Genuine disagreement? PR mode?
+  * **The temperature:** Was this awkward? Hostile? Just tense?
+* **Round 2: [Short descriptive title]** [Timestamp]
+  * **What happened:** ...
+  * **Why it matters:** ...
+  * **The temperature:** ...
+
+Number drama moments as "Round 1", "Round 2", etc. Give each round a short, punchy title that captures the conflict.
+
+If there's only one drama moment, skip the "Round" numbering and just use the title format.
 
 If nothing spicy happened, say so briefly. Don't force drama where there isn't any.
 
