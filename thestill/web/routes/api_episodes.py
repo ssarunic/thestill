@@ -184,10 +184,12 @@ async def bulk_process_episodes(
     app_state: AppState = Depends(get_app_state),
 ) -> BulkProcessResponse:
     """
-    Queue next pipeline stage for multiple episodes.
+    Queue full pipeline processing for multiple episodes.
 
     For each episode, determines the appropriate next stage based on current state
-    and queues a task. Episodes that are already fully processed (summarized) are skipped.
+    and queues a task with run_full_pipeline=True. This means each episode will
+    automatically progress through all remaining stages until it reaches 'summarized'.
+    Episodes that are already fully processed (summarized) are skipped.
 
     Args:
         request: List of episode IDs to process
@@ -216,9 +218,13 @@ async def bulk_process_episodes(
             skipped += 1
             continue
 
-        # Queue the task
+        # Queue the task with run_full_pipeline=True so it processes to completion
         try:
-            task = app_state.queue_manager.add_task(episode_id, next_stage)
+            task = app_state.queue_manager.add_task(
+                episode_id,
+                next_stage,
+                metadata={"run_full_pipeline": True},
+            )
             tasks.append(
                 BulkProcessTaskInfo(
                     episode_id=episode_id,

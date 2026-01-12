@@ -527,6 +527,8 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
         click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
     except Exception as e:
@@ -940,6 +942,8 @@ def facts_extract(ctx, podcast_id, episode_id, force):
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
         click.echo(f"✓ Using {config.llm_provider.upper()} provider")
     except Exception as e:
@@ -1144,31 +1148,107 @@ def activity(ctx, limit):
 @click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
 @click.pass_context
 def cleanup(ctx, dry_run):
-    """Clean up old audio files"""
+    """Clean up old audio files and sync database.
+
+    Removes audio files older than CLEANUP_DAYS from both original_audio/
+    and downsampled_audio/ directories. Also clears the corresponding
+    database paths so episodes can be re-downloaded if needed.
+
+    Episodes that are already transcribed will NOT be re-transcribed
+    (transcript paths are preserved).
+    """
     if ctx.obj is None:
         click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
         ctx.exit(1)
 
     config = ctx.obj.config
-    downloader = ctx.obj.audio_downloader
+    path_manager = ctx.obj.path_manager
+    repository = ctx.obj.repository
 
     if dry_run:
         click.echo(f"🧹 [DRY RUN] Previewing cleanup of files older than {config.cleanup_days} days...")
     else:
         click.echo(f"🧹 Cleaning up files older than {config.cleanup_days} days...")
 
-    count = downloader.cleanup_old_files(config.cleanup_days, dry_run=dry_run)
+    cutoff_time = time.time() - (config.cleanup_days * 24 * 60 * 60)
+
+    # Collect files to delete from both directories
+    # Store relative paths (e.g., "podcast-slug/episode.mp3") to match database paths
+    deleted_original = []  # List of relative paths deleted from original_audio
+    deleted_downsampled = []  # List of relative paths deleted from downsampled_audio
+
+    # Process original_audio directory
+    original_dir = path_manager.original_audio_dir()
+    if original_dir.exists():
+        for file_path in original_dir.glob("**/*"):
+            if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
+                # Get relative path from original_audio dir (e.g., "podcast-slug/episode.mp3")
+                relative_path = str(file_path.relative_to(original_dir))
+                if dry_run:
+                    click.echo(f"  Would delete: original_audio/{relative_path}")
+                else:
+                    try:
+                        file_path.unlink()
+                        click.echo(f"  Deleted: original_audio/{relative_path}")
+                    except Exception as e:
+                        click.echo(f"  ⚠️ Error deleting {relative_path}: {e}", err=True)
+                        continue
+                deleted_original.append(relative_path)
+
+    # Process downsampled_audio directory
+    downsampled_dir = path_manager.downsampled_audio_dir()
+    if downsampled_dir.exists():
+        for file_path in downsampled_dir.glob("**/*"):
+            if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
+                # Get relative path from downsampled_audio dir
+                relative_path = str(file_path.relative_to(downsampled_dir))
+                if dry_run:
+                    click.echo(f"  Would delete: downsampled_audio/{relative_path}")
+                else:
+                    try:
+                        file_path.unlink()
+                        click.echo(f"  Deleted: downsampled_audio/{relative_path}")
+                    except Exception as e:
+                        click.echo(f"  ⚠️ Error deleting {relative_path}: {e}", err=True)
+                        continue
+                deleted_downsampled.append(relative_path)
+
+    total_files = len(deleted_original) + len(deleted_downsampled)
+
+    if total_files == 0:
+        click.echo("✓ No files to delete")
+        return
+
+    # Sync database - clear paths for deleted files
+    # This preserves transcript paths so already-transcribed episodes won't be re-processed
+    db_updates = 0
+    podcasts = repository.get_all()
+
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            updates = {}
+
+            # Check if original audio was deleted
+            if episode.audio_path and episode.audio_path in deleted_original:
+                updates["audio_path"] = None
+
+            # Check if downsampled audio was deleted
+            if episode.downsampled_audio_path and episode.downsampled_audio_path in deleted_downsampled:
+                updates["downsampled_audio_path"] = None
+
+            # Apply updates if any
+            if updates:
+                if dry_run:
+                    click.echo(f"  Would clear DB paths for: {episode.title[:50]}...")
+                else:
+                    repository.update_episode(str(podcast.rss_url), episode.external_id, updates)
+                    click.echo(f"  Cleared DB paths for: {episode.title[:50]}...")
+                db_updates += 1
 
     if dry_run:
-        if count > 0:
-            click.echo(f"✓ Would delete {count} file(s) (dry-run mode)")
-        else:
-            click.echo("✓ No files would be deleted")
+        click.echo(f"\n✓ Would delete {total_files} file(s) and update {db_updates} episode(s) (dry-run mode)")
     else:
-        if count > 0:
-            click.echo(f"✓ Cleanup complete - deleted {count} file(s)")
-        else:
-            click.echo("✓ Cleanup complete - no files to delete")
+        click.echo(f"\n✓ Cleanup complete - deleted {total_files} file(s), updated {db_updates} episode(s)")
 
 
 @main.command()
@@ -1709,6 +1789,8 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
     except Exception as e:
         click.echo(f"Failed to initialize LLM provider: {e}", err=True)
@@ -1893,6 +1975,8 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -2061,6 +2145,8 @@ def evaluate_clean_transcript(
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)

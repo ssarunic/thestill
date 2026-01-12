@@ -90,6 +90,10 @@ class Config(BaseModel):
     # Anthropic Configuration
     anthropic_model: str = "claude-sonnet-4-5-20250929"
 
+    # Mistral Configuration
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-large-latest"
+
     # Transcript Cleaning Configuration (legacy - used during transcription step only)
     enable_transcript_cleaning: bool = False  # Enable LLM-based transcript cleaning
     cleaning_provider: str = "gemini"  # Provider for cleaning (openai, ollama, gemini, or anthropic)
@@ -135,6 +139,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
     openai_api_key = os.getenv("OPENAI_API_KEY", "")
     gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    mistral_api_key = os.getenv("MISTRAL_API_KEY", "")
 
     if llm_provider == "openai" and not openai_api_key:
         raise ValueError(
@@ -149,6 +154,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
     if llm_provider == "anthropic" and not anthropic_api_key:
         raise ValueError(
             "ANTHROPIC_API_KEY environment variable is required when using Anthropic provider. "
+            "Please set it in your .env file or environment, or switch to another provider."
+        )
+    if llm_provider == "mistral" and not mistral_api_key:
+        raise ValueError(
+            "MISTRAL_API_KEY environment variable is required when using Mistral provider. "
             "Please set it in your .env file or environment, or switch to another provider."
         )
 
@@ -200,6 +210,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "gemini_thinking_level": os.getenv("GEMINI_THINKING_LEVEL")
         or None,  # low/high for Pro, minimal/low/medium/high for Flash
         "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
+        "mistral_api_key": mistral_api_key,
+        "mistral_model": os.getenv("MISTRAL_MODEL", "mistral-large-latest"),
         "enable_transcript_cleaning": os.getenv("ENABLE_TRANSCRIPT_CLEANING", "false").lower() == "true",
         "cleaning_provider": os.getenv("CLEANING_PROVIDER", "gemini"),
         "cleaning_model": os.getenv("CLEANING_MODEL", "gemini-3-flash-preview"),

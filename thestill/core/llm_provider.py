@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, and Anthropic.
+Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, Anthropic, and Mistral.
 """
 
 import json
@@ -26,6 +26,7 @@ import ollama
 from anthropic import Anthropic, APIStatusError, BadRequestError, RateLimitError
 from google import genai
 from google.genai import types as genai_types
+from mistralai import Mistral
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -466,6 +467,53 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         max_output_tokens=8192,
         supports_temperature=True,
         supports_structured_output=False,
+    ),
+    # Mistral AI models - supports structured output via chat.parse()
+    # Source: https://docs.mistral.ai/capabilities/structured_output/custom
+    "mistral-large-latest": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=256000,
+        max_output_tokens=32768,
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "mistral-small-latest": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=32768,
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "mistral-medium-latest": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=128000,
+        max_output_tokens=32768,
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "ministral-8b-latest": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=262000,
+        max_output_tokens=32768,
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "codestral-latest": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=256000,
+        max_output_tokens=32768,
+        supports_temperature=True,
+        supports_structured_output=True,
     ),
 }
 
@@ -2238,6 +2286,338 @@ class GeminiProvider(LLMProvider):
         return full_response
 
 
+class MistralProvider(LLMProvider):
+    """Mistral AI API provider"""
+
+    def __init__(self, api_key: str, model: str = "mistral-large-latest"):
+        """
+        Initialize Mistral provider.
+
+        Args:
+            api_key: Mistral API key
+            model: Model name (e.g., "mistral-large-latest", "mistral-small-latest")
+        """
+        self.client = Mistral(api_key=api_key)
+        self.model = model
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Generate a chat completion using Mistral API"""
+        return self._create_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            enable_continuation=False,
+        )
+
+    def chat_completion_with_continuation(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        max_attempts: int = 3,
+    ) -> str:
+        """
+        Generate a complete chat completion with automatic continuation on truncation.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate per attempt
+            response_format: Response format specification
+            max_attempts: Maximum continuation attempts (default: 3)
+
+        Returns:
+            The complete generated text response
+        """
+        return self._create_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            enable_continuation=True,
+            max_attempts=max_attempts,
+        )
+
+    def _create_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        enable_continuation: bool = False,
+        max_attempts: int = 3,
+    ) -> str:
+        """Internal method to create completions with optional continuation"""
+        full_response = ""
+        current_messages = messages.copy()
+
+        for attempt in range(max_attempts):
+            params: Dict[str, Any] = {
+                "model": self.model,
+                "messages": current_messages,
+            }
+
+            if temperature is not None:
+                params["temperature"] = temperature
+            if max_tokens is not None:
+                params["max_tokens"] = max_tokens
+            if response_format and response_format.get("type") == "json_object":
+                params["response_format"] = {"type": "json_object"}
+
+            # Make API request with retry logic
+            max_retries = 3
+            for retry_attempt in range(max_retries):
+                try:
+                    response = self.client.chat.complete(**params)
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    # Check for rate limit (429)
+                    if "rate" in error_str or "429" in error_str:
+                        if retry_attempt < max_retries - 1:
+                            retry_after = 60
+                            logger.warning(
+                                f"Mistral rate limit exceeded. Waiting {retry_after}s "
+                                f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                            )
+                            time.sleep(retry_after)
+                            continue
+                        logger.error(f"Rate limit retry failed after {max_retries} attempts")
+                        raise
+                    # Server errors (5xx) - retry
+                    elif "500" in error_str or "502" in error_str or "503" in error_str:
+                        if retry_attempt < max_retries - 1:
+                            retry_after = 30
+                            logger.warning(
+                                f"Mistral server error. Waiting {retry_after}s "
+                                f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                            )
+                            time.sleep(retry_after)
+                            continue
+                        logger.error(f"Server error retry failed after {max_retries} attempts")
+                        raise
+                    # Other errors - fail fast
+                    else:
+                        logger.error(f"Mistral API error: {e}")
+                        raise
+
+            # Extract content
+            current_text = ""
+            if response.choices and len(response.choices) > 0:
+                current_text = response.choices[0].message.content or ""
+
+            full_response += current_text
+
+            # Log token usage if available
+            if hasattr(response, "usage") and response.usage:
+                logger.debug(
+                    f"Token usage - Input: {response.usage.prompt_tokens}, "
+                    f"Output: {response.usage.completion_tokens}"
+                )
+
+            # Check finish_reason
+            finish_reason = ""
+            if response.choices and len(response.choices) > 0:
+                finish_reason = response.choices[0].finish_reason or ""
+
+            if finish_reason == "length":
+                if enable_continuation and attempt < max_attempts - 1:
+                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    current_messages = messages + [
+                        {"role": "assistant", "content": full_response},
+                        {"role": "user", "content": "Please continue from where you left off."},
+                    ]
+                    continue
+                else:
+                    logger.warning(
+                        f"Mistral response truncated due to max_tokens limit (limit: {max_tokens or 'default'})"
+                    )
+                    if not enable_continuation:
+                        logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
+                    break
+            elif finish_reason == "stop":
+                # Normal completion
+                break
+            else:
+                # Other finish reasons
+                break
+
+        return full_response
+
+    def chat_completion_streaming(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_chunk: Optional[callable] = None,
+    ) -> str:
+        """
+        Generate a chat completion with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            response_format: Response format specification
+            on_chunk: Optional callback function(chunk_text) called for each chunk
+
+        Returns:
+            The complete generated text response
+        """
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        if temperature is not None:
+            params["temperature"] = temperature
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+        if response_format and response_format.get("type") == "json_object":
+            params["response_format"] = {"type": "json_object"}
+
+        # Make streaming API request with retry logic
+        max_retries = 3
+        for retry_attempt in range(max_retries):
+            try:
+                full_response = ""
+                response = self.client.chat.stream(**params)
+
+                for event in response:
+                    if event.data.choices and len(event.data.choices) > 0:
+                        delta = event.data.choices[0].delta
+                        if delta and delta.content:
+                            full_response += delta.content
+                            if on_chunk:
+                                on_chunk(delta.content)
+
+                return full_response
+
+            except Exception as e:
+                error_str = str(e).lower()
+                # Check for rate limit (429)
+                if "rate" in error_str or "429" in error_str:
+                    if retry_attempt < max_retries - 1:
+                        retry_after = 60
+                        logger.warning(
+                            f"Mistral rate limit exceeded in streaming. Waiting {retry_after}s "
+                            f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                        )
+                        time.sleep(retry_after)
+                        continue
+                    logger.error(f"Rate limit retry failed after {max_retries} attempts")
+                    raise
+                # Server errors (5xx) - retry
+                elif "500" in error_str or "502" in error_str or "503" in error_str:
+                    if retry_attempt < max_retries - 1:
+                        retry_after = 30
+                        logger.warning(
+                            f"Mistral server error in streaming. Waiting {retry_after}s "
+                            f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                        )
+                        time.sleep(retry_after)
+                        continue
+                    logger.error(f"Server error retry failed after {max_retries} attempts")
+                    raise
+                # Other errors - fail fast
+                else:
+                    logger.error(f"Mistral streaming API error: {e}")
+                    raise
+
+        return ""
+
+    def supports_temperature(self) -> bool:
+        """Mistral always supports temperature"""
+        return True
+
+    def health_check(self) -> bool:
+        """Check if Mistral API is accessible"""
+        try:
+            self.client.chat.complete(
+                model=self.model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Mistral health check failed: {e}")
+            return False
+
+    def get_model_name(self) -> str:
+        """Get the current model name"""
+        return self.model
+
+    def get_model_display_name(self) -> str:
+        """Get human-readable model name for display"""
+        return f"Mistral {self.model}"
+
+    def supports_structured_output(self) -> bool:
+        """Check if this model supports structured output"""
+        if self.model in MODEL_CONFIGS:
+            return MODEL_CONFIGS[self.model].supports_structured_output
+        # Most Mistral models support structured output
+        return True
+
+    def generate_structured(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """
+        Generate a structured response using Mistral's chat.parse().
+
+        Uses Mistral's native structured output support via response_format
+        with a Pydantic model for schema-validated JSON output.
+        """
+        params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_model,
+        }
+
+        if temperature is not None:
+            params["temperature"] = temperature
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+
+        try:
+            response = self.client.chat.parse(**params)
+
+            # Access parsed output
+            if response.choices and len(response.choices) > 0:
+                parsed = response.choices[0].message.parsed
+                if parsed is not None:
+                    return parsed
+
+            raise ValueError("Mistral returned empty parsed response")
+
+        except Exception as e:
+            # If parse fails, fall back to JSON mode + manual parsing
+            error_str = str(e).lower()
+            if "parse" in error_str or "schema" in error_str:
+                logger.warning(f"Mistral parse failed, using JSON mode fallback: {e}")
+                response = self.chat_completion(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                data = json.loads(response)
+                return response_model(**data)
+            raise
+
+
 def create_llm_provider(
     provider_type: str,
     openai_api_key: str = "",
@@ -2250,12 +2630,14 @@ def create_llm_provider(
     gemini_thinking_level: Optional[str] = None,
     anthropic_api_key: str = "",
     anthropic_model: str = "claude-sonnet-4-5-20250929",
+    mistral_api_key: str = "",
+    mistral_model: str = "mistral-large-latest",
 ) -> LLMProvider:
     """
     Factory function to create the appropriate LLM provider.
 
     Args:
-        provider_type: "openai", "ollama", "gemini", or "anthropic"
+        provider_type: "openai", "ollama", "gemini", "anthropic", or "mistral"
         openai_api_key: OpenAI API key (required if provider_type is "openai")
         openai_model: OpenAI model name
         openai_reasoning_effort: Reasoning effort for GPT-5.x models.
@@ -2270,6 +2652,8 @@ def create_llm_provider(
                               Flash: "minimal", "low", "medium", "high" (default)
         anthropic_api_key: Anthropic API key (required if provider_type is "anthropic")
         anthropic_model: Anthropic model name
+        mistral_api_key: Mistral API key (required if provider_type is "mistral")
+        mistral_model: Mistral model name
 
     Returns:
         LLMProvider instance
@@ -2303,7 +2687,11 @@ def create_llm_provider(
         if not anthropic_api_key:
             raise ValueError("Anthropic API key is required for Anthropic provider")
         return AnthropicProvider(api_key=anthropic_api_key, model=anthropic_model)
+    elif provider_type == "mistral":
+        if not mistral_api_key:
+            raise ValueError("Mistral API key is required for Mistral provider")
+        return MistralProvider(api_key=mistral_api_key, model=mistral_model)
     else:
         raise ValueError(
-            f"Unknown provider type: {provider_type}. Must be 'openai', 'ollama', 'gemini', or 'anthropic'"
+            f"Unknown provider type: {provider_type}. Must be 'openai', 'ollama', 'gemini', 'anthropic', or 'mistral'"
         )

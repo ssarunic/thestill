@@ -309,6 +309,8 @@ def handle_clean(task: Task, state: "AppState") -> None:
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
 
         cleaning_processor = TranscriptCleaningProcessor(llm_provider)
@@ -416,6 +418,8 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
 
         summarizer = TranscriptSummarizer(llm_provider)

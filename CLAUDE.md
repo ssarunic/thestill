@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-thestill.me is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using either local Whisper transcription or cloud-based Google Speech-to-Text, and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini, Anthropic Claude) for analysis.
+thestill.me is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using either local Whisper transcription or cloud-based Google Speech-to-Text, and supports multiple LLM providers (OpenAI GPT-4, Ollama, Google Gemini, Anthropic Claude, Mistral AI) for analysis.
 
 ## Development Commands
 
@@ -724,6 +724,7 @@ data/                      # Generated data directory
 - **Ollama**: Local LLM models for cost-effective processing
 - **Google Gemini**: Fast and cost-effective cloud models (Flash variants)
 - **Anthropic Claude**: High-quality text processing with Claude 3.5 Sonnet and Haiku
+- **Mistral AI**: High-quality European models with large context windows (up to 256K)
 
 ### Data Storage
 

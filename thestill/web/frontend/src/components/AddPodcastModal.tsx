@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAddPodcast, useAddPodcastStatus } from '../hooks/useApi'
+import { useToast } from './Toast'
 
 interface AddPodcastModalProps {
   isOpen: boolean
@@ -9,13 +11,17 @@ interface AddPodcastModalProps {
 export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProps) {
   const [url, setUrl] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const queryClient = useQueryClient()
   const { mutate: startAdd, isPending } = useAddPodcast()
-  const { data: status } = useAddPodcastStatus(isOpen)
+  const { showToast, dismissToast } = useToast()
 
-  const isRunning = status?.status === 'running'
-  const isCompleted = status?.status === 'completed'
-  const isFailed = status?.status === 'failed'
-  const isDisabled = isPending || isRunning
+  // Track if we're waiting for a result from a task we started
+  const [waitingForResult, setWaitingForResult] = useState(false)
+  // Track the last status we've seen to avoid duplicate toasts
+  const lastSeenStatusRef = useRef<string | null>(null)
+  // Track the "Adding..." toast ID so we can dismiss it
+  const pendingToastIdRef = useRef<number | null>(null)
+  const { data: status } = useAddPodcastStatus(waitingForResult)
 
   // Focus input when modal opens
   useEffect(() => {
@@ -31,21 +37,58 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
     }
   }, [isOpen])
 
-  // Close modal on successful completion
+  // Show toast notifications only for tasks we started (when waitingForResult is true)
+  // Only show if status changed from what we last saw (avoid duplicate toasts)
   useEffect(() => {
-    if (isCompleted && status?.result) {
-      // Auto-close after showing success message
-      const timer = setTimeout(() => {
-        onClose()
-      }, 2000)
-      return () => clearTimeout(timer)
+    if (!waitingForResult || !status) return
+
+    // Skip if we've already seen this status
+    const statusKey = `${status.status}-${status.started_at}`
+    if (statusKey === lastSeenStatusRef.current) return
+
+    if (status.status === 'completed' && status.result) {
+      lastSeenStatusRef.current = statusKey
+      const resultData = status.result
+
+      // Refetch podcasts list first, then show toast after list is updated
+      Promise.all([
+        queryClient.refetchQueries({ queryKey: ['podcasts'] }),
+        queryClient.refetchQueries({ queryKey: ['dashboard'] }),
+      ]).then(() => {
+        // Dismiss the "Adding..." toast before showing success
+        if (pendingToastIdRef.current) {
+          dismissToast(pendingToastIdRef.current)
+          pendingToastIdRef.current = null
+        }
+        showToast(
+          `Added: ${resultData.podcast_title} (${resultData.episodes_count} episodes)`,
+          'success'
+        )
+      })
+      setWaitingForResult(false)
+    } else if (status.status === 'failed' && status.error) {
+      lastSeenStatusRef.current = statusKey
+      // Dismiss the "Adding..." toast before showing error
+      if (pendingToastIdRef.current) {
+        dismissToast(pendingToastIdRef.current)
+        pendingToastIdRef.current = null
+      }
+      showToast(`Failed to add podcast: ${status.error}`, 'error')
+      setWaitingForResult(false)
     }
-  }, [isCompleted, status?.result, onClose])
+  }, [status, waitingForResult, showToast, dismissToast, queryClient])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (url.trim() && !isDisabled) {
+    if (url.trim() && !isPending) {
+      // Clear cached status so we don't show old results
+      queryClient.removeQueries({ queryKey: ['commands', 'add', 'status'] })
+      lastSeenStatusRef.current = null
+      // Show "Adding..." toast and save ID so we can dismiss it later
+      pendingToastIdRef.current = showToast('Adding podcast...', 'info')
+      setWaitingForResult(true)
       startAdd({ url: url.trim() })
+      onClose()
     }
   }
 
@@ -93,79 +136,18 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com/feed.xml"
-              disabled={isDisabled}
+              disabled={isPending}
               className={`
                 w-full px-4 py-3 border rounded-lg text-gray-900 placeholder-gray-400
                 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                 transition-colors
-                ${isDisabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}
+                ${isPending ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}
               `}
             />
             <p className="mt-2 text-sm text-gray-500">
               Supports RSS feeds, Apple Podcasts, and YouTube channels/playlists
             </p>
           </div>
-
-          {/* Status indicators */}
-          {isRunning && status && (
-            <div className="mb-4 p-3 bg-indigo-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-indigo-600 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  />
-                </svg>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-indigo-700">{status.message}</p>
-                  <div className="mt-2 w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-indigo-600 transition-all duration-300"
-                      style={{ width: `${status.progress}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isCompleted && status?.result && (
-            <div className="mb-4 p-3 bg-green-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium text-green-700">
-                    Added: {status.result.podcast_title}
-                  </p>
-                  <p className="text-xs text-green-600">
-                    {status.result.episodes_count} episode{status.result.episodes_count !== 1 ? 's' : ''} discovered
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isFailed && status?.error && (
-            <div className="mb-4 p-3 bg-red-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                <p className="text-sm text-red-700">{status.error}</p>
-              </div>
-            </div>
-          )}
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-3 mt-6">
@@ -178,43 +160,20 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
             </button>
             <button
               type="submit"
-              disabled={isDisabled || !url.trim()}
+              disabled={isPending || !url.trim()}
               className={`
                 inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm
                 transition-all duration-200
-                ${isDisabled || !url.trim()
+                ${isPending || !url.trim()
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   : 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 shadow-sm hover:shadow'
                 }
               `}
             >
-              {isRunning ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                  <span>Adding...</span>
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  <span>Add Podcast</span>
-                </>
-              )}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              <span>Add Podcast</span>
             </button>
           </div>
         </form>

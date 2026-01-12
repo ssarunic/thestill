@@ -1406,6 +1406,8 @@ def _get_cleaning_processor(config):
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
         return TranscriptCleaningProcessor(llm_provider)
     except Exception as e:
@@ -1439,6 +1441,8 @@ def _get_summarizer(config):
             gemini_thinking_level=config.gemini_thinking_level,
             anthropic_api_key=config.anthropic_api_key,
             anthropic_model=config.anthropic_model,
+            mistral_api_key=config.mistral_api_key,
+            mistral_model=config.mistral_model,
         )
         return TranscriptSummarizer(llm_provider)
     except Exception as e:
