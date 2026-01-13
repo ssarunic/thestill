@@ -1,12 +1,19 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import type { Episode, FailureType } from '../api/types'
+import type { Episode, EpisodeWithPodcast, FailureType } from '../api/types'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import FailureDetailsModal from './FailureDetailsModal'
+import EpisodePreviewTooltip from './EpisodePreviewTooltip'
 
 interface EpisodeCardProps {
-  episode: Episode
+  episode: Episode | EpisodeWithPodcast
   podcastTitle?: string  // Optional podcast title for modal display
+  showPodcastName?: boolean  // Show podcast name below title (default: false)
+  // Selection props (optional - for use in Episodes browser)
+  isSelected?: boolean
+  onSelect?: (episodeId: string, selected: boolean) => void
+  // Artwork fallback (optional - use podcast image if episode has none)
+  podcastImageUrl?: string | null
 }
 
 const stateColors: Record<string, string> = {
@@ -48,47 +55,114 @@ function formatDate(dateStr: string | null): string {
 }
 
 
-export default function EpisodeCard({ episode, podcastTitle }: EpisodeCardProps) {
+export default function EpisodeCard({
+  episode,
+  podcastTitle,
+  showPodcastName = false,
+  isSelected,
+  onSelect,
+  podcastImageUrl,
+}: EpisodeCardProps) {
   const [showFailureModal, setShowFailureModal] = useState(false)
+  const [showTooltip, setShowTooltip] = useState(false)
+  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryMutation = useRetryFailedEpisode()
 
   const isProcessed = episode.state === 'cleaned' || episode.state === 'summarized'
   const isFailed = episode.is_failed && episode.failure_type
+  const isSelectable = onSelect !== undefined
+
+  // Get artwork URL - prioritize episode image, fall back to podcast image
+  const episodeWithPodcast = episode as EpisodeWithPodcast
+  const artworkUrl = episode.image_url || episodeWithPodcast.podcast_image_url || podcastImageUrl || null
+
+  // Get podcast title for display
+  const displayPodcastTitle = podcastTitle || episodeWithPodcast.podcast_title
+
+  const handleMouseEnter = () => {
+    if (!isProcessed) return
+    const timeout = setTimeout(() => {
+      setShowTooltip(true)
+    }, 500)
+    tooltipTimeoutRef.current = timeout
+  }
+
+  const handleMouseLeave = () => {
+    if (tooltipTimeoutRef.current) {
+      clearTimeout(tooltipTimeoutRef.current)
+      tooltipTimeoutRef.current = null
+    }
+    setShowTooltip(false)
+  }
+
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation()
+    onSelect?.(episode.id, e.target.checked)
+  }
 
   const handleRetry = async () => {
     await retryMutation.mutateAsync(episode.id)
     setShowFailureModal(false)
   }
 
-  // Determine card border style based on failure state
-  const cardBorderClass = isFailed
-    ? episode.failure_type === 'fatal'
-      ? 'border-red-300 hover:border-red-400'
-      : 'border-yellow-300 hover:border-yellow-400'
-    : 'border-gray-200 hover:border-gray-300'
+  // Determine card border style based on failure and selection state
+  const cardBorderClass = isSelected
+    ? 'border-indigo-500 ring-2 ring-indigo-200'
+    : isFailed
+      ? episode.failure_type === 'fatal'
+        ? 'border-red-300 hover:border-red-400'
+        : 'border-yellow-300 hover:border-yellow-400'
+      : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
 
   const content = (
     <div className="flex items-start gap-3 sm:gap-4">
-      {/* Episode number */}
-      <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-        isFailed
-          ? episode.failure_type === 'fatal'
-            ? 'bg-red-100'
-            : 'bg-yellow-100'
-          : 'bg-gray-100'
-      }`}>
-        <span className={`text-xs sm:text-sm font-medium ${
+      {/* Checkbox (only when selectable) */}
+      {isSelectable && (
+        <div className="flex-shrink-0 pt-1">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={handleCheckboxChange}
+            className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 cursor-pointer"
+          />
+        </div>
+      )}
+
+      {/* Episode artwork */}
+      {artworkUrl ? (
+        <img
+          src={artworkUrl}
+          alt=""
+          className="w-10 h-10 rounded-md object-cover flex-shrink-0"
+        />
+      ) : (
+        <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 ${
           isFailed
             ? episode.failure_type === 'fatal'
-              ? 'text-red-600'
-              : 'text-yellow-600'
-            : 'text-gray-600'
-        }`}>#{episode.episode_index}</span>
-      </div>
+              ? 'bg-red-100'
+              : 'bg-yellow-100'
+            : 'bg-gray-100'
+        }`}>
+          <svg className={`w-5 h-5 ${
+            isFailed
+              ? episode.failure_type === 'fatal'
+                ? 'text-red-400'
+                : 'text-yellow-400'
+              : 'text-gray-400'
+          }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+          </svg>
+        </div>
+      )}
 
       <div className="flex-1 min-w-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-2">
-          <h3 className="font-medium text-gray-900 line-clamp-2 text-sm sm:text-base">{episode.title}</h3>
+          <div className="min-w-0">
+            <h3 className="font-medium text-gray-900 line-clamp-2 text-sm sm:text-base">{episode.title}</h3>
+            {showPodcastName && displayPodcastTitle && (
+              <p className="text-xs text-gray-500 mt-0.5 truncate">{displayPodcastTitle}</p>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 flex-shrink-0 self-start">
             {/* Show failure badge if failed */}
             {isFailed && episode.failure_type && (
@@ -168,12 +242,26 @@ export default function EpisodeCard({ episode, podcastTitle }: EpisodeCardProps)
 
   return (
     <>
-      <Link
-        to={`/podcasts/${episode.podcast_slug}/episodes/${episode.slug}`}
-        className={`block p-3 sm:p-4 bg-white rounded-lg border hover:shadow-sm transition-all ${cardBorderClass}`}
+      <div
+        className={`relative p-3 sm:p-4 bg-white rounded-lg border transition-all ${cardBorderClass}`}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
-        {content}
-      </Link>
+        <Link
+          to={`/podcasts/${episode.podcast_slug}/episodes/${episode.slug}`}
+          className="block"
+        >
+          {content}
+        </Link>
+
+        {/* Hover tooltip */}
+        {showTooltip && isProcessed && (
+          <EpisodePreviewTooltip
+            podcastSlug={episode.podcast_slug}
+            episodeSlug={episode.slug}
+          />
+        )}
+      </div>
 
       {/* Failure details modal */}
       {isFailed && episode.failure_type && episode.failed_at_stage && (

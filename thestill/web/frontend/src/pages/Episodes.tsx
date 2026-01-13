@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAllEpisodesInfinite } from '../hooks/useApi'
-import EpisodeBrowserCard from '../components/EpisodeBrowserCard'
+import EpisodeCard from '../components/EpisodeCard'
 import EpisodeFilters from '../components/EpisodeFilters'
 import BulkActionsBar from '../components/BulkActionsBar'
 import type { EpisodeFilters as EpisodeFiltersType, EpisodeState } from '../api/types'
@@ -195,9 +195,10 @@ export default function Episodes() {
         <>
           <div className="space-y-3">
             {allEpisodes.map((episode) => (
-              <EpisodeBrowserCard
+              <EpisodeCard
                 key={episode.id}
                 episode={episode}
+                showPodcastName={true}
                 isSelected={selectedIds.has(episode.id)}
                 onSelect={handleSelect}
               />

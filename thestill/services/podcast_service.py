@@ -81,6 +81,7 @@ class EpisodeWithIndex(BaseModel):
     state: str  # Processing state (discovered, downloaded, downsampled, transcribed, cleaned)
     transcript_available: bool = False
     summary_available: bool = False
+    image_url: Optional[str] = None  # Episode-specific artwork
 
     @computed_field  # type: ignore[misc]
     @property
@@ -398,6 +399,7 @@ class PodcastService:
                     summary_available=bool(
                         episode.summary_path and self.path_manager.summary_file(episode.summary_path).exists()
                     ),
+                    image_url=episode.image_url,
                 )
             )
 

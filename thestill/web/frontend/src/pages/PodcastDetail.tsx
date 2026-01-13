@@ -158,7 +158,11 @@ export default function PodcastDetail() {
         ) : (
           <div className="space-y-3">
             {allEpisodes.map((episode, index) => (
-              <EpisodeCard key={episode.external_id || index} episode={episode} />
+              <EpisodeCard
+                key={episode.external_id || index}
+                episode={episode}
+                podcastImageUrl={podcast?.image_url}
+              />
             ))}
 
             {/* Load more trigger */}
