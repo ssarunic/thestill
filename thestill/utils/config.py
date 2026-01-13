@@ -104,6 +104,7 @@ class Config(BaseModel):
 
     # Cleanup Configuration
     cleanup_days: int = 30
+    delete_audio_after_processing: bool = False  # Delete audio files after each pipeline stage completes
 
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
@@ -219,6 +220,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleaning_overlap_pct": float(os.getenv("CLEANING_OVERLAP_PCT", "0.15")),
         "cleaning_extract_entities": os.getenv("CLEANING_EXTRACT_ENTITIES", "true").lower() == "true",
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
+        "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
     }
 

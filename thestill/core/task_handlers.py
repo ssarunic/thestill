@@ -194,6 +194,15 @@ def handle_downsample(task: Task, state: "AppState") -> None:
             str(podcast.rss_url), episode.external_id, relative_path, duration=duration_seconds
         )
 
+        # Auto-cleanup: delete original audio file after successful downsampling
+        if state.config.delete_audio_after_processing and episode.audio_path:
+            from .audio_downloader import AudioDownloader
+
+            downloader = AudioDownloader(str(state.path_manager.original_audio_dir()))
+            if downloader.delete_audio_file(episode):
+                state.feed_manager.clear_episode_audio_path(str(podcast.rss_url), episode.external_id)
+                logger.info(f"Cleaned up original audio file for episode: {episode.title}")
+
         logger.info(f"Downsample completed for episode: {episode.title}")
 
 
@@ -277,6 +286,18 @@ def handle_transcribe(
             clean_transcript_path="",  # Clear - needs re-cleaning
             summary_path="",  # Clear - needs re-summarizing
         )
+
+        # Auto-cleanup: delete downsampled audio file after successful transcription
+        if config.delete_audio_after_processing and episode.downsampled_audio_path:
+            from .audio_preprocessor import AudioPreprocessor
+
+            preprocessor = AudioPreprocessor()
+            if preprocessor.delete_downsampled_audio(
+                episode.downsampled_audio_path,
+                str(config.path_manager.downsampled_audio_dir()),
+            ):
+                state.feed_manager.clear_episode_downsampled_audio_path(str(podcast.rss_url), episode.external_id)
+                logger.info(f"Cleaned up downsampled audio file for episode: {episode.title}")
 
         logger.info(f"Transcription completed for episode: {episode.title}")
 

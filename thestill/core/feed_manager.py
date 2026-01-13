@@ -387,6 +387,72 @@ class PodcastFeedManager:
             else:
                 logger.warning(f"Episode not found for downsample marking: {episode_external_id}")
 
+    def clear_episode_audio_path(
+        self,
+        podcast_rss_url: str,
+        episode_external_id: str,
+    ) -> None:
+        """
+        Clear the audio_path field for an episode after the original audio file has been deleted.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+            episode_external_id: External ID (from RSS feed) of the episode
+        """
+        if self._in_transaction:
+            # Update in-memory cache
+            podcast = self._get_or_cache_podcast(podcast_rss_url)
+            if podcast:
+                for episode in podcast.episodes:
+                    if episode.external_id == episode_external_id:
+                        episode.audio_path = None
+                        logger.info(f"Cleared audio_path (in transaction): {episode_external_id}")
+                        return
+                logger.warning(f"Episode not found for clearing audio_path: {episode_external_id}")
+            else:
+                logger.warning(f"Podcast not found: {podcast_rss_url}")
+        else:
+            # Direct repository update
+            success = self.repository.update_episode(podcast_rss_url, episode_external_id, {"audio_path": None})
+            if success:
+                logger.info(f"Cleared audio_path: {episode_external_id}")
+            else:
+                logger.warning(f"Episode not found for clearing audio_path: {episode_external_id}")
+
+    def clear_episode_downsampled_audio_path(
+        self,
+        podcast_rss_url: str,
+        episode_external_id: str,
+    ) -> None:
+        """
+        Clear the downsampled_audio_path field for an episode after the downsampled audio file has been deleted.
+
+        Args:
+            podcast_rss_url: RSS URL of the podcast
+            episode_external_id: External ID (from RSS feed) of the episode
+        """
+        if self._in_transaction:
+            # Update in-memory cache
+            podcast = self._get_or_cache_podcast(podcast_rss_url)
+            if podcast:
+                for episode in podcast.episodes:
+                    if episode.external_id == episode_external_id:
+                        episode.downsampled_audio_path = None
+                        logger.info(f"Cleared downsampled_audio_path (in transaction): {episode_external_id}")
+                        return
+                logger.warning(f"Episode not found for clearing downsampled_audio_path: {episode_external_id}")
+            else:
+                logger.warning(f"Podcast not found: {podcast_rss_url}")
+        else:
+            # Direct repository update
+            success = self.repository.update_episode(
+                podcast_rss_url, episode_external_id, {"downsampled_audio_path": None}
+            )
+            if success:
+                logger.info(f"Cleared downsampled_audio_path: {episode_external_id}")
+            else:
+                logger.warning(f"Episode not found for clearing downsampled_audio_path: {episode_external_id}")
+
     def mark_episode_processed(
         self,
         podcast_rss_url: str,

@@ -487,6 +487,14 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
                     )
                     downsampled_count += 1
                     click.echo("✅ Downsampled successfully")
+
+                    # Auto-cleanup: delete original audio file after successful downsampling
+                    if config.delete_audio_after_processing:
+                        downloader = ctx.obj.audio_downloader
+                        if downloader.delete_audio_file(episode):
+                            # Clear the path in database since file no longer exists
+                            feed_manager.clear_episode_audio_path(str(podcast.rss_url), episode.external_id)
+                            click.echo("🗑️  Cleaned up original audio file")
                 else:
                     click.echo("❌ Downsampling failed")
 
@@ -1665,6 +1673,16 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         total_audio_seconds += episode.duration
 
                     click.echo("✅ Transcription complete!")
+
+                    # Auto-cleanup: delete downsampled audio file after successful transcription
+                    if config.delete_audio_after_processing and episode.downsampled_audio_path:
+                        if preprocessor.delete_downsampled_audio(
+                            episode.downsampled_audio_path,
+                            str(config.path_manager.downsampled_audio_dir()),
+                        ):
+                            # Clear the path in database since file no longer exists
+                            feed_manager.clear_episode_downsampled_audio_path(str(podcast.rss_url), episode.external_id)
+                            click.echo("🗑️  Cleaned up downsampled audio file")
                 elif getattr(ctx.obj, "using_webhook_mode", False):
                     # In webhook mode, None means "submitted, waiting for callback"
                     # The webhook handler will save the transcript and update the database

@@ -223,6 +223,35 @@ class AudioPreprocessor:
         except Exception as e:
             self._log(f"Error cleaning up preprocessed file: {e}")
 
+    def delete_downsampled_audio(self, downsampled_audio_path: str, storage_base: str) -> bool:
+        """
+        Delete a downsampled audio file.
+
+        Args:
+            downsampled_audio_path: Relative path to the downsampled audio file (as stored in Episode)
+            storage_base: Base directory where downsampled audio is stored
+
+        Returns:
+            True if file was deleted or didn't exist, False on error
+        """
+        if not downsampled_audio_path:
+            self._log("No downsampled_audio_path provided")
+            return True
+
+        file_path = Path(storage_base) / downsampled_audio_path
+
+        if not file_path.exists():
+            self._log(f"Downsampled audio file already deleted: {downsampled_audio_path}")
+            return True
+
+        try:
+            file_path.unlink()
+            self._log(f"Deleted downsampled audio: {downsampled_audio_path}")
+            return True
+        except Exception as e:
+            self._log(f"Error deleting downsampled audio file {downsampled_audio_path}: {e}")
+            return False
+
     def downsample_audio(self, audio_path: str, output_dir: str) -> Optional[str]:
         """
         Downsample audio to 16kHz, 16-bit, mono WAV for optimal transcription and diarization.

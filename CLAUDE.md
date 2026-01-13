@@ -538,6 +538,24 @@ thestill server --reload           # Development mode with auto-reload
   - After processing 10: Next refresh keeps those 10 processed + 40 most recent unprocessed
   - Result: Always stays at ≤50 total episodes per podcast
 
+#### Audio Cleanup
+
+**DELETE_AUDIO_AFTER_PROCESSING**: Delete audio files after each pipeline stage completes
+
+- **Purpose**: Saves disk space by removing intermediate audio files once they're no longer needed
+- **Behavior**:
+  - After successful **downsampling**: Deletes the original audio file (MP3/M4A)
+  - After successful **transcription**: Deletes the downsampled audio file (WAV)
+  - The corresponding database path fields are cleared to indicate files no longer exist
+  - Episode state is preserved (determined by furthest completed stage, not file existence)
+- **Configuration**:
+  - Set in `.env`: `DELETE_AUDIO_AFTER_PROCESSING=true`
+  - Default: `false` (audio files are kept)
+- **Important Notes**:
+  - Once deleted, audio files must be re-downloaded if you want to re-process
+  - The `thestill cleanup` command still works for time-based cleanup of old files
+  - Transcripts and summaries are never automatically deleted
+
 ### Data Flow
 
 **Six-Step Atomic Workflow (Refresh → Download → Downsample → Transcribe → Clean → Summarize):**

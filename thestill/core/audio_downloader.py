@@ -174,6 +174,34 @@ class AudioDownloader:
                     # Progress updates are handled by CLI progress bar
                     # Removed per-chunk logging to avoid terminal spam
 
+    def delete_audio_file(self, episode: Episode) -> bool:
+        """
+        Delete the original audio file for an episode.
+
+        Args:
+            episode: Episode whose audio file should be deleted
+
+        Returns:
+            True if file was deleted or didn't exist, False on error
+        """
+        if not episode.audio_path:
+            logger.debug(f"No audio_path set for episode {episode.title}")
+            return True
+
+        file_path = self.storage_path / episode.audio_path
+
+        if not file_path.exists():
+            logger.debug(f"Audio file already deleted: {episode.audio_path}")
+            return True
+
+        try:
+            file_path.unlink()
+            logger.info(f"Deleted original audio: {episode.audio_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting audio file {episode.audio_path}: {e}")
+            return False
+
     def cleanup_old_files(self, days: int = 30, dry_run: bool = False) -> int:
         """
         Remove audio files older than specified days.
