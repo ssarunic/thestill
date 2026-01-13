@@ -55,6 +55,14 @@ class PodcastWithIndex(BaseModel):
     episodes_count: int = 0
     episodes_processed: int = 0
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def description_text(self) -> str:
+        """Plain text version of description (HTML stripped)"""
+        from thestill.utils.html_utils import html_to_plain_text
+
+        return html_to_plain_text(self.description)
+
 
 class EpisodeWithIndex(BaseModel):
     """Episode with human-friendly index numbers"""

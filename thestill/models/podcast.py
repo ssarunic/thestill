@@ -274,6 +274,25 @@ class Podcast(BaseModel):
             self.slug = generate_slug(self.title)
         return self
 
+    @property
+    def description_text(self) -> str:
+        """
+        Get podcast description as plain text.
+
+        The description field may contain HTML from RSS feeds. This property
+        converts it to readable plain text while preserving structure:
+        - Paragraph breaks become double newlines
+        - Links are formatted as "text (url)"
+        - Lists become bullet points
+        - HTML entities are decoded
+
+        Returns:
+            Plain text version of the description
+        """
+        from thestill.utils.html_utils import html_to_plain_text
+
+        return html_to_plain_text(self.description)
+
 
 class GoogleTranscriptMetadata(BaseModel):
     """Metadata from Google Cloud Speech-to-Text API response."""

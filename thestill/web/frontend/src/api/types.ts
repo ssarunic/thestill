@@ -52,7 +52,8 @@ export interface ActivityResponse {
 export interface PodcastSummary {
   index: number
   title: string
-  description: string
+  description: string  // Original description (may contain HTML)
+  description_text: string  // Plain text version for display
   rss_url: string
   slug: string
   image_url: string | null

@@ -35,7 +35,7 @@ export default function PodcastCard({ podcast }: PodcastCardProps) {
 
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-gray-900 truncate">{podcast.title}</h3>
-            <p className="text-sm text-gray-500 mt-1 line-clamp-2">{podcast.description || 'No description'}</p>
+            <p className="text-sm text-gray-500 mt-1 line-clamp-2">{podcast.description_text || 'No description'}</p>
           </div>
         </div>
 
