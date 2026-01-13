@@ -178,10 +178,19 @@ def run_refresh_task(
     task_manager = state.task_manager
 
     try:
-        task_manager.update_progress(TaskType.REFRESH, 10, "Fetching podcast feeds...")
+        task_manager.update_progress(TaskType.REFRESH, 5, "Starting feed refresh...")
 
         # Get max_episodes_per_podcast from config if not specified
         max_episodes_per_podcast = max_episodes or state.config.max_episodes_per_podcast
+
+        # Progress callback that maps podcast iteration to 5-90% range
+        def on_progress(current_idx: int, total: int, podcast_title: str) -> None:
+            if total > 0:
+                # Map progress from 5% to 90% (leaving room for start/finish)
+                pct = 5 + int((current_idx / total) * 85)
+                task_manager.update_progress(
+                    TaskType.REFRESH, pct, f"Fetching {podcast_title} ({current_idx + 1}/{total})..."
+                )
 
         # Execute the refresh
         result = state.refresh_service.refresh(
@@ -189,9 +198,10 @@ def run_refresh_task(
             max_episodes=max_episodes,
             max_episodes_per_podcast=max_episodes_per_podcast,
             dry_run=dry_run,
+            progress_callback=on_progress,
         )
 
-        task_manager.update_progress(TaskType.REFRESH, 90, "Processing results...")
+        task_manager.update_progress(TaskType.REFRESH, 95, "Processing results...")
 
         # Build result summary
         result_data = {

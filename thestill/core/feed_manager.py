@@ -16,7 +16,7 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import feedparser
 
@@ -163,21 +163,31 @@ class PodcastFeedManager:
         """Remove a podcast feed"""
         return self.repository.delete(rss_url)
 
-    def get_new_episodes(self, max_episodes_per_podcast: Optional[int] = None) -> List[Tuple[Podcast, List[Episode]]]:
+    def get_new_episodes(
+        self,
+        max_episodes_per_podcast: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> List[Tuple[Podcast, List[Episode]]]:
         """
         Check all feeds for new episodes.
 
         Args:
             max_episodes_per_podcast: Optional limit on episodes to discover per podcast.
                                      If set, only the N most recent episodes will be tracked.
+            progress_callback: Optional callback for progress reporting.
+                              Called with (current_index, total_count, podcast_title).
 
         Returns:
             List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
         """
         new_episodes = []
         podcasts = self.repository.get_all()
+        total_podcasts = len(podcasts)
 
-        for podcast in podcasts:
+        for idx, podcast in enumerate(podcasts):
+            # Report progress
+            if progress_callback:
+                progress_callback(idx, total_podcasts, podcast.title)
             try:
                 # Detect source type and fetch episodes
                 source = self.media_source_factory.detect_source(str(podcast.rss_url))

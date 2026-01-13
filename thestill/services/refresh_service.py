@@ -17,7 +17,7 @@ Refresh service - Business logic for feed refreshing and episode discovery
 """
 
 import logging
-from typing import List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -68,6 +68,7 @@ class RefreshService:
         max_episodes: Optional[int] = None,
         max_episodes_per_podcast: Optional[int] = None,
         dry_run: bool = False,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> RefreshResult:
         """
         Refresh podcast feeds and discover new episodes.
@@ -77,6 +78,8 @@ class RefreshService:
             max_episodes: Maximum episodes to process (applied after filtering)
             max_episodes_per_podcast: Maximum episodes to discover per podcast
             dry_run: If True, don't persist changes
+            progress_callback: Optional callback for progress reporting.
+                              Called with (current_index, total_count, podcast_title).
 
         Returns:
             RefreshResult with discovered episodes
@@ -87,7 +90,10 @@ class RefreshService:
         logger.info("Starting feed refresh...")
 
         # Get new episodes from all podcasts
-        new_episodes = self.feed_manager.get_new_episodes(max_episodes_per_podcast=max_episodes_per_podcast)
+        new_episodes = self.feed_manager.get_new_episodes(
+            max_episodes_per_podcast=max_episodes_per_podcast,
+            progress_callback=progress_callback,
+        )
 
         if not new_episodes:
             logger.info("No new episodes found")
