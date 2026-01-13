@@ -32,6 +32,8 @@ from pydub import AudioSegment
 from pydub.effects import normalize
 
 from thestill.models.transcript import Segment, Transcript, Word
+from thestill.utils.device import resolve_hybrid_devices
+from thestill.utils.duration import get_audio_duration_float
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
@@ -651,53 +653,12 @@ class WhisperXTranscriber(Transcriber):
         """
         Resolve device setting into per-stage devices for optimal performance.
 
-        On Mac with MPS available:
-        - Transcription: CPU (Faster-Whisper/CTranslate2 has MPS issues)
-        - Alignment: MPS (Wav2Vec2 works well with Metal)
-        - Diarization: MPS (pyannote benefits from GPU parallelism)
-
-        On CUDA systems: all stages use CUDA.
-        On CPU-only systems: all stages use CPU.
+        Delegates to shared utility function in thestill.utils.device.
 
         Returns:
             tuple: (transcription_device, alignment_device, diarization_device)
         """
-        # Check for MPS availability
-        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        cuda_available = torch.cuda.is_available()
-
-        if device == "auto":
-            if cuda_available:
-                # CUDA: use GPU for everything
-                return ("cuda", "cuda", "cuda")
-            elif mps_available:
-                # Mac with MPS: hybrid approach
-                print(
-                    "🍎 Mac detected: using hybrid device strategy (CPU for transcription, MPS for alignment/diarization)"
-                )
-                return ("cpu", "mps", "mps")
-            else:
-                # CPU only
-                return ("cpu", "cpu", "cpu")
-        elif device == "mps":
-            if mps_available:
-                # Explicit MPS: use hybrid approach (transcription on CPU due to Faster-Whisper issues)
-                print(
-                    "🍎 MPS requested: using hybrid device strategy (CPU for transcription, MPS for alignment/diarization)"
-                )
-                return ("cpu", "mps", "mps")
-            else:
-                print("WARNING: MPS requested but not available, falling back to CPU")
-                return ("cpu", "cpu", "cpu")
-        elif device == "cuda":
-            if cuda_available:
-                return ("cuda", "cuda", "cuda")
-            else:
-                print("WARNING: CUDA requested but not available, falling back to CPU")
-                return ("cpu", "cpu", "cpu")
-        else:
-            # Explicit device (e.g., "cpu")
-            return (device, device, device)
+        return resolve_hybrid_devices(device, verbose=True)
 
     def load_model(self) -> None:
         """Load WhisperX model on transcription device"""
@@ -984,13 +945,8 @@ class WhisperXTranscriber(Transcriber):
             return None
 
     def _get_audio_duration_seconds(self, audio_path: str) -> float:
-        """Get audio duration in seconds"""
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / 1000.0
-        except Exception as e:
-            print(f"Warning: Could not determine audio duration: {e}")
-            return 0.0
+        """Get audio duration in seconds using ffprobe."""
+        return get_audio_duration_float(audio_path)
 
     def _format_transcript(
         self,

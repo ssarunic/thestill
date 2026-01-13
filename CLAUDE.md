@@ -747,6 +747,16 @@ data/                      # Generated data directory
 
 For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUIDELINES.md).
 
+### Coding Principles
+
+**DRY (Don't Repeat Yourself)**: Every piece of knowledge must have a single, unambiguous, authoritative representation within the system.
+
+- Extract repeated logic into reusable functions, classes, or modules
+- Use existing abstractions (PathManager, services, repositories) rather than duplicating patterns
+- Consolidate configuration values into single sources of truth
+- Eliminate duplication in process via automation (builds, tests, deployments)
+- Balance with KISS and YAGNI — avoid premature abstraction when code is used only once
+
 ### Testing Strategy
 
 **Coverage Targets**:

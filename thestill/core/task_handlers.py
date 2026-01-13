@@ -28,11 +28,13 @@ Usage:
 
 import json
 import logging
+from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict
+from typing import TYPE_CHECKING, Callable, Dict, Generator, Tuple
 
 from thestill.utils.exceptions import FatalError, TransientError
 
+from ..models.podcast import Episode, Podcast
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
 from .error_classifier import classify_and_raise
@@ -43,6 +45,58 @@ if TYPE_CHECKING:
     from ..web.dependencies import AppState
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Helper Functions (DRY - reduce boilerplate across handlers)
+# =============================================================================
+
+
+def _get_episode_or_fail(task: Task, state: "AppState") -> Tuple[Podcast, Episode]:
+    """
+    Get episode and podcast from task, raising FatalError if not found.
+
+    Args:
+        task: Task containing episode_id
+        state: Application state with repository
+
+    Returns:
+        Tuple of (Podcast, Episode)
+
+    Raises:
+        FatalError: If episode not found in database
+    """
+    result = state.repository.get_episode(task.episode_id)
+    if not result:
+        raise FatalError(f"Episode not found in database: {task.episode_id}")
+    return result
+
+
+@contextmanager
+def _handler_error_context(context_msg: str, default_transient: bool = True) -> Generator[None, None, None]:
+    """
+    Context manager for consistent error handling in task handlers.
+
+    Catches exceptions and classifies them as transient or fatal.
+    Already-classified errors (FatalError, TransientError) are re-raised as-is.
+
+    Args:
+        context_msg: Context message for error classification
+        default_transient: Whether unclassified errors default to transient
+
+    Yields:
+        None
+
+    Raises:
+        FatalError: If error is classified as fatal
+        TransientError: If error is classified as transient
+    """
+    try:
+        yield
+    except (FatalError, TransientError):
+        raise  # Already classified
+    except Exception as e:
+        classify_and_raise(e, context=context_msg, default_transient=default_transient)
 
 
 def handle_download(task: Task, state: "AppState") -> None:
@@ -59,14 +113,9 @@ def handle_download(task: Task, state: "AppState") -> None:
     """
     logger.info(f"Processing download task for episode {task.episode_id}")
 
-    # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
-    result = state.repository.get_episode(task.episode_id)
-    if not result:
-        raise FatalError(f"Episode not found in database: {task.episode_id}")
+    podcast, episode = _get_episode_or_fail(task, state)
 
-    podcast, episode = result
-
-    try:
+    with _handler_error_context(f"downloading audio for {episode.title}"):
         # Create downloader and download
         downloader = AudioDownloader(str(state.path_manager.original_audio_dir()))
         audio_path = downloader.download_episode(episode, podcast)
@@ -87,11 +136,6 @@ def handle_download(task: Task, state: "AppState") -> None:
 
         logger.info(f"Download completed for episode: {episode.title}")
 
-    except (FatalError, TransientError):
-        raise  # Already classified
-    except Exception as e:
-        classify_and_raise(e, context=f"downloading audio for {episode.title}")
-
 
 def handle_downsample(task: Task, state: "AppState") -> None:
     """
@@ -107,12 +151,7 @@ def handle_downsample(task: Task, state: "AppState") -> None:
     """
     logger.info(f"Processing downsample task for episode {task.episode_id}")
 
-    # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
-    result = state.repository.get_episode(task.episode_id)
-    if not result:
-        raise FatalError(f"Episode not found in database: {task.episode_id}")
-
-    podcast, episode = result
+    podcast, episode = _get_episode_or_fail(task, state)
 
     if not episode.audio_path:
         raise FatalError(f"No audio path set for episode: {task.episode_id}")
@@ -122,7 +161,8 @@ def handle_downsample(task: Task, state: "AppState") -> None:
     if not original_audio_file.exists():
         raise FatalError(f"Original audio file not found: {original_audio_file}")
 
-    try:
+    # Audio processing errors are usually fatal (corrupt file, unsupported format)
+    with _handler_error_context(f"downsampling audio for {episode.title}", default_transient=False):
         # Determine output directory
         audio_path_obj = Path(episode.audio_path)
         if len(audio_path_obj.parts) > 1:
@@ -156,12 +196,6 @@ def handle_downsample(task: Task, state: "AppState") -> None:
 
         logger.info(f"Downsample completed for episode: {episode.title}")
 
-    except (FatalError, TransientError):
-        raise  # Already classified
-    except Exception as e:
-        # Audio processing errors are usually fatal (corrupt file, unsupported format)
-        classify_and_raise(e, context=f"downsampling audio for {episode.title}", default_transient=False)
-
 
 def handle_transcribe(
     task: Task,
@@ -192,12 +226,7 @@ def handle_transcribe(
             )
         )
 
-    # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
-    result = state.repository.get_episode(task.episode_id)
-    if not result:
-        raise FatalError(f"Episode not found in database: {task.episode_id}")
-
-    podcast, episode = result
+    podcast, episode = _get_episode_or_fail(task, state)
 
     if not episode.downsampled_audio_path:
         raise FatalError(f"No downsampled audio path for episode: {task.episode_id}")
@@ -209,7 +238,8 @@ def handle_transcribe(
     if not audio_file.exists():
         raise FatalError(f"Downsampled audio file not found: {audio_file}")
 
-    try:
+    # Transcription errors are usually transient (API issues, rate limits)
+    with _handler_error_context(f"transcribing {episode.title}"):
         # Create transcriber based on config (with progress callback if available)
         transcriber = _create_transcriber(config, config.path_manager, progress_callback)
 
@@ -250,12 +280,6 @@ def handle_transcribe(
 
         logger.info(f"Transcription completed for episode: {episode.title}")
 
-    except (FatalError, TransientError):
-        raise  # Already classified
-    except Exception as e:
-        # Transcription errors are usually transient (API issues, rate limits)
-        classify_and_raise(e, context=f"transcribing {episode.title}")
-
 
 def handle_clean(task: Task, state: "AppState") -> None:
     """
@@ -271,12 +295,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
     """
     logger.info(f"Processing clean task for episode {task.episode_id}")
 
-    # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
-    result = state.repository.get_episode(task.episode_id)
-    if not result:
-        raise FatalError(f"Episode not found in database: {task.episode_id}")
-
-    podcast, episode = result
+    podcast, episode = _get_episode_or_fail(task, state)
 
     if not episode.raw_transcript_path:
         raise FatalError(f"No raw transcript path for episode: {task.episode_id}")
@@ -289,7 +308,8 @@ def handle_clean(task: Task, state: "AppState") -> None:
     if not transcript_path.exists():
         raise FatalError(f"Transcript file not found: {transcript_path}")
 
-    try:
+    # LLM errors are usually transient (rate limits, API issues)
+    with _handler_error_context(f"cleaning transcript for {episode.title}"):
         with open(transcript_path, "r", encoding="utf-8") as f:
             transcript_data = json.load(f)
 
@@ -359,12 +379,6 @@ def handle_clean(task: Task, state: "AppState") -> None:
 
         logger.info(f"Transcript cleaning completed for episode: {episode.title}")
 
-    except (FatalError, TransientError):
-        raise  # Already classified
-    except Exception as e:
-        # LLM errors are usually transient (rate limits, API issues)
-        classify_and_raise(e, context=f"cleaning transcript for {episode.title}")
-
 
 def handle_summarize(task: Task, state: "AppState") -> None:
     """
@@ -380,12 +394,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
     """
     logger.info(f"Processing summarize task for episode {task.episode_id}")
 
-    # Get episode and podcast (get_episode returns tuple of (Podcast, Episode))
-    result = state.repository.get_episode(task.episode_id)
-    if not result:
-        raise FatalError(f"Episode not found in database: {task.episode_id}")
-
-    podcast, episode = result
+    podcast, episode = _get_episode_or_fail(task, state)
 
     if not episode.clean_transcript_path:
         raise FatalError(f"No clean transcript path for episode: {task.episode_id}")
@@ -398,7 +407,8 @@ def handle_summarize(task: Task, state: "AppState") -> None:
     if not clean_path.exists():
         raise FatalError(f"Clean transcript file not found: {clean_path}")
 
-    try:
+    # LLM errors are usually transient (rate limits, API issues)
+    with _handler_error_context(f"summarizing {episode.title}"):
         with open(clean_path, "r", encoding="utf-8") as f:
             transcript_text = f.read()
 
@@ -459,12 +469,6 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         )
 
         logger.info(f"Summarization completed for episode: {episode.title}")
-
-    except (FatalError, TransientError):
-        raise  # Already classified
-    except Exception as e:
-        # LLM errors are usually transient (rate limits, API issues)
-        classify_and_raise(e, context=f"summarizing {episode.title}")
 
 
 def _create_transcriber(

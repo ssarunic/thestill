@@ -18,13 +18,13 @@ Podcast API endpoints for thestill.me web UI.
 Provides read-only access to podcasts and their episodes.
 """
 
-from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
+from ..responses import api_response, not_found, paginated_response
 
 router = APIRouter()
 
@@ -51,20 +51,13 @@ async def get_podcasts(
     # Apply pagination
     podcasts = all_podcasts[offset : offset + limit]
 
-    has_more = offset + len(podcasts) < total
-    next_offset = offset + limit if has_more else None
-
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "podcasts": [p.model_dump() for p in podcasts],
-        "count": len(podcasts),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": next_offset,
-    }
+    return paginated_response(
+        items=[p.model_dump() for p in podcasts],
+        total=total,
+        offset=offset,
+        limit=limit,
+        items_key="podcasts",
+    )
 
 
 @router.get("/{podcast_slug}")
@@ -84,28 +77,28 @@ async def get_podcast(
     podcast = state.repository.get_by_slug(podcast_slug)
 
     if not podcast:
-        raise HTTPException(status_code=404, detail="Podcast not found")
+        not_found("Podcast", podcast_slug)
 
     # Get the indexed version for extra info
     podcasts = state.podcast_service.get_podcasts()
     podcast_info = next((p for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), None)
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "podcast": {
-            "id": podcast.id,
-            "index": podcast_info.index if podcast_info else 0,
-            "title": podcast.title,
-            "description": podcast.description,
-            "rss_url": str(podcast.rss_url),
-            "slug": podcast.slug,
-            "image_url": podcast.image_url,
-            "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
-            "episodes_count": len(podcast.episodes),
-            "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
-        },
-    }
+    return api_response(
+        {
+            "podcast": {
+                "id": podcast.id,
+                "index": podcast_info.index if podcast_info else 0,
+                "title": podcast.title,
+                "description": podcast.description,
+                "rss_url": str(podcast.rss_url),
+                "slug": podcast.slug,
+                "image_url": podcast.image_url,
+                "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
+                "episodes_count": len(podcast.episodes),
+                "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
+            },
+        }
+    )
 
 
 @router.get("/{podcast_slug}/episodes")
@@ -130,32 +123,25 @@ async def get_podcast_episodes(
     """
     podcast = state.repository.get_by_slug(podcast_slug)
     if not podcast:
-        raise HTTPException(status_code=404, detail="Podcast not found")
+        not_found("Podcast", podcast_slug)
 
     # Get total count for pagination
     total = state.podcast_service.get_episodes_count(podcast.id, since_hours=since_hours)
     if total is None:
-        raise HTTPException(status_code=404, detail="Podcast not found")
+        not_found("Podcast", podcast_slug)
 
     episodes = state.podcast_service.get_episodes(podcast.id, limit=limit, offset=offset, since_hours=since_hours)
 
     if episodes is None:
-        raise HTTPException(status_code=404, detail="Podcast not found")
+        not_found("Podcast", podcast_slug)
 
-    has_more = offset + len(episodes) < total
-    next_offset = offset + limit if has_more else None
-
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "episodes": [e.model_dump() for e in episodes],
-        "count": len(episodes),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": next_offset,
-    }
+    return paginated_response(
+        items=[e.model_dump() for e in episodes],
+        total=total,
+        offset=offset,
+        limit=limit,
+        items_key="episodes",
+    )
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}")
@@ -177,39 +163,39 @@ async def get_episode_by_slugs(
     result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
 
     if not result:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
     podcast, episode = result
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "episode": {
-            "id": episode.id,
-            "podcast_id": podcast.id,
-            "podcast_slug": podcast.slug,
-            "podcast_title": podcast.title,
-            "title": episode.title,
-            "description": episode.description,
-            "slug": episode.slug,
-            "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
-            "audio_url": str(episode.audio_url),
-            "duration": episode.duration,
-            "duration_formatted": format_duration(episode.duration) if episode.duration else None,
-            "external_id": episode.external_id,
-            "state": episode.state.value,
-            "has_transcript": bool(episode.clean_transcript_path),
-            "has_summary": bool(episode.summary_path),
-            "image_url": episode.image_url,
-            "podcast_image_url": podcast.image_url,
-            # Failure info
-            "is_failed": episode.is_failed,
-            "failed_at_stage": episode.failed_at_stage,
-            "failure_reason": episode.failure_reason,
-            "failure_type": episode.failure_type.value if episode.failure_type else None,
-            "failed_at": episode.failed_at.isoformat() if episode.failed_at else None,
-        },
-    }
+    return api_response(
+        {
+            "episode": {
+                "id": episode.id,
+                "podcast_id": podcast.id,
+                "podcast_slug": podcast.slug,
+                "podcast_title": podcast.title,
+                "title": episode.title,
+                "description": episode.description,
+                "slug": episode.slug,
+                "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
+                "audio_url": str(episode.audio_url),
+                "duration": episode.duration,
+                "duration_formatted": format_duration(episode.duration) if episode.duration else None,
+                "external_id": episode.external_id,
+                "state": episode.state.value,
+                "has_transcript": bool(episode.clean_transcript_path),
+                "has_summary": bool(episode.summary_path),
+                "image_url": episode.image_url,
+                "podcast_image_url": podcast.image_url,
+                # Failure info
+                "is_failed": episode.is_failed,
+                "failed_at_stage": episode.failed_at_stage,
+                "failure_reason": episode.failure_reason,
+                "failure_type": episode.failure_type.value if episode.failure_type else None,
+                "failed_at": episode.failed_at.isoformat() if episode.failed_at else None,
+            },
+        }
+    )
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/transcript")
@@ -233,24 +219,24 @@ async def get_episode_transcript_by_slugs(
     result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
 
     if not result:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
     podcast, episode = result
 
     transcript_result = state.podcast_service.get_transcript(podcast.id, episode.id)
 
     if transcript_result is None:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "episode_id": episode.id,
-        "episode_title": episode.title,
-        "content": transcript_result.content,
-        "available": transcript_result.transcript_type is not None,
-        "transcript_type": transcript_result.transcript_type,
-    }
+    return api_response(
+        {
+            "episode_id": episode.id,
+            "episode_title": episode.title,
+            "content": transcript_result.content,
+            "available": transcript_result.transcript_type is not None,
+            "transcript_type": transcript_result.transcript_type,
+        }
+    )
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
@@ -272,20 +258,20 @@ async def get_episode_summary_by_slugs(
     result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
 
     if not result:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
     podcast, episode = result
 
     summary = state.podcast_service.get_summary(podcast.id, episode.id)
 
     if summary is None:
-        raise HTTPException(status_code=404, detail="Episode not found")
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "episode_id": episode.id,
-        "episode_title": episode.title,
-        "content": summary,
-        "available": not summary.startswith("N/A"),
-    }
+    return api_response(
+        {
+            "episode_id": episode.id,
+            "episode_title": episode.title,
+            "content": summary,
+            "available": not summary.startswith("N/A"),
+        }
+    )

@@ -18,14 +18,15 @@ Dashboard API endpoints for thestill.me web UI.
 Provides statistics and recent activity for the dashboard.
 """
 
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime
+from typing import List
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
+from ..responses import api_response, paginated_response
 
 router = APIRouter()
 
@@ -71,25 +72,25 @@ async def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
     """
     stats = state.stats_service.get_stats()
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "podcasts_tracked": stats.podcasts_tracked,
-        "episodes_total": stats.episodes_total,
-        "episodes_processed": stats.episodes_summarized,
-        "episodes_pending": stats.episodes_unprocessed,
-        "storage_path": stats.storage_path,
-        "audio_files_count": stats.audio_files_count,
-        "transcripts_available": stats.transcripts_available,
-        "pipeline": {
-            "discovered": stats.episodes_discovered,
-            "downloaded": stats.episodes_downloaded,
-            "downsampled": stats.episodes_downsampled,
-            "transcribed": stats.episodes_transcribed,
-            "cleaned": stats.episodes_cleaned,
-            "summarized": stats.episodes_summarized,
-        },
-    }
+    return api_response(
+        {
+            "podcasts_tracked": stats.podcasts_tracked,
+            "episodes_total": stats.episodes_total,
+            "episodes_processed": stats.episodes_summarized,
+            "episodes_pending": stats.episodes_unprocessed,
+            "storage_path": stats.storage_path,
+            "audio_files_count": stats.audio_files_count,
+            "transcripts_available": stats.transcripts_available,
+            "pipeline": {
+                "discovered": stats.episodes_discovered,
+                "downloaded": stats.episodes_downloaded,
+                "downsampled": stats.episodes_downsampled,
+                "transcribed": stats.episodes_transcribed,
+                "cleaned": stats.episodes_cleaned,
+                "summarized": stats.episodes_summarized,
+            },
+        }
+    )
 
 
 @router.get("/activity")
@@ -137,17 +138,10 @@ async def get_recent_activity(
     # Apply pagination
     items = all_episodes[offset : offset + limit]
 
-    has_more = offset + len(items) < total
-    next_offset = offset + limit if has_more else None
-
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "items": items,
-        "count": len(items),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": next_offset,
-    }
+    return paginated_response(
+        items=items,
+        total=total,
+        offset=offset,
+        limit=limit,
+        items_key="items",
+    )

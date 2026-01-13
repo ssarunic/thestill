@@ -19,7 +19,7 @@ Provides cross-podcast episode listing, search, and bulk operations.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,6 +29,7 @@ from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
+from ..responses import bad_request, conflict, not_found, paginated_response
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ async def get_all_episodes(
     if podcast_slug:
         podcast = app_state.repository.get_by_slug(podcast_slug)
         if not podcast:
-            raise HTTPException(status_code=404, detail=f"Podcast not found: {podcast_slug}")
+            not_found("Podcast", podcast_slug)
         podcast_id = podcast.id
 
     # Parse date parameters
@@ -116,13 +117,13 @@ async def get_all_episodes(
     if date_from:
         try:
             parsed_date_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid date_from format: {date_from}")
+        except ValueError as exc:
+            bad_request(f"Invalid date_from format: {date_from}")
     if date_to:
         try:
             parsed_date_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid date_to format: {date_to}")
+        except ValueError as exc:
+            bad_request(f"Invalid date_to format: {date_to}")
 
     # Query repository
     episodes_with_podcasts, total = app_state.repository.get_all_episodes(
@@ -162,20 +163,13 @@ async def get_all_episodes(
             }
         )
 
-    has_more = offset + len(episodes) < total
-    next_offset = offset + limit if has_more else None
-
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "episodes": episodes,
-        "count": len(episodes),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": next_offset,
-    }
+    return paginated_response(
+        items=episodes,
+        total=total,
+        offset=offset,
+        limit=limit,
+        items_key="episodes",
+    )
 
 
 @router.post("/bulk/process")
@@ -351,7 +345,7 @@ async def get_episode_failure(
     """
     result = app_state.repository.get_episode(episode_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_id}")
+        not_found("Episode", episode_id)
 
     podcast, episode = result
 
@@ -395,39 +389,27 @@ async def retry_failed_episode(
     """
     result = app_state.repository.get_episode(episode_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_id}")
+        not_found("Episode", episode_id)
 
-    podcast, episode = result
+    _podcast, episode = result
 
     if not episode.is_failed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Episode is not in failed state (state={episode.state.value})",
-        )
+        bad_request(f"Episode is not in failed state (state={episode.state.value})")
 
     # Determine the stage to retry based on where it failed
     failed_stage = episode.failed_at_stage
     if not failed_stage:
-        raise HTTPException(
-            status_code=400,
-            detail="Episode has no recorded failed_at_stage",
-        )
+        bad_request("Episode has no recorded failed_at_stage")
 
     # Map failed_at_stage to TaskStage
     try:
         retry_stage = TaskStage(failed_stage)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown stage: {failed_stage}",
-        )
+    except ValueError as exc:
+        bad_request(f"Unknown stage: {failed_stage}")
 
     # Check for existing pending/processing task
     if app_state.queue_manager.has_pending_task(episode_id, retry_stage):
-        raise HTTPException(
-            status_code=409,
-            detail=f"A {retry_stage.value} task is already queued or processing for this episode",
-        )
+        conflict(f"A {retry_stage.value} task is already queued or processing for this episode")
 
     # Clear the failure state
     app_state.repository.clear_episode_failure(episode_id)

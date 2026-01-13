@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import json
 import sys
 import time
@@ -69,6 +70,32 @@ class CLIContext:
         self.external_transcript_downloader = external_transcript_downloader
 
 
+def require_config(f):
+    """
+    Decorator to ensure CLIContext is loaded before command runs.
+
+    Displays a user-friendly error message if configuration failed to load.
+    Should be applied after @click.pass_context.
+
+    Example:
+        @main.command()
+        @click.pass_context
+        @require_config
+        def my_command(ctx):
+            # ctx.obj is guaranteed to be CLIContext here
+            pass
+    """
+
+    @functools.wraps(f)
+    def wrapper(ctx, *args, **kwargs):
+        if ctx.obj is None:
+            click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
+            ctx.exit(1)
+        return f(ctx, *args, **kwargs)
+
+    return wrapper
+
+
 @click.group()
 @click.option("--config", "-c", help="Path to config file")
 @click.pass_context
@@ -113,12 +140,9 @@ def main(ctx, config):
 @main.command()
 @click.argument("rss_url")
 @click.pass_context
+@require_config
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     podcast = ctx.obj.podcast_service.add_podcast(rss_url)
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
@@ -129,12 +153,9 @@ def add(ctx, rss_url):
 @main.command()
 @click.argument("podcast_id")
 @click.pass_context
+@require_config
 def remove(ctx, podcast_id):
     """Remove a podcast by RSS URL or index number"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     if ctx.obj.podcast_service.remove_podcast(podcast_id):
         click.echo("✓ Podcast removed")
     else:
@@ -143,11 +164,9 @@ def remove(ctx, podcast_id):
 
 @main.command()
 @click.pass_context
+@require_config
 def list(ctx):
     """List all tracked podcasts"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
 
     podcasts = ctx.obj.podcast_service.get_podcasts()
     output = CLIFormatter.format_podcast_list(podcasts)
@@ -159,12 +178,9 @@ def list(ctx):
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to discover per podcast")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be discovered without updating feeds.json")
 @click.pass_context
+@require_config
 def refresh(ctx, podcast_id, max_episodes, dry_run):
     """Refresh podcast feeds and discover new episodes (step 1)"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     # Use shared services from context
     config = ctx.obj.config
     refresh_service = RefreshService(ctx.obj.feed_manager, ctx.obj.podcast_service)
@@ -216,12 +232,9 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to download per podcast")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be downloaded without downloading")
 @click.pass_context
+@require_config
 def download(ctx, podcast_id, max_episodes, dry_run):
     """Download audio files for episodes that need downloading (step 2)"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     # Use shared services from context
     config = ctx.obj.config
     feed_manager = ctx.obj.feed_manager
@@ -348,12 +361,9 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to downsample")
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be downsampled")
 @click.pass_context
+@require_config
 def downsample(ctx, podcast_id, max_episodes, dry_run):
     """Downsample downloaded audio to 16kHz, 16-bit, mono WAV format"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     # Use shared services from context
     config = ctx.obj.config
     podcast_service = ctx.obj.podcast_service
@@ -498,12 +508,9 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--force", "-f", is_flag=True, help="Re-process even if clean transcript exists")
 @click.option("--stream", "-s", is_flag=True, help="Stream LLM output in real-time")
 @click.pass_context
+@require_config
 def clean_transcript(ctx, dry_run, max_episodes, force, stream):
     """Clean transcripts using facts-based two-pass approach"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     import json
 
     from .core.llm_provider import create_llm_provider
@@ -676,12 +683,9 @@ def facts(ctx):
 
 @facts.command("list")
 @click.pass_context
+@require_config
 def facts_list(ctx):
     """List all facts files"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     path_manager = ctx.obj.path_manager
 
     # List podcast facts
@@ -731,12 +735,9 @@ def facts_list(ctx):
 @click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
 @click.option("--episode-id", "-e", help="Episode ID (index, 'latest', or slug)")
 @click.pass_context
+@require_config
 def facts_show(ctx, podcast_id, episode_id):
     """Show facts for a podcast or episode"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     from .core.facts_manager import FactsManager
     from .utils.slug import generate_slug
 
@@ -797,14 +798,11 @@ def facts_show(ctx, podcast_id, episode_id):
 @click.option("--podcast-id", "-p", help="Podcast ID (index or URL)")
 @click.option("--episode-id", "-e", help="Episode ID (index, 'latest', or slug)")
 @click.pass_context
+@require_config
 def facts_edit(ctx, podcast_id, episode_id):
     """Open facts file in $EDITOR"""
     import os
     import subprocess
-
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
 
     from .core.facts_manager import FactsManager
     from .utils.slug import generate_slug
@@ -861,13 +859,10 @@ def facts_edit(ctx, podcast_id, episode_id):
 @click.option("--episode-id", "-e", help="Episode UUID (or 'latest')")
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing facts")
 @click.pass_context
+@require_config
 def facts_extract(ctx, podcast_id, episode_id, force):
     """Extract facts from a transcript"""
     import json
-
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
 
     from .core.facts_extractor import FactsExtractor
     from .core.facts_manager import FactsManager
@@ -994,12 +989,9 @@ def facts_extract(ctx, podcast_id, episode_id, force):
 
 @main.command()
 @click.pass_context
+@require_config
 def status(ctx):
     """Show system status and statistics"""
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     # Use shared services from context
     config = ctx.obj.config
     stats_service = ctx.obj.stats_service
@@ -1130,12 +1122,9 @@ def status(ctx):
 @main.command()
 @click.option("--limit", "-l", type=int, default=20, help="Number of items to show (default: 20)")
 @click.pass_context
+@require_config
 def activity(ctx, limit):
     """Show recent processing activity log"""
-    if ctx.obj is None:
-        click.echo("Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     # Get activity from service
     items = ctx.obj.stats_service.get_recent_activity(limit=limit)
 
@@ -1147,6 +1136,7 @@ def activity(ctx, limit):
 @main.command()
 @click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
 @click.pass_context
+@require_config
 def cleanup(ctx, dry_run):
     """Clean up old audio files and sync database.
 
@@ -1157,10 +1147,6 @@ def cleanup(ctx, dry_run):
     Episodes that are already transcribed will NOT be re-transcribed
     (transcript paths are preserved).
     """
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
     repository = ctx.obj.repository
@@ -1264,16 +1250,13 @@ def cleanup(ctx, dry_run):
     help="Download completed operations and CANCEL still-running ones (don't wait)",
 )
 @click.pass_context
+@require_config
 def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run, cancel_pending):
     """Transcribe audio files to JSON transcripts.
 
     Without arguments: Transcribes all downloaded episodes that need transcription.
     With audio_path: Transcribes a specific audio file (standalone mode).
     """
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     config = ctx.obj.config
     preprocessor = ctx.obj.audio_preprocessor
 
@@ -1758,6 +1741,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to summarize (default: all)")
 @click.option("--force", "-f", is_flag=True, help="Re-summarize even if summary exists")
 @click.pass_context
+@require_config
 def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     """Summarize cleaned transcripts with comprehensive analysis.
 
@@ -1767,10 +1751,6 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     Produces executive summary, notable quotes, content angles, social snippets,
     resource check, and critical analysis.
     """
-    if ctx.obj is None:
-        click.echo("Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
     feed_manager = ctx.obj.feed_manager
@@ -1943,6 +1923,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be evaluated")
 @click.option("--force", "-f", is_flag=True, help="Re-evaluate even if evaluation exists")
 @click.pass_context
+@require_config
 def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id, max_episodes, dry_run, force):
     """Evaluate the quality of raw transcripts.
 
@@ -1952,10 +1933,6 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
     Uses LLM to analyze transcript quality including accuracy, completeness,
     entity handling, and structural clarity.
     """
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
     feed_manager = ctx.obj.feed_manager
@@ -2112,6 +2089,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be evaluated")
 @click.option("--force", "-f", is_flag=True, help="Re-evaluate even if evaluation exists")
 @click.pass_context
+@require_config
 def evaluate_clean_transcript(
     ctx, transcript_path, original, output, podcast_id, episode_id, max_episodes, dry_run, force
 ):
@@ -2122,10 +2100,6 @@ def evaluate_clean_transcript(
 
     Uses LLM to analyze fidelity, formatting, readability, and enhancements.
     """
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
     feed_manager = ctx.obj.feed_manager
@@ -2299,6 +2273,7 @@ def evaluate_clean_transcript(
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 @click.option("--workers", "-w", default=1, type=int, help="Number of worker processes (default: 1)")
 @click.pass_context
+@require_config
 def server(ctx, host, port, reload, workers):
     """Start the web server for webhooks and API.
 
@@ -2314,10 +2289,6 @@ def server(ctx, host, port, reload, workers):
         thestill server --host 0.0.0.0       # Bind to all interfaces
         thestill server --reload             # Auto-reload for development
     """
-    if ctx.obj is None:
-        click.echo("❌ Configuration not loaded. Please check your setup.", err=True)
-        ctx.exit(1)
-
     try:
         import uvicorn
 

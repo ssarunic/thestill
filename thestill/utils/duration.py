@@ -118,7 +118,11 @@ def format_duration_verbose(seconds: Union[int, float]) -> str:
 
 def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:
     """
-    Get audio file duration using ffprobe.
+    Get audio file duration in seconds using ffprobe.
+
+    This is the canonical way to get audio duration in the codebase.
+    Prefer this over pydub-based methods as ffprobe is more reliable
+    for various audio formats.
 
     Args:
         audio_path: Path to audio file
@@ -166,6 +170,40 @@ def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:
         logger.warning(f"Error getting duration for {audio_path}: {e}")
 
     return None
+
+
+def get_audio_duration_minutes(audio_path: Union[str, Path]) -> float:
+    """
+    Get audio file duration in minutes using ffprobe.
+
+    Convenience wrapper around get_audio_duration() for cases where
+    minutes are preferred. Returns 0.0 if duration cannot be determined.
+
+    Args:
+        audio_path: Path to audio file
+
+    Returns:
+        Duration in minutes as float, or 0.0 if ffprobe fails
+    """
+    seconds = get_audio_duration(audio_path)
+    return seconds / 60.0 if seconds else 0.0
+
+
+def get_audio_duration_float(audio_path: Union[str, Path]) -> float:
+    """
+    Get audio file duration in seconds as float using ffprobe.
+
+    Similar to get_audio_duration() but returns 0.0 instead of None
+    on failure, for cases where a numeric value is always needed.
+
+    Args:
+        audio_path: Path to audio file
+
+    Returns:
+        Duration in seconds as float, or 0.0 if ffprobe fails
+    """
+    seconds = get_audio_duration(audio_path)
+    return float(seconds) if seconds else 0.0
 
 
 def calculate_speed_ratio(processing_seconds: Union[int, float], audio_seconds: Union[int, float]) -> Optional[float]:

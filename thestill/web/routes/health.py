@@ -21,11 +21,10 @@ These endpoints are used for:
 - Quick status verification
 """
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends
 
 from ..dependencies import AppState, get_app_state
+from ..responses import api_response
 
 router = APIRouter()
 
@@ -38,10 +37,7 @@ async def health_check():
     Returns:
         Health status with timestamp.
     """
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    return api_response({}, status="healthy")
 
 
 @router.get("/status")
@@ -60,30 +56,30 @@ async def status(state: AppState = Depends(get_app_state)):
     """
     stats = state.stats_service.get_stats()
 
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "storage": {
-            "path": str(stats.storage_path),
-            "audio_files": stats.audio_files_count,
-            "transcripts": stats.transcripts_available,
-        },
-        "podcasts": {
-            "tracked": stats.podcasts_tracked,
-            "total_episodes": stats.episodes_total,
-        },
-        "pipeline": {
-            "discovered": stats.episodes_discovered,
-            "downloaded": stats.episodes_downloaded,
-            "downsampled": stats.episodes_downsampled,
-            "transcribed": stats.episodes_transcribed,
-            "cleaned": stats.episodes_cleaned,
-            "summarized": stats.episodes_summarized,
-            "unprocessed": stats.episodes_unprocessed,
-        },
-        "configuration": {
-            "transcription_provider": state.config.transcription_provider,
-            "llm_provider": state.config.llm_provider,
-            "diarization_enabled": state.config.enable_diarization,
-        },
-    }
+    return api_response(
+        {
+            "storage": {
+                "path": str(stats.storage_path),
+                "audio_files": stats.audio_files_count,
+                "transcripts": stats.transcripts_available,
+            },
+            "podcasts": {
+                "tracked": stats.podcasts_tracked,
+                "total_episodes": stats.episodes_total,
+            },
+            "pipeline": {
+                "discovered": stats.episodes_discovered,
+                "downloaded": stats.episodes_downloaded,
+                "downsampled": stats.episodes_downsampled,
+                "transcribed": stats.episodes_transcribed,
+                "cleaned": stats.episodes_cleaned,
+                "summarized": stats.episodes_summarized,
+                "unprocessed": stats.episodes_unprocessed,
+            },
+            "configuration": {
+                "transcription_provider": state.config.transcription_provider,
+                "llm_provider": state.config.llm_provider,
+                "diarization_enabled": state.config.enable_diarization,
+            },
+        }
+    )

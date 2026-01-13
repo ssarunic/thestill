@@ -24,10 +24,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
-import torch
-from pydub import AudioSegment
-
 from thestill.models.transcript import Transcript
+from thestill.utils.device import resolve_device
+from thestill.utils.duration import get_audio_duration_minutes
 
 
 class Transcriber(ABC):
@@ -80,19 +79,9 @@ class Transcriber(ABC):
             print(f"Error saving transcript: {e}")
 
     def _get_audio_duration_minutes(self, audio_path: str) -> float:
-        """Get audio duration in minutes."""
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / (1000 * 60)
-        except Exception:
-            return 0.0
+        """Get audio duration in minutes using ffprobe."""
+        return get_audio_duration_minutes(audio_path)
 
     def _resolve_device(self, device: str) -> str:
         """Resolve 'auto' device to actual device (cuda/mps/cpu)."""
-        if device == "auto":
-            if torch.cuda.is_available():
-                return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "cpu"  # MPS has issues with some models
-            return "cpu"
-        return device
+        return resolve_device(device)
