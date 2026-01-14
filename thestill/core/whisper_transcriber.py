@@ -34,6 +34,7 @@ from pydub.effects import normalize
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.utils.device import resolve_hybrid_devices
 from thestill.utils.duration import get_audio_duration_float
+from thestill.utils.stdout_capture import WHISPERX_PROGRESS_PATTERN, StdoutProgressCapture
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
@@ -241,7 +242,8 @@ class WhisperTranscriber(Transcriber):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        language: str = "en",
+        *,
+        language: str,
         custom_prompt: Optional[str] = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
@@ -257,7 +259,7 @@ class WhisperTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             output_path: Path to save transcript JSON
-            language: Language code (default: 'en')
+            language: Language code (ISO 639-1, e.g., 'en', 'hr')
             custom_prompt: Custom prompt to improve transcription accuracy
             preprocess_audio: Whether to preprocess audio before transcription
                 WARNING: Causes timestamp drift - transcripts won't align with original
@@ -705,7 +707,8 @@ class WhisperXTranscriber(Transcriber):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        language: str = "en",
+        *,
+        language: str,
         custom_prompt: Optional[str] = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
@@ -721,7 +724,7 @@ class WhisperXTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             output_path: Path to save transcript JSON
-            language: Language code (default: 'en')
+            language: Language code (ISO 639-1, e.g., 'en', 'hr')
             custom_prompt: Custom prompt (not used in WhisperX, for API compatibility)
             preprocess_audio: Whether to preprocess audio
             clean_transcript: Whether to clean transcript with LLM
@@ -739,20 +742,29 @@ class WhisperXTranscriber(Transcriber):
                 return self._whisper_fallback.transcribe_audio(
                     audio_path,
                     output_path,
-                    language,
-                    custom_prompt,
-                    preprocess_audio,
-                    clean_transcript,
-                    cleaning_config,
-                    podcast_title,
-                    episode_id,
-                    podcast_slug,
-                    episode_slug,
+                    language=language,
+                    custom_prompt=custom_prompt,
+                    preprocess_audio=preprocess_audio,
+                    clean_transcript=clean_transcript,
+                    cleaning_config=cleaning_config,
+                    podcast_title=podcast_title,
+                    episode_id=episode_id,
+                    podcast_slug=podcast_slug,
+                    episode_slug=episode_slug,
                 )
 
-            # Report loading model progress
-            # Progress scale: loading=2%, transcribing=5%, aligning=8%, diarizing=10-90%, formatting=95%
-            # Diarization takes ~80% of the total time, so it gets 80% of the progress bar
+            # Progress allocation depends on whether diarization is enabled:
+            # With diarization: load=0-5%, transcribe=5-25%, align=25-30%, diarize=30-95%, format=95-100%
+            # Without diarization: load=0-5%, transcribe=5-85%, align=85-95%, format=95-100%
+            if self.enable_diarization:
+                transcribe_base, transcribe_range = 5, 20  # 5-25%
+                align_pct = 25
+                diarize_base, diarize_range = 30, 65  # 30-95%
+            else:
+                transcribe_base, transcribe_range = 5, 80  # 5-85%
+                align_pct = 85
+                diarize_base, diarize_range = 0, 0  # unused
+
             self._report_progress(
                 TranscriptionStage.LOADING_MODEL,
                 2,
@@ -766,15 +778,15 @@ class WhisperXTranscriber(Transcriber):
                 return self._whisper_fallback.transcribe_audio(
                     audio_path,
                     output_path,
-                    language,
-                    custom_prompt,
-                    preprocess_audio,
-                    clean_transcript,
-                    cleaning_config,
-                    podcast_title,
-                    episode_id,
-                    podcast_slug,
-                    episode_slug,
+                    language=language,
+                    custom_prompt=custom_prompt,
+                    preprocess_audio=preprocess_audio,
+                    clean_transcript=clean_transcript,
+                    cleaning_config=cleaning_config,
+                    podcast_title=podcast_title,
+                    episode_id=episode_id,
+                    podcast_slug=podcast_slug,
+                    episode_slug=episode_slug,
                 )
 
             print(f"Starting transcription of: {Path(audio_path).name}")
@@ -785,24 +797,35 @@ class WhisperXTranscriber(Transcriber):
                 self._load_whisper_fallback()
                 processed_audio_path = self._whisper_fallback._preprocess_audio(audio_path)
 
-            # Step 1: Transcribe with WhisperX
+            # Step 1: Transcribe with WhisperX (with chunk-level progress capture)
             self._report_progress(
                 TranscriptionStage.TRANSCRIBING,
-                5,
+                transcribe_base,
                 "Transcribing audio with WhisperX...",
             )
             print("Step 1: Transcribing audio with WhisperX...")
-            result = self._model.transcribe(
-                processed_audio_path,
-                batch_size=16,
-                language=language,
-                print_progress=True,
-            )
+
+            def on_transcribe_progress(whisperx_pct: float) -> None:
+                """Scale WhisperX's 0-100% to our allocated range."""
+                scaled_pct = transcribe_base + int(whisperx_pct * transcribe_range / 100)
+                self._report_progress(
+                    TranscriptionStage.TRANSCRIBING,
+                    scaled_pct,
+                    f"Transcribing: {whisperx_pct:.0f}%",
+                )
+
+            with StdoutProgressCapture(WHISPERX_PROGRESS_PATTERN, on_transcribe_progress):
+                result = self._model.transcribe(
+                    processed_audio_path,
+                    batch_size=16,
+                    language=language,
+                    print_progress=True,
+                )
 
             # Step 2: Align for word-level timestamps
             self._report_progress(
                 TranscriptionStage.ALIGNING,
-                8,
+                align_pct,
                 f"Aligning timestamps for {len(result.get('segments', []))} segments...",
             )
             print("Step 2: Aligning timestamps for word-level accuracy...")
@@ -826,10 +849,10 @@ class WhisperXTranscriber(Transcriber):
             if self.enable_diarization:
                 self._report_progress(
                     TranscriptionStage.DIARIZING,
-                    10,
+                    diarize_base,
                     "Starting speaker diarization...",
                 )
-                speakers_detected = self._perform_diarization(result, processed_audio_path)
+                speakers_detected = self._perform_diarization(result, processed_audio_path, diarize_base, diarize_range)
 
             if preprocess_audio and processed_audio_path != audio_path:
                 try:
@@ -873,11 +896,33 @@ class WhisperXTranscriber(Transcriber):
             print("Falling back to standard Whisper")
             self._load_whisper_fallback()
             return self._whisper_fallback.transcribe_audio(
-                audio_path, output_path, language, custom_prompt, preprocess_audio, clean_transcript, cleaning_config
+                audio_path,
+                output_path,
+                language=language,
+                custom_prompt=custom_prompt,
+                preprocess_audio=preprocess_audio,
+                clean_transcript=clean_transcript,
+                cleaning_config=cleaning_config,
             )
 
-    def _perform_diarization(self, result: Dict, audio_path: str) -> Optional[int]:
-        """Perform speaker diarization and update result using diarization_device"""
+    def _perform_diarization(
+        self,
+        result: Dict,
+        audio_path: str,
+        progress_base_pct: int = 30,
+        progress_range_pct: int = 65,
+    ) -> Optional[int]:
+        """Perform speaker diarization and update result using diarization_device.
+
+        Args:
+            result: WhisperX result dict to update with speaker labels
+            audio_path: Path to audio file
+            progress_base_pct: Base percentage for diarization progress (default 30%)
+            progress_range_pct: Range of percentage for diarization (default 65%, so 30-95%)
+
+        Returns:
+            Number of speakers detected, or None if diarization failed
+        """
         try:
             print("Step 3: Performing speaker diarization...")
             print(f"  - Loading diarization model ({self.diarization_model}) on {self.diarization_device}...")
@@ -901,6 +946,8 @@ class WhisperXTranscriber(Transcriber):
                 audio_duration_seconds=audio_duration_seconds,
                 device=self.diarization_device,
                 progress_callback=self.progress_callback,
+                progress_base_pct=progress_base_pct,
+                progress_range_pct=progress_range_pct,
             )
             progress_monitor.start()
 
