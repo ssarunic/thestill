@@ -46,7 +46,8 @@ class Transcriber(ABC):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        language: str = "en",
+        *,
+        language: str,
         custom_prompt: Optional[str] = None,
     ) -> Optional[Transcript]:
         """

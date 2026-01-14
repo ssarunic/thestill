@@ -74,6 +74,8 @@ class TranscriptCleaner:
         podcast_facts: Optional[PodcastFacts],
         episode_facts: EpisodeFacts,
         episode_title: str = "",
+        *,
+        language: str,
         on_prompt_ready: Optional[PromptSaveCallback] = None,
     ) -> str:
         """
@@ -84,6 +86,7 @@ class TranscriptCleaner:
             podcast_facts: Podcast-level facts (hosts, keywords, etc.)
             episode_facts: Episode-specific facts (speaker mapping, guests, etc.)
             episode_title: Title for the output header
+            language: ISO 639-1 language code (e.g., "en", "hr", "de") for language-aware cleaning
             on_prompt_ready: Optional callback invoked BEFORE each LLM call with prompt data
 
         Returns:
@@ -100,6 +103,7 @@ class TranscriptCleaner:
             podcast_facts=podcast_facts,
             episode_facts=episode_facts,
             episode_title=episode_title,
+            language=language,
             on_prompt_ready=on_prompt_ready,
         )
 
@@ -152,20 +156,22 @@ class TranscriptCleaner:
         podcast_facts: Optional[PodcastFacts],
         episode_facts: EpisodeFacts,
         episode_title: str,
+        *,
+        language: str,
         on_prompt_ready: Optional[PromptSaveCallback] = None,
     ) -> str:
         """
         Stage 2b: Use LLM to clean the transcript.
 
         Handles:
-        - Spelling and grammar correction (British English)
+        - Spelling and grammar correction (language-specific)
         - Proper noun fixing using keywords from facts
         - Filler word removal
         - Ad break detection and marking
         - Final formatting
         """
         # Build prompts
-        system_prompt = self._build_cleanup_system_prompt()
+        system_prompt = self._build_cleanup_system_prompt(language=language)
         user_prompt = self._build_cleanup_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_facts=podcast_facts,
@@ -364,10 +370,58 @@ class TranscriptCleaner:
 
         return chunks
 
-    def _build_cleanup_system_prompt(self) -> str:
+    def _build_cleanup_system_prompt(self, *, language: str) -> str:
         """Build system prompt for transcript cleanup."""
-        return """You are an expert podcast transcript editor. Your job is to LIGHTLY EDIT an existing transcript - NOT rewrite it.
+        # Map ISO 639-1 codes to language names and spelling rules
+        language_config = {
+            "en": {"name": "English", "spelling": "British English (e.g., 'labour', 'programme', 'realise', 'colour')"},
+            "hr": {"name": "Croatian", "spelling": "standard Croatian spelling rules"},
+            "de": {"name": "German", "spelling": "standard German orthography (Rechtschreibung)"},
+            "es": {"name": "Spanish", "spelling": "standard Spanish spelling rules"},
+            "fr": {"name": "French", "spelling": "standard French spelling rules"},
+            "it": {"name": "Italian", "spelling": "standard Italian spelling rules"},
+            "pt": {"name": "Portuguese", "spelling": "standard Portuguese spelling rules"},
+            "nl": {"name": "Dutch", "spelling": "standard Dutch spelling rules"},
+            "pl": {"name": "Polish", "spelling": "standard Polish spelling rules"},
+            "ru": {"name": "Russian", "spelling": "standard Russian spelling rules"},
+            "cs": {"name": "Czech", "spelling": "standard Czech spelling rules"},
+            "sk": {"name": "Slovak", "spelling": "standard Slovak spelling rules"},
+            "sl": {"name": "Slovenian", "spelling": "standard Slovenian spelling rules"},
+            "sr": {"name": "Serbian", "spelling": "standard Serbian spelling rules"},
+            "bs": {"name": "Bosnian", "spelling": "standard Bosnian spelling rules"},
+            "uk": {"name": "Ukrainian", "spelling": "standard Ukrainian spelling rules"},
+            "hu": {"name": "Hungarian", "spelling": "standard Hungarian spelling rules"},
+            "ro": {"name": "Romanian", "spelling": "standard Romanian spelling rules"},
+            "bg": {"name": "Bulgarian", "spelling": "standard Bulgarian spelling rules"},
+            "el": {"name": "Greek", "spelling": "standard Greek spelling rules"},
+            "sv": {"name": "Swedish", "spelling": "standard Swedish spelling rules"},
+            "da": {"name": "Danish", "spelling": "standard Danish spelling rules"},
+            "fi": {"name": "Finnish", "spelling": "standard Finnish spelling rules"},
+            "no": {"name": "Norwegian", "spelling": "standard Norwegian spelling rules"},
+            "ja": {"name": "Japanese", "spelling": "standard Japanese writing conventions"},
+            "ko": {"name": "Korean", "spelling": "standard Korean writing conventions"},
+            "zh": {"name": "Chinese", "spelling": "standard Chinese writing conventions"},
+            "ar": {"name": "Arabic", "spelling": "standard Arabic writing conventions"},
+            "tr": {"name": "Turkish", "spelling": "standard Turkish spelling rules"},
+        }
 
+        config = language_config.get(
+            language, {"name": language.upper(), "spelling": f"standard {language.upper()} spelling rules"}
+        )
+        lang_name = config["name"]
+        spelling_rules = config["spelling"]
+
+        # Add language-specific instruction for non-English transcripts
+        language_note = ""
+        if language != "en":
+            language_note = f"""
+IMPORTANT - LANGUAGE:
+This transcript is in {lang_name}. Apply {spelling_rules}. Keep all text in {lang_name}.
+
+"""
+
+        return f"""You are an expert podcast transcript editor. Your job is to LIGHTLY EDIT an existing transcript - NOT rewrite it.
+{language_note}
 CRITICAL RULE - VERBATIM PRESERVATION:
 - You MUST preserve the speaker's ACTUAL WORDS. This is a transcript of what was said.
 - DO NOT paraphrase, summarise, or rewrite sentences.
@@ -401,7 +455,7 @@ The transcript has already been formatted with speaker names and timestamps. You
 
 4. MINIMAL EDITING (light touch only):
    - Fix ONLY obvious transcription errors (e.g., "their" vs "there", garbled words)
-   - Convert spelling to British English (e.g., 'labour', 'programme', 'realise', 'colour')
+   - Apply {spelling_rules}
    - Remove filler words (um, uh, like, you know) ONLY if excessive
    - DO NOT restructure sentences
    - DO NOT improve eloquence or clarity

@@ -145,6 +145,7 @@ class PodcastFeedManager:
                 description=metadata.get("description", ""),
                 rss_url=metadata.get("rss_url", url),  # type: ignore[arg-type]  # Pydantic validates to HttpUrl
                 image_url=metadata.get("image_url"),
+                language=metadata.get("language", "en"),
             )
 
             # Save if not already exists
@@ -201,10 +202,24 @@ class PodcastFeedManager:
                 }
 
                 # Add podcast_slug for RSS sources to enable debug RSS saving
+                language_changed = False
                 if isinstance(source, RSSMediaSource):
                     fetch_kwargs["podcast_slug"] = podcast.slug
 
+                    # Update language from RSS feed if it changed (or was never set)
+                    metadata = source.extract_metadata(str(podcast.rss_url))
+                    if metadata and metadata.get("language"):
+                        new_language = metadata["language"]
+                        if podcast.language != new_language:
+                            logger.info(f"Updating podcast language: {podcast.language} -> {new_language}")
+                            podcast.language = new_language
+                            language_changed = True
+
                 episodes = source.fetch_episodes(**fetch_kwargs)
+
+                # Save podcast if language changed (even if no new episodes)
+                if language_changed and not episodes:
+                    self.repository.save_podcast(podcast)
 
                 # Add new episodes to podcast
                 for episode in episodes:

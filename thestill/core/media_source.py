@@ -172,7 +172,7 @@ class RSSMediaSource(MediaSource):
             url: RSS feed URL or Apple Podcasts URL
 
         Returns:
-            Dictionary with 'title', 'description', 'rss_url', 'image_url' or None if extraction fails
+            Dictionary with 'title', 'description', 'rss_url', 'image_url', 'language' or None if extraction fails
         """
         try:
             # Resolve Apple Podcasts URLs to RSS first
@@ -207,11 +207,22 @@ class RSSMediaSource(MediaSource):
             if image_url:
                 logger.debug(f"Extracted podcast artwork: {image_url}")
 
+            # Extract language from RSS <language> tag
+            # RSS format: "en", "en-us", "en-US", "hr", "hr-HR", etc.
+            # Normalize to ISO 639-1 two-letter code
+            language = "en"  # Default to English
+            feed_language = feed.get("language", "")
+            if feed_language:
+                # Extract first part before hyphen and lowercase: "en-US" -> "en", "hr-HR" -> "hr"
+                language = feed_language.split("-")[0].lower()[:2]
+                logger.debug(f"Extracted language from RSS: {feed_language} -> {language}")
+
             return {
                 "title": feed.get("title", "Unknown Podcast"),
                 "description": feed.get("description", ""),
                 "rss_url": rss_url,
                 "image_url": image_url,
+                "language": language,
             }
 
         except Exception as e:
@@ -648,7 +659,7 @@ class YouTubeMediaSource(MediaSource):
             url: YouTube playlist or channel URL
 
         Returns:
-            Dictionary with 'title', 'description', 'uploader' or None if extraction fails
+            Dictionary with 'title', 'description', 'uploader', 'language' or None if extraction fails
         """
         try:
             playlist_info = self.youtube_downloader.extract_playlist_info(url)
@@ -661,6 +672,7 @@ class YouTubeMediaSource(MediaSource):
                 "description": playlist_info.get("description", ""),
                 "uploader": playlist_info.get("uploader", ""),
                 "rss_url": url,  # YouTube URL is treated as RSS URL
+                "language": "en",  # Default to English for YouTube (could be enhanced with yt-dlp metadata)
             }
 
         except Exception as e:

@@ -150,6 +150,8 @@ class FactsExtractor:
         episode_title: str,
         episode_description: str,
         podcast_facts: Optional[PodcastFacts] = None,
+        *,
+        language: str,
     ) -> EpisodeFacts:
         """
         Extract episode-specific facts from transcript (Pass 1).
@@ -170,6 +172,7 @@ class FactsExtractor:
             episode_title: Title of the episode
             episode_description: Description of the episode
             podcast_facts: Existing podcast facts for context (optional)
+            language: ISO 639-1 language code (e.g., "en", "hr", "de")
 
         Returns:
             EpisodeFacts with extracted information
@@ -183,7 +186,7 @@ class FactsExtractor:
             podcast_context = self._render_podcast_facts_context(podcast_facts)
 
         # Build the prompt
-        system_prompt = self._build_facts_extraction_system_prompt()
+        system_prompt = self._build_facts_extraction_system_prompt(language=language)
         user_prompt = self._build_facts_extraction_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_title=podcast_title,
@@ -191,6 +194,7 @@ class FactsExtractor:
             episode_title=episode_title,
             episode_description=episode_description,
             podcast_context=podcast_context,
+            language=language,
         )
 
         messages = [
@@ -269,6 +273,8 @@ class FactsExtractor:
         podcast_title: str,
         podcast_description: str,
         episode_facts: EpisodeFacts,
+        *,
+        language: str,
     ) -> PodcastFacts:
         """
         Extract initial podcast facts from first episode processed.
@@ -281,6 +287,7 @@ class FactsExtractor:
             podcast_title: Title of the podcast
             podcast_description: Description of the podcast
             episode_facts: Already extracted episode facts
+            language: ISO 639-1 language code (e.g., "en", "hr", "de")
 
         Returns:
             PodcastFacts with initial podcast-level information
@@ -399,9 +406,55 @@ class FactsExtractor:
 
         return "\n".join(lines)
 
-    def _build_facts_extraction_system_prompt(self) -> str:
+    def _build_facts_extraction_system_prompt(self, *, language: str) -> str:
         """Build system prompt for episode facts extraction."""
-        return """You are an expert at analyzing podcast transcripts to extract EPISODE-SPECIFIC facts.
+        # Map ISO 639-1 codes to language names
+        language_names = {
+            "en": "English",
+            "hr": "Croatian",
+            "de": "German",
+            "es": "Spanish",
+            "fr": "French",
+            "it": "Italian",
+            "pt": "Portuguese",
+            "nl": "Dutch",
+            "pl": "Polish",
+            "ru": "Russian",
+            "ja": "Japanese",
+            "ko": "Korean",
+            "zh": "Chinese",
+            "ar": "Arabic",
+            "tr": "Turkish",
+            "cs": "Czech",
+            "sk": "Slovak",
+            "sl": "Slovenian",
+            "sr": "Serbian",
+            "bs": "Bosnian",
+            "uk": "Ukrainian",
+            "hu": "Hungarian",
+            "ro": "Romanian",
+            "bg": "Bulgarian",
+            "el": "Greek",
+            "sv": "Swedish",
+            "da": "Danish",
+            "fi": "Finnish",
+            "no": "Norwegian",
+        }
+        lang_name = language_names.get(language, language.upper())
+
+        # Add language-specific instruction for non-English transcripts
+        language_instruction = ""
+        if language != "en":
+            language_instruction = f"""
+IMPORTANT: This transcript is in {lang_name}. When extracting facts:
+- Keep speaker names and roles in {lang_name} as spoken
+- Extract keywords and topics using the original {lang_name} terms
+- Recognize {lang_name} naming conventions and titles
+
+"""
+
+        return f"""You are an expert at analyzing podcast transcripts to extract EPISODE-SPECIFIC facts.
+{language_instruction}
 
 Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPISODE:
 
@@ -434,15 +487,15 @@ IMPORTANT GUIDELINES:
 - Keep topics_keywords focused (20-50 items max) - prioritize proper nouns that might be misspelled
 
 Return your analysis as JSON with this structure:
-{
-  "speaker_mapping": {
+{{
+  "speaker_mapping": {{
     "SPEAKER_00": "Name (Role)",
     "SPEAKER_01": "Name (Role)"
-  },
+  }},
   "guests": ["Name - Role/Company"],
   "topics_keywords": ["keyword1", "keyword2"],
   "ad_sponsors": ["Sponsor1", "Sponsor2"]
-}"""
+}}"""
 
     def _build_facts_extraction_user_prompt(
         self,
@@ -452,12 +505,27 @@ Return your analysis as JSON with this structure:
         episode_title: str,
         episode_description: str,
         podcast_context: str,
+        *,
+        language: str,
     ) -> str:
         """Build user prompt for episode facts extraction."""
+        # Map ISO 639-1 codes to language names
+        language_names = {
+            "en": "English",
+            "hr": "Croatian",
+            "de": "German",
+            "es": "Spanish",
+            "fr": "French",
+            "it": "Italian",
+            "pt": "Portuguese",
+        }
+        lang_name = language_names.get(language, language.upper())
+
         lines = [
             "PODCAST METADATA:",
             f"Podcast: {podcast_title}",
             f"Description: {podcast_description}",
+            f"Language: {lang_name}",
             "",
             "EPISODE METADATA:",
             f"Episode: {episode_title}",

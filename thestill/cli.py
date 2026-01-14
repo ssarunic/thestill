@@ -1257,9 +1257,15 @@ def cleanup(ctx, dry_run):
     is_flag=True,
     help="Download completed operations and CANCEL still-running ones (don't wait)",
 )
+@click.option(
+    "--language",
+    "-l",
+    default="en",
+    help="Language code for standalone transcription (ISO 639-1, e.g., 'en', 'hr'). Ignored for batch mode.",
+)
 @click.pass_context
 @require_config
-def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run, cancel_pending):
+def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run, cancel_pending, language):
     """Transcribe audio files to JSON transcripts.
 
     Without arguments: Transcribes all downloaded episodes that need transcription.
@@ -1440,9 +1446,16 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     "anthropic_api_key": config.anthropic_api_key,
                 }
 
+            # Convert language for provider (Google needs BCP-47 format)
+            transcribe_language = language
+            if config.transcription_provider.lower() == "google":
+                locale_map = {"en": "en-US", "hr": "hr-HR", "de": "de-DE", "es": "es-ES", "fr": "fr-FR", "it": "it-IT"}
+                transcribe_language = locale_map.get(language, f"{language}-{language.upper()}")
+
             transcript_data = transcriber.transcribe_audio(
                 transcription_audio_path,
                 output,
+                language=transcribe_language,
                 clean_transcript=config.enable_transcript_cleaning,
                 cleaning_config=cleaning_config,
             )
@@ -1644,11 +1657,27 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         "anthropic_api_key": config.anthropic_api_key,
                     }
 
+                # Convert language for provider (Google needs BCP-47 format)
+                episode_language = podcast.language
+                if config.transcription_provider.lower() == "google":
+                    locale_map = {
+                        "en": "en-US",
+                        "hr": "hr-HR",
+                        "de": "de-DE",
+                        "es": "es-ES",
+                        "fr": "fr-FR",
+                        "it": "it-IT",
+                    }
+                    episode_language = locale_map.get(
+                        podcast.language, f"{podcast.language}-{podcast.language.upper()}"
+                    )
+
                 # Pass episode context for Google Cloud operation persistence
                 # This allows resuming transcriptions if the app is restarted
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
                     output,
+                    language=episode_language,
                     clean_transcript=config.enable_transcript_cleaning,
                     cleaning_config=cleaning_config,
                     episode_id=episode.id,

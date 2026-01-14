@@ -139,7 +139,8 @@ class ElevenLabsTranscriber(Transcriber):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        language: str = "en",
+        *,
+        language: str,
         custom_prompt: Optional[str] = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
@@ -161,7 +162,7 @@ class ElevenLabsTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             output_path: Optional path to save transcript JSON
-            language: Language code (e.g., 'en', 'en-US'). Overrides instance setting.
+            language: Language code (ISO 639-1, e.g., 'en', 'hr'). Overrides instance setting.
             custom_prompt: Not supported by ElevenLabs (ignored)
             preprocess_audio: Not used (ignored for API compatibility)
             clean_transcript: Not used (ignored for API compatibility)

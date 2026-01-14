@@ -97,6 +97,8 @@ class TranscriptCleaningProcessor:
         path_manager: Optional[Any] = None,
         save_prompts: bool = True,
         on_stream_chunk: Optional[Callable[[str], None]] = None,
+        *,
+        language: str,
     ) -> Dict:
         """
         Clean transcript using the two-pass facts-based approach.
@@ -126,6 +128,7 @@ class TranscriptCleaningProcessor:
             path_manager: PathManager instance for facts file paths (required)
             save_prompts: Whether to save prompts to debug folder (default: True)
             on_stream_chunk: Optional callback for streaming LLM output chunks
+            language: ISO 639-1 language code (e.g., "en", "hr", "de") for language-aware cleaning
 
         Returns:
             Dict with keys: cleaned_markdown, podcast_facts, episode_facts, processing_time
@@ -176,6 +179,7 @@ class TranscriptCleaningProcessor:
                 episode_title=episode_title,
                 episode_description=episode_description,
                 podcast_facts=podcast_facts,
+                language=language,
             )
             # Save episode facts
             if effective_episode_slug:
@@ -192,6 +196,7 @@ class TranscriptCleaningProcessor:
                 podcast_title=podcast_title,
                 podcast_description=podcast_description,
                 episode_facts=episode_facts,
+                language=language,
             )
             # Save podcast facts
             facts_manager.save_podcast_facts(effective_podcast_slug, podcast_facts)
@@ -217,6 +222,7 @@ class TranscriptCleaningProcessor:
             podcast_facts=podcast_facts,
             episode_facts=episode_facts,
             episode_title=episode_title,
+            language=language,
             on_prompt_ready=prompt_save_callback,
         )
 

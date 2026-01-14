@@ -99,6 +99,62 @@ def _handler_error_context(context_msg: str, default_transient: bool = True) -> 
         classify_and_raise(e, context=context_msg, default_transient=default_transient)
 
 
+def _convert_language_for_transcriber(language: str, provider: str) -> str:
+    """
+    Convert ISO 639-1 language code to format expected by transcriber.
+
+    Different transcription providers expect different language code formats:
+    - Whisper/WhisperX: ISO 639-1 (e.g., "en", "hr", "de")
+    - ElevenLabs: ISO 639-1 (e.g., "en", "hr", "de")
+    - Google Cloud: BCP-47 (e.g., "en-US", "hr-HR", "de-DE")
+
+    Args:
+        language: ISO 639-1 code (e.g., "en", "hr", "de")
+        provider: Transcription provider name ("whisper", "google", "elevenlabs")
+
+    Returns:
+        Language code in provider's expected format
+    """
+    if provider.lower() == "google":
+        # Google Cloud Speech-to-Text uses BCP-47 language codes
+        # Map common ISO 639-1 codes to their BCP-47 equivalents
+        locale_map = {
+            "en": "en-US",
+            "hr": "hr-HR",
+            "de": "de-DE",
+            "es": "es-ES",
+            "fr": "fr-FR",
+            "it": "it-IT",
+            "pt": "pt-BR",
+            "nl": "nl-NL",
+            "pl": "pl-PL",
+            "ru": "ru-RU",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+            "zh": "zh-CN",
+            "ar": "ar-SA",
+            "tr": "tr-TR",
+            "cs": "cs-CZ",
+            "sk": "sk-SK",
+            "sl": "sl-SI",
+            "sr": "sr-RS",
+            "bs": "bs-BA",
+            "uk": "uk-UA",
+            "hu": "hu-HU",
+            "ro": "ro-RO",
+            "bg": "bg-BG",
+            "el": "el-GR",
+            "sv": "sv-SE",
+            "da": "da-DK",
+            "fi": "fi-FI",
+            "no": "nb-NO",
+        }
+        return locale_map.get(language, f"{language}-{language.upper()}")
+    else:
+        # Whisper and ElevenLabs use ISO 639-1 codes directly
+        return language
+
+
 def handle_download(task: Task, state: "AppState") -> None:
     """
     Download audio for an episode.
@@ -266,10 +322,15 @@ def handle_transcribe(
         output = str(transcript_dir / transcript_filename)
         output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
+        # Convert language code to provider-specific format
+        language = _convert_language_for_transcriber(podcast.language, config.transcription_provider)
+        logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
+
         # Transcribe
         transcript_data = transcriber.transcribe_audio(
             str(audio_file),
             output,
+            language=language,
             episode_id=episode.id,
             podcast_slug=podcast.slug,
             episode_slug=episode.slug,
@@ -375,6 +436,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
         clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
         # Clean transcript
+        logger.info(f"Cleaning transcript with language: {podcast.language}")
         cleaning_result = cleaning_processor.clean_transcript(
             transcript_data=transcript_data,
             podcast_title=podcast.title,
@@ -385,6 +447,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
             episode_slug=episode.slug,
             output_path=str(cleaned_path),
             path_manager=path_manager,
+            language=podcast.language,
         )
 
         if not cleaning_result:

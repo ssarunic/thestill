@@ -47,7 +47,9 @@ class CLIFormatter:
         lines = [f"\n📻 Tracked Podcasts ({len(podcasts)}):", "─" * 50, ""]
 
         for podcast in podcasts:
-            lines.append(f"{podcast.index}. {podcast.title}")
+            # Show language code if not English
+            lang_suffix = f" ({podcast.language})" if podcast.language and podcast.language != "en" else ""
+            lines.append(f"{podcast.index}. {podcast.title}{lang_suffix}")
             lines.append(f"   RSS: {podcast.rss_url}")
             if podcast.last_processed:
                 lines.append(f"   Last processed: {podcast.last_processed.strftime('%Y-%m-%d %H:%M')}")

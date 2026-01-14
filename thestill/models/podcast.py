@@ -258,6 +258,7 @@ class Podcast(BaseModel):
     slug: str = ""  # URL/filesystem-safe identifier (auto-generated from title if empty)
     description: str
     image_url: Optional[str] = None  # Podcast artwork URL (from itunes:image or RSS image tag)
+    language: str = "en"  # ISO 639-1 language code (e.g., "en", "hr", "de") - extracted from RSS <language> tag
 
     # Processing status
     last_processed: Optional[datetime] = None

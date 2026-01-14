@@ -51,6 +51,7 @@ class PodcastWithIndex(BaseModel):
     rss_url: str
     slug: str
     image_url: Optional[str] = None
+    language: str = "en"  # ISO 639-1 language code
     last_processed: Optional[datetime] = None
     episodes_count: int = 0
     episodes_processed: int = 0
@@ -209,6 +210,7 @@ class PodcastService:
                     rss_url=str(podcast.rss_url),
                     slug=podcast.slug,
                     image_url=podcast.image_url,
+                    language=podcast.language,
                     last_processed=podcast.last_processed,
                     episodes_count=len(podcast.episodes),
                     episodes_processed=episodes_processed,

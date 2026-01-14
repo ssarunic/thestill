@@ -475,7 +475,8 @@ class GoogleCloudTranscriber(Transcriber):
         self,
         audio_path: str,
         output_path: str = None,
-        language: str = "en-US",
+        *,
+        language: str,
         custom_prompt: str = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
@@ -494,7 +495,7 @@ class GoogleCloudTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file (must be downsampled 16kHz WAV)
             output_path: Path to save transcript JSON
-            language: Language code (e.g., 'en-US', 'hr-HR')
+            language: Language code (BCP-47, e.g., 'en-US', 'hr-HR')
             custom_prompt: Not used for Google Cloud (included for API compatibility)
             preprocess_audio: Not used for Google Cloud (included for API compatibility)
             clean_transcript: Not used for Google Cloud (included for API compatibility)
