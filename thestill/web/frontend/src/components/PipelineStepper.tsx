@@ -79,6 +79,8 @@ interface PipelineStepperProps {
   progress?: ProgressUpdate | null
   /** Show compact version without labels */
   compact?: boolean
+  /** Whether the current stage is actively processing (true) or just queued (false) */
+  isProcessing?: boolean
 }
 
 function CheckIcon() {
@@ -126,11 +128,20 @@ function formatTimeRemaining(seconds: number): string {
 
 type StageStatus = 'completed' | 'current' | 'pending' | 'skipped'
 
+function QueueIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  )
+}
+
 export default function PipelineStepper({
   currentStage,
   startingStage,
   progress,
   compact = false,
+  isProcessing = true,
 }: PipelineStepperProps) {
   const stageKeys = STAGES.map((s) => s.key)
   const startIdx = stageKeys.indexOf(startingStage)
@@ -170,16 +181,19 @@ export default function PipelineStepper({
                   className={`
                     w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300
                     ${status === 'completed' ? 'bg-green-500 text-white' : ''}
-                    ${status === 'current' ? 'bg-purple-500 text-white ring-4 ring-purple-200' : ''}
+                    ${status === 'current' && isProcessing ? 'bg-purple-500 text-white ring-4 ring-purple-200' : ''}
+                    ${status === 'current' && !isProcessing ? 'bg-gray-400 text-white ring-4 ring-gray-200' : ''}
                     ${status === 'pending' ? 'bg-gray-200 text-gray-400' : ''}
                     ${status === 'skipped' ? 'bg-green-100 text-green-600' : ''}
                   `}
-                  title={`${stage.label}${status === 'completed' ? ' (completed)' : status === 'current' ? ' (in progress)' : status === 'skipped' ? ' (already done)' : ''}`}
+                  title={`${stage.label}${status === 'completed' ? ' (completed)' : status === 'current' && isProcessing ? ' (processing)' : status === 'current' ? ' (queued)' : status === 'skipped' ? ' (already done)' : ''}`}
                 >
                   {status === 'completed' || status === 'skipped' ? (
                     <CheckIcon />
-                  ) : status === 'current' ? (
+                  ) : status === 'current' && isProcessing ? (
                     <SpinnerIcon />
+                  ) : status === 'current' ? (
+                    <QueueIcon />
                   ) : (
                     stage.icon
                   )}
@@ -206,7 +220,8 @@ export default function PipelineStepper({
                   className={`
                     w-6 h-1 mx-1 rounded transition-all duration-300
                     ${status === 'completed' || status === 'skipped' ? 'bg-green-400' : ''}
-                    ${status === 'current' ? 'bg-gradient-to-r from-purple-400 to-gray-200' : ''}
+                    ${status === 'current' && isProcessing ? 'bg-gradient-to-r from-purple-400 to-gray-200' : ''}
+                    ${status === 'current' && !isProcessing ? 'bg-gradient-to-r from-gray-400 to-gray-200' : ''}
                     ${status === 'pending' ? 'bg-gray-200' : ''}
                   `}
                   style={{ marginTop: compact ? 0 : '-1rem' }}
@@ -220,17 +235,23 @@ export default function PipelineStepper({
       {/* Current stage detail */}
       {currentStage && (
         <div className="text-sm text-gray-600 mt-1">
-          <span className="font-medium text-purple-700">
+          <span className={`font-medium ${isProcessing ? 'text-purple-700' : 'text-gray-600'}`}>
             {STAGES.find((s) => s.key === currentStage)?.label}
           </span>
-          {progressLabel && (
-            <span className="text-gray-500">: {progressLabel}</span>
-          )}
-          {progressPct > 0 && (
-            <span className="text-gray-400 ml-1">({progressPct}%)</span>
-          )}
-          {eta && (
-            <span className="text-gray-400 ml-2">{eta}</span>
+          {isProcessing ? (
+            <>
+              {progressLabel && (
+                <span className="text-gray-500">: {progressLabel}</span>
+              )}
+              {progressPct > 0 && (
+                <span className="text-gray-400 ml-1">({progressPct}%)</span>
+              )}
+              {eta && (
+                <span className="text-gray-400 ml-2">{eta}</span>
+              )}
+            </>
+          ) : (
+            <span className="text-gray-400">: Queued (waiting for worker)</span>
           )}
         </div>
       )}

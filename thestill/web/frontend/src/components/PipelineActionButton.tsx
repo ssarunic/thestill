@@ -132,6 +132,14 @@ function SpinnerIcon() {
   )
 }
 
+function QueueIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  )
+}
+
 function ChevronDownIcon() {
   return (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -461,6 +469,7 @@ export default function PipelineActionButton({
           currentStage={activeTask.stage}
           startingStage={startingStage}
           progress={progress}
+          isProcessing={activeTask.status === 'processing'}
         />
         <button
           onClick={handleCancelPipeline}
@@ -515,15 +524,29 @@ export default function PipelineActionButton({
     }
 
     // Default processing display (non-transcribe or no progress yet)
-    const statusLabel = isProcessing ? 'Processing...' : 'Queued...'
+    // Distinguish between actively processing vs waiting in queue
+    if (isProcessing) {
+      return (
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 text-purple-700 border border-purple-200">
+            <SpinnerIcon />
+            <span className="text-sm font-medium">
+              {stageLabel}: Processing...
+            </span>
+          </div>
+        </div>
+      )
+    }
 
+    // Task is queued but not yet being processed
     return (
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 text-gray-600">
-          <SpinnerIcon />
+        <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-50 text-gray-600 border border-gray-200">
+          <QueueIcon />
           <span className="text-sm font-medium">
-            {stageLabel}: {statusLabel}
+            {stageLabel}: Queued
           </span>
+          <span className="text-xs text-gray-400">(waiting for worker)</span>
         </div>
       </div>
     )
