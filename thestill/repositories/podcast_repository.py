@@ -25,7 +25,7 @@ class PodcastRepository(ABC):
         Get all podcasts.
 
         Returns:
-            List of all podcasts, ordered by insertion (oldest first)
+            List of all podcasts, ordered by creation date (newest first)
         """
         pass
 

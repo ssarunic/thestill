@@ -276,7 +276,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language, last_processed, updated_at
                 FROM podcasts
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
             """
             )
 
@@ -331,7 +331,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language, last_processed, updated_at
                 FROM podcasts
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
                 LIMIT 1 OFFSET ?
             """,
                 (index - 1,),
