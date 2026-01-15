@@ -775,6 +775,35 @@ For complete development standards, see [docs/CODE_GUIDELINES.md](docs/CODE_GUID
 - Eliminate duplication in process via automation (builds, tests, deployments)
 - Balance with KISS and YAGNI — avoid premature abstraction when code is used only once
 
+### Markdown Style
+
+When writing or editing `.md` files, follow the project's markdownlint rules (`.markdownlint.yaml`):
+
+- **MD031**: Add blank lines before and after fenced code blocks (```)
+- **MD032**: Add blank lines before and after lists (both bulleted and numbered)
+
+Example of correct formatting:
+
+```markdown
+Some text here.
+
+- First item
+- Second item
+
+More text after the list.
+
+Here's some code:
+
+\`\`\`python
+def example():
+    pass
+\`\`\`
+
+Text after the code block.
+```
+
+Pre-commit hooks will auto-fix many issues, but write correctly from the start to avoid churn.
+
 ### Testing Strategy
 
 **Coverage Targets**:
