@@ -25,7 +25,6 @@ This significantly reduces token usage since markdown is much smaller than JSON.
 
 import logging
 import re
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from thestill.core.llm_provider import LLMProvider
@@ -503,6 +502,7 @@ IMPORTANT:
 
         # Add episode facts context
         lines.append("EPISODE FACTS:")
+        lines.append(f"Episode Title: {episode_title}")
         if episode_facts.guests:
             lines.append(f"Guests: {', '.join(episode_facts.guests)}")
         if episode_facts.topics_keywords:

@@ -1,0 +1,656 @@
+# Multi-User Shared Podcasts Specification
+
+> **Status:** Draft
+> **Created:** 2026-01-15
+> **Author:** Product & Engineering
+
+---
+
+## Executive Summary
+
+Extend thestill to support multiple users who can follow (subscribe to) podcasts, where **processing happens once and results are shared** across all followers. This achieves significant resource savings by eliminating duplicate transcription and summarization work.
+
+**Key Principle:** "Process Once, Deliver to Many" — a podcast's episodes are transcribed and summarized exactly once, regardless of how many users follow it.
+
+---
+
+## Table of Contents
+
+1. [Product Requirements](#product-requirements)
+2. [Architecture Overview](#architecture-overview)
+3. [Database Schema Changes](#database-schema-changes)
+4. [Data Model](#data-model)
+5. [Service Layer Changes](#service-layer-changes)
+6. [API Changes](#api-changes)
+7. [Migration Strategy](#migration-strategy)
+8. [Implementation Guidelines](#implementation-guidelines)
+9. [Security Considerations](#security-considerations)
+10. [Open Questions](#open-questions)
+
+---
+
+## Product Requirements
+
+### User Stories
+
+| As a... | I want to... | So that... |
+|---------|--------------|------------|
+| New user | Browse existing podcasts in the system | I can follow podcasts without adding them myself |
+| User | Follow a podcast someone else added | I get transcripts without re-processing |
+| User | See all episodes of a podcast I follow | I can catch up on older content |
+| User | Trigger processing for an unprocessed episode | I don't have to wait for background workers |
+| User | Track my own read/saved state | My progress is independent of other users |
+| Admin | See which podcasts have the most followers | I can prioritize processing |
+| Self-hoster | Use the CLI without authentication | Existing workflows continue unchanged |
+
+### Core Behaviors
+
+1. **Shared Podcasts**: Podcasts exist independently of users. Users "follow" them.
+2. **Shared Processing**: Transcripts/summaries are stored once, referenced by all followers.
+3. **Private State**: Read/saved/interest states are per-user.
+4. **Open Processing**: Any follower can trigger processing for any episode.
+5. **All Episodes Access**: Following a podcast grants access to all its episodes (past and future).
+6. **Backward Compatible CLI**: CLI works without authentication using a synthetic "local" user.
+
+---
+
+## Architecture Overview
+
+### Before (Current Single-User)
+
+```
+┌─────────────┐
+│    User     │  (implicit, single)
+└──────┬──────┘
+       │ owns
+       ▼
+┌─────────────┐
+│  Podcasts   │
+│  (user_id)  │
+└──────┬──────┘
+       │ contains
+       ▼
+┌─────────────┐
+│  Episodes   │
+└─────────────┘
+```
+
+### After (Multi-User with Sharing)
+
+```
+┌─────────────┐              ┌─────────────┐
+│   Users     │              │  Podcasts   │  (no user ownership)
+└──────┬──────┘              └──────┬──────┘
+       │                            │
+       │ follows                    │ contains
+       ▼                            ▼
+┌─────────────────┐          ┌─────────────┐
+│   Followers     │          │  Episodes   │  (shared content)
+│ (user_id,       │          └──────┬──────┘
+│  podcast_id)    │                 │
+└────────┬────────┘                 │
+         │                          │
+         └──────────┬───────────────┘
+                    │ interacts with
+                    ▼
+         ┌─────────────────────┐
+         │   User Episodes     │  (private state)
+         │ (user_id,           │
+         │  episode_id)        │
+         └─────────────────────┘
+```
+
+### Key Insight: Decoupling Ownership from Content
+
+- **Old model**: Podcast belongs to user, user controls everything
+- **New model**: Podcast is a shared resource, users follow it, state is private
+
+---
+
+## Database Schema Changes
+
+### New Table: `followers`
+
+Links users to podcasts they follow. This replaces the `user_id` column on podcasts.
+
+```sql
+-- User-Podcast following relationship
+CREATE TABLE followers (
+    id TEXT PRIMARY KEY,                    -- UUID v4
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    podcast_id TEXT NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    -- Subscription metadata
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Future: notification preferences, content filters
+    UNIQUE(user_id, podcast_id)
+);
+
+-- Indexes for common queries
+CREATE INDEX idx_followers_user ON followers(user_id);
+CREATE INDEX idx_followers_podcast ON followers(podcast_id);
+
+-- Count followers per podcast (for prioritization)
+CREATE INDEX idx_followers_podcast_count ON followers(podcast_id)
+    WHERE 1=1;  -- Covering index for COUNT queries
+```
+
+### New Table: `user_episodes`
+
+Per-user episode state (read, saved, interest level).
+
+```sql
+-- User-Episode interaction state
+CREATE TABLE user_episodes (
+    id TEXT PRIMARY KEY,                    -- UUID v4
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    -- Reading state
+    is_read INTEGER NOT NULL DEFAULT 0,     -- SQLite boolean
+    read_at TIMESTAMP NULL,
+    -- Triage state
+    interest_level TEXT NULL,               -- 'interested', 'not_interested', 'saved'
+    interest_set_at TIMESTAMP NULL,
+    -- Timestamps
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, episode_id)
+);
+
+-- Indexes for feed queries
+CREATE INDEX idx_user_episodes_user ON user_episodes(user_id);
+CREATE INDEX idx_user_episodes_episode ON user_episodes(episode_id);
+CREATE INDEX idx_user_episodes_unread ON user_episodes(user_id, is_read)
+    WHERE is_read = 0;
+CREATE INDEX idx_user_episodes_saved ON user_episodes(user_id, interest_level)
+    WHERE interest_level = 'saved';
+```
+
+### Table: `users` (from auth spec)
+
+Already defined in [authentication.md](authentication.md). Key fields:
+
+```sql
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,                    -- UUID v4
+    email TEXT UNIQUE,
+    name TEXT,
+    provider TEXT,                          -- 'local', 'google', 'microsoft'
+    provider_id TEXT,
+    created_at TIMESTAMP,
+    last_login_at TIMESTAMP
+);
+```
+
+### Podcasts Table: NO CHANGES
+
+The `podcasts` table remains unchanged. Podcasts do NOT have a `user_id` column. They are shared resources.
+
+```sql
+-- Existing schema (unchanged)
+CREATE TABLE podcasts (
+    id TEXT PRIMARY KEY,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    rss_url TEXT UNIQUE NOT NULL,
+    title TEXT,
+    slug TEXT,
+    description TEXT,
+    image_url TEXT,
+    language TEXT DEFAULT 'en',
+    last_processed TIMESTAMP
+    -- NO user_id column!
+);
+```
+
+### Episodes Table: NO CHANGES
+
+Episodes remain unchanged. Processing state (audio_path, transcript_path, etc.) is shared.
+
+---
+
+## Data Model
+
+### New Pydantic Models
+
+```python
+# thestill/models/user.py
+
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel, Field
+import uuid
+
+
+class User(BaseModel):
+    """User account (from OAuth or local auth)."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    email: Optional[str] = None
+    name: Optional[str] = None
+    provider: str = "local"  # 'local', 'google', 'microsoft'
+    provider_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now())
+    last_login_at: Optional[datetime] = None
+
+
+class Follower(BaseModel):
+    """User-Podcast following relationship."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    podcast_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now())
+
+
+class UserEpisode(BaseModel):
+    """Per-user episode state (read, saved, interest)."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    episode_id: str
+    is_read: bool = False
+    read_at: Optional[datetime] = None
+    interest_level: Optional[str] = None  # 'interested', 'not_interested', 'saved'
+    interest_set_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now())
+    updated_at: datetime = Field(default_factory=lambda: datetime.now())
+```
+
+### Special "Local" User for CLI
+
+```python
+# Synthetic user for AUTH_MODE=none (CLI compatibility)
+LOCAL_USER = User(
+    id="local",
+    email=None,
+    name="Local User",
+    provider="local",
+    provider_id=None,
+)
+```
+
+---
+
+## Service Layer Changes
+
+### New: `FollowerService`
+
+Manages user-podcast following relationships.
+
+```python
+# thestill/services/follower_service.py
+
+class FollowerService:
+    """Manage user-podcast following relationships."""
+
+    def follow(self, user_id: str, podcast_id: str) -> Follower:
+        """User starts following a podcast."""
+        pass
+
+    def unfollow(self, user_id: str, podcast_id: str) -> bool:
+        """User stops following a podcast."""
+        pass
+
+    def get_followers(self, podcast_id: str) -> List[User]:
+        """Get all users following a podcast."""
+        pass
+
+    def get_followed_podcasts(self, user_id: str) -> List[Podcast]:
+        """Get all podcasts a user follows."""
+        pass
+
+    def is_following(self, user_id: str, podcast_id: str) -> bool:
+        """Check if user follows a podcast."""
+        pass
+
+    def get_follower_count(self, podcast_id: str) -> int:
+        """Get count of followers for prioritization."""
+        pass
+
+    def get_podcasts_by_popularity(self, limit: int = 20) -> List[Tuple[Podcast, int]]:
+        """Get podcasts ordered by follower count."""
+        pass
+```
+
+### New: `UserEpisodeService`
+
+Manages per-user episode state.
+
+```python
+# thestill/services/user_episode_service.py
+
+class UserEpisodeService:
+    """Manage per-user episode state (read, saved, interest)."""
+
+    def mark_read(self, user_id: str, episode_id: str) -> UserEpisode:
+        """Mark episode as read."""
+        pass
+
+    def mark_unread(self, user_id: str, episode_id: str) -> UserEpisode:
+        """Mark episode as unread."""
+        pass
+
+    def set_interest(self, user_id: str, episode_id: str, level: str) -> UserEpisode:
+        """Set interest level (interested, not_interested, saved)."""
+        pass
+
+    def get_user_episode(self, user_id: str, episode_id: str) -> Optional[UserEpisode]:
+        """Get user's state for an episode."""
+        pass
+
+    def get_unread_episodes(self, user_id: str, podcast_id: Optional[str] = None) -> List[Episode]:
+        """Get unread episodes for user's followed podcasts."""
+        pass
+
+    def get_saved_episodes(self, user_id: str) -> List[Episode]:
+        """Get episodes user has saved."""
+        pass
+```
+
+### Modified: `PodcastService`
+
+Add user-context methods while preserving backward compatibility.
+
+```python
+# thestill/services/podcast_service.py (additions)
+
+class PodcastService:
+    # Existing methods unchanged...
+
+    # NEW: User-context methods
+    def get_user_podcasts(self, user_id: str) -> List[PodcastWithIndex]:
+        """Get podcasts user follows (replaces get_podcasts for multi-user)."""
+        pass
+
+    def get_user_feed(
+        self,
+        user_id: str,
+        limit: int = 20,
+        offset: int = 0,
+        unread_only: bool = False,
+        podcast_id: Optional[str] = None,
+    ) -> List[EpisodeWithUserState]:
+        """Get personalized episode feed with user state."""
+        pass
+
+    def add_podcast_for_user(self, user_id: str, url: str) -> Optional[Podcast]:
+        """Add podcast (if new) and follow it for user."""
+        # If podcast doesn't exist, add it
+        # Then create follower relationship
+        pass
+```
+
+### New Repository: `FollowerRepository`
+
+```python
+# thestill/repositories/follower_repository.py
+
+class FollowerRepository:
+    """SQLite repository for follower relationships."""
+
+    def add(self, follower: Follower) -> Follower:
+        """Add follower relationship."""
+        pass
+
+    def remove(self, user_id: str, podcast_id: str) -> bool:
+        """Remove follower relationship."""
+        pass
+
+    def get_by_user(self, user_id: str) -> List[Follower]:
+        """Get all following relationships for user."""
+        pass
+
+    def get_by_podcast(self, podcast_id: str) -> List[Follower]:
+        """Get all followers for podcast."""
+        pass
+
+    def exists(self, user_id: str, podcast_id: str) -> bool:
+        """Check if relationship exists."""
+        pass
+
+    def count_by_podcast(self, podcast_id: str) -> int:
+        """Count followers for podcast."""
+        pass
+```
+
+---
+
+## API Changes
+
+### New Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/podcasts/catalog` | Browse all podcasts in system (public) |
+| GET | `/api/podcasts/popular` | Get podcasts by follower count |
+| POST | `/api/podcasts/{id}/follow` | Follow a podcast |
+| DELETE | `/api/podcasts/{id}/follow` | Unfollow a podcast |
+| GET | `/api/podcasts/{id}/followers/count` | Get follower count |
+| POST | `/api/episodes/{id}/read` | Mark episode as read |
+| DELETE | `/api/episodes/{id}/read` | Mark episode as unread |
+| POST | `/api/episodes/{id}/interest` | Set interest level `{level}` |
+| GET | `/api/feed` | User's personalized feed |
+| GET | `/api/feed/unread` | Unread episodes only |
+| GET | `/api/feed/saved` | Saved episodes |
+
+### Modified Endpoints
+
+| Method | Endpoint | Change |
+|--------|----------|--------|
+| GET | `/api/podcasts` | Returns user's followed podcasts (not all) |
+| POST | `/api/podcasts` | Adds podcast AND follows it for current user |
+| DELETE | `/api/podcasts/{slug}` | Unfollows only, doesn't delete podcast |
+
+### Query Parameters
+
+**GET `/api/feed`:**
+
+- `?limit=20&offset=0` - Pagination
+- `?podcast_id=xxx` - Filter by podcast
+- `?unread=true` - Unread only
+- `?state=summarized` - Filter by processing state
+
+---
+
+## Migration Strategy
+
+### Phase 1: Schema Migration
+
+```sql
+-- migration_001_add_followers.sql
+
+-- Create users table (from auth spec)
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE,
+    name TEXT,
+    provider TEXT DEFAULT 'local',
+    provider_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP
+);
+
+-- Create synthetic local user for CLI compatibility
+INSERT OR IGNORE INTO users (id, name, provider)
+VALUES ('local', 'Local User', 'local');
+
+-- Create followers table
+CREATE TABLE followers (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    podcast_id TEXT NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, podcast_id)
+);
+
+-- Migrate existing podcasts: local user follows all existing podcasts
+INSERT INTO followers (id, user_id, podcast_id, created_at)
+SELECT
+    lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+    substr(lower(hex(randomblob(2))),2) || '-' ||
+    substr('89ab', abs(random()) % 4 + 1, 1) ||
+    substr(lower(hex(randomblob(2))),2) || '-' ||
+    lower(hex(randomblob(6))),
+    'local',
+    id,
+    created_at
+FROM podcasts;
+
+-- Create user_episodes table
+CREATE TABLE user_episodes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    read_at TIMESTAMP,
+    interest_level TEXT,
+    interest_set_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, episode_id)
+);
+
+-- Create indexes
+CREATE INDEX idx_followers_user ON followers(user_id);
+CREATE INDEX idx_followers_podcast ON followers(podcast_id);
+CREATE INDEX idx_user_episodes_user ON user_episodes(user_id);
+CREATE INDEX idx_user_episodes_episode ON user_episodes(episode_id);
+```
+
+### Phase 2: CLI Command
+
+```bash
+thestill db migrate
+# Output:
+# - Created users table
+# - Created followers table
+# - Migrated 15 podcasts to local user (follower relationships created)
+# - Created user_episodes table
+# Migration complete!
+```
+
+### Phase 3: Code Changes
+
+1. Add `FollowerRepository` and `UserEpisodeRepository`
+2. Add `FollowerService` and `UserEpisodeService`
+3. Update `PodcastService` with user-context methods
+4. Update API routes to use `get_current_user()` dependency
+5. Add new API endpoints
+
+---
+
+## Implementation Guidelines
+
+### 1. Repository Pattern
+
+Follow existing SQLite repository patterns:
+
+```python
+class FollowerRepository:
+    def __init__(self, db_path: str):
+        self.db_path = Path(db_path)
+
+    @contextmanager
+    def _get_connection(self) -> sqlite3.Connection:
+        # Same pattern as SqlitePodcastRepository
+        pass
+```
+
+### 2. Dependency Injection
+
+Add new services to `AppState`:
+
+```python
+@dataclass
+class AppState:
+    config: Config
+    path_manager: PathManager
+    repository: SqlitePodcastRepository
+    podcast_service: PodcastService
+    stats_service: StatsService
+    # NEW
+    follower_service: FollowerService
+    user_episode_service: UserEpisodeService
+```
+
+### 3. User Context in Routes
+
+All protected routes receive current user:
+
+```python
+@router.get("/podcasts")
+async def get_podcasts(
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(get_current_user),  # From auth middleware
+) -> dict:
+    podcasts = state.podcast_service.get_user_podcasts(user.id)
+    return paginated_response(...)
+```
+
+### 4. CLI Compatibility
+
+For CLI operations, use the synthetic local user:
+
+```python
+# In CLI context
+def get_current_user_cli() -> User:
+    """Return local user for CLI operations."""
+    return LOCAL_USER  # id="local"
+```
+
+### 5. Error Handling
+
+- `404` if podcast not found
+- `409` if already following (on follow)
+- `404` if not following (on unfollow)
+- Create `user_episode` lazily on first interaction
+
+---
+
+## Security Considerations
+
+| Concern | Mitigation |
+|---------|------------|
+| User can see others' private state | All `user_episode` queries filter by `user_id` |
+| User can delete shared podcast | Delete = unfollow only, podcast remains |
+| Processing abuse | Rate limiting on processing triggers |
+| Follower count manipulation | No user-facing benefit to follower count |
+
+---
+
+## Open Questions
+
+1. **Should there be podcast "ownership"?** The spec assumes no ownership — podcasts are communal. Consider: should the first user who adds a podcast have any special privileges?
+
+2. **Orphan podcast cleanup?** If a podcast has 0 followers, should it be deleted after X days? Or kept indefinitely?
+
+3. **Processing priority?** Should podcasts with more followers be processed first? The `get_follower_count()` method enables this.
+
+4. **Rate limiting follows?** Should there be a limit on how many podcasts a user can follow? (Prevents abuse in hosted version)
+
+5. **Follower visibility?** Should users see who else follows a podcast? Or keep follower lists private?
+
+---
+
+## Success Metrics
+
+| Metric | Target | Measurement |
+|--------|--------|-------------|
+| Processing savings | 80%+ | Episodes processed once vs. per-user |
+| Migration success | 100% | All existing podcasts migrated |
+| CLI compatibility | Zero breaks | All CLI tests pass |
+| Query performance | <100ms | Feed queries with 1000+ episodes |
+
+---
+
+## Dependencies
+
+This specification depends on:
+
+- [Authentication Specification](authentication.md) - User model, auth providers, JWT
+- [Multi-User Web App Specification](multi-user-web-app.md) - Overall architecture context
+
+---
+
+## Revision History
+
+| Date | Version | Changes |
+|------|---------|---------|
+| 2026-01-15 | 0.1 | Initial draft |
