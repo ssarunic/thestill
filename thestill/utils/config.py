@@ -58,8 +58,7 @@ class Config(BaseModel):
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
     # Transcription Configuration
-    transcription_provider: str = "whisper"  # whisper or google
-    transcription_model: str = "whisper"  # whisper or parakeet (legacy, for whisper provider only)
+    transcription_provider: str = "whisper"  # whisper, parakeet, google, or elevenlabs
     whisper_model: str = "base"
     whisper_device: str = "auto"
 
@@ -193,7 +192,6 @@ def load_config(env_file: Optional[str] = None) -> Config:
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None
         ),
         "transcription_provider": os.getenv("TRANSCRIPTION_PROVIDER", "whisper"),
-        "transcription_model": os.getenv("TRANSCRIPTION_MODEL", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
         "enable_diarization": os.getenv("ENABLE_DIARIZATION", "false").lower() == "true",

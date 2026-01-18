@@ -208,7 +208,7 @@ mypy thestill/
      - Language detection from podcast RSS metadata
      - Cloud-based: No GPU/CPU requirements, pay-per-use pricing
    - Supports word-level timestamps and speaker identification
-   - Configurable via `TRANSCRIPTION_PROVIDER` (whisper or google)
+   - Configurable via `TRANSCRIPTION_PROVIDER` (whisper, parakeet, google, or elevenlabs)
    - Automatic fallback to standard Whisper if diarization fails (WhisperX only)
 
 7. **Facts System** (`thestill/core/facts_extractor.py`, `thestill/core/facts_manager.py`)
@@ -1088,6 +1088,35 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
   4. Assigns speaker labels to segments
   5. Falls back to standard Whisper if diarization fails
 
+### NVIDIA Parakeet (Local Transcription)
+
+**Setup:**
+
+```bash
+# Install dependencies
+pip install -e .
+pip install transformers librosa
+
+# Configure .env
+TRANSCRIPTION_PROVIDER=parakeet
+WHISPER_DEVICE=auto  # Options: auto, cpu, cuda
+```
+
+**How it works:**
+
+- Uses NVIDIA's Parakeet TDT 1.1B model via HuggingFace Transformers
+- English-only (language parameter is ignored)
+- No speaker diarization support
+- No word-level timestamps
+- Processes audio in 30-second chunks for long files
+
+**Limitations:**
+
+- English only
+- No speaker diarization
+- No custom prompts (API parameters accepted for compatibility but ignored)
+- No word-level timestamps
+
 ### Google Cloud Speech-to-Text (Cloud Transcription)
 
 **Setup:**
@@ -1149,18 +1178,19 @@ WHISPER_MODEL=base  # Options: tiny, base, small, medium, large
 - See: <https://elevenlabs.io/pricing>
 - Billed per audio hour
 
-### Comparison: Whisper vs Google vs ElevenLabs
+### Comparison: Whisper vs Parakeet vs Google vs ElevenLabs
 
-| Feature | Whisper (Local) | Google Cloud | ElevenLabs |
-|---------|----------------|--------------|------------|
-| **Cost** | Free (uses local CPU/GPU) | ~$0.024-0.048/min | Per audio hour |
-| **Privacy** | Fully local | Audio sent to Google | Audio sent to ElevenLabs |
-| **Speed** | Depends on hardware | Fast (cloud) | Fast (cloud) |
-| **Diarization Setup** | Requires HuggingFace token + pyannote.audio | Built-in | Built-in |
-| **Accuracy** | Good | Excellent | Excellent |
-| **Max Speakers** | Depends on model | Varies | 32 |
-| **Max File Size** | Memory limited | Chunked via GCS | 2GB |
-| **Network** | Not required | Required | Required |
+| Feature | Whisper (Local) | Parakeet (Local) | Google Cloud | ElevenLabs |
+|---------|----------------|------------------|--------------|------------|
+| **Cost** | Free (local CPU/GPU) | Free (local CPU/GPU) | ~$0.024-0.048/min | Per audio hour |
+| **Privacy** | Fully local | Fully local | Audio sent to Google | Audio sent to ElevenLabs |
+| **Speed** | Depends on hardware | Fast on GPU | Fast (cloud) | Fast (cloud) |
+| **Diarization** | Requires HuggingFace + pyannote | Not supported | Built-in | Built-in |
+| **Accuracy** | Good | Good | Excellent | Excellent |
+| **Languages** | Multi-language | English only | Multi-language | Multi-language |
+| **Max Speakers** | Depends on model | N/A | Varies | 32 |
+| **Max File Size** | Memory limited | Memory limited | Chunked via GCS | 2GB |
+| **Network** | Not required | Not required | Required | Required |
 
 **Transcript Output Format (all providers):**
 

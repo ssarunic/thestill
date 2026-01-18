@@ -1361,7 +1361,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         )
         # Store webhook mode flag for handling transcription results
         ctx.obj.using_webhook_mode = webhook_available
-    elif config.transcription_model.lower() == "parakeet":
+    elif config.transcription_provider.lower() == "parakeet":
+        click.echo("🎤 Using NVIDIA Parakeet Speech-to-Text")
         from .core.parakeet_transcriber import ParakeetTranscriber
 
         transcriber = ParakeetTranscriber(config.whisper_device)
