@@ -24,17 +24,20 @@ Features:
 """
 
 import logging
+import mimetypes
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.utils.path_manager import PathManager
 
+from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,10 @@ MAX_POLL_DURATION = 7200  # 2 hours max wait for transcript (supports ~4hr podca
 # File size threshold for async mode (bytes)
 # Files larger than this use async mode with polling
 ASYNC_THRESHOLD_MB = 50  # Use async for files > 50MB
+
+# Upload progress reporting interval (percentage points)
+# Log progress every N percent to avoid spamming logs
+UPLOAD_PROGRESS_LOG_INTERVAL = 10  # Log every 10%
 
 
 class ElevenLabsTranscriber(Transcriber):
@@ -149,6 +156,7 @@ class ElevenLabsTranscriber(Transcriber):
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using ElevenLabs Speech-to-Text API.
@@ -171,6 +179,7 @@ class ElevenLabsTranscriber(Transcriber):
             episode_id: Episode UUID for operation persistence
             podcast_slug: Podcast slug for operation persistence
             episode_slug: Episode slug for operation persistence
+            progress_callback: Optional callback for upload and transcription progress updates
 
         Returns:
             Transcript object with segments and metadata. None on error.
@@ -200,6 +209,7 @@ class ElevenLabsTranscriber(Transcriber):
                 episode_id=episode_id,
                 podcast_slug=podcast_slug,
                 episode_slug=episode_slug,
+                progress_callback=progress_callback,
             )
         else:
             logger.info("Using sync mode")
@@ -207,6 +217,7 @@ class ElevenLabsTranscriber(Transcriber):
                 audio_path=audio_path,
                 output_path=output_path,
                 language=language,
+                progress_callback=progress_callback,
             )
 
     def _transcribe_sync(
@@ -214,6 +225,7 @@ class ElevenLabsTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str],
         language: str,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> Optional[Transcript]:
         """
         Synchronous transcription - wait for response in single request.
@@ -223,7 +235,7 @@ class ElevenLabsTranscriber(Transcriber):
         start_time = time.time()
 
         try:
-            response_data = self._call_api_sync(audio_path, language)
+            response_data = self._call_api_sync(audio_path, language, progress_callback)
             transcript = self._format_response(response_data, audio_path, start_time)
 
             if output_path:
@@ -252,6 +264,7 @@ class ElevenLabsTranscriber(Transcriber):
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> Optional[Transcript]:
         """
         Asynchronous transcription - submit job and poll for results.
@@ -281,7 +294,9 @@ class ElevenLabsTranscriber(Transcriber):
         try:
             # Step 1: Submit transcription request (async mode)
             try:
-                submit_response = self._submit_async_transcription(audio_path, language, webhook_metadata)
+                submit_response = self._submit_async_transcription(
+                    audio_path, language, webhook_metadata, progress_callback
+                )
             except requests.exceptions.HTTPError as e:
                 # Check for "no webhooks configured" error - fallback to sync
                 if e.response is not None and e.response.status_code == 400:
@@ -293,7 +308,7 @@ class ElevenLabsTranscriber(Transcriber):
                                 "Falling back to sync mode (may timeout for large files). "
                                 "Configure webhooks at https://elevenlabs.io/app/speech-to-text/webhooks"
                             )
-                            return self._transcribe_sync(audio_path, output_path, language)
+                            return self._transcribe_sync(audio_path, output_path, language, progress_callback)
                     except (ValueError, KeyError):
                         pass
                 raise  # Re-raise if not the specific error we're handling
@@ -301,7 +316,7 @@ class ElevenLabsTranscriber(Transcriber):
             transcription_id = submit_response.get("transcription_id")
             if not transcription_id:
                 logger.error("No transcription_id in async response. Falling back to sync mode.")
-                return self._transcribe_sync(audio_path, output_path, language)
+                return self._transcribe_sync(audio_path, output_path, language, progress_callback)
 
             logger.info(f"Transcription submitted. ID: {transcription_id}")
 
@@ -412,18 +427,107 @@ class ElevenLabsTranscriber(Transcriber):
 
         return data
 
+    def _create_upload_monitor(
+        self,
+        audio_path: str,
+        data: Dict[str, Any],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> tuple[MultipartEncoderMonitor, Dict[str, str]]:
+        """
+        Create a MultipartEncoderMonitor for tracking upload progress.
+
+        Args:
+            audio_path: Path to audio file
+            data: Form data dict to include in the request
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            Tuple of (monitor, headers) ready for requests.post()
+        """
+        audio_file = Path(audio_path)
+        file_size = audio_file.stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+
+        # Determine MIME type
+        mime_type, _ = mimetypes.guess_type(audio_path)
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+
+        # Track last logged percentage to avoid log spam
+        last_logged_pct = -UPLOAD_PROGRESS_LOG_INTERVAL  # Ensure first log at 0%
+        upload_complete_signaled = False  # Track if we've signaled upload completion
+
+        def progress_monitor_callback(monitor: MultipartEncoderMonitor) -> None:
+            nonlocal last_logged_pct, upload_complete_signaled
+
+            bytes_read = monitor.bytes_read
+            pct = int((bytes_read / file_size) * 100) if file_size > 0 else 100
+            mb_uploaded = bytes_read / (1024 * 1024)
+
+            # Log progress at intervals
+            if pct >= last_logged_pct + UPLOAD_PROGRESS_LOG_INTERVAL or pct == 100:
+                last_logged_pct = (pct // UPLOAD_PROGRESS_LOG_INTERVAL) * UPLOAD_PROGRESS_LOG_INTERVAL
+                logger.info(f"Upload progress: {pct}% ({mb_uploaded:.1f} MB / {file_size_mb:.1f} MB)")
+
+            # Call progress callback for web UI
+            if progress_callback:
+                if pct < 100:
+                    # Still uploading
+                    progress_callback(
+                        ProgressUpdate(
+                            stage=TranscriptionStage.UPLOADING,
+                            progress_pct=pct,
+                            message=f"Uploading: {pct}% ({mb_uploaded:.1f} MB / {file_size_mb:.1f} MB)",
+                        )
+                    )
+                elif not upload_complete_signaled:
+                    # Upload complete, now waiting for transcription
+                    upload_complete_signaled = True
+                    progress_callback(
+                        ProgressUpdate(
+                            stage=TranscriptionStage.TRANSCRIBING,
+                            progress_pct=0,
+                            message="Waiting for ElevenLabs to transcribe...",
+                        )
+                    )
+
+        # Build multipart encoder with file and form data
+        # Note: MultipartEncoder requires file to be opened in binary mode
+        fields = {
+            "file": (audio_file.name, open(audio_path, "rb"), mime_type),
+        }
+        # Add all form data fields
+        for key, value in data.items():
+            fields[key] = value
+
+        encoder = MultipartEncoder(fields=fields)
+        monitor = MultipartEncoderMonitor(encoder, progress_monitor_callback)
+
+        headers = {
+            "xi-api-key": self.api_key,
+            "Content-Type": monitor.content_type,
+        }
+
+        return monitor, headers
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=60),
         reraise=True,
     )
-    def _call_api_sync(self, audio_path: str, language: str) -> Dict[str, Any]:
+    def _call_api_sync(
+        self,
+        audio_path: str,
+        language: str,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Dict[str, Any]:
         """
         Call ElevenLabs Speech-to-Text API synchronously with retry logic.
 
         Args:
             audio_path: Path to audio file
             language: Language code
+            progress_callback: Optional callback for upload progress updates
 
         Returns:
             API response as dictionary with transcript data
@@ -431,30 +535,28 @@ class ElevenLabsTranscriber(Transcriber):
         Raises:
             requests.exceptions.HTTPError: On API errors
         """
-        headers = {"xi-api-key": self.api_key}
         data = self._build_request_data(language, async_mode=False)
 
-        with open(audio_path, "rb") as audio_file:
-            files = {"file": audio_file}
+        logger.info(f"Calling ElevenLabs API (sync, timeout={SYNC_REQUEST_TIMEOUT}s)...")
+        logger.debug(f"Request data: {data}")
 
-            logger.info(f"Calling ElevenLabs API (sync, timeout={SYNC_REQUEST_TIMEOUT}s)...")
-            logger.debug(f"Request data: {data}")
+        # Create upload monitor with progress tracking
+        monitor, headers = self._create_upload_monitor(audio_path, data, progress_callback)
 
-            try:
-                response = requests.post(
-                    ELEVENLABS_API_URL,
-                    headers=headers,
-                    data=data,
-                    files=files,
-                    timeout=SYNC_REQUEST_TIMEOUT,
-                )
-                response.raise_for_status()
-            except requests.exceptions.Timeout:
-                logger.error(f"Request timed out after {SYNC_REQUEST_TIMEOUT}s. Consider using async mode.")
-                raise
-            except requests.exceptions.HTTPError as e:
-                self._log_http_error(e)
-                raise
+        try:
+            response = requests.post(
+                ELEVENLABS_API_URL,
+                headers=headers,
+                data=monitor,
+                timeout=SYNC_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            logger.error(f"Request timed out after {SYNC_REQUEST_TIMEOUT}s. Consider using async mode.")
+            raise
+        except requests.exceptions.HTTPError as e:
+            self._log_http_error(e)
+            raise
 
         logger.info("ElevenLabs API call successful")
         return response.json()
@@ -464,6 +566,7 @@ class ElevenLabsTranscriber(Transcriber):
         audio_path: str,
         language: str,
         webhook_metadata: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> Dict[str, Any]:
         """
         Submit transcription request in async mode.
@@ -478,6 +581,7 @@ class ElevenLabsTranscriber(Transcriber):
             audio_path: Path to audio file
             language: Language code
             webhook_metadata: Optional metadata to include in webhook callback
+            progress_callback: Optional callback for upload progress updates
 
         Returns:
             API response with transcription_id, message, request_id
@@ -485,30 +589,28 @@ class ElevenLabsTranscriber(Transcriber):
         Raises:
             requests.exceptions.HTTPError: On API errors (including webhook not configured)
         """
-        headers = {"xi-api-key": self.api_key}
         data = self._build_request_data(language, async_mode=True, webhook_metadata=webhook_metadata)
 
-        with open(audio_path, "rb") as audio_file:
-            files = {"file": audio_file}
+        logger.info(f"Submitting async transcription (upload timeout={UPLOAD_TIMEOUT}s)...")
+        logger.debug(f"Request data: {data}")
 
-            logger.info(f"Submitting async transcription (upload timeout={UPLOAD_TIMEOUT}s)...")
-            logger.debug(f"Request data: {data}")
+        # Create upload monitor with progress tracking
+        monitor, headers = self._create_upload_monitor(audio_path, data, progress_callback)
 
-            try:
-                response = requests.post(
-                    ELEVENLABS_API_URL,
-                    headers=headers,
-                    data=data,
-                    files=files,
-                    timeout=UPLOAD_TIMEOUT,
-                )
-                response.raise_for_status()
-            except requests.exceptions.Timeout:
-                logger.error(f"Upload timed out after {UPLOAD_TIMEOUT}s.")
-                raise
-            except requests.exceptions.HTTPError as e:
-                self._log_http_error(e)
-                raise
+        try:
+            response = requests.post(
+                ELEVENLABS_API_URL,
+                headers=headers,
+                data=monitor,
+                timeout=UPLOAD_TIMEOUT,
+            )
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            logger.error(f"Upload timed out after {UPLOAD_TIMEOUT}s.")
+            raise
+        except requests.exceptions.HTTPError as e:
+            self._log_http_error(e)
+            raise
 
         result = response.json()
         logger.info(f"Async submission successful: {result.get('message', 'OK')}")

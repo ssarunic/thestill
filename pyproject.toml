@@ -45,6 +45,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "tenacity>=8.2.0",
     "python-slugify>=8.0.0",
+    "requests-toolbelt>=1.0.0",
 ]
 
 [project.optional-dependencies]

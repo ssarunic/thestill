@@ -28,6 +28,7 @@ class TranscriptionStage(str, Enum):
     """Stages of the transcription pipeline."""
 
     PENDING = "pending"
+    UPLOADING = "uploading"
     LOADING_MODEL = "loading_model"
     TRANSCRIBING = "transcribing"
     ALIGNING = "aligning"
@@ -40,6 +41,7 @@ class TranscriptionStage(str, Enum):
 # Human-readable labels for each stage
 STAGE_LABELS = {
     TranscriptionStage.PENDING: "Waiting to start...",
+    TranscriptionStage.UPLOADING: "Uploading audio file...",
     TranscriptionStage.LOADING_MODEL: "Loading transcription model...",
     TranscriptionStage.TRANSCRIBING: "Transcribing audio...",
     TranscriptionStage.ALIGNING: "Aligning word timestamps...",

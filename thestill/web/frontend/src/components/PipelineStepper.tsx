@@ -52,6 +52,7 @@ const STAGES: { key: PipelineStage; label: string; icon: JSX.Element }[] = [
 // Human-readable labels for transcription sub-stages
 const STAGE_LABELS: Record<string, string> = {
   pending: 'Starting...',
+  uploading: 'Uploading audio...',
   loading_model: 'Loading model...',
   transcribing: 'Transcribing...',
   aligning: 'Aligning timestamps...',
@@ -159,7 +160,10 @@ export default function PipelineStepper({
   }
 
   // Get progress info for the current stage
-  const progressLabel = progress ? (STAGE_LABELS[progress.stage] || progress.message) : null
+  // Prefer the detailed message if it contains progress info (like "Uploading: 45%...")
+  const progressLabel = progress
+    ? (progress.message && progress.message.includes('%') ? progress.message : (STAGE_LABELS[progress.stage] || progress.message))
+    : null
   const progressPct = progress?.progress_pct ?? 0
   const eta = progress?.estimated_remaining_seconds
     ? formatTimeRemaining(progress.estimated_remaining_seconds)

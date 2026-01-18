@@ -306,7 +306,9 @@ def handle_transcribe(
     # Transcription errors are usually transient (API issues, rate limits)
     with _handler_error_context(f"transcribing {episode.title}"):
         # Create transcriber based on config (with progress callback if available)
+        logger.debug(f"Creating transcriber, provider={config.transcription_provider}")
         transcriber = _create_transcriber(config, config.path_manager, progress_callback)
+        logger.debug(f"Transcriber created: {type(transcriber).__name__}")
 
         # Determine output path
         path_parts = Path(episode.downsampled_audio_path).parts
@@ -327,6 +329,8 @@ def handle_transcribe(
         logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
 
         # Transcribe
+        file_size_mb = audio_file.stat().st_size / 1024 / 1024
+        logger.info(f"Starting transcription: {audio_file.name} ({file_size_mb:.1f}MB)")
         transcript_data = transcriber.transcribe_audio(
             str(audio_file),
             output,
@@ -334,7 +338,9 @@ def handle_transcribe(
             episode_id=episode.id,
             podcast_slug=podcast.slug,
             episode_slug=episode.slug,
+            progress_callback=progress_callback,
         )
+        logger.info(f"Transcription completed, result: {type(transcript_data).__name__}")
 
         if not transcript_data:
             raise TransientError(f"Transcription returned no data for episode: {episode.title}")

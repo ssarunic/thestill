@@ -81,6 +81,7 @@ class ParakeetTranscriber(Transcriber):
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        progress_callback=None,  # Accepted for API compatibility, not used
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using Parakeet model.

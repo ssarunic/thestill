@@ -252,6 +252,7 @@ class WhisperTranscriber(Transcriber):
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        progress_callback=None,  # Accepted for API compatibility, not used
     ) -> Optional[Transcript]:
         """
         Transcribe audio file with optional custom prompt for better accuracy.
@@ -664,6 +665,7 @@ class WhisperXTranscriber(Transcriber):
         episode_id: Optional[str] = None,
         podcast_slug: Optional[str] = None,
         episode_slug: Optional[str] = None,
+        progress_callback=None,  # Accepted for API compatibility, not used
     ) -> Optional[Transcript]:
         """
         Transcribe audio with optional speaker diarization.
