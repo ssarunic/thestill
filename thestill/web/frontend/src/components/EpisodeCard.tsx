@@ -116,18 +116,6 @@ export default function EpisodeCard({
 
   const content = (
     <div className="flex items-start gap-3 sm:gap-4">
-      {/* Checkbox (only when selectable) */}
-      {isSelectable && (
-        <div className="flex-shrink-0 pt-1">
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={handleCheckboxChange}
-            className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 cursor-pointer"
-          />
-        </div>
-      )}
-
       {/* Episode artwork */}
       {artworkUrl ? (
         <img
@@ -247,12 +235,26 @@ export default function EpisodeCard({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        <Link
-          to={`/podcasts/${episode.podcast_slug}/episodes/${episode.slug}`}
-          className="block"
-        >
-          {content}
-        </Link>
+        <div className="flex items-start gap-3 sm:gap-4">
+          {/* Checkbox (only when selectable) - outside Link to prevent navigation on click */}
+          {isSelectable && (
+            <div className="flex-shrink-0 pt-1">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={handleCheckboxChange}
+                className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 cursor-pointer"
+              />
+            </div>
+          )}
+
+          <Link
+            to={`/podcasts/${episode.podcast_slug}/episodes/${episode.slug}`}
+            className="block flex-1 min-w-0"
+          >
+            {content}
+          </Link>
+        </div>
 
         {/* Hover tooltip */}
         {showTooltip && isProcessed && (
