@@ -24,7 +24,6 @@ import re
 import tempfile
 import threading
 import time
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,22 +47,15 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("GRPC_VERBOSITY", "NONE")
 os.environ.setdefault("GLOG_minloglevel", "2")  # Suppress INFO and WARNING from glog
 
-try:
-    from google.api_core.client_options import ClientOptions
-    from google.cloud import storage
-    from google.cloud.speech_v2 import SpeechClient
-    from google.cloud.speech_v2.types import cloud_speech
-    from google.oauth2 import service_account
+# pylint: disable=wrong-import-position
+# These imports MUST come after os.environ settings above to suppress gRPC warnings
+from google.api_core.client_options import ClientOptions
+from google.cloud import storage
+from google.cloud.speech_v2 import SpeechClient
+from google.cloud.speech_v2.types import cloud_speech
+from google.oauth2 import service_account
 
-    GOOGLE_CLOUD_AVAILABLE = True
-except ImportError:
-    GOOGLE_CLOUD_AVAILABLE = False
-    # Create dummy module references for type hints when library not available
-    SpeechClient = None  # type: ignore
-    cloud_speech = None  # type: ignore
-    storage = None  # type: ignore
-    service_account = None  # type: ignore
-    ClientOptions = None  # type: ignore
+# pylint: enable=wrong-import-position
 
 
 # Default region for Speech-to-Text V2 API
@@ -196,12 +188,13 @@ class _ChunkResult:
     Result of a chunk transcription task.
 
     Contains the transcript data and metadata needed for merging.
+    On error, transcript will be None and error will contain the message.
     """
 
     chunk_index: int
     start_ms: int
     end_ms: int
-    transcript: Transcript
+    transcript: Optional[Transcript] = None
     error: Optional[str] = None
 
 
@@ -262,12 +255,6 @@ class GoogleCloudTranscriber(Transcriber):
             path_manager: PathManager instance for storing operation state files
             _quiet: Internal flag to suppress initialization messages (used for worker instances)
         """
-        if not GOOGLE_CLOUD_AVAILABLE:
-            raise ImportError(
-                "Google Cloud Speech-to-Text V2 libraries not installed. "
-                "Install with: pip install google-cloud-speech google-cloud-storage"
-            )
-
         if not project_id:
             raise ValueError("project_id is required for Speech-to-Text V2 API")
 
@@ -328,8 +315,8 @@ class GoogleCloudTranscriber(Transcriber):
         audio_path: str,
         duration_minutes: float,
         num_chunks: int,
-        chunk_minutes: int = None,
-        overlap_seconds: int = None,
+        chunk_minutes: Optional[int] = None,
+        overlap_seconds: Optional[int] = None,
     ) -> None:
         """
         Print a consolidated header with transcription settings.
@@ -474,17 +461,17 @@ class GoogleCloudTranscriber(Transcriber):
     def transcribe_audio(
         self,
         audio_path: str,
-        output_path: str = None,
+        output_path: Optional[str] = None,
         *,
         language: str,
-        custom_prompt: str = None,
+        custom_prompt: Optional[str] = None,
         preprocess_audio: bool = False,
         clean_transcript: bool = False,
-        cleaning_config: Dict = None,
-        podcast_title: str = None,
-        episode_id: str = None,
-        podcast_slug: str = None,
-        episode_slug: str = None,
+        cleaning_config: Optional[Dict[str, Any]] = None,
+        podcast_title: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using Chirp 3 with optional speaker diarization.
@@ -681,6 +668,8 @@ class GoogleCloudTranscriber(Transcriber):
 
             # We need to wait for in-progress chunks and collect their results
             # Re-fetch pending ops and poll until some complete
+            # Note: chunks_in_progress can only be populated when episode_id is set
+            assert episode_id is not None
             while chunks_in_progress:
                 time.sleep(30)
                 pending_ops = self.get_pending_operations_for_episode(episode_id)
@@ -988,7 +977,7 @@ class GoogleCloudTranscriber(Transcriber):
                             chunk_index=task.chunk_index,
                             start_ms=task.start_ms,
                             end_ms=task.end_ms,
-                            transcript={},
+                            transcript=None,
                             error=str(e),
                         )
                     )
@@ -1904,7 +1893,7 @@ class GoogleCloudTranscriber(Transcriber):
 
             # Find the file result
             file_result = None
-            for _, fr in response.results.items():
+            for _, fr in response.results.items():  # pylint: disable=no-member
                 file_result = fr
                 break
 
