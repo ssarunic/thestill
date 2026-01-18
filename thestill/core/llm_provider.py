@@ -1103,6 +1103,7 @@ class OllamaProvider(LLMProvider):
             # List available models using SDK
             models_response = self.client.list()
             # SDK returns a Pydantic model with .models attribute
+            # pylint: disable-next=no-member
             model_names = [m.model for m in models_response.models]
 
             # Check for exact match or model with tag
@@ -2695,3 +2696,34 @@ def create_llm_provider(
         raise ValueError(
             f"Unknown provider type: {provider_type}. Must be 'openai', 'ollama', 'gemini', 'anthropic', or 'mistral'"
         )
+
+
+def create_llm_provider_from_config(config) -> LLMProvider:
+    """
+    Create an LLM provider from a config object.
+
+    This is a convenience wrapper around create_llm_provider that extracts
+    all necessary parameters from the config object, reducing boilerplate
+    in CLI and service code.
+
+    Args:
+        config: Configuration object with LLM settings (e.g., from load_config())
+
+    Returns:
+        LLMProvider instance configured according to config settings
+    """
+    return create_llm_provider(
+        provider_type=config.llm_provider,
+        openai_api_key=config.openai_api_key,
+        openai_model=config.openai_model,
+        openai_reasoning_effort=config.openai_reasoning_effort,
+        ollama_base_url=config.ollama_base_url,
+        ollama_model=config.ollama_model,
+        gemini_api_key=config.gemini_api_key,
+        gemini_model=config.gemini_model,
+        gemini_thinking_level=config.gemini_thinking_level,
+        anthropic_api_key=config.anthropic_api_key,
+        anthropic_model=config.anthropic_model,
+        mistral_api_key=config.mistral_api_key,
+        mistral_model=config.mistral_model,
+    )

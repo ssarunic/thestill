@@ -126,7 +126,7 @@ def setup_resources(server: Server, storage_path: str):
                 raise ValueError(f"Podcast not found: {podcast_id}")
 
             # Get podcast index
-            podcasts = podcast_service.list_podcasts()
+            podcasts = podcast_service.get_podcasts()
             podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
             # Build response
@@ -150,7 +150,7 @@ def setup_resources(server: Server, storage_path: str):
                 raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
 
             # Get indices
-            podcasts = podcast_service.list_podcasts()
+            podcasts = podcast_service.get_podcasts()
             podcast = podcast_service.get_podcast(podcast_id)
             if not podcast:
                 raise ValueError(f"Podcast not found: {podcast_id}")

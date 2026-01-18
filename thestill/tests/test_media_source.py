@@ -263,8 +263,8 @@ class TestRSSMediaSource:
         )
 
         # RSS source should return None (signals standard HTTP download)
-        result = source.download_episode(episode, "Test Podcast", "/tmp/storage")
-        assert result is None
+        # Note: download_episode intentionally returns None for RSS sources
+        assert source.download_episode(episode, "Test Podcast", "/tmp/storage") is None
 
     def test_parse_date_valid(self):
         """Test date parsing with valid struct_time."""

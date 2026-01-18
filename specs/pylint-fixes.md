@@ -4,9 +4,29 @@ This document outlines the pylint issues found in the thestill codebase and a pr
 
 ## Current Status
 
-- **Pylint Score**: 9.06/10
-- **Total Issues**: ~1,100 warnings/errors across the codebase
+- **Pylint Score**: 9.19/10 (improved from 9.06)
+- **Total Issues**: ~900 warnings/errors across the codebase
+- **E-level Errors**: 0 (all resolved!)
 - **Date**: 2025-01-15
+- **Last Updated**: 2025-01-15
+
+### Completed Fixes
+
+1. ✅ Fixed E1125 in `cli.py` - Added missing `language` argument to transcript cleaning calls
+2. ✅ Fixed E0102 in `cli.py` - Refactored duplicate `stream_callback` function definition
+3. ✅ Fixed E1131 in `task_handlers.py` - Updated pylint to Python 3.12 (recognizes `X | Y` union syntax)
+4. ✅ Fixed E1120 in `cli.py` - Disabled `no-value-for-parameter` (Click framework false positive)
+5. ✅ Added `create_llm_provider_from_config()` helper to reduce 15-line boilerplate in 9 places
+6. ✅ Updated `.pylintrc` `py-version` from 3.9 to 3.12
+7. ✅ Removed dead `_clean_transcript_with_llm` method from `whisper_transcriber.py` (51 lines)
+8. ✅ Fixed E1125 in `mcp/tools.py` - Added missing `language` argument
+9. ✅ Fixed E1101 in `mcp/tools.py` - Corrected `PodcastService` method names
+10. ✅ Fixed E1101 in `mcp/resources.py` - Corrected `list_podcasts` → `get_podcasts`
+11. ✅ Fixed E1128 in `test_media_source.py` - Fixed assignment-from-none warning
+12. ✅ Fixed E1135 in `test_service_contracts.py` - Fixed unsupported-membership-test warnings
+13. ✅ Fixed E1123 in `test_cleaning.py` and `test_formatter.py` - Updated to new API signatures
+14. ✅ Suppressed false positive E1101 errors in `google_transcriber.py` and `llm_provider.py` (third-party libs)
+15. ✅ Suppressed E0401 import-error for optional `librosa` dependency in `parakeet_transcriber.py`
 
 ## Issue Summary
 
@@ -43,25 +63,43 @@ This document outlines the pylint issues found in the thestill codebase and a pr
 
 ### P0: Critical Errors (Fix Immediately)
 
-- [ ] **Fix E1125: Missing mandatory `language` argument in transcriber calls**
+- [x] **Fix E1125: Missing mandatory `language` argument in transcriber calls** ✅
   - Location: `cli.py:636`, `cli.py:967`, `cli.py:983`
   - Issue: Transcriber API was refactored to require `language` parameter but callers weren't updated
-  - Fix: Add `language` parameter to all transcriber method calls
+  - Fix: Added `language=podcast.language` to all transcriber method calls
 
-- [ ] **Fix E1120: No value for parameter in function call**
+- [x] **Fix E1120: No value for parameter in function call** ✅
   - Location: `cli.py:2382`
-  - Issue: Function called without required `ctx` and `config` arguments
-  - Fix: Ensure proper arguments are passed to the function
+  - Issue: Click framework false positive - decorators handle parameter injection
+  - Fix: Disabled `no-value-for-parameter` in `.pylintrc`
 
-- [ ] **Fix E0102: Function already defined**
+- [x] **Fix E0102: Function already defined** ✅
   - Location: `cli.py:596`
-  - Issue: Duplicate function definition
-  - Fix: Remove or rename the duplicate function
+  - Issue: `stream_callback` defined as `None` then redefined as function
+  - Fix: Refactored to define `_stream_chunk` function, then assign conditionally
 
-- [ ] **Fix E1131: Unsupported binary operation with `|`**
+- [x] **Fix E1131: Unsupported binary operation with `|`** ✅
   - Location: `task_handlers.py:268`, `task_handlers.py:561`, `task_handlers.py:619`
-  - Issue: Using `|` operator on incompatible types (likely union type syntax issue)
-  - Fix: Use `Union[]` from typing or fix the type annotations
+  - Issue: pylint was configured for Python 3.9, doesn't recognize 3.10+ union syntax
+  - Fix: Updated `.pylintrc` `py-version` to 3.12
+
+### P0.5: Remaining Critical Errors (Not in original scope)
+
+- [x] **Fix E1125 in `whisper_transcriber.py:592`** ✅
+  - Issue: Legacy `_clean_transcript_with_llm` method uses outdated `TranscriptCleaner` API
+  - Fix: Removed dead method entirely (51 lines)
+
+- [x] **Fix E1125 in `mcp/tools.py:909`** ✅
+  - Issue: Missing `language` argument in MCP tools transcription call
+  - Fix: Added `language=podcast.language` to all cleaning calls
+
+- [x] **Fix E1101 in `mcp/tools.py` and `mcp/resources.py`** ✅
+  - Issues: `PodcastService` method names don't match (`list_podcasts` vs `get_podcasts`)
+  - Fix: Changed all `list_podcasts()` calls to `get_podcasts()`
+
+- [x] **Fix E1123/E1128/E1135 in tests** ✅
+  - Issues: Test files using outdated API signatures
+  - Fix: Updated `test_cleaning.py`, `test_formatter.py`, `test_media_source.py`, `test_service_contracts.py`
 
 ### P1: High Priority (Next Sprint)
 

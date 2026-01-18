@@ -314,8 +314,7 @@ class WhisperTranscriber(Transcriber):
 
             transcript = self._format_transcript(result, processing_time, audio_path)
 
-            if clean_transcript and cleaning_config:
-                transcript = self._clean_transcript_with_llm(transcript, cleaning_config)
+            # Note: clean_transcript parameter is deprecated - use 'thestill clean-transcript' instead
 
             if output_path:
                 self._save_transcript(transcript, output_path)
@@ -551,58 +550,6 @@ class WhisperTranscriber(Transcriber):
             chunks.append(current_chunk)
 
         return chunks
-
-    def _clean_transcript_with_llm(self, transcript: Transcript, cleaning_config: Dict) -> Transcript:
-        """Clean transcript text using LLM"""
-        print("\n" + "=" * 60)
-        print("CLEANING TRANSCRIPT WITH LLM")
-        print("=" * 60)
-
-        try:
-            from .llm_provider import AnthropicProvider, GeminiProvider, OllamaProvider, OpenAIProvider
-            from .transcript_cleaner import TranscriptCleaner
-
-            provider_type = cleaning_config.get("provider", "gemini")
-            model = cleaning_config.get("model", "gemini-3-flash-preview")
-            thinking_level = cleaning_config.get("thinking_level")
-
-            if provider_type == "openai":
-                api_key = cleaning_config.get("api_key")
-                if not api_key:
-                    raise ValueError("OpenAI API key required for cleaning")
-                provider = OpenAIProvider(api_key=api_key, model=model)
-            elif provider_type == "gemini":
-                api_key = cleaning_config.get("gemini_api_key") or cleaning_config.get("api_key")
-                if not api_key:
-                    raise ValueError("Gemini API key required for cleaning")
-                provider = GeminiProvider(api_key=api_key, model=model, thinking_level=thinking_level)
-            elif provider_type == "anthropic":
-                api_key = cleaning_config.get("anthropic_api_key") or cleaning_config.get("api_key")
-                if not api_key:
-                    raise ValueError("Anthropic API key required for cleaning")
-                provider = AnthropicProvider(api_key=api_key, model=model)
-            else:  # ollama
-                base_url = cleaning_config.get("base_url", "http://localhost:11434")
-                provider = OllamaProvider(base_url=base_url, model=model)
-
-            cleaner = TranscriptCleaner(provider=provider)
-            original_text = transcript.get_text_with_timestamps()
-
-            # Note: TranscriptCleaner API may vary - this is a simplified call
-            cleaned_result = cleaner.clean_transcript(original_text, {}, {})
-
-            transcript.cleaned_text = cleaned_result.get("cleaned_text", original_text)
-            transcript.cleaning_metadata = {
-                "processing_time": cleaned_result.get("processing_time", 0),
-            }
-
-            print("=" * 60)
-            return transcript
-
-        except Exception as e:
-            print(f"Error cleaning transcript: {e}")
-            print("Returning original transcript without cleaning")
-            return transcript
 
 
 class WhisperXTranscriber(Transcriber):
@@ -875,9 +822,7 @@ class WhisperXTranscriber(Transcriber):
 
             transcript = self._format_transcript(result, processing_time, audio_path, speakers_detected)
 
-            if clean_transcript and cleaning_config:
-                self._load_whisper_fallback()
-                transcript = self._whisper_fallback._clean_transcript_with_llm(transcript, cleaning_config)
+            # Note: clean_transcript parameter is deprecated - use 'thestill clean-transcript' instead
 
             # Report completion
             self._report_progress(

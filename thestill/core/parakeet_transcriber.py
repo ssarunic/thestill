@@ -111,7 +111,7 @@ class ParakeetTranscriber(Transcriber):
             audio_duration = self._get_audio_duration_minutes(audio_path)
             print(f"Audio duration: {audio_duration:.1f} minutes")
 
-            import librosa
+            import librosa  # pylint: disable=import-error
 
             audio_array, sample_rate = librosa.load(audio_path, sr=16000, mono=True)
 

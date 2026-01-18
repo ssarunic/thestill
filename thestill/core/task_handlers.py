@@ -396,24 +396,10 @@ def handle_clean(task: Task, state: "AppState") -> None:
             transcript_data = json.load(f)
 
         # Create LLM provider
-        from .llm_provider import create_llm_provider
+        from .llm_provider import create_llm_provider_from_config
         from .transcript_cleaning_processor import TranscriptCleaningProcessor
 
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
 
         cleaning_processor = TranscriptCleaningProcessor(llm_provider)
 
@@ -497,24 +483,10 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             transcript_text = f.read()
 
         # Create LLM provider and summarizer
-        from .llm_provider import create_llm_provider
+        from .llm_provider import create_llm_provider_from_config
         from .post_processor import TranscriptSummarizer
 
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
 
         summarizer = TranscriptSummarizer(llm_provider)
 

@@ -44,7 +44,6 @@ def main():
     markdown = formatter.format_to_file(
         str(transcript_path),
         str(output_path),
-        episode_title="How to AI-Proof Your Career, Spot Market Hype, and Raise Critical Thinkers — ft. Greg Shove",
     )
 
     print("\n" + "=" * 50)

@@ -508,8 +508,9 @@ class TestServiceContractStability:
         model_fields = (
             PodcastWithIndex.model_fields if hasattr(PodcastWithIndex, "model_fields") else PodcastWithIndex.__fields__
         )
+        field_names = set(model_fields.keys())
         for field_name in expected_fields:
-            assert field_name in model_fields, f"Missing field: {field_name}"
+            assert field_name in field_names, f"Missing field: {field_name}"
 
     def test_episode_with_index_model_stability(self):
         """Contract: EpisodeWithIndex maintains its field names."""
@@ -530,8 +531,9 @@ class TestServiceContractStability:
         model_fields = (
             EpisodeWithIndex.model_fields if hasattr(EpisodeWithIndex, "model_fields") else EpisodeWithIndex.__fields__
         )
+        field_names = set(model_fields.keys())
         for field_name in expected_fields:
-            assert field_name in model_fields, f"Missing field: {field_name}"
+            assert field_name in field_names, f"Missing field: {field_name}"
 
     def test_refresh_result_model_stability(self):
         """Contract: RefreshResult maintains its field names."""
@@ -540,8 +542,9 @@ class TestServiceContractStability:
         model_fields = (
             RefreshResult.model_fields if hasattr(RefreshResult, "model_fields") else RefreshResult.__fields__
         )
+        field_names = set(model_fields.keys())
         for field_name in expected_fields:
-            assert field_name in model_fields, f"Missing field: {field_name}"
+            assert field_name in field_names, f"Missing field: {field_name}"
 
     def test_system_stats_model_stability(self):
         """Contract: SystemStats maintains its field names."""
@@ -557,5 +560,6 @@ class TestServiceContractStability:
         ]
 
         model_fields = SystemStats.model_fields if hasattr(SystemStats, "model_fields") else SystemStats.__fields__
+        field_names = set(model_fields.keys())
         for field_name in expected_fields:
-            assert field_name in model_fields, f"Missing field: {field_name}"
+            assert field_name in field_names, f"Missing field: {field_name}"

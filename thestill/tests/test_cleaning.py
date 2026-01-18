@@ -20,9 +20,10 @@ Test script for transcript cleaning processor
 import json
 from pathlib import Path
 
-from thestill.core.llm_provider import create_llm_provider
+from thestill.core.llm_provider import create_llm_provider_from_config
 from thestill.core.transcript_cleaning_processor import TranscriptCleaningProcessor
 from thestill.utils.config import load_config
+from thestill.utils.path_manager import PathManager
 
 
 def main():
@@ -30,18 +31,7 @@ def main():
     config = load_config()
 
     # Create LLM provider
-    llm_provider = create_llm_provider(
-        provider_type=config.llm_provider,
-        openai_api_key=config.openai_api_key,
-        openai_model=config.openai_model,
-        ollama_base_url=config.ollama_base_url,
-        ollama_model=config.ollama_model,
-        gemini_api_key=config.gemini_api_key,
-        gemini_model=config.gemini_model,
-        gemini_thinking_level=config.gemini_thinking_level,
-        anthropic_api_key=config.anthropic_api_key,
-        anthropic_model=config.anthropic_model,
-    )
+    llm_provider = create_llm_provider_from_config(config)
 
     print(f"Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
 
@@ -55,6 +45,9 @@ def main():
 
     print(f"\nLoaded transcript: {transcript_path.name}")
 
+    # Create path manager
+    path_manager = PathManager(config.data_dir)
+
     # Create cleaning processor
     cleaning_processor = TranscriptCleaningProcessor(llm_provider)
 
@@ -67,30 +60,32 @@ def main():
         podcast_description="Scott Galloway brings his no-mercy insights to the latest in business, tech, and politics.",
         episode_title="How to AI-Proof Your Career, Spot Market Hype, and Raise Critical Thinkers — ft. Greg Shove",
         episode_description="Scott and Greg Shove discuss AI, career advice, and parenting in the modern age.",
+        podcast_slug="the-prof-g-pod-with-scott-galloway",
+        episode_slug="how-to-ai-proof-your-career",
         output_path=str(output_path),
-        save_corrections=True,
+        path_manager=path_manager,
+        language="en",
     )
 
     print("\n" + "=" * 50)
     print("CLEANING RESULTS:")
     print("=" * 50)
     print(f"Processing time: {result['processing_time']:.1f}s")
-    print(f"Corrections found: {len(result['corrections'])}")
-    print(f"Speakers identified: {len(result['speaker_mapping'])}")
+    print(f"Episode facts: {result.get('episode_facts')}")
+    print(f"Podcast facts: {result.get('podcast_facts')}")
 
-    print("\nSpeaker Mapping:")
-    for speaker, name in result["speaker_mapping"].items():
-        print(f"  {speaker} -> {name}")
+    # Print speaker mapping from episode facts
+    episode_facts = result.get("episode_facts")
+    if episode_facts and episode_facts.speaker_mapping:
+        print("\nSpeaker Mapping:")
+        for speaker, name in episode_facts.speaker_mapping.items():
+            print(f"  {speaker} -> {name}")
 
     print(f"\nFirst 500 chars of cleaned transcript:")
-    print(result["cleaned_markdown"][:500])
+    print(result.get("cleaned_markdown", "")[:500])
     print("...")
 
-    print("\nFiles saved to:")
-    print(f"  - {output_path}.md")
-    print(f"  - {output_path}.json")
-    print(f"  - {output_path.parent / (output_path.name + '_corrections.json')}")
-    print(f"  - {output_path.parent / (output_path.name + '_speakers.json')}")
+    print(f"\nOutput saved to: {output_path}.md")
 
 
 if __name__ == "__main__":

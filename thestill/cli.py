@@ -32,7 +32,7 @@ from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_e
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
-from .core.llm_provider import create_llm_provider
+from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
 from .core.post_processor import TranscriptSummarizer
 from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -521,7 +521,6 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
     """Clean transcripts using facts-based two-pass approach"""
     import json
 
-    from .core.llm_provider import create_llm_provider
     from .core.transcript_cleaning_processor import TranscriptCleaningProcessor
 
     config = ctx.obj.config
@@ -530,21 +529,7 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
 
     # Create LLM provider
     try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
         click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: {llm_provider.get_model_name()}")
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -590,13 +575,12 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
     start_time = time.time()
 
     # Create streaming callback if enabled (defined once, outside loop)
-    stream_callback = None
-    if stream:
+    def _stream_chunk(chunk: str) -> None:
+        """Print LLM output chunks in real-time."""
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
 
-        def stream_callback(chunk: str) -> None:
-            """Print LLM output chunks in real-time."""
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
+    stream_callback = _stream_chunk if stream else None
 
     for podcast, episode, transcript_path in transcripts_to_clean[:max_episodes]:
         click.echo(f"\n📻 {podcast.title}")
@@ -644,6 +628,7 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
                 output_path=str(cleaned_path),
                 path_manager=path_manager,
                 on_stream_chunk=stream_callback,
+                language=podcast.language,
             )
 
             # Add newline after streaming completes
@@ -933,21 +918,7 @@ def facts_extract(ctx, podcast_id, episode_id, force):
 
     # Create LLM provider
     try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
         click.echo(f"✓ Using {config.llm_provider.upper()} provider")
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
@@ -971,6 +942,7 @@ def facts_extract(ctx, podcast_id, episode_id, force):
         episode_title=episode.title,
         episode_description=episode.description,
         podcast_facts=podcast_facts,
+        language=podcast.language,
     )
 
     # Save episode facts
@@ -985,6 +957,7 @@ def facts_extract(ctx, podcast_id, episode_id, force):
             podcast_title=podcast.title,
             podcast_description=podcast.description,
             episode_facts=episode_facts,
+            language=podcast.language,
         )
         facts_manager.save_podcast_facts(podcast_slug, podcast_facts)
         click.echo(f"✓ Saved podcast facts: {facts_manager.get_podcast_facts_path(podcast_slug)}")
@@ -1804,21 +1777,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 
     # Create LLM provider
     try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
     except Exception as e:
         click.echo(f"Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
@@ -1987,21 +1946,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
 
     # Create LLM provider
     try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
@@ -2154,21 +2099,7 @@ def evaluate_clean_transcript(
 
     # Create LLM provider
     try:
-        llm_provider = create_llm_provider(
-            provider_type=config.llm_provider,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-            openai_reasoning_effort=config.openai_reasoning_effort,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            gemini_api_key=config.gemini_api_key,
-            gemini_model=config.gemini_model,
-            gemini_thinking_level=config.gemini_thinking_level,
-            anthropic_api_key=config.anthropic_api_key,
-            anthropic_model=config.anthropic_model,
-            mistral_api_key=config.mistral_api_key,
-            mistral_model=config.mistral_model,
-        )
+        llm_provider = create_llm_provider_from_config(config)
     except Exception as e:
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)

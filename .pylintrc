@@ -11,8 +11,8 @@ load-plugins=
 # Discover python modules and packages in the file system subtree
 recursive=yes
 
-# Python version to use
-py-version=3.9
+# Python version to use (project uses Python 3.12+, enabling modern syntax like X | Y unions)
+py-version=3.12
 
 [MESSAGES CONTROL]
 # Disable specific messages that may not be relevant for your project
@@ -39,6 +39,8 @@ disable=
     invalid-name,
     # Logging
     logging-fstring-interpolation,
+    # Click framework false positives
+    no-value-for-parameter,  # Click decorators handle parameter injection
 
 [REPORTS]
 # Set the output format

@@ -310,7 +310,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast = podcast_service.add_podcast(url)
                 if podcast:
                     # Get the podcast index
-                    podcasts = podcast_service.list_podcasts()
+                    podcasts = podcast_service.get_podcasts()
                     podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
                     result = {
@@ -351,7 +351,7 @@ def setup_tools(server: Server, storage_path: str):
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "list_podcasts":
-                podcasts = podcast_service.list_podcasts()
+                podcasts = podcast_service.get_podcasts()
 
                 result = {
                     "podcasts": [
@@ -386,7 +386,7 @@ def setup_tools(server: Server, storage_path: str):
                 limit = arguments.get("limit", 10)
                 since_hours = arguments.get("since_hours")
 
-                episodes = podcast_service.list_episodes(podcast_id, limit, since_hours)
+                episodes = podcast_service.get_episodes(podcast_id, limit=limit, since_hours=since_hours)
                 if episodes is None:
                     return [
                         TextContent(
@@ -453,9 +453,9 @@ def setup_tools(server: Server, storage_path: str):
                 if isinstance(episode_id, str) and episode_id.isdigit():
                     episode_id = int(episode_id)
 
-                transcript = podcast_service.get_transcript(podcast_id, episode_id)
+                transcript_result = podcast_service.get_transcript(podcast_id, episode_id)
 
-                if transcript is None:
+                if transcript_result is None:
                     return [
                         TextContent(
                             type="text",
@@ -468,12 +468,16 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # If transcript starts with "N/A", it means it's not available
-                if transcript.startswith("N/A"):
-                    return [TextContent(type="text", text=json.dumps({"success": False, "error": transcript}))]
+                # If transcript_type is None, it means transcript is not available
+                if transcript_result.transcript_type is None:
+                    return [
+                        TextContent(
+                            type="text", text=json.dumps({"success": False, "error": transcript_result.content})
+                        )
+                    ]
 
                 # Return the transcript content directly (not JSON-encoded)
-                return [TextContent(type="text", text=transcript)]
+                return [TextContent(type="text", text=transcript_result.content)]
 
             # Pipeline tools implementation
             elif name == "refresh_feeds":
@@ -916,6 +920,7 @@ def setup_tools(server: Server, storage_path: str):
                             episode_slug=episode.slug,
                             output_path=str(cleaned_path),
                             path_manager=path_manager,
+                            language=podcast.language,
                         )
 
                         if result_data:
@@ -1163,9 +1168,11 @@ def setup_tools(server: Server, storage_path: str):
                             podcast_description=podcast.description,
                             episode_title=episode.title,
                             episode_description=episode.description,
-                            episode_id=episode.id,
+                            podcast_slug=podcast.slug,
+                            episode_slug=episode.slug,
                             output_path=str(cleaned_path),
                             path_manager=path_manager,
+                            language=podcast.language,
                         )
 
                         if result_data:
