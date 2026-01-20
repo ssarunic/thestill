@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from ..models.podcast import Episode, Podcast
+from ..models.podcast import Episode, Podcast, TranscriptLink
 
 
 class PodcastRepository(ABC):
@@ -145,6 +145,75 @@ class PodcastRepository(ABC):
                 "episode-123",
                 {"audio_path": "/path/to/audio.mp3", "audio_size": 1024000}
             )
+        """
+        pass
+
+    @abstractmethod
+    def save_podcast(self, podcast: Podcast) -> Podcast:
+        """
+        Save or update podcast metadata only. Does NOT touch episodes.
+
+        Idempotent: Only updates updated_at if data actually changed.
+
+        Args:
+            podcast: Podcast model with metadata to save
+
+        Returns:
+            The saved podcast (with updated timestamps if changed)
+        """
+        pass
+
+    @abstractmethod
+    def save_episode(self, episode: Episode) -> Episode:
+        """
+        Save or update a single episode.
+
+        Idempotent: Only updates updated_at if data actually changed.
+        Requires: episode.podcast_id must be set.
+
+        Args:
+            episode: Episode model to save
+
+        Returns:
+            The saved episode
+
+        Raises:
+            ValueError: If episode.podcast_id is not set
+        """
+        pass
+
+    @abstractmethod
+    def save_episodes(self, episodes: List[Episode]) -> List[Episode]:
+        """
+        Save or update multiple episodes in a single transaction.
+
+        Idempotent: Only updates updated_at for episodes with actual changes.
+        Requires: Each episode.podcast_id must be set.
+
+        Args:
+            episodes: List of Episode models to save
+
+        Returns:
+            List of saved episodes
+
+        Raises:
+            ValueError: If any episode.podcast_id is not set
+        """
+        pass
+
+    @abstractmethod
+    def add_transcript_links(self, episode_id: str, links: List[TranscriptLink]) -> int:
+        """
+        Add transcript links for an episode.
+
+        Skips duplicates (same episode_id + url).
+
+        Args:
+            episode_id: Episode UUID
+            links: List of TranscriptLink objects to add
+
+        Returns:
+            Number of links actually inserted (excludes duplicates)
         """
         pass
 

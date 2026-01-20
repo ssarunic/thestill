@@ -32,6 +32,7 @@ from pydub import AudioSegment
 from pydub.effects import normalize
 
 from thestill.models.transcript import Segment, Transcript, Word
+from thestill.models.transcription import TranscribeOptions
 from thestill.utils.device import resolve_hybrid_devices
 from thestill.utils.duration import get_audio_duration_float
 from thestill.utils.stdout_capture import WHISPERX_PROGRESS_PATTERN, StdoutProgressCapture
@@ -243,36 +244,16 @@ class WhisperTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
-        preprocess_audio: bool = False,
-        clean_transcript: bool = False,
-        cleaning_config: Optional[Dict] = None,
-        podcast_title: Optional[str] = None,
-        episode_id: Optional[str] = None,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
-        progress_callback=None,  # Accepted for API compatibility, not used
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
-        Transcribe audio file with optional custom prompt for better accuracy.
+        Transcribe audio file using Whisper.
 
         Args:
             audio_path: Path to audio file
             output_path: Path to save transcript JSON
-            language: Language code (ISO 639-1, e.g., 'en', 'hr')
-            custom_prompt: Custom prompt to improve transcription accuracy
-            preprocess_audio: Whether to preprocess audio before transcription
-                WARNING: Causes timestamp drift - transcripts won't align with original
-            clean_transcript: Whether to clean transcript with LLM
-            cleaning_config: Configuration dict for transcript cleaning
-            podcast_title: Not used for local transcription (API compatibility)
-            episode_id: Not used for local transcription (API compatibility)
-            podcast_slug: Not used for local transcription (API compatibility)
-            episode_slug: Not used for local transcription (API compatibility)
+            options: Transcription options including language and progress callback.
         """
-        # Note: podcast_title, episode_id, podcast_slug, episode_slug are unused
-        # They exist for API compatibility with cloud transcribers (Google, ElevenLabs)
         try:
             self.load_model()
 
@@ -287,7 +268,7 @@ class WhisperTranscriber(Transcriber):
             print(f"Audio duration: {audio_duration:.1f} minutes")
 
             transcribe_options = {
-                "language": language,
+                "language": options.language,
                 "task": "transcribe",
                 "verbose": True,
                 "word_timestamps": True,
@@ -298,13 +279,9 @@ class WhisperTranscriber(Transcriber):
                 "condition_on_previous_text": False,
             }
 
-            if custom_prompt:
-                transcribe_options["initial_prompt"] = custom_prompt
-                print(f"Using custom prompt: {custom_prompt[:100]}...")
-
             result = self._model.transcribe(processed_audio_path, **transcribe_options)
 
-            if preprocess_audio and processed_audio_path != audio_path:
+            if processed_audio_path != audio_path:
                 try:
                     os.remove(processed_audio_path)
                 except OSError:
@@ -656,16 +633,7 @@ class WhisperXTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
-        preprocess_audio: bool = False,
-        clean_transcript: bool = False,
-        cleaning_config: Optional[Dict] = None,
-        podcast_title: Optional[str] = None,
-        episode_id: Optional[str] = None,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
-        progress_callback=None,  # Accepted for API compatibility, not used
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
         Transcribe audio with optional speaker diarization.
@@ -673,33 +641,15 @@ class WhisperXTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             output_path: Path to save transcript JSON
-            language: Language code (ISO 639-1, e.g., 'en', 'hr')
-            custom_prompt: Custom prompt (not used in WhisperX, for API compatibility)
-            preprocess_audio: Whether to preprocess audio
-            clean_transcript: Whether to clean transcript with LLM
-            cleaning_config: Configuration for transcript cleaning
-            podcast_title: Not used for local transcription (API compatibility)
-            episode_id: Not used for local transcription (API compatibility)
-            podcast_slug: Not used for local transcription (API compatibility)
-            episode_slug: Not used for local transcription (API compatibility)
+            options: Transcription options including language and progress callback.
         """
-        # Note: podcast_title, episode_id, podcast_slug, episode_slug are unused
-        # They exist for API compatibility with cloud transcribers (Google, ElevenLabs)
         try:
             if not WHISPERX_AVAILABLE:
                 self._load_whisper_fallback()
                 return self._whisper_fallback.transcribe_audio(
                     audio_path,
                     output_path,
-                    language=language,
-                    custom_prompt=custom_prompt,
-                    preprocess_audio=preprocess_audio,
-                    clean_transcript=clean_transcript,
-                    cleaning_config=cleaning_config,
-                    podcast_title=podcast_title,
-                    episode_id=episode_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    options=options,
                 )
 
             # Progress allocation depends on whether diarization is enabled:
@@ -727,24 +677,13 @@ class WhisperXTranscriber(Transcriber):
                 return self._whisper_fallback.transcribe_audio(
                     audio_path,
                     output_path,
-                    language=language,
-                    custom_prompt=custom_prompt,
-                    preprocess_audio=preprocess_audio,
-                    clean_transcript=clean_transcript,
-                    cleaning_config=cleaning_config,
-                    podcast_title=podcast_title,
-                    episode_id=episode_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    options=options,
                 )
 
             print(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
             processed_audio_path = audio_path
-            if preprocess_audio:
-                self._load_whisper_fallback()
-                processed_audio_path = self._whisper_fallback._preprocess_audio(audio_path)
 
             # Step 1: Transcribe with WhisperX (with chunk-level progress capture)
             self._report_progress(
@@ -767,7 +706,7 @@ class WhisperXTranscriber(Transcriber):
                 result = self._model.transcribe(
                     processed_audio_path,
                     batch_size=16,
-                    language=language,
+                    language=options.language,
                     print_progress=True,
                 )
 
@@ -845,11 +784,7 @@ class WhisperXTranscriber(Transcriber):
             return self._whisper_fallback.transcribe_audio(
                 audio_path,
                 output_path,
-                language=language,
-                custom_prompt=custom_prompt,
-                preprocess_audio=preprocess_audio,
-                clean_transcript=clean_transcript,
-                cleaning_config=cleaning_config,
+                options=options,
             )
 
     def _perform_diarization(

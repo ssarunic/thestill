@@ -21,11 +21,12 @@ custom prompts or word-level timestamps like Whisper does.
 
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import torch
 
 from thestill.models.transcript import Segment, Transcript
+from thestill.models.transcription import TranscribeOptions
 
 from .transcriber import Transcriber
 
@@ -72,37 +73,23 @@ class ParakeetTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
-        preprocess_audio: bool = False,
-        clean_transcript: bool = False,
-        cleaning_config: Optional[Dict] = None,
-        podcast_title: Optional[str] = None,
-        episode_id: Optional[str] = None,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
-        progress_callback=None,  # Accepted for API compatibility, not used
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using Parakeet model.
 
+        Note: Parakeet is English-only and doesn't support custom prompts or
+        most TranscribeOptions fields.
+
         Args:
             audio_path: Path to audio file
             output_path: Path to save transcript JSON
-            language: Language code (ignored - Parakeet is English-only)
-            custom_prompt: Custom prompt (ignored - Parakeet doesn't support prompts)
-            preprocess_audio: Not used (API compatibility)
-            clean_transcript: Not used (API compatibility)
-            cleaning_config: Not used (API compatibility)
-            podcast_title: Not used (API compatibility)
-            episode_id: Not used (API compatibility)
-            podcast_slug: Not used (API compatibility)
-            episode_slug: Not used (API compatibility)
+            options: Transcription options (language is ignored - Parakeet is English-only).
 
         Returns:
             Transcript object or None on error
         """
-        # Note: Extra parameters are unused - they exist for API compatibility
+        # Note: options fields are largely unused - Parakeet is English-only
         try:
             self.load_model()
 

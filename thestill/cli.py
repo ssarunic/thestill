@@ -35,6 +35,7 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
 from .core.post_processor import TranscriptSummarizer
 from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
+from .models.transcription import TranscribeOptions
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
 from .utils.cli_formatter import CLIFormatter
@@ -1429,9 +1430,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             transcript_data = transcriber.transcribe_audio(
                 transcription_audio_path,
                 output,
-                language=transcribe_language,
-                clean_transcript=config.enable_transcript_cleaning,
-                cleaning_config=cleaning_config,
+                options=TranscribeOptions(language=transcribe_language),
             )
 
             # Cleanup temporary files
@@ -1651,12 +1650,12 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
                     output,
-                    language=episode_language,
-                    clean_transcript=config.enable_transcript_cleaning,
-                    cleaning_config=cleaning_config,
-                    episode_id=episode.id,
-                    podcast_slug=podcast.slug,
-                    episode_slug=episode.slug,
+                    options=TranscribeOptions(
+                        language=episode_language,
+                        episode_id=episode.id,
+                        podcast_slug=podcast.slug,
+                        episode_slug=episode.slug,
+                    ),
                 )
 
                 if transcript_data:

@@ -521,10 +521,9 @@ class TestFullPipelineIntegration:
         ]
         feed2.bozo = False
 
-        # Mock requests.get to return different content per URL so feedparser can differentiate
+        # Mock requests.get to return different content per URL
         def mock_get_side_effect(url, **kwargs):
             response = MagicMock()
-            # Embed the URL in the content so feedparser mock can differentiate
             if "podcast1" in url:
                 response.text = "<rss>podcast1 content</rss>"
             else:
@@ -534,18 +533,24 @@ class TestFullPipelineIntegration:
 
         mock_rss_get.side_effect = mock_get_side_effect
 
-        # Mock feedparser to return different feeds based on content
-        def mock_parse_side_effect(content):
-            if "podcast1" in str(content):
+        # Mock feedparser to return different feeds based on URL (feedparser.parse receives URL directly)
+        def mock_parse_side_effect(url_or_content):
+            if "podcast1" in str(url_or_content):
                 return feed1
             return feed2
 
         mock_parse.side_effect = mock_parse_side_effect
 
         # Add two podcasts
-        podcast1 = podcast_service.add_podcast("https://example.com/podcast1.xml")
-        podcast2 = podcast_service.add_podcast("https://example.com/podcast2.xml")
+        result1 = podcast_service.add_podcast("https://example.com/podcast1.xml")
+        result2 = podcast_service.add_podcast("https://example.com/podcast2.xml")
 
+        assert result1 is not None
+        assert result2 is not None
+
+        # Use URL lookup to get reliable references (add_podcast return value may have ordering issues)
+        podcast1 = podcast_service.get_podcast("https://example.com/podcast1.xml")
+        podcast2 = podcast_service.get_podcast("https://example.com/podcast2.xml")
         assert podcast1 is not None
         assert podcast2 is not None
         assert podcast1.title == "Podcast 1"

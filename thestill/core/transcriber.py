@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from thestill.models.transcript import Transcript
+from thestill.models.transcription import TranscribeOptions
 from thestill.utils.device import resolve_device
 from thestill.utils.duration import get_audio_duration_minutes
 
@@ -47,8 +48,7 @@ class Transcriber(ABC):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file and return structured transcript.
@@ -56,8 +56,8 @@ class Transcriber(ABC):
         Args:
             audio_path: Path to audio file
             output_path: Optional path to save transcript JSON
-            language: Language code (e.g., 'en', 'en-US')
-            custom_prompt: Optional prompt to improve accuracy (provider-specific)
+            options: Transcription options including language, episode context,
+                and progress callback.
 
         Returns:
             Transcript object with segments and metadata. None on error.

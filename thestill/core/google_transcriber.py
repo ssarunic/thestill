@@ -34,6 +34,7 @@ from pydub import AudioSegment
 
 from thestill.models.podcast import TranscriptionOperation, TranscriptionOperationState
 from thestill.models.transcript import Segment, Transcript, Word
+from thestill.models.transcription import TranscribeOptions
 from thestill.utils.path_manager import PathManager
 
 from .transcriber import Transcriber
@@ -463,16 +464,7 @@ class GoogleCloudTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
-        preprocess_audio: bool = False,
-        clean_transcript: bool = False,
-        cleaning_config: Optional[Dict[str, Any]] = None,
-        podcast_title: Optional[str] = None,
-        episode_id: Optional[str] = None,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
-        progress_callback=None,  # Accepted for API compatibility, not used
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using Chirp 3 with optional speaker diarization.
@@ -483,15 +475,7 @@ class GoogleCloudTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file (must be downsampled 16kHz WAV)
             output_path: Path to save transcript JSON
-            language: Language code (BCP-47, e.g., 'en-US', 'hr-HR')
-            custom_prompt: Not used for Google Cloud (included for API compatibility)
-            preprocess_audio: Not used for Google Cloud (included for API compatibility)
-            clean_transcript: Not used for Google Cloud (included for API compatibility)
-            cleaning_config: Not used for Google Cloud (included for API compatibility)
-            podcast_title: Optional podcast title used as prefix for temp files in GCS
-            episode_id: Optional episode UUID for operation persistence
-            podcast_slug: Optional podcast slug for operation persistence
-            episode_slug: Optional episode slug for operation persistence
+            options: Transcription options including language and episode context.
 
         Returns:
             Transcript object, or None on error
@@ -521,12 +505,12 @@ class GoogleCloudTranscriber(Transcriber):
                 transcript_data = self._transcribe_chunked(
                     audio,
                     audio_path,
-                    language,
+                    options.language,
                     output_path,
-                    podcast_title,
-                    episode_id=episode_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    None,  # podcast_title no longer passed
+                    episode_id=options.episode_id,
+                    podcast_slug=options.podcast_slug,
+                    episode_slug=options.episode_slug,
                 )
             else:
                 # Short audio - transcribe directly without chunking
@@ -537,11 +521,11 @@ class GoogleCloudTranscriber(Transcriber):
                 )
                 result = self._transcribe_batch(
                     audio_path,
-                    language,
-                    podcast_title,
-                    episode_id=episode_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    options.language,
+                    None,  # podcast_title no longer passed
+                    episode_id=options.episode_id,
+                    podcast_slug=options.podcast_slug,
+                    episode_slug=options.episode_slug,
                 )
                 transcript_data = self._format_transcript(result, time.time() - start_time, audio_path)
 

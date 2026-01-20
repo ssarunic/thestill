@@ -15,8 +15,6 @@
 
 """Tests for FactsManager - loading and saving facts as Markdown files."""
 
-import pytest
-
 from thestill.core.facts_manager import FactsManager
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 from thestill.utils.path_manager import PathManager
@@ -58,24 +56,24 @@ class TestFactsManagerDirectories:
     def test_podcast_facts_dir(self, tmp_path):
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
-        assert facts_manager.podcast_facts_dir() == tmp_path / "podcast_facts"
+        assert facts_manager.get_podcast_facts_dir() == tmp_path / "podcast_facts"
 
     def test_episode_facts_dir(self, tmp_path):
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
-        assert facts_manager.episode_facts_dir() == tmp_path / "episode_facts"
+        assert facts_manager.get_episode_facts_dir() == tmp_path / "episode_facts"
 
     def test_ensure_facts_directories_creates_dirs(self, tmp_path):
         path_manager = PathManager(str(tmp_path))
         facts_manager = FactsManager(path_manager)
 
-        assert not facts_manager.podcast_facts_dir().exists()
-        assert not facts_manager.episode_facts_dir().exists()
+        assert not facts_manager.get_podcast_facts_dir().exists()
+        assert not facts_manager.get_episode_facts_dir().exists()
 
         facts_manager.ensure_facts_directories()
 
-        assert facts_manager.podcast_facts_dir().exists()
-        assert facts_manager.episode_facts_dir().exists()
+        assert facts_manager.get_podcast_facts_dir().exists()
+        assert facts_manager.get_episode_facts_dir().exists()
 
 
 class TestPodcastFactsPaths:

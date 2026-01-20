@@ -431,10 +431,11 @@ class TestGetTranscript:
         # Execute
         result = podcast_service.get_transcript(1, 1)
 
-        # Verify
+        # Verify - result is now a TranscriptResult object
         assert result is not None
-        assert "Episode 1 Transcript" in result
-        assert "This is the content" in result
+        assert "Episode 1 Transcript" in result.content
+        assert "This is the content" in result.content
+        assert result.transcript_type == "cleaned"
 
     def test_get_transcript_episode_not_found(self, podcast_service, sample_podcasts):
         """Should return None if episode not found."""
@@ -455,8 +456,10 @@ class TestGetTranscript:
         # Execute - Episode 2 is not processed
         result = podcast_service.get_transcript(1, 2)
 
-        # Verify
-        assert result == "N/A - Episode not yet processed"
+        # Verify - result is now a TranscriptResult object
+        assert result is not None
+        assert "N/A" in result.content
+        assert result.transcript_type is None
 
     def test_get_transcript_file_not_found(self, podcast_service, sample_podcasts):
         """Should return N/A message if file not found."""
@@ -466,8 +469,10 @@ class TestGetTranscript:
         # Execute - Episode 1 is processed but file doesn't exist
         result = podcast_service.get_transcript(1, 1)
 
-        # Verify
-        assert result == "N/A - Transcript file not found"
+        # Verify - result is now a TranscriptResult object
+        assert result is not None
+        assert "N/A" in result.content
+        assert result.transcript_type is None
 
 
 class TestEdgeCases:

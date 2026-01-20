@@ -30,6 +30,7 @@ from mcp.types import TextContent, Tool
 from ..core.audio_downloader import AudioDownloader
 from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
+from ..models.transcription import TranscribeOptions
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import load_config
@@ -792,7 +793,9 @@ def setup_tools(server: Server, storage_path: str):
 
                         # Transcribe
                         transcript_data = transcriber.transcribe_audio(
-                            str(audio_file), output_path, language=episode_language
+                            str(audio_file),
+                            output_path,
+                            options=TranscribeOptions(language=episode_language),
                         )
 
                         if transcript_data:
@@ -1102,7 +1105,9 @@ def setup_tools(server: Server, storage_path: str):
                             )
 
                         transcript_data = transcriber.transcribe_audio(
-                            str(audio_file), output_path, language=episode_language
+                            str(audio_file),
+                            output_path,
+                            options=TranscribeOptions(language=episode_language),
                         )
                         if transcript_data:
                             feed_manager.mark_episode_processed(

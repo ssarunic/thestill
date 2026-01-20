@@ -35,6 +35,7 @@ from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from thestill.models.transcript import Segment, Transcript, Word
+from thestill.models.transcription import TranscribeOptions
 from thestill.utils.path_manager import PathManager
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
@@ -147,16 +148,7 @@ class ElevenLabsTranscriber(Transcriber):
         audio_path: str,
         output_path: Optional[str] = None,
         *,
-        language: str,
-        custom_prompt: Optional[str] = None,
-        preprocess_audio: bool = False,
-        clean_transcript: bool = False,
-        cleaning_config: Optional[Dict[str, Any]] = None,
-        podcast_title: Optional[str] = None,
-        episode_id: Optional[str] = None,
-        podcast_slug: Optional[str] = None,
-        episode_slug: Optional[str] = None,
-        progress_callback: Optional[ProgressCallback] = None,
+        options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
         Transcribe audio file using ElevenLabs Speech-to-Text API.
@@ -170,16 +162,7 @@ class ElevenLabsTranscriber(Transcriber):
         Args:
             audio_path: Path to audio file
             output_path: Optional path to save transcript JSON
-            language: Language code (ISO 639-1, e.g., 'en', 'hr'). Overrides instance setting.
-            custom_prompt: Not supported by ElevenLabs (ignored)
-            preprocess_audio: Not used (ignored for API compatibility)
-            clean_transcript: Not used (ignored for API compatibility)
-            cleaning_config: Not used (ignored for API compatibility)
-            podcast_title: Not used (ignored for API compatibility)
-            episode_id: Episode UUID for operation persistence
-            podcast_slug: Podcast slug for operation persistence
-            episode_slug: Episode slug for operation persistence
-            progress_callback: Optional callback for upload and transcription progress updates
+            options: Transcription options including language and episode context.
 
         Returns:
             Transcript object with segments and metadata. None on error.
@@ -192,9 +175,6 @@ class ElevenLabsTranscriber(Transcriber):
         file_size_mb = audio_file.stat().st_size / (1024 * 1024)
         logger.info(f"Transcribing {audio_file.name} ({file_size_mb:.1f} MB)")
 
-        if custom_prompt:
-            logger.warning("ElevenLabs does not support custom prompts. Ignoring custom_prompt parameter.")
-
         # Decide sync vs async based on file size and settings
         # Use instance threshold (0 = always async when use_async=True)
         threshold = self.async_threshold_mb if self.async_threshold_mb > 0 else 0
@@ -205,19 +185,19 @@ class ElevenLabsTranscriber(Transcriber):
             return self._transcribe_async(
                 audio_path=audio_path,
                 output_path=output_path,
-                language=language,
-                episode_id=episode_id,
-                podcast_slug=podcast_slug,
-                episode_slug=episode_slug,
-                progress_callback=progress_callback,
+                language=options.language,
+                episode_id=options.episode_id,
+                podcast_slug=options.podcast_slug,
+                episode_slug=options.episode_slug,
+                progress_callback=options.progress_callback,
             )
         else:
             logger.info("Using sync mode")
             return self._transcribe_sync(
                 audio_path=audio_path,
                 output_path=output_path,
-                language=language,
-                progress_callback=progress_callback,
+                language=options.language,
+                progress_callback=options.progress_callback,
             )
 
     def _transcribe_sync(

@@ -50,18 +50,18 @@ class FactsManager:
         self._podcast_facts_dir = "podcast_facts"
         self._episode_facts_dir = "episode_facts"
 
-    def podcast_facts_dir(self) -> Path:
+    def get_podcast_facts_dir(self) -> Path:
         """Get path to podcast facts directory."""
         return self.path_manager.storage_path / self._podcast_facts_dir
 
-    def episode_facts_dir(self) -> Path:
+    def get_episode_facts_dir(self) -> Path:
         """Get path to episode facts directory."""
         return self.path_manager.storage_path / self._episode_facts_dir
 
     def ensure_facts_directories(self) -> None:
         """Create facts directories if they don't exist."""
-        self.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
-        self.episode_facts_dir().mkdir(parents=True, exist_ok=True)
+        self.get_podcast_facts_dir().mkdir(parents=True, exist_ok=True)
+        self.get_episode_facts_dir().mkdir(parents=True, exist_ok=True)
 
     def get_podcast_facts_path(self, podcast_slug: str) -> Path:
         """
@@ -73,7 +73,7 @@ class FactsManager:
         Returns:
             Path to {slug}.facts.md file
         """
-        return self.podcast_facts_dir() / f"{podcast_slug}.facts.md"
+        return self.get_podcast_facts_dir() / f"{podcast_slug}.facts.md"
 
     def get_episode_facts_path(self, podcast_slug: str, episode_slug: str) -> Path:
         """
@@ -86,7 +86,7 @@ class FactsManager:
         Returns:
             Path to {podcast_slug}/{episode_slug}.facts.md file
         """
-        return self.episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md"
+        return self.get_episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md"
 
     def load_podcast_facts(self, podcast_slug: str) -> Optional[PodcastFacts]:
         """

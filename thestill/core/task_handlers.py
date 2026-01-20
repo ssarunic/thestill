@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Generator, Tuple
 from thestill.utils.exceptions import FatalError, TransientError
 
 from ..models.podcast import Episode, Podcast
+from ..models.transcription import TranscribeOptions
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
 from .error_classifier import classify_and_raise
@@ -334,11 +335,13 @@ def handle_transcribe(
         transcript_data = transcriber.transcribe_audio(
             str(audio_file),
             output,
-            language=language,
-            episode_id=episode.id,
-            podcast_slug=podcast.slug,
-            episode_slug=episode.slug,
-            progress_callback=progress_callback,
+            options=TranscribeOptions(
+                language=language,
+                episode_id=episode.id,
+                podcast_slug=podcast.slug,
+                episode_slug=episode.slug,
+                progress_callback=progress_callback,
+            ),
         )
         logger.info(f"Transcription completed, result: {type(transcript_data).__name__}")
 
