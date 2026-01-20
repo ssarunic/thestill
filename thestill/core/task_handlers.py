@@ -493,11 +493,19 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
         # Create LLM provider and summarizer
         from .llm_provider import create_llm_provider_from_config
-        from .post_processor import TranscriptSummarizer
+        from .post_processor import EpisodeMetadata, TranscriptSummarizer
 
         llm_provider = create_llm_provider_from_config(config)
 
         summarizer = TranscriptSummarizer(llm_provider)
+
+        # Create metadata for accurate summary
+        metadata = EpisodeMetadata(
+            title=episode.title,
+            pub_date=episode.pub_date,
+            duration_seconds=episode.duration,
+            podcast_title=podcast.title,
+        )
 
         # Determine output path - preserve podcast subfolder structure
         clean_transcripts_dir = path_manager.clean_transcripts_dir().resolve()
@@ -522,7 +530,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Summarize
-        summarizer.summarize(transcript_text, output_path)
+        summarizer.summarize(transcript_text, output_path, metadata=metadata)
 
         # Update episode state
         state.feed_manager.mark_episode_processed(

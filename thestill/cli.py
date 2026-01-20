@@ -33,7 +33,7 @@ from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
-from .core.post_processor import TranscriptSummarizer
+from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -1790,28 +1790,55 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         with open(transcript_path_obj, "r", encoding="utf-8") as f:
             transcript_text = f.read()
 
+        # Try to look up episode metadata from the database
+        metadata = None
+        podcast_slug = None
+        clean_transcripts_dir = path_manager.clean_transcripts_dir().resolve()
+        try:
+            relative_path = transcript_path_obj.relative_to(clean_transcripts_dir)
+            # If file is in a podcast subfolder, we can look up metadata
+            if len(relative_path.parts) > 1:
+                podcast_slug = relative_path.parts[0]
+                # Extract episode slug from filename (format: episode-slug_hash_cleaned.md)
+                filename_stem = transcript_path_obj.stem
+                if filename_stem.endswith("_cleaned"):
+                    filename_stem = filename_stem[: -len("_cleaned")]
+                # filename_stem is now: episode-slug_hash
+                # Extract episode slug (everything before the last underscore)
+                parts = filename_stem.rsplit("_", 1)
+                episode_slug = parts[0] if len(parts) > 0 else filename_stem
+
+                # Look up podcast and episode from database
+                podcasts = feed_manager.list_podcasts()
+                for podcast in podcasts:
+                    if podcast.slug == podcast_slug:
+                        for episode in podcast.episodes:
+                            if episode.slug == episode_slug:
+                                metadata = EpisodeMetadata(
+                                    title=episode.title,
+                                    pub_date=episode.pub_date,
+                                    duration_seconds=episode.duration,
+                                    podcast_title=podcast.title,
+                                )
+                                break
+                        break
+        except ValueError:
+            # Path is not under clean_transcripts_dir
+            pass
+
         if output:
             output_path = Path(output)
         else:
-            # Try to extract podcast slug from path (e.g., data/clean_transcripts/<slug>/file.md)
-            # to preserve folder structure in summaries
-            clean_transcripts_dir = path_manager.clean_transcripts_dir().resolve()
-            try:
-                relative_path = transcript_path_obj.relative_to(clean_transcripts_dir)
-                # If file is in a podcast subfolder, preserve that structure
-                if len(relative_path.parts) > 1:
-                    podcast_slug = relative_path.parts[0]
-                    summary_filename = f"{transcript_path_obj.stem}_summary.md"
-                    output_path = path_manager.summaries_dir() / podcast_slug / summary_filename
-                else:
-                    output_path = path_manager.summary_file(f"{transcript_path_obj.stem}_summary.md")
-            except ValueError:
-                # Path is not under clean_transcripts_dir, use flat structure
+            # Build output path with podcast subdirectory if available
+            if podcast_slug:
+                summary_filename = f"{transcript_path_obj.stem}_summary.md"
+                output_path = path_manager.summaries_dir() / podcast_slug / summary_filename
+            else:
                 output_path = path_manager.summary_file(f"{transcript_path_obj.stem}_summary.md")
 
         click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
         try:
-            summarizer.summarize(transcript_text, output_path)
+            summarizer.summarize(transcript_text, output_path, metadata=metadata)
             click.echo("Summarization complete!")
             click.echo(f"Output saved to: {output_path}")
         except Exception as e:
@@ -1896,8 +1923,16 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             # Database stores relative path: {podcast_slug}/{filename}
             summary_db_path = f"{podcast.slug}/{summary_filename}"
 
+            # Create metadata for accurate summary
+            metadata = EpisodeMetadata(
+                title=episode.title,
+                pub_date=episode.pub_date,
+                duration_seconds=episode.duration,
+                podcast_title=podcast.title,
+            )
+
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
-            summarizer.summarize(transcript_text, output_path)
+            summarizer.summarize(transcript_text, output_path, metadata=metadata)
 
             # Update feed manager
             feed_manager.mark_episode_processed(

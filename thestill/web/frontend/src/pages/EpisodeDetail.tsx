@@ -2,12 +2,14 @@ import { useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
+import { useReadingPosition } from '../hooks/useReadingPosition'
 import TranscriptViewer from '../components/TranscriptViewer'
 import SummaryViewer from '../components/SummaryViewer'
 import AudioPlayer from '../components/AudioPlayer'
 import ExpandableDescription from '../components/ExpandableDescription'
 import PipelineActionButton from '../components/PipelineActionButton'
 import FailureBanner from '../components/FailureBanner'
+import ShareButton from '../components/ShareButton'
 import type { PipelineStage, FailureType } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
@@ -40,6 +42,9 @@ export default function EpisodeDetail() {
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
   const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(podcastSlug!, episodeSlug!)
+
+  // Reading position persistence - auto-restores when episode ID is available
+  useReadingPosition(episodeData?.episode?.id)
 
   // Handle task completion - refresh relevant data
   const handleTaskComplete = useCallback((stage: PipelineStage) => {
@@ -127,6 +132,11 @@ export default function EpisodeDetail() {
                 <span>{episode.duration_formatted}</span>
               </>
             )}
+            <span className="hidden sm:inline">•</span>
+            <ShareButton
+              title={`${episode.title} - ${episode.podcast_title}`}
+              url={window.location.href}
+            />
           </div>
 
           {/* Failure Banner */}

@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
+from ...services.podcast_service import extract_summary_preview
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 from ..responses import bad_request, conflict, not_found, paginated_response
@@ -141,6 +142,13 @@ async def get_all_episodes(
     # Format response
     episodes = []
     for podcast, episode in episodes_with_podcasts:
+        # Extract summary preview if summary exists
+        summary_preview = None
+        if episode.summary_path:
+            summary_file = app_state.path_manager.summary_file(episode.summary_path)
+            if summary_file.exists():
+                summary_preview = extract_summary_preview(summary_file)
+
         episodes.append(
             {
                 "id": episode.id,
@@ -160,6 +168,7 @@ async def get_all_episodes(
                 "state": episode.state.value,
                 "transcript_available": bool(episode.clean_transcript_path),
                 "summary_available": bool(episode.summary_path),
+                "summary_preview": summary_preview,
             }
         )
 

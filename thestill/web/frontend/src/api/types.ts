@@ -112,6 +112,7 @@ export interface Episode {
   transcript_available: boolean
   summary_available: boolean
   image_url: string | null  // Episode-specific artwork
+  summary_preview: string | null  // Preview text from summary (The Gist section)
   // Failure info (optional - only present when episode has failed)
   is_failed?: boolean
   failed_at_stage?: string | null

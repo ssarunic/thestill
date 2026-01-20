@@ -35,6 +35,56 @@ logger = logging.getLogger(__name__)
 TranscriptType = Literal["cleaned", "raw"]
 
 
+def extract_summary_preview(summary_path: Path, max_length: int = 200) -> Optional[str]:
+    """
+    Extract a preview from a summary file (The Gist section).
+
+    Args:
+        summary_path: Path to the summary markdown file
+        max_length: Maximum length of the preview
+
+    Returns:
+        Preview text or None if not available
+    """
+    if not summary_path.exists():
+        return None
+
+    try:
+        content = summary_path.read_text(encoding="utf-8")
+
+        # Try to extract "The Gist" section (## 1. 🎙️ The Gist)
+        import re
+
+        gist_match = re.search(r"##\s*1\.\s*🎙️\s*The Gist\s*\n+([\s\S]*?)(?=\n##|\n---|\Z)", content, re.IGNORECASE)
+        if gist_match:
+            gist_content = gist_match.group(1).strip()
+            # Get lines that aren't empty
+            lines = [line.strip() for line in gist_content.split("\n") if line.strip()]
+            # Skip the first line (host/guest info) and get the summary paragraph
+            if len(lines) > 1:
+                # Join remaining lines (the actual summary)
+                summary_text = " ".join(lines[1:])
+            elif lines:
+                summary_text = lines[0]
+            else:
+                return None
+
+            # Strip markdown formatting
+            summary_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", summary_text)  # **bold**
+            summary_text = re.sub(r"\*([^*]+)\*", r"\1", summary_text)  # *italic*
+            summary_text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", summary_text)  # [link](url)
+
+            # Truncate if needed
+            if len(summary_text) > max_length:
+                summary_text = summary_text[: max_length - 3].rsplit(" ", 1)[0] + "..."
+
+            return summary_text
+
+        return None
+    except Exception:
+        return None
+
+
 class TranscriptResult(NamedTuple):
     """Result from get_transcript with type information"""
 
@@ -83,6 +133,7 @@ class EpisodeWithIndex(BaseModel):
     transcript_available: bool = False
     summary_available: bool = False
     image_url: Optional[str] = None  # Episode-specific artwork
+    summary_preview: Optional[str] = None  # Preview text from summary (The Gist section)
 
     @computed_field  # type: ignore[misc]
     @property
@@ -380,6 +431,13 @@ class PodcastService:
         # Build result with indices (account for offset in indexing)
         result = []
         for idx, episode in enumerate(sorted_episodes, start=offset + 1):
+            # Extract summary preview if summary exists
+            summary_preview = None
+            if episode.summary_path:
+                summary_file = self.path_manager.summary_file(episode.summary_path)
+                if summary_file.exists():
+                    summary_preview = extract_summary_preview(summary_file)
+
             result.append(
                 EpisodeWithIndex(
                     id=episode.id,
@@ -402,6 +460,7 @@ class PodcastService:
                         episode.summary_path and self.path_manager.summary_file(episode.summary_path).exists()
                     ),
                     image_url=episode.image_url,
+                    summary_preview=summary_preview,
                 )
             )
 

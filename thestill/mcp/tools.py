@@ -1292,6 +1292,8 @@ def setup_tools(server: Server, storage_path: str):
                     ]
 
                 # Summarize transcripts
+                from ..core.post_processor import EpisodeMetadata
+
                 summarized = []
                 failed = []
                 for podcast, episode, clean_path in transcripts_to_summarize:
@@ -1306,7 +1308,15 @@ def setup_tools(server: Server, storage_path: str):
                         summary_filename = f"{base_name}_summary.md"
                         summary_path = path_manager.summaries_dir() / summary_filename
 
-                        summarizer.summarize(transcript_text, summary_path)
+                        # Create metadata for accurate summary
+                        metadata = EpisodeMetadata(
+                            title=episode.title,
+                            pub_date=episode.pub_date,
+                            duration_seconds=episode.duration,
+                            podcast_title=podcast.title,
+                        )
+
+                        summarizer.summarize(transcript_text, summary_path, metadata=metadata)
 
                         # Update feed manager
                         feed_manager.mark_episode_processed(

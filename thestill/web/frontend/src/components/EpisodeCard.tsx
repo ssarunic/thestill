@@ -1,9 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Episode, EpisodeWithPodcast, FailureType } from '../api/types'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import FailureDetailsModal from './FailureDetailsModal'
-import EpisodePreviewTooltip from './EpisodePreviewTooltip'
 
 interface EpisodeCardProps {
   episode: Episode | EpisodeWithPodcast
@@ -64,11 +63,8 @@ export default function EpisodeCard({
   podcastImageUrl,
 }: EpisodeCardProps) {
   const [showFailureModal, setShowFailureModal] = useState(false)
-  const [showTooltip, setShowTooltip] = useState(false)
-  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryMutation = useRetryFailedEpisode()
 
-  const isProcessed = episode.state === 'cleaned' || episode.state === 'summarized'
   const isFailed = episode.is_failed && episode.failure_type
   const isSelectable = onSelect !== undefined
 
@@ -78,22 +74,6 @@ export default function EpisodeCard({
 
   // Get podcast title for display
   const displayPodcastTitle = podcastTitle || episodeWithPodcast.podcast_title
-
-  const handleMouseEnter = () => {
-    if (!isProcessed) return
-    const timeout = setTimeout(() => {
-      setShowTooltip(true)
-    }, 500)
-    tooltipTimeoutRef.current = timeout
-  }
-
-  const handleMouseLeave = () => {
-    if (tooltipTimeoutRef.current) {
-      clearTimeout(tooltipTimeoutRef.current)
-      tooltipTimeoutRef.current = null
-    }
-    setShowTooltip(false)
-  }
 
   const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.stopPropagation()
@@ -203,6 +183,13 @@ export default function EpisodeCard({
           </div>
         )}
 
+        {/* Summary preview */}
+        {episode.summary_preview && (
+          <p className="mt-2 text-xs sm:text-sm text-gray-600 line-clamp-2">
+            {episode.summary_preview}
+          </p>
+        )}
+
       </div>
     </div>
   )
@@ -211,8 +198,6 @@ export default function EpisodeCard({
     <>
       <div
         className={`relative p-3 sm:p-4 bg-white rounded-lg border transition-all ${cardBorderClass}`}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
       >
         <div className="flex items-start gap-3 sm:gap-4">
           {/* Checkbox (only when selectable) - outside Link to prevent navigation on click */}
@@ -235,13 +220,6 @@ export default function EpisodeCard({
           </Link>
         </div>
 
-        {/* Hover tooltip */}
-        {showTooltip && isProcessed && (
-          <EpisodePreviewTooltip
-            podcastSlug={episode.podcast_slug}
-            episodeSlug={episode.slug}
-          />
-        )}
       </div>
 
       {/* Failure details modal */}

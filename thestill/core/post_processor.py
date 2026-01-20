@@ -17,6 +17,8 @@ Transcript summarizer for podcast transcripts using LLM.
 Produces comprehensive analysis with executive summary, quotes, content angles, and social snippets.
 """
 
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -24,7 +26,35 @@ from typing import List, Optional
 # Re-export for backward compatibility with existing imports
 from .llm_provider import MODEL_CONFIGS, LLMProvider, ModelLimits
 
-__all__ = ["MODEL_CONFIGS", "ModelLimits", "TranscriptSummarizer"]
+__all__ = ["MODEL_CONFIGS", "ModelLimits", "TranscriptSummarizer", "EpisodeMetadata"]
+
+
+@dataclass
+class EpisodeMetadata:
+    """Metadata about an episode to include in the summary prompt."""
+
+    title: str
+    pub_date: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    podcast_title: Optional[str] = None
+
+    @property
+    def formatted_date(self) -> str:
+        """Format publication date for display."""
+        if not self.pub_date:
+            return "Unknown date"
+        return self.pub_date.strftime("%d %b %Y")
+
+    @property
+    def formatted_duration(self) -> str:
+        """Format duration for display."""
+        if not self.duration_seconds:
+            return "Unknown duration"
+        hours, remainder = divmod(self.duration_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h {minutes}min"
+        return f"{minutes} min"
 
 
 class TranscriptSummarizer:
@@ -44,11 +74,9 @@ class TranscriptSummarizer:
 * **Citations:** Every claim must have a timestamp. Use [MM:SS] for episodes under 60 minutes, [HH:MM:SS] for longer episodes.
 
 ## 1. 🎙️ The Gist
-**[Episode Title]**
 [Host] interviews [Guest(s) with roles/titles]
-[Date] | [Duration]
 
-A 2-sentence summary of the episode.
+A 2-sentence summary of the episode. Do NOT include the episode title, date, or duration - these are displayed elsewhere.
 
 ## 2. ⏱️ Timeline
 Break the episode into 3-6 segments showing the flow of conversation:
@@ -116,9 +144,7 @@ If nothing spicy happened, say so briefly. Don't force drama where there isn't a
 ## Example Output (follow this formatting exactly)
 
 ## 1. 🎙️ The Gist
-**The Future of AI in Healthcare**
 Sarah Chen interviews Dr. James Miller, Chief AI Officer at Stanford Medicine
-15 Nov 2024 | 45 min
 
 A deep dive into how machine learning is transforming diagnostics and why doctors shouldn't fear the robots just yet.
 
@@ -203,7 +229,17 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 
         return chunks
 
-    def _process_single_chunk(self, chunk_text: str, chunk_num: int, total_chunks: int) -> str:
+    def _get_formatted_system_prompt(self, metadata: Optional[EpisodeMetadata] = None) -> str:
+        """Return the system prompt (metadata no longer embedded in prompt)."""
+        return self.SYSTEM_PROMPT
+
+    def _process_single_chunk(
+        self,
+        chunk_text: str,
+        chunk_num: int,
+        total_chunks: int,
+        system_prompt: str,
+    ) -> str:
         """Process a single transcript chunk"""
         user_message = "TRANSCRIPT:\n\n"
 
@@ -214,7 +250,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 
         try:
             messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ]
 
@@ -228,13 +264,19 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
             print(f"Error processing chunk {chunk_num}/{total_chunks}: {e}")
             raise
 
-    def summarize(self, transcript_text: str, output_path: Optional[Path] = None) -> str:
+    def summarize(
+        self,
+        transcript_text: str,
+        output_path: Optional[Path] = None,
+        metadata: Optional[EpisodeMetadata] = None,
+    ) -> str:
         """
         Summarize a transcript with comprehensive analysis.
 
         Args:
             transcript_text: The transcript text (from cleaned transcript markdown)
             output_path: Optional path to save the summary markdown
+            metadata: Optional episode metadata (title, pub_date, duration) for accurate summary
 
         Returns:
             The summary as markdown text
@@ -243,6 +285,9 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 
         print(f"Summarizing transcript with {self.provider.get_model_name()}...")
         print(f"Estimated tokens: ~{estimated_tokens:,}")
+
+        # Format system prompt with metadata
+        system_prompt = self._get_formatted_system_prompt(metadata)
 
         chunks = self._chunk_transcript(transcript_text)
 
@@ -256,7 +301,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
                 if len(chunks) > 1:
                     print(f"Processing chunk {i}/{len(chunks)}...")
 
-                output_text = self._process_single_chunk(chunk, i, len(chunks))
+                output_text = self._process_single_chunk(chunk, i, len(chunks), system_prompt)
                 chunk_outputs.append(output_text)
 
             # Combine results if multiple chunks
