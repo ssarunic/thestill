@@ -108,6 +108,14 @@ class Config(BaseModel):
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
 
+    # Authentication Configuration
+    multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
+    google_client_id: str = ""  # Google OAuth client ID (required for multi-user)
+    google_client_secret: str = ""  # Google OAuth client secret (required for multi-user)
+    jwt_secret_key: str = ""  # Secret key for signing JWTs
+    jwt_algorithm: str = "HS256"  # JWT signing algorithm
+    jwt_expire_days: int = 30  # JWT token expiration in days
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize PathManager for centralized path management
@@ -220,6 +228,13 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
+        # Authentication
+        "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
+        "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+        "google_client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        "jwt_secret_key": os.getenv("JWT_SECRET_KEY", ""),
+        "jwt_algorithm": os.getenv("JWT_ALGORITHM", "HS256"),
+        "jwt_expire_days": int(os.getenv("JWT_EXPIRE_DAYS", "30")),
     }
 
     return Config(**config_data)
