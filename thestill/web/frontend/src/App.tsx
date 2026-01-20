@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
+import ProtectedRoute from './components/ProtectedRoute'
 
 // Lazy load pages for code splitting
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -9,6 +10,7 @@ const PodcastDetail = lazy(() => import('./pages/PodcastDetail'))
 const EpisodeDetail = lazy(() => import('./pages/EpisodeDetail'))
 const Episodes = lazy(() => import('./pages/Episodes'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
+const Login = lazy(() => import('./pages/Login'))
 
 // Loading fallback for page transitions
 function PageLoader() {
@@ -22,7 +24,19 @@ function PageLoader() {
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Layout />}>
+      {/* Login page - outside protected routes */}
+      <Route path="/login" element={
+        <Suspense fallback={<PageLoader />}>
+          <Login />
+        </Suspense>
+      } />
+
+      {/* Protected routes with layout */}
+      <Route path="/" element={
+        <ProtectedRoute>
+          <Layout />
+        </ProtectedRoute>
+      }>
         <Route index element={
           <Suspense fallback={<PageLoader />}>
             <Dashboard />

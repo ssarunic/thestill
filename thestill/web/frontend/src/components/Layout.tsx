@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import MobileHeader from './MobileHeader'
 import NavigationDrawer from './NavigationDrawer'
+import UserMenu from './UserMenu'
 
 interface NavItemProps {
   to: string
@@ -191,12 +192,14 @@ export default function Layout() {
               />
             </nav>
 
-            {/* Footer */}
+            {/* Footer with user menu */}
             <div className={`border-t border-gray-200 ${showLabels ? 'p-4' : 'p-2'}`}>
-              {showLabels && (
-                <p className="text-xs text-gray-400 text-center">
-                  Read-only mode
-                </p>
+              {showLabels ? (
+                <UserMenu />
+              ) : (
+                <div className="flex justify-center">
+                  <UserMenu />
+                </div>
               )}
             </div>
           </aside>
