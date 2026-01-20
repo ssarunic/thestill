@@ -200,7 +200,7 @@ export default function TranscriptViewer({ content, isLoading, available, episod
                   {segment.speaker}:
                 </span>
               </div>
-              <p className="text-gray-800 pl-4 border-l-2 border-gray-200">
+              <p className="text-gray-800 pl-4 border-l-2 border-gray-200 text-base leading-[1.7] sm:text-lg">
                 {segment.content}
               </p>
             </div>

@@ -15,6 +15,11 @@ export default function PodcastDetail() {
     isFetchingNextPage,
   } = usePodcastEpisodesInfinite(podcastSlug!)
 
+  // Scroll to top when entering this page
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [podcastSlug])
+
   // Intersection Observer for infinite scroll
   const loadMoreRef = useRef<HTMLDivElement>(null)
 

@@ -31,13 +31,13 @@ body {
   @apply bg-gray-50 text-gray-900 antialiased;
 }
 
-/* Transcript styling */
+/* Transcript styling - mobile optimized */
 .transcript-content {
-  @apply font-serif leading-relaxed;
+  @apply font-serif text-base leading-[1.7] sm:text-lg;
 }
 
 .transcript-content p {
-  @apply mb-4;
+  @apply mb-4 leading-[1.7];
 }
 
 .transcript-content .speaker {
@@ -48,15 +48,21 @@ body {
   @apply font-mono text-xs text-gray-400;
 }
 
-/* Summary styling */
+/* Summary styling - mobile optimized */
 .summary-content {
-  @apply prose prose-slate max-w-none;
+  @apply prose prose-slate max-w-none prose-base sm:prose-lg;
 }
 
-.summary-content h1,
-.summary-content h2,
+.summary-content h1 {
+  @apply text-xl text-primary-900 sm:text-2xl;
+}
+
+.summary-content h2 {
+  @apply text-lg text-primary-900 sm:text-xl;
+}
+
 .summary-content h3 {
-  @apply text-primary-900;
+  @apply text-base text-primary-900 sm:text-lg;
 }
 
 .summary-content blockquote {
