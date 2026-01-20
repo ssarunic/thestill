@@ -111,6 +111,40 @@ See [transcript-cleaning.md](transcript-cleaning.md) for details.
 | `HOST` | Server bind address | `127.0.0.1` |
 | `PORT` | Server port | `8000` |
 
+## Authentication
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MULTI_USER` | Enable multi-user mode with Google OAuth | `false` |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 Client ID | - |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 Client Secret | - |
+| `JWT_SECRET_KEY` | Secret for JWT signing (auto-generated if empty) | - |
+| `JWT_ALGORITHM` | JWT signing algorithm | `HS256` |
+| `JWT_EXPIRE_DAYS` | JWT token expiration in days | `30` |
+
+### Single-User Mode (Default)
+
+When `MULTI_USER=false`:
+
+- No login required
+- All API endpoints are accessible without authentication
+- A default user is automatically created for ownership tracking
+- Best for personal deployments
+
+### Multi-User Mode
+
+When `MULTI_USER=true`:
+
+- Google OAuth authentication required
+- Users must log in to access the application
+- Each user's data is isolated
+- Requires Google OAuth credentials:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Create OAuth 2.0 Client ID (type: "Web application")
+3. Add authorized redirect URI: `http://localhost:8000/auth/google/callback`
+4. Copy Client ID and Secret to `.env`
+
 ## MCP Server
 
 | Variable | Description | Default |

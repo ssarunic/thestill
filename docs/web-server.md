@@ -53,6 +53,16 @@ thestill server --workers 4        # Multiple worker processes
 | `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
 | `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
 
+### Authentication (`/auth`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/status` | GET | Get authentication mode and user info |
+| `/auth/google/login` | GET | Initiate Google OAuth flow |
+| `/auth/google/callback` | GET | OAuth callback handler |
+| `/auth/logout` | POST | Clear authentication cookie |
+| `/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
+
 ### Webhooks
 
 | Endpoint | Method | Description |
@@ -75,7 +85,8 @@ thestill/web/
 │   ├── webhooks.py          # ElevenLabs webhook handlers
 │   ├── api_podcasts.py      # Podcast CRUD endpoints
 │   ├── api_episodes.py      # Episode content endpoints
-│   └── api_commands.py      # Processing commands (pipeline, DLQ)
+│   ├── api_commands.py      # Processing commands (pipeline, DLQ)
+│   └── auth.py              # Authentication endpoints (OAuth, JWT)
 ├── frontend/                # React SPA
 │   ├── src/
 │   │   ├── App.tsx
@@ -84,13 +95,18 @@ thestill/web/
 │   │   │   ├── Podcasts.tsx
 │   │   │   ├── Episodes.tsx
 │   │   │   ├── EpisodeDetail.tsx
-│   │   │   └── FailedTasks.tsx
+│   │   │   ├── FailedTasks.tsx
+│   │   │   └── Login.tsx            # Google OAuth login page
+│   │   ├── contexts/
+│   │   │   └── AuthContext.tsx      # Authentication state management
 │   │   ├── components/
 │   │   │   ├── Layout.tsx
 │   │   │   ├── EpisodeCard.tsx
 │   │   │   ├── PipelineActionButton.tsx
 │   │   │   ├── FailureBanner.tsx
-│   │   │   └── FailureDetailsModal.tsx
+│   │   │   ├── FailureDetailsModal.tsx
+│   │   │   ├── ProtectedRoute.tsx   # Route protection wrapper
+│   │   │   └── UserMenu.tsx         # User avatar dropdown
 │   │   └── api/
 │   │       ├── client.ts
 │   │       └── types.ts
@@ -122,6 +138,42 @@ CLI (cli.py)                    Web (web/app.py)
 - **dependencies.py**: FastAPI dependency injection
   - `AppState`: Dataclass mirroring `CLIContext` from CLI
   - `get_app_state()`: Dependency function for routes
+
+## Authentication
+
+The web server supports two authentication modes:
+
+### Single-User Mode (Default)
+
+When `MULTI_USER=false`:
+
+- No login required, all routes accessible
+- A default user is auto-created for data ownership tracking
+- `UserMenu` shows "Single-user mode" indicator
+- Best for personal/local deployments
+
+### Multi-User Mode
+
+When `MULTI_USER=true`:
+
+- Google OAuth 2.0 authentication required
+- Protected routes redirect unauthenticated users to `/login`
+- JWT tokens stored in httpOnly cookies (30-day expiry by default)
+- User data isolated by account
+
+**Authentication Flow**:
+
+1. User visits protected route → redirected to `/login`
+2. User clicks "Sign in with Google" → redirected to Google OAuth
+3. After Google approval → callback to `/auth/google/callback`
+4. Server creates/updates user, issues JWT cookie
+5. User redirected to dashboard
+
+**Frontend Components**:
+
+- `AuthContext`: Manages auth state, provides `login`/`logout` functions
+- `ProtectedRoute`: Wrapper that enforces authentication
+- `UserMenu`: Displays user avatar with logout option
 
 ## Webhook Security
 
