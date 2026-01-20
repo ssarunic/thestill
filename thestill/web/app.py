@@ -44,11 +44,13 @@ from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import PodcastService, RefreshService, StatsService
+from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, health, webhooks
+from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, auth, health, webhooks
 from .task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
@@ -105,6 +107,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize progress store for real-time progress updates
     progress_store = ProgressStore()
 
+    # Initialize authentication services
+    user_repository = SqliteUserRepository(db_path=config.database_path)
+    auth_service = AuthService(config, user_repository)
+
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
@@ -118,6 +124,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         queue_manager=queue_manager,
         task_worker=None,  # type: ignore  # Will be set after creation
         progress_store=progress_store,
+        user_repository=user_repository,
+        auth_service=auth_service,
     )
 
     # Create task worker with handlers that have access to app_state
@@ -196,6 +204,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Register routes
     app.include_router(health.router, tags=["health"])
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
+    app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
     # API routes for web UI
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
@@ -216,7 +225,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         async def serve_spa(request: Request, full_path: str):
             """Serve the SPA index.html for all non-API routes."""
             # Skip if it's an API or known route
-            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health", "status")):
+            if full_path.startswith(("api/", "webhook/", "auth/", "docs", "redoc", "openapi.json", "health", "status")):
                 return None
             index_file = static_dir / "index.html"
             if index_file.exists():
