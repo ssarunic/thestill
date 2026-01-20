@@ -23,10 +23,13 @@ export default function PodcastCard({ podcast }: PodcastCardProps) {
             <img
               src={podcast.image_url}
               alt={`${podcast.title} artwork`}
-              className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
+              width={64}
+              height={64}
+              loading="lazy"
+              className="w-16 h-16 rounded-lg object-cover flex-shrink-0 aspect-square"
             />
           ) : (
-            <div className="w-16 h-16 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
+            <div className="w-16 h-16 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 aspect-square">
               <svg className="w-8 h-8 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
               </svg>

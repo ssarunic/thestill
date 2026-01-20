@@ -53,7 +53,7 @@ function getSummaryStatus(state?: string): { title: string; description: string;
 export default function SummaryViewer({ content, isLoading, available, episodeState }: SummaryViewerProps) {
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 min-h-[300px]">
         {[...Array(4)].map((_, i) => (
           <div key={i} className="animate-pulse">
             <div className="h-5 bg-gray-200 rounded w-1/3 mb-3" />
@@ -71,7 +71,7 @@ export default function SummaryViewer({ content, isLoading, available, episodeSt
   if (!available) {
     const status = getSummaryStatus(episodeState)
     return (
-      <div className="text-center py-12">
+      <div className="text-center py-12 min-h-[300px]">
         {status.icon === 'progress' ? (
           <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary-200 border-t-primary-600"></div>

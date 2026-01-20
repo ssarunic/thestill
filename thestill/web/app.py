@@ -35,6 +35,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from ..core.feed_manager import PodcastFeedManager
 from ..core.progress_store import ProgressStore
@@ -50,6 +52,25 @@ from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, hea
 from .task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
+
+
+class CachedStaticFiles(StaticFiles):
+    """
+    StaticFiles with aggressive caching for hashed assets.
+
+    Vite builds include content hashes in filenames (e.g., index-abc123.js),
+    so we can safely cache them for a long time (1 year with immutable).
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        # Add aggressive caching for JS/CSS files (they have content hashes)
+        if path.endswith((".js", ".css")):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        # Add moderate caching for other assets (images, fonts)
+        elif path.endswith((".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf")):
+            response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
 
 
 def create_app(config: Optional[Config] = None) -> FastAPI:
@@ -185,10 +206,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
-        # Mount static assets (JS, CSS)
+        # Mount static assets (JS, CSS) with aggressive caching
         assets_dir = static_dir / "assets"
         if assets_dir.exists():
-            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+            app.mount("/assets", CachedStaticFiles(directory=str(assets_dir)), name="assets")
 
         # Catch-all route for SPA - must be after API routes
         @app.get("/{full_path:path}")

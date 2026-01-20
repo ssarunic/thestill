@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 
 interface ReadingPositionData {
   scrollPercent: number
@@ -12,10 +13,12 @@ const POSITION_EXPIRY_DAYS = 30
  * Hook to persist and restore reading position for an episode.
  * Saves scroll position as percentage (responsive across screen sizes).
  *
- * Position is automatically restored when the episode ID is set.
+ * Position is only restored when navigating back (browser back/forward),
+ * not when clicking a link to navigate to the page fresh.
  * Scroll position is saved with debouncing to avoid excessive writes.
  */
 export function useReadingPosition(episodeId: string | undefined) {
+  const location = useLocation()
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
   const hasRestoredRef = useRef<string | null>(null)
@@ -77,12 +80,26 @@ export function useReadingPosition(episodeId: string | undefined) {
     }
   }, [episodeId, savePosition])
 
-  // Auto-restore position when episode ID changes
+  // Auto-restore position only when navigating back (POP navigation)
+  // Fresh navigations (clicking links) should start at the top
   useEffect(() => {
     if (!episodeId) return
 
     // Don't restore if we already restored for this episode
     if (hasRestoredRef.current === episodeId) return
+
+    // Only restore position on back/forward navigation (POP), not on fresh link clicks (PUSH)
+    // location.state?.fromBack is set by the browser on back navigation
+    // We use the history API's navigation type when available
+    const navigationType = (window.performance?.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming)?.type
+    const isBackNavigation = navigationType === 'back_forward' || location.state?.restoreScroll
+
+    if (!isBackNavigation) {
+      // Fresh navigation - scroll to top and don't restore
+      window.scrollTo({ top: 0, behavior: 'instant' })
+      hasRestoredRef.current = episodeId
+      return
+    }
 
     const key = `${STORAGE_PREFIX}${episodeId}`
 
@@ -126,7 +143,7 @@ export function useReadingPosition(episodeId: string | undefined) {
     } catch {
       // Invalid stored data
     }
-  }, [episodeId])
+  }, [episodeId, location.state])
 
   return {
     clearPosition,

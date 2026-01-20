@@ -136,10 +136,13 @@ export default function ActivityFeed({
             <img
               src={item.episode_image_url || item.podcast_image_url || ''}
               alt=""
-              className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+              width={40}
+              height={40}
+              loading="lazy"
+              className="w-10 h-10 rounded-lg object-cover flex-shrink-0 aspect-square"
             />
           ) : (
-            <div className="w-10 h-10 bg-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
+            <div className="w-10 h-10 bg-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 aspect-square">
               <svg className="w-5 h-5 text-secondary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
               </svg>

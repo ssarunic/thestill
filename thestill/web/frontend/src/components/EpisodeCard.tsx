@@ -101,10 +101,13 @@ export default function EpisodeCard({
         <img
           src={artworkUrl}
           alt=""
-          className="w-10 h-10 rounded-md object-cover flex-shrink-0"
+          width={40}
+          height={40}
+          loading="lazy"
+          className="w-10 h-10 rounded-md object-cover flex-shrink-0 aspect-square"
         />
       ) : (
-        <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 ${
+        <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 aspect-square ${
           isFailed
             ? episode.failure_type === 'fatal'
               ? 'bg-red-100'

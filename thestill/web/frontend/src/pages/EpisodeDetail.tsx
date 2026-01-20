@@ -1,11 +1,13 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
-import TranscriptViewer from '../components/TranscriptViewer'
-import SummaryViewer from '../components/SummaryViewer'
 import AudioPlayer from '../components/AudioPlayer'
+
+// Lazy load heavy markdown viewer components
+const TranscriptViewer = lazy(() => import('../components/TranscriptViewer'))
+const SummaryViewer = lazy(() => import('../components/SummaryViewer'))
 import ExpandableDescription from '../components/ExpandableDescription'
 import PipelineActionButton from '../components/PipelineActionButton'
 import FailureBanner from '../components/FailureBanner'
@@ -92,9 +94,24 @@ export default function EpisodeDetail() {
       {/* Header */}
       {episodeLoading ? (
         <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
-          <div className="h-6 bg-gray-200 rounded w-full sm:w-3/4" />
-          <div className="h-4 bg-gray-200 rounded w-2/3 sm:w-1/2" />
-          <div className="h-10 bg-gray-200 rounded" />
+          {/* Match real header layout: artwork + title area */}
+          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+            <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gray-200 rounded-lg flex-shrink-0 mx-auto sm:mx-0 aspect-square" />
+            <div className="flex-1 space-y-2 text-center sm:text-left">
+              <div className="h-7 bg-gray-200 rounded w-3/4 mx-auto sm:mx-0" />
+              <div className="h-5 bg-gray-200 rounded w-1/2 mx-auto sm:mx-0" />
+            </div>
+          </div>
+          {/* Meta info */}
+          <div className="h-5 bg-gray-200 rounded w-1/3" />
+          {/* Pipeline button area */}
+          <div className="border-t border-gray-100 pt-4">
+            <div className="h-10 bg-gray-200 rounded w-40" />
+          </div>
+          {/* Audio player area */}
+          <div className="border-t border-gray-100 pt-4">
+            <div className="h-12 bg-gray-200 rounded" />
+          </div>
         </div>
       ) : episode ? (
         <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
@@ -104,10 +121,13 @@ export default function EpisodeDetail() {
               <img
                 src={episode.image_url || episode.podcast_image_url || ''}
                 alt={`${episode.title} artwork`}
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0"
+                width={96}
+                height={96}
+                loading="eager"
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
               />
             ) : (
-              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
                 <svg className="w-8 h-8 sm:w-10 sm:h-10 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
@@ -181,8 +201,8 @@ export default function EpisodeDetail() {
         </div>
       ) : null}
 
-      {/* Content Tabs */}
-      <div className="bg-white rounded-lg border border-gray-200">
+      {/* Content Tabs - show skeleton while loading to prevent CLS */}
+      <div className="bg-white rounded-lg border border-gray-200 min-h-[400px]">
         {/* Tab Headers */}
         <div className="border-b border-gray-200">
           <nav className="flex">
@@ -217,22 +237,28 @@ export default function EpisodeDetail() {
 
         {/* Tab Content */}
         <div className="p-4 sm:p-6">
-          {activeTab === 'summary' ? (
-            <SummaryViewer
-              content={summaryData?.content ?? ''}
-              isLoading={summaryLoading}
-              available={summaryData?.available}
-              episodeState={episode?.state}
-            />
-          ) : (
-            <TranscriptViewer
-              content={transcriptData?.content ?? ''}
-              isLoading={transcriptLoading}
-              available={transcriptData?.available}
-              episodeState={episode?.state}
-              transcriptType={transcriptData?.transcript_type}
-            />
-          )}
+          <Suspense fallback={
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+            </div>
+          }>
+            {activeTab === 'summary' ? (
+              <SummaryViewer
+                content={summaryData?.content ?? ''}
+                isLoading={summaryLoading}
+                available={summaryData?.available}
+                episodeState={episode?.state}
+              />
+            ) : (
+              <TranscriptViewer
+                content={transcriptData?.content ?? ''}
+                isLoading={transcriptLoading}
+                available={transcriptData?.available}
+                episodeState={episode?.state}
+                transcriptType={transcriptData?.transcript_type}
+              />
+            )}
+          </Suspense>
         </div>
       </div>
     </div>
