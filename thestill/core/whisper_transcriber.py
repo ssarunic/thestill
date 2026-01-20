@@ -19,7 +19,6 @@ WhisperTranscriber: Standard OpenAI Whisper with hallucination filtering.
 WhisperXTranscriber: Enhanced Whisper with speaker diarization via pyannote.audio.
 """
 
-import os
 import shutil
 import threading
 import time
@@ -260,11 +259,7 @@ class WhisperTranscriber(Transcriber):
             print(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
-            processed_audio_path = audio_path
-            if preprocess_audio:
-                processed_audio_path = self._preprocess_audio(audio_path)
-
-            audio_duration = self._get_audio_duration_minutes(processed_audio_path)
+            audio_duration = self._get_audio_duration_minutes(audio_path)
             print(f"Audio duration: {audio_duration:.1f} minutes")
 
             transcribe_options = {
@@ -279,13 +274,7 @@ class WhisperTranscriber(Transcriber):
                 "condition_on_previous_text": False,
             }
 
-            result = self._model.transcribe(processed_audio_path, **transcribe_options)
-
-            if processed_audio_path != audio_path:
-                try:
-                    os.remove(processed_audio_path)
-                except OSError:
-                    pass
+            result = self._model.transcribe(audio_path, **transcribe_options)
 
             processing_time = time.time() - start_time
             print(f"Transcription completed in {processing_time:.1f} seconds")
@@ -740,13 +729,7 @@ class WhisperXTranscriber(Transcriber):
                     diarize_base,
                     "Starting speaker diarization...",
                 )
-                speakers_detected = self._perform_diarization(result, processed_audio_path, diarize_base, diarize_range)
-
-            if preprocess_audio and processed_audio_path != audio_path:
-                try:
-                    os.remove(processed_audio_path)
-                except OSError:
-                    pass
+                speakers_detected = self._perform_diarization(result, audio_path, diarize_base, diarize_range)
 
             # Step 4: Format transcript
             self._report_progress(
