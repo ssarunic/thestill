@@ -3,6 +3,7 @@ import StatusCard from '../components/StatusCard'
 import ActivityFeed from '../components/ActivityFeed'
 import PipelineStatus from '../components/PipelineStatus'
 import RefreshButton from '../components/RefreshButton'
+import MobileSummaryBar from '../components/MobileSummaryBar'
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats()
@@ -39,8 +40,19 @@ export default function Dashboard() {
         <RefreshButton />
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Mobile: Compact Summary Bar */}
+      <div className="sm:hidden">
+        <MobileSummaryBar
+          podcastsTracked={stats?.podcasts_tracked ?? 0}
+          episodesProcessed={stats?.episodes_processed ?? 0}
+          episodesTotal={stats?.episodes_total ?? 0}
+          episodesPending={stats?.episodes_pending ?? 0}
+          isLoading={statsLoading}
+        />
+      </div>
+
+      {/* Tablet/Desktop: Stats Grid */}
+      <div className="hidden sm:grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatusCard
           label="Podcasts Tracked"
           value={statsLoading ? '...' : stats?.podcasts_tracked ?? 0}
@@ -84,8 +96,8 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Pipeline Status */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      {/* Pipeline Status - hidden on mobile */}
+      <div className="hidden sm:block bg-white rounded-lg border border-gray-200 p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Pipeline Status</h2>
         {statsLoading ? (
           <div className="animate-pulse h-20 bg-gray-100 rounded" />

@@ -35,6 +35,8 @@ export interface ActivityItem {
   pub_date: string | null
   duration: number | null  // Duration in seconds
   duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
+  episode_image_url: string | null  // Episode-specific artwork
+  podcast_image_url: string | null  // Podcast artwork (fallback)
 }
 
 export interface ActivityResponse {

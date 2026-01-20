@@ -25,10 +25,24 @@ function formatTimestamp(timestamp: string): string {
   return date.toLocaleDateString()
 }
 
-function formatPubDate(pubDate: string | null): string | null {
-  if (!pubDate) return null
-  const date = new Date(pubDate)
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+function formatDuration(durationFormatted: string | null): string | null {
+  if (!durationFormatted) return null
+  // Convert "1:24:32" to "1h 24m" or "24:32" to "24m"
+  const parts = durationFormatted.split(':')
+  if (parts.length === 3) {
+    // Hours:Minutes:Seconds
+    const hours = parseInt(parts[0], 10)
+    const minutes = parseInt(parts[1], 10)
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`
+    }
+    return `${minutes}m`
+  } else if (parts.length === 2) {
+    // Minutes:Seconds
+    const minutes = parseInt(parts[0], 10)
+    return `${minutes}m`
+  }
+  return durationFormatted
 }
 
 function ActionBadge({ action }: { action: string }) {
@@ -117,11 +131,20 @@ export default function ActivityFeed({
           to={`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`}
           className="flex items-start gap-4 p-4 bg-white rounded-lg border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all"
         >
-          <div className="w-10 h-10 bg-secondary-100 rounded-full flex items-center justify-center flex-shrink-0">
-            <svg className="w-5 h-5 text-secondary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-            </svg>
-          </div>
+          {/* Artwork with fallback: episode -> podcast -> icon */}
+          {item.episode_image_url || item.podcast_image_url ? (
+            <img
+              src={item.episode_image_url || item.podcast_image_url || ''}
+              alt=""
+              className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+            />
+          ) : (
+            <div className="w-10 h-10 bg-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0">
+              <svg className="w-5 h-5 text-secondary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h4 className="font-medium text-gray-900 truncate">{item.episode_title}</h4>
@@ -129,17 +152,11 @@ export default function ActivityFeed({
             </div>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <span className="truncate">{item.podcast_title}</span>
-              {(item.pub_date || item.duration_formatted) && (
-                <span className="text-gray-300">•</span>
-              )}
-              {item.pub_date && (
-                <span className="flex-shrink-0">{formatPubDate(item.pub_date)}</span>
-              )}
-              {item.pub_date && item.duration_formatted && (
-                <span className="text-gray-300">•</span>
-              )}
               {item.duration_formatted && (
-                <span className="flex-shrink-0">{item.duration_formatted}</span>
+                <>
+                  <span className="text-gray-300">•</span>
+                  <span className="flex-shrink-0">{formatDuration(item.duration_formatted)}</span>
+                </>
               )}
             </div>
           </div>

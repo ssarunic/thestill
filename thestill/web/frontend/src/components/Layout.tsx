@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
+import MobileHeader from './MobileHeader'
+import NavigationDrawer from './NavigationDrawer'
 
 interface NavItemProps {
   to: string
@@ -29,35 +31,42 @@ function NavItem({ to, icon, label, showLabel }: NavItemProps) {
   )
 }
 
-function useIsLargeScreen() {
-  const [isLarge, setIsLarge] = useState(
-    typeof window !== 'undefined' ? window.innerWidth >= 1024 : false
-  )
+type ScreenSize = 'mobile' | 'tablet' | 'desktop'
+
+function useScreenSize(): ScreenSize {
+  const [screenSize, setScreenSize] = useState<ScreenSize>(() => {
+    if (typeof window === 'undefined') return 'desktop'
+    if (window.innerWidth < 640) return 'mobile'
+    if (window.innerWidth < 1024) return 'tablet'
+    return 'desktop'
+  })
 
   useEffect(() => {
     const handleResize = () => {
-      setIsLarge(window.innerWidth >= 1024)
+      if (window.innerWidth < 640) setScreenSize('mobile')
+      else if (window.innerWidth < 1024) setScreenSize('tablet')
+      else setScreenSize('desktop')
     }
 
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  return isLarge
+  return screenSize
 }
 
 export default function Layout() {
-  const [isExpanded, setIsExpanded] = useState(false)
-  const isLargeScreen = useIsLargeScreen()
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
+  const screenSize = useScreenSize()
 
-  // Close sidebar when resizing to large screen
+  // Close sidebar/drawer when screen size changes
   useEffect(() => {
-    if (isLargeScreen) {
-      setIsExpanded(false)
-    }
-  }, [isLargeScreen])
+    setIsDrawerOpen(false)
+    setIsSidebarExpanded(false)
+  }, [screenSize])
 
-  const showLabels = isExpanded || isLargeScreen
+  const showLabels = isSidebarExpanded || screenSize === 'desktop'
 
   const dashboardIcon = (
     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -85,105 +94,123 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Overlay for mobile when sidebar is expanded */}
-      {isExpanded && (
-        <div
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
-          onClick={() => setIsExpanded(false)}
+      {/* Mobile: Fixed header + navigation drawer (hidden on sm: and up via CSS) */}
+      <div className="sm:hidden">
+        <MobileHeader onMenuClick={() => setIsDrawerOpen(true)} />
+        <NavigationDrawer
+          isOpen={isDrawerOpen}
+          onClose={() => setIsDrawerOpen(false)}
         />
-      )}
+      </div>
 
-      {/* Sidebar */}
-      <aside
-        className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 flex flex-col z-40 transition-all duration-300 ${
-          isExpanded ? 'w-64' : 'w-16 lg:w-64'
-        }`}
-      >
-        {/* Logo */}
-        <div className={`border-b border-gray-200 ${showLabels ? 'p-6' : 'p-3'}`}>
-          <div className={`flex items-center ${showLabels ? '' : 'justify-center'}`}>
-            {/* Logo icon - visible on collapsed mobile/tablet */}
-            {!showLabels && (
-              <div className="w-8 h-8 bg-primary-900 rounded-lg flex items-center justify-center flex-shrink-0">
-                <span className="text-white font-bold text-sm">ts</span>
-              </div>
-            )}
-            {/* Full logo - visible on expanded or desktop */}
-            {showLabels && (
-              <div>
-                <h1 className="text-xl font-bold text-primary-900">thestill.me</h1>
-                <p className="text-sm text-gray-500 mt-1">Podcast Transcription</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Hamburger button - visible on collapsed mobile/tablet */}
-        {!isLargeScreen && !isExpanded && (
-          <button
-            onClick={() => setIsExpanded(true)}
-            className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors"
-            aria-label="Open menu"
-          >
-            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
+      {/* Tablet/Desktop: Sidebar (hidden on mobile via CSS) */}
+      <div className="hidden sm:block">
+        {/* Overlay for tablet when sidebar is expanded */}
+        {isSidebarExpanded && screenSize === 'tablet' && (
+          <div
+            className="fixed inset-0 bg-black/50 z-30"
+            onClick={() => setIsSidebarExpanded(false)}
+          />
         )}
 
-        {/* Close button - visible on expanded mobile/tablet */}
-        {!isLargeScreen && isExpanded && (
-          <button
-            onClick={() => setIsExpanded(false)}
-            className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors self-end"
-            aria-label="Close menu"
-          >
-            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        )}
+        <aside
+          className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 flex flex-col z-40 transition-all duration-300 ${
+            isSidebarExpanded ? 'w-64' : 'w-16 lg:w-64'
+          }`}
+        >
+            {/* Logo */}
+            <div className={`border-b border-gray-200 ${showLabels ? 'p-6' : 'p-3'}`}>
+              <div className={`flex items-center ${showLabels ? '' : 'justify-center'}`}>
+                {/* Logo icon - visible on collapsed tablet */}
+                {!showLabels && (
+                  <div className="w-8 h-8 bg-primary-900 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-bold text-sm">ts</span>
+                  </div>
+                )}
+                {/* Full logo - visible on expanded or desktop */}
+                {showLabels && (
+                  <div>
+                    <h1 className="text-xl font-bold text-primary-900">thestill.me</h1>
+                    <p className="text-sm text-gray-500 mt-1">Podcast Transcription</p>
+                  </div>
+                )}
+              </div>
+            </div>
 
-        {/* Navigation */}
-        <nav className={`flex-1 space-y-1 ${showLabels ? 'p-4' : 'p-2'}`}>
-          <NavItem
-            to="/"
-            icon={dashboardIcon}
-            label="Dashboard"
-            showLabel={showLabels}
-          />
-          <NavItem
-            to="/podcasts"
-            icon={podcastsIcon}
-            label="Podcasts"
-            showLabel={showLabels}
-          />
-          <NavItem
-            to="/episodes"
-            icon={episodesIcon}
-            label="Episodes"
-            showLabel={showLabels}
-          />
-          <NavItem
-            to="/failed"
-            icon={failedIcon}
-            label="Failed Tasks"
-            showLabel={showLabels}
-          />
-        </nav>
+            {/* Hamburger button - visible on collapsed tablet */}
+            {screenSize === 'tablet' && !isSidebarExpanded && (
+              <button
+                onClick={() => setIsSidebarExpanded(true)}
+                className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors"
+                aria-label="Open menu"
+              >
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
 
-        {/* Footer */}
-        <div className={`border-t border-gray-200 ${showLabels ? 'p-4' : 'p-2'}`}>
-          {showLabels && (
-            <p className="text-xs text-gray-400 text-center">
-              Read-only mode
-            </p>
-          )}
+            {/* Close button - visible on expanded tablet */}
+            {screenSize === 'tablet' && isSidebarExpanded && (
+              <button
+                onClick={() => setIsSidebarExpanded(false)}
+                className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors self-end"
+                aria-label="Close menu"
+              >
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+
+            {/* Navigation */}
+            <nav className={`flex-1 space-y-1 ${showLabels ? 'p-4' : 'p-2'}`}>
+              <NavItem
+                to="/"
+                icon={dashboardIcon}
+                label="Dashboard"
+                showLabel={showLabels}
+              />
+              <NavItem
+                to="/podcasts"
+                icon={podcastsIcon}
+                label="Podcasts"
+                showLabel={showLabels}
+              />
+              <NavItem
+                to="/episodes"
+                icon={episodesIcon}
+                label="Episodes"
+                showLabel={showLabels}
+              />
+              <NavItem
+                to="/failed"
+                icon={failedIcon}
+                label="Failed Tasks"
+                showLabel={showLabels}
+              />
+            </nav>
+
+            {/* Footer */}
+            <div className={`border-t border-gray-200 ${showLabels ? 'p-4' : 'p-2'}`}>
+              {showLabels && (
+                <p className="text-xs text-gray-400 text-center">
+                  Read-only mode
+                </p>
+              )}
+            </div>
+          </aside>
         </div>
-      </aside>
+
 
       {/* Main content */}
-      <main className="ml-16 lg:ml-64 min-h-screen transition-all duration-300">
+      {/*
+        Use CSS classes for responsive margins/padding to ensure correct styles on first render.
+        Mobile (<640px): no margin, pt-14 for fixed header
+        Tablet (640-1024px): ml-16 for collapsed sidebar
+        Desktop (≥1024px): ml-64 for full sidebar
+      */}
+      <main className="min-h-screen transition-all duration-300 ml-0 pt-14 sm:pt-0 sm:ml-16 lg:ml-64">
         <div className="p-4 md:p-6 lg:p-8">
           <Outlet />
         </div>

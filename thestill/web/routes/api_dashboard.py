@@ -128,6 +128,8 @@ async def get_recent_activity(
                     "pub_date": episode.pub_date,
                     "duration": episode.duration,
                     "duration_formatted": format_duration(episode.duration) if episode.duration else None,
+                    "episode_image_url": episode.image_url,
+                    "podcast_image_url": podcast.image_url,
                 }
             )
 
