@@ -29,7 +29,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
-const AUTH_BASE = '/auth'
+const AUTH_BASE = '/api/auth'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -42,8 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!response.ok) {
         throw new Error('Failed to fetch auth status')
       }
-      const data = await response.json() as { data: AuthStatus }
-      const authStatus = data.data
+      const authStatus = await response.json() as AuthStatus
 
       setIsMultiUser(authStatus.multi_user)
       setUser(authStatus.user)

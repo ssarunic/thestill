@@ -95,7 +95,7 @@ class AuthService:
         if not self.jwt_secret_key:
             if self.multi_user:
                 raise ValueError(
-                    "JWT_SECRET_KEY is required for multi-user mode. " "Generate one with: openssl rand -hex 32"
+                    "JWT_SECRET_KEY is required for multi-user mode. Generate one with: openssl rand -hex 32"
                 )
             else:
                 # For single-user mode, generate a random secret if not provided

@@ -18,7 +18,7 @@ Tests for MockLLMProvider fixture.
 
 import json
 
-from thestill.tests.conftest import MockLLMProvider
+from tests.conftest import MockLLMProvider
 
 
 class TestMockLLMProvider:

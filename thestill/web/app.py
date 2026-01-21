@@ -204,9 +204,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Register routes
     app.include_router(health.router, tags=["health"])
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
-    app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
     # API routes for web UI
+    app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
@@ -225,7 +225,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         async def serve_spa(request: Request, full_path: str):
             """Serve the SPA index.html for all non-API routes."""
             # Skip if it's an API or known route
-            if full_path.startswith(("api/", "webhook/", "auth/", "docs", "redoc", "openapi.json", "health", "status")):
+            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health", "status")):
                 return None
             index_file = static_dir / "index.html"
             if index_file.exists():

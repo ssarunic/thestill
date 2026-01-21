@@ -50,7 +50,7 @@ def _get_redirect_uri(request: Request) -> str:
     # Use X-Forwarded headers if behind a proxy
     scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
     host = request.headers.get("X-Forwarded-Host", request.url.netloc)
-    return f"{scheme}://{host}/auth/google/callback"
+    return f"{scheme}://{host}/api/auth/google/callback"
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -198,7 +198,7 @@ async def google_callback(
 
     except Exception as e:
         logger.error(f"OAuth callback error: {e}")
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}") from e
 
 
 @router.post("/logout")

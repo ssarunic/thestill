@@ -146,4 +146,5 @@ addopts = [
     "--cov=thestill",
     "--cov-report=term-missing",
     "--cov-report=html:reports/coverage",
+    "--ignore=tests/e2e",
 ]

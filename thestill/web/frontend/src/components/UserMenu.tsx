@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 export default function UserMenu() {
   const { user, isMultiUser, logout } = useAuth()
   const [isOpen, setIsOpen] = useState(false)
+  const [imageError, setImageError] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   // Close menu when clicking outside
@@ -39,18 +40,22 @@ export default function UserMenu() {
         className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
         aria-label="User menu"
       >
-        {user.picture ? (
+        {user.picture && !imageError ? (
           <img
             src={user.picture}
             alt={user.name || user.email}
             className="w-8 h-8 rounded-full object-cover"
             referrerPolicy="no-referrer"
+            onError={() => setImageError(true)}
           />
         ) : (
           <div className="w-8 h-8 rounded-full bg-primary-600 text-white flex items-center justify-center text-sm font-medium">
             {initials}
           </div>
         )}
+        <span className="text-sm font-medium text-gray-700 hidden sm:block max-w-[120px] truncate">
+          {user.name || user.email}
+        </span>
         <svg
           className={`w-4 h-4 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
@@ -63,7 +68,7 @@ export default function UserMenu() {
 
       {/* Dropdown menu */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+        <div className="absolute left-0 bottom-full mb-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-[100]">
           {/* User info */}
           <div className="px-4 py-3 border-b border-gray-100">
             <p className="text-sm font-medium text-gray-900 truncate">

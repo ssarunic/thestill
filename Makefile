@@ -23,13 +23,22 @@ install-dev: ## Install package with development dependencies
 	pre-commit install
 
 test: ## Run all tests with coverage report
-	pytest --cov=thestill --cov-report=term-missing --cov-report=html:reports/coverage
+	pytest --cov=thestill --cov-report=term-missing --cov-report=html:reports/coverage --ignore=tests/e2e
 
 test-fast: ## Run tests without coverage (faster)
-	pytest -v
+	pytest -v --ignore=tests/e2e
+
+test-unit: ## Run unit tests only
+	pytest tests/unit --cov=thestill --cov-report=term-missing
+
+test-integration: ## Run integration tests only
+	pytest tests/integration --cov=thestill --cov-report=term-missing
+
+test-e2e: ## Run E2E tests (requires running server)
+	node tests/e2e/web/test_web_auth.cjs
 
 test-coverage: ## Run tests and open HTML coverage report
-	pytest --cov=thestill --cov-report=html:reports/coverage
+	pytest --cov=thestill --cov-report=html:reports/coverage --ignore=tests/e2e
 	@echo "$(GREEN)Opening coverage report...$(RESET)"
 	open reports/coverage/index.html || xdg-open reports/coverage/index.html
 
