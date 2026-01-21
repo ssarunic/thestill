@@ -109,6 +109,7 @@ data/
 ### Technical Specs (`specs/`)
 
 - [architecture.md](specs/architecture.md) - Layered architecture, design patterns, data flow
+- [api-reference.md](specs/api-reference.md) - REST API endpoints, request/response formats
 - [error-handling.md](specs/error-handling.md) - Exception hierarchy, retry logic
 - [testing.md](specs/testing.md) - Test strategy, coverage targets, type hints
 

@@ -50,7 +50,7 @@ from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, auth, health, webhooks
+from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, api_status, auth, health, webhooks
 from .task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
@@ -202,11 +202,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     )
 
     # Register routes
+    # Health check at root level (infrastructure convention for load balancers)
     app.include_router(health.router, tags=["health"])
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
 
-    # API routes for web UI
+    # API routes for web UI (all under /api prefix)
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+    app.include_router(api_status.router, prefix="/api/status", tags=["status"])
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
@@ -225,7 +227,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         async def serve_spa(request: Request, full_path: str):
             """Serve the SPA index.html for all non-API routes."""
             # Skip if it's an API or known route
-            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health", "status")):
+            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health")):
                 return None
             index_file = static_dir / "index.html"
             if index_file.exists():
