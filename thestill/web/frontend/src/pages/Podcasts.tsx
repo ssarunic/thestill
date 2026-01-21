@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { usePodcastsInfinite } from '../hooks/useApi'
 import PodcastCard from '../components/PodcastCard'
 import AddPodcastModal from '../components/AddPodcastModal'
+import Button, { PlusIcon } from '../components/Button'
 
 export default function Podcasts() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
@@ -59,22 +60,20 @@ export default function Podcasts() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Podcasts</h1>
           <p className="text-gray-500 mt-1">
             {isLoading ? 'Loading...' : `${totalPodcasts} podcasts tracked`}
           </p>
         </div>
-        <button
+        <Button
           onClick={() => setIsAddModalOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium text-sm hover:bg-indigo-700 active:bg-indigo-800 transition-all duration-200 shadow-sm hover:shadow"
+          icon={<PlusIcon />}
+          iconOnlyMobile
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          <span>Add Podcast</span>
-        </button>
+          Follow
+        </Button>
       </div>
 
       {/* Grid */}
@@ -98,17 +97,14 @@ export default function Podcasts() {
           <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
           </svg>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No podcasts yet</h3>
-          <p className="text-gray-500 mb-4">Click the Add Podcast button to get started.</p>
-          <button
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No podcasts followed</h3>
+          <p className="text-gray-500 mb-4">Click the Follow button to get started.</p>
+          <Button
             onClick={() => setIsAddModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium text-sm hover:bg-indigo-700 active:bg-indigo-800 transition-all duration-200 shadow-sm hover:shadow"
+            icon={<PlusIcon />}
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Add Podcast</span>
-          </button>
+            Follow Podcast
+          </Button>
         </div>
       ) : (
         <>

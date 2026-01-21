@@ -43,6 +43,19 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def get_by_id(self, podcast_id: str) -> Optional[Podcast]:
+        """
+        Get podcast by internal UUID.
+
+        Args:
+            podcast_id: Internal UUID identifier
+
+        Returns:
+            Podcast if found, None otherwise
+        """
+        pass
+
+    @abstractmethod
     def get_by_index(self, index: int) -> Optional[Podcast]:
         """
         Get podcast by 1-based index (for CLI/user convenience).

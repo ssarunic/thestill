@@ -43,9 +43,10 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
+from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
-from ..services import PodcastService, RefreshService, StatsService
+from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
@@ -111,6 +112,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)
 
+    # Initialize follower services
+    follower_repository = SqlitePodcastFollowerRepository(db_path=config.database_path)
+    follower_service = FollowerService(follower_repository, repository)
+
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
@@ -126,6 +131,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         progress_store=progress_store,
         user_repository=user_repository,
         auth_service=auth_service,
+        follower_repository=follower_repository,
+        follower_service=follower_service,
     )
 
     # Create task worker with handlers that have access to app_state
@@ -160,6 +167,23 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
         # Store state in app for access in routes
         app.state.app_state = app_state
+
+        # In single-user mode, ensure the default user follows all existing podcasts
+        # This handles the case where podcasts were added before follower support
+        if not config.multi_user:
+            default_user = auth_service.get_or_create_default_user()
+            all_podcasts = repository.get_all()
+            followed_ids = set(follower_repository.get_followed_podcast_ids(default_user.id))
+
+            podcasts_to_follow = [p for p in all_podcasts if p.id not in followed_ids]
+            if podcasts_to_follow:
+                for podcast in podcasts_to_follow:
+                    try:
+                        follower_service.follow(default_user.id, podcast.id)
+                        logger.info(f"Auto-followed podcast for default user: {podcast.title}")
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-follow podcast {podcast.title}: {e}")
+                logger.info(f"Single-user mode: auto-followed {len(podcasts_to_follow)} existing podcast(s)")
 
         # Set event loop in progress store for cross-thread async operations
         progress_store.set_event_loop(asyncio.get_event_loop())

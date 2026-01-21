@@ -128,8 +128,13 @@ class PodcastFeedManager:
             self._transaction_podcasts[podcast_rss_url] = podcast
         return podcast
 
-    def add_podcast(self, url: str) -> bool:
-        """Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs"""
+    def add_podcast(self, url: str) -> Optional[Podcast]:
+        """
+        Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs.
+
+        Returns:
+            The newly added Podcast object, or None if failed or already exists.
+        """
         try:
             # Detect source type and extract metadata
             source = self.media_source_factory.detect_source(url)
@@ -137,7 +142,7 @@ class PodcastFeedManager:
 
             if not metadata:
                 logger.error(f"Could not extract metadata from {url}")
-                return False
+                return None
 
             # Create podcast entry
             podcast = Podcast(
@@ -148,17 +153,20 @@ class PodcastFeedManager:
                 language=metadata.get("language", "en"),
             )
 
-            # Save if not already exists
+            # Save if not already exists, otherwise return existing
             podcast_url = str(podcast.rss_url)
             if not self.repository.exists(podcast_url):
                 self.repository.save(podcast)
                 logger.info(f"Added podcast: {podcast.title}")
-                return True
-            return False
+                return podcast
+            # Return existing podcast (idempotent behavior)
+            existing = self.repository.get_by_url(podcast_url)
+            logger.info(f"Podcast already exists: {existing.title if existing else podcast_url}")
+            return existing
 
         except Exception as e:
             logger.error(f"Error adding podcast {url}: {e}")
-            return False
+            return None
 
     def remove_podcast(self, rss_url: str) -> bool:
         """Remove a podcast feed"""
@@ -168,21 +176,36 @@ class PodcastFeedManager:
         self,
         max_episodes_per_podcast: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        podcast_id: Optional[str] = None,
     ) -> List[Tuple[Podcast, List[Episode]]]:
         """
-        Check all feeds for new episodes.
+        Check feeds for new episodes.
 
         Args:
             max_episodes_per_podcast: Optional limit on episodes to discover per podcast.
                                      If set, only the N most recent episodes will be tracked.
             progress_callback: Optional callback for progress reporting.
                               Called with (current_index, total_count, podcast_title).
+            podcast_id: Optional podcast ID or RSS URL to filter. If provided, only
+                       this podcast's feed will be checked.
 
         Returns:
             List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
         """
         new_episodes = []
-        podcasts = self.repository.get_all()
+
+        # Get podcasts - filter to single podcast if podcast_id is provided
+        if podcast_id:
+            # Try to find by RSS URL first, then by ID
+            podcast = self.repository.get_by_url(podcast_id)
+            if not podcast:
+                podcast = self.repository.get_by_id(podcast_id)
+            if not podcast:
+                logger.warning(f"Podcast not found for refresh: {podcast_id}")
+                return []
+            podcasts = [podcast]
+        else:
+            podcasts = self.repository.get_all()
         total_podcasts = len(podcasts)
 
         for idx, podcast in enumerate(podcasts):

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""User authentication models for single-user and multi-user modes."""
+"""User authentication models and follower relationships for single-user and multi-user modes."""
 
 import uuid
 from datetime import datetime, timezone
@@ -60,3 +60,23 @@ class TokenPayload(BaseModel):
     sub: str  # user_id
     exp: datetime
     iat: datetime
+
+
+class PodcastFollower(BaseModel):
+    """
+    User-Podcast following relationship.
+
+    Represents a user following (subscribing to) a podcast.
+    Podcasts are shared resources - processing happens once, delivered to many.
+
+    Attributes:
+        id: Internal UUID for the relationship
+        user_id: ID of the user following the podcast
+        podcast_id: ID of the podcast being followed
+        created_at: When the user started following
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    podcast_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -1,12 +1,18 @@
-import { useParams, Link } from 'react-router-dom'
-import { useEffect, useRef, useCallback } from 'react'
-import { usePodcast, usePodcastEpisodesInfinite } from '../hooks/useApi'
+import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast } from '../hooks/useApi'
+import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
+import Button, { MinusIcon } from '../components/Button'
 
 export default function PodcastDetail() {
   const { podcastSlug } = useParams<{ podcastSlug: string }>()
+  const navigate = useNavigate()
+  const { showToast } = useToast()
+  const [isUnfollowing, setIsUnfollowing] = useState(false)
   const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastSlug!)
+  const { mutate: unfollow } = useUnfollowPodcast()
   const {
     data: episodesData,
     isLoading: episodesLoading,
@@ -110,7 +116,32 @@ export default function PodcastDetail() {
             )}
 
             <div className="flex-1 text-center sm:text-left">
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
+              {/* Title row with Unfollow button aligned right */}
+              <div className="flex items-start justify-between gap-4">
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
+                <Button
+                  variant="secondary"
+                  icon={<MinusIcon />}
+                  iconOnlyMobile
+                  isLoading={isUnfollowing}
+                  onClick={() => {
+                    if (isUnfollowing) return
+                    setIsUnfollowing(true)
+                    unfollow(podcastSlug!, {
+                      onSuccess: () => {
+                        showToast(`Unfollowed ${podcast.title}`, 'success')
+                        navigate('/podcasts')
+                      },
+                      onError: (error) => {
+                        showToast(`Failed to unfollow: ${error.message}`, 'error')
+                        setIsUnfollowing(false)
+                      },
+                    })
+                  }}
+                >
+                  Unfollow
+                </Button>
+              </div>
               {podcast.description ? (
                 <div className="mt-2">
                   <ExpandableDescription html={podcast.description} maxLines={3} />

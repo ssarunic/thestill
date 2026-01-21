@@ -38,9 +38,10 @@ if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
     from ..models.user import User
+    from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
-    from ..services import PodcastService, RefreshService, StatsService
+    from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -69,6 +70,8 @@ class AppState:
         progress_store: In-memory progress store for real-time updates
         user_repository: User persistence repository
         auth_service: Authentication service
+        follower_repository: Podcast follower relationship repository
+        follower_service: Follower management service
     """
 
     config: "Config"
@@ -84,6 +87,8 @@ class AppState:
     progress_store: "ProgressStore"
     user_repository: "UserRepository"
     auth_service: "AuthService"
+    follower_repository: "PodcastFollowerRepository"
+    follower_service: "FollowerService"
 
 
 def get_app_state(request: Request) -> AppState:
