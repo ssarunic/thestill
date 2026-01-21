@@ -19,6 +19,13 @@ This package contains business logic services that can be used by multiple
 presentation layers (CLI, MCP server, web API, etc.)
 """
 
+from .follower_service import (
+    AlreadyFollowingError,
+    FollowerService,
+    FollowerServiceError,
+    NotFollowingError,
+    PodcastNotFoundError,
+)
 from .podcast_service import EpisodeWithIndex, PodcastService, PodcastWithIndex
 from .refresh_service import RefreshResult, RefreshService
 from .stats_service import ActivityItem, StatsService, SystemStats
@@ -32,4 +39,9 @@ __all__ = [
     "StatsService",
     "SystemStats",
     "ActivityItem",
+    "FollowerService",
+    "FollowerServiceError",
+    "AlreadyFollowingError",
+    "NotFollowingError",
+    "PodcastNotFoundError",
 ]

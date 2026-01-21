@@ -1,7 +1,8 @@
 # Multi-User Shared Podcasts Specification
 
-> **Status:** Draft
+> **Status:** Implemented (Phase 1 - Follow/Unfollow)
 > **Created:** 2026-01-15
+> **Updated:** 2026-01-21
 > **Author:** Product & Engineering
 
 ---
@@ -109,29 +110,26 @@ Extend thestill to support multiple users who can follow (subscribe to) podcasts
 
 ## Database Schema Changes
 
-### New Table: `followers`
+### New Table: `podcast_followers`
 
 Links users to podcasts they follow. This replaces the `user_id` column on podcasts.
 
 ```sql
--- User-Podcast following relationship
-CREATE TABLE followers (
-    id TEXT PRIMARY KEY,                    -- UUID v4
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    podcast_id TEXT NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
-    -- Subscription metadata
+-- User-Podcast following relationship (IMPLEMENTED)
+CREATE TABLE podcast_followers (
+    id TEXT PRIMARY KEY NOT NULL,           -- UUID v4
+    user_id TEXT NOT NULL,
+    podcast_id TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    -- Future: notification preferences, content filters
-    UNIQUE(user_id, podcast_id)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE,
+    UNIQUE(user_id, podcast_id),
+    CHECK (length(id) = 36)
 );
 
 -- Indexes for common queries
-CREATE INDEX idx_followers_user ON followers(user_id);
-CREATE INDEX idx_followers_podcast ON followers(podcast_id);
-
--- Count followers per podcast (for prioritization)
-CREATE INDEX idx_followers_podcast_count ON followers(podcast_id)
-    WHERE 1=1;  -- Covering index for COUNT queries
+CREATE INDEX idx_podcast_followers_user_id ON podcast_followers(user_id);
+CREATE INDEX idx_podcast_followers_podcast_id ON podcast_followers(podcast_id);
 ```
 
 ### New Table: `user_episodes`
@@ -232,12 +230,12 @@ class User(BaseModel):
     last_login_at: Optional[datetime] = None
 
 
-class Follower(BaseModel):
-    """User-Podcast following relationship."""
+class PodcastFollower(BaseModel):
+    """User-Podcast following relationship. (IMPLEMENTED in thestill/models/user.py)"""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     podcast_id: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now())
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class UserEpisode(BaseModel):
@@ -270,51 +268,65 @@ LOCAL_USER = User(
 
 ## Service Layer Changes
 
-### New: `FollowerService`
+### New: `FollowerService` (IMPLEMENTED)
 
 Manages user-podcast following relationships.
 
 ```python
-# thestill/services/follower_service.py
+# thestill/services/follower_service.py (IMPLEMENTED)
 
 class FollowerService:
     """Manage user-podcast following relationships."""
 
-    def follow(self, user_id: str, podcast_id: str) -> Follower:
-        """User starts following a podcast."""
+    def follow(self, user_id: str, podcast_id: str) -> PodcastFollower:
+        """User starts following a podcast by ID."""
+        pass
+
+    def follow_by_slug(self, user_id: str, podcast_slug: str) -> PodcastFollower:
+        """User starts following a podcast by slug."""
         pass
 
     def unfollow(self, user_id: str, podcast_id: str) -> bool:
-        """User stops following a podcast."""
+        """User stops following a podcast by ID."""
         pass
 
-    def get_followers(self, podcast_id: str) -> List[User]:
-        """Get all users following a podcast."""
+    def unfollow_by_slug(self, user_id: str, podcast_slug: str) -> bool:
+        """User stops following a podcast by slug."""
         pass
 
     def get_followed_podcasts(self, user_id: str) -> List[Podcast]:
         """Get all podcasts a user follows."""
         pass
 
+    def get_followed_podcast_ids(self, user_id: str) -> List[str]:
+        """Get IDs of all podcasts a user follows."""
+        pass
+
     def is_following(self, user_id: str, podcast_id: str) -> bool:
         """Check if user follows a podcast."""
+        pass
+
+    def is_following_by_slug(self, user_id: str, podcast_slug: str) -> bool:
+        """Check if user follows a podcast by slug."""
         pass
 
     def get_follower_count(self, podcast_id: str) -> int:
         """Get count of followers for prioritization."""
         pass
-
-    def get_podcasts_by_popularity(self, limit: int = 20) -> List[Tuple[Podcast, int]]:
-        """Get podcasts ordered by follower count."""
-        pass
 ```
 
-### New: `UserEpisodeService`
+**Custom Exceptions:**
 
-Manages per-user episode state.
+- `AlreadyFollowingError`: Raised when user tries to follow a podcast they already follow
+- `NotFollowingError`: Raised when user tries to unfollow a podcast they don't follow
+- `PodcastNotFoundError`: Raised when podcast slug doesn't exist
+
+### New: `UserEpisodeService` (NOT YET IMPLEMENTED)
+
+Manages per-user episode state. This is planned for Phase 2.
 
 ```python
-# thestill/services/user_episode_service.py
+# thestill/services/user_episode_service.py (PLANNED)
 
 class UserEpisodeService:
     """Manage per-user episode state (read, saved, interest)."""
@@ -377,66 +389,86 @@ class PodcastService:
         pass
 ```
 
-### New Repository: `FollowerRepository`
+### New Repository: `PodcastFollowerRepository` (IMPLEMENTED)
 
 ```python
-# thestill/repositories/follower_repository.py
+# thestill/repositories/podcast_follower_repository.py (IMPLEMENTED)
 
-class FollowerRepository:
-    """SQLite repository for follower relationships."""
+class PodcastFollowerRepository(ABC):
+    """Abstract repository for follower relationships."""
 
-    def add(self, follower: Follower) -> Follower:
+    @abstractmethod
+    def add(self, follower: PodcastFollower) -> PodcastFollower:
         """Add follower relationship."""
         pass
 
+    @abstractmethod
     def remove(self, user_id: str, podcast_id: str) -> bool:
         """Remove follower relationship."""
         pass
 
-    def get_by_user(self, user_id: str) -> List[Follower]:
-        """Get all following relationships for user."""
-        pass
-
-    def get_by_podcast(self, podcast_id: str) -> List[Follower]:
-        """Get all followers for podcast."""
-        pass
-
+    @abstractmethod
     def exists(self, user_id: str, podcast_id: str) -> bool:
         """Check if relationship exists."""
         pass
 
+    @abstractmethod
+    def get_by_user(self, user_id: str) -> List[PodcastFollower]:
+        """Get all following relationships for user."""
+        pass
+
+    @abstractmethod
+    def get_by_podcast(self, podcast_id: str) -> List[PodcastFollower]:
+        """Get all followers for podcast."""
+        pass
+
+    @abstractmethod
     def count_by_podcast(self, podcast_id: str) -> int:
         """Count followers for podcast."""
         pass
+
+    @abstractmethod
+    def get_followed_podcast_ids(self, user_id: str) -> List[str]:
+        """Get list of podcast IDs user follows."""
+        pass
+
+# thestill/repositories/sqlite_podcast_follower_repository.py (IMPLEMENTED)
+# SQLite implementation of the above interface
 ```
 
 ---
 
 ## API Changes
 
-### New Endpoints
+### Implemented Endpoints (Phase 1)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/podcasts/catalog` | Browse all podcasts in system (public) |
-| GET | `/api/podcasts/popular` | Get podcasts by follower count |
-| POST | `/api/podcasts/{id}/follow` | Follow a podcast |
-| DELETE | `/api/podcasts/{id}/follow` | Unfollow a podcast |
-| GET | `/api/podcasts/{id}/followers/count` | Get follower count |
-| POST | `/api/episodes/{id}/read` | Mark episode as read |
-| DELETE | `/api/episodes/{id}/read` | Mark episode as unread |
-| POST | `/api/episodes/{id}/interest` | Set interest level `{level}` |
-| GET | `/api/feed` | User's personalized feed |
-| GET | `/api/feed/unread` | Unread episodes only |
-| GET | `/api/feed/saved` | Saved episodes |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| POST | `/api/podcasts/{slug}/follow` | Follow a podcast (201 Created) | IMPLEMENTED |
+| DELETE | `/api/podcasts/{slug}/follow` | Unfollow a podcast (204 No Content) | IMPLEMENTED |
+| GET | `/api/podcasts/{slug}/followers/count` | Get follower count | IMPLEMENTED |
 
-### Modified Endpoints
+### Planned Endpoints (Phase 2 - User Episode State)
 
-| Method | Endpoint | Change |
-|--------|----------|--------|
-| GET | `/api/podcasts` | Returns user's followed podcasts (not all) |
-| POST | `/api/podcasts` | Adds podcast AND follows it for current user |
-| DELETE | `/api/podcasts/{slug}` | Unfollows only, doesn't delete podcast |
+| Method | Endpoint | Description | Status |
+|--------|----------|-------------|--------|
+| GET | `/api/podcasts/catalog` | Browse all podcasts in system (public) | NOT IMPLEMENTED |
+| GET | `/api/podcasts/popular` | Get podcasts by follower count | NOT IMPLEMENTED |
+| POST | `/api/episodes/{id}/read` | Mark episode as read | NOT IMPLEMENTED |
+| DELETE | `/api/episodes/{id}/read` | Mark episode as unread | NOT IMPLEMENTED |
+| POST | `/api/episodes/{id}/interest` | Set interest level `{level}` | NOT IMPLEMENTED |
+| GET | `/api/feed` | User's personalized feed | NOT IMPLEMENTED |
+| GET | `/api/feed/unread` | Unread episodes only | NOT IMPLEMENTED |
+| GET | `/api/feed/saved` | Saved episodes | NOT IMPLEMENTED |
+
+### Modified Endpoints (IMPLEMENTED)
+
+| Method | Endpoint | Change | Status |
+|--------|----------|--------|--------|
+| GET | `/api/podcasts` | Returns user's followed podcasts (requires auth) | IMPLEMENTED |
+| POST | `/api/commands/add` | Adds podcast AND auto-follows for current user | IMPLEMENTED |
+
+**Note:** Uses podcast `slug` (not `id`) for all user-facing endpoints per UX decision.
 
 ### Query Parameters
 
@@ -654,3 +686,47 @@ This specification depends on:
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-01-15 | 0.1 | Initial draft |
+| 2026-01-21 | 0.2 | Phase 1 implementation complete - Follow/Unfollow feature |
+
+---
+
+## Implementation Notes (Phase 1)
+
+### What Was Implemented
+
+1. **Database**: `podcast_followers` table with migration in `sqlite_podcast_repository.py`
+2. **Model**: `PodcastFollower` in `thestill/models/user.py`
+3. **Repository**: `PodcastFollowerRepository` (abstract) and `SqlitePodcastFollowerRepository`
+4. **Service**: `FollowerService` in `thestill/services/follower_service.py`
+5. **API Endpoints**: Follow, unfollow, follower count in `api_podcasts.py`
+6. **API Changes**: GET `/api/podcasts` filters by followed, POST `/api/commands/add` auto-follows
+7. **Frontend**: "Follow" button (renamed from "Add"), "Unfollow" button on podcast detail
+
+### UX Decisions Made
+
+- **No catalog/browse screen**: Users only see podcasts they follow
+- **No unfollow confirmation**: Single click unfollows immediately
+- **Unfollow location**: Only on podcast detail page, not in list view
+- **Follow flow**: Opens URL dialog, follows on successful add
+- **Slug-based API**: All user-facing endpoints use slug, not ID
+
+### Files Changed
+
+Backend:
+
+- `thestill/models/user.py` - Added `PodcastFollower` model
+- `thestill/repositories/podcast_follower_repository.py` - New abstract repository
+- `thestill/repositories/sqlite_podcast_follower_repository.py` - SQLite implementation
+- `thestill/services/follower_service.py` - New service with business logic
+- `thestill/web/dependencies.py` - Added follower_repository and follower_service to AppState
+- `thestill/web/app.py` - Initialize follower components
+- `thestill/web/routes/api_podcasts.py` - Follow/unfollow endpoints, filtered GET
+- `thestill/web/routes/api_commands.py` - Auto-follow on add
+
+Frontend:
+
+- `src/api/client.ts` - Added `unfollowPodcast` function
+- `src/hooks/useApi.ts` - Added `useUnfollowPodcast` hook
+- `src/pages/PodcastDetail.tsx` - Added Unfollow button
+- `src/pages/Podcasts.tsx` - Renamed "Add Podcast" to "Follow"
+- `src/components/AddPodcastModal.tsx` - Renamed header to "Follow Podcast"

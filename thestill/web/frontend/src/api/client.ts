@@ -35,7 +35,9 @@ import type {
 const API_BASE = '/api'
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`)
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    credentials: 'include',
+  })
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`)
   }
@@ -58,6 +60,19 @@ export async function getPodcasts(limit = 12, offset = 0): Promise<PodcastsRespo
 
 export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResponse> {
   return fetchApi<PodcastDetailResponse>(`/podcasts/${podcastSlug}`)
+}
+
+// Unfollow a podcast
+export async function unfollowPodcast(podcastSlug: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `API error: ${response.status}`)
+  }
 }
 
 export async function getPodcastEpisodes(
@@ -107,6 +122,7 @@ export async function getRefreshStatus(): Promise<RefreshTaskStatus> {
 export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcastResponse> {
   const response = await fetch(`${API_BASE}/commands/add`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },

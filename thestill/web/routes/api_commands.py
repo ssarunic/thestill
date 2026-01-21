@@ -33,7 +33,8 @@ from ...core.queue_manager import QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
 from ...core.queue_manager import get_next_stage
 from ...models.podcast import EpisodeState
-from ..dependencies import AppState, get_app_state
+from ...models.user import User
+from ..dependencies import AppState, get_app_state, require_auth
 from ..task_manager import TaskStatus, TaskType
 
 logger = logging.getLogger(__name__)
@@ -93,17 +94,19 @@ class TaskStatusResponse(BaseModel):
 def run_add_podcast_task(
     state: AppState,
     url: str,
+    user_id: str,
 ) -> None:
     """
     Execute the add podcast task in the background.
 
     This function runs in a separate thread and updates the task manager
     with progress and results. After adding the podcast, it automatically
-    refreshes the feed to discover episodes.
+    refreshes the feed to discover episodes and follows the podcast for the user.
 
     Args:
         state: Application state with services
         url: URL of the podcast to add (RSS, Apple Podcasts, or YouTube)
+        user_id: ID of the user who is adding/following the podcast
     """
     task_manager = state.task_manager
 
@@ -111,24 +114,55 @@ def run_add_podcast_task(
         task_manager.update_progress(TaskType.ADD_PODCAST, 10, "Validating URL...")
         task_manager.update_progress(TaskType.ADD_PODCAST, 30, "Fetching podcast feed...")
 
-        # Execute the add podcast
+        # Get count of podcasts before adding (to detect if it's new)
+        podcasts_before = len(state.repository.get_all())
+
+        # Execute the add podcast (returns existing if already exists)
         podcast = state.podcast_service.add_podcast(url)
 
         if podcast is None:
             task_manager.fail_task(
                 TaskType.ADD_PODCAST,
-                "Failed to add podcast. It may already exist or the URL may be invalid.",
+                "Failed to add podcast. The URL may be invalid.",
             )
             return
 
-        task_manager.update_progress(TaskType.ADD_PODCAST, 60, "Discovering episodes...")
+        # Check if this was a newly added podcast or an existing one
+        podcasts_after = len(state.repository.get_all())
+        is_new_podcast = podcasts_after > podcasts_before
 
-        # Refresh the newly added podcast to discover episodes
-        max_episodes_per_podcast = state.config.max_episodes_per_podcast
-        result = state.refresh_service.refresh(
-            podcast_id=str(podcast.rss_url),
-            max_episodes_per_podcast=max_episodes_per_podcast,
-        )
+        if is_new_podcast:
+            task_manager.update_progress(TaskType.ADD_PODCAST, 60, "Discovering episodes...")
+
+            # Refresh only for newly added podcasts to discover episodes
+            max_episodes_per_podcast = state.config.max_episodes_per_podcast
+            result = state.refresh_service.refresh(
+                podcast_id=str(podcast.rss_url),
+                max_episodes_per_podcast=max_episodes_per_podcast,
+            )
+        else:
+            # Podcast already exists - follow immediately (skip slow refresh)
+            task_manager.update_progress(TaskType.ADD_PODCAST, 50, "Following existing podcast...")
+
+            # Create a dummy result for the response (no refresh needed for existing podcast)
+            from thestill.services.refresh_service import RefreshResult
+
+            result = RefreshResult(total_episodes=0, episodes_by_podcast=[])
+
+            logger.info(f"Re-following existing podcast: {podcast.title}")
+
+        task_manager.update_progress(TaskType.ADD_PODCAST, 80, "Following podcast...")
+
+        # Auto-follow the podcast for the user
+        try:
+            logger.info(f"Attempting to follow podcast {podcast.id} for user {user_id}")
+            state.follower_service.follow(user_id, podcast.id)
+            followed = True
+            logger.info(f"Successfully followed podcast {podcast.id}")
+        except Exception as follow_error:
+            # May already be following - that's fine
+            logger.warning(f"Follow error (may already be following): {follow_error}")
+            followed = state.follower_service.is_following(user_id, podcast.id)
 
         task_manager.update_progress(TaskType.ADD_PODCAST, 90, "Finalizing...")
 
@@ -140,13 +174,15 @@ def run_add_podcast_task(
         result_data = {
             "podcast_title": podcast.title,
             "podcast_id": podcast.id,
+            "podcast_slug": podcast.slug,
             "rss_url": str(podcast.rss_url),
             "episodes_count": episodes_count,
             "episodes_discovered": result.total_episodes,
+            "is_following": followed,
         }
 
         # Complete the task
-        message = f"Added podcast: {podcast.title} ({episodes_count} episodes)"
+        message = f"Following: {podcast.title} ({episodes_count} episodes)"
         task_manager.complete_task(TaskType.ADD_PODCAST, result=result_data, message=message)
 
     except ValueError as e:
@@ -344,21 +380,27 @@ async def get_all_tasks_status(
 async def add_podcast(
     request: AddPodcastRequest,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> AddPodcastResponse:
     """
-    Add a new podcast to tracking.
+    Add a new podcast to tracking and follow it.
 
-    This endpoint starts a background task to add a podcast. Only one add can run at a time.
+    This endpoint starts a background task to add a podcast and automatically
+    follow it for the current user. Only one add can run at a time.
     Use GET /api/commands/add/status to check progress.
+
+    Requires authentication.
 
     Args:
         request: Add podcast parameters (url)
         state: Application state with services
+        user: Authenticated user
 
     Returns:
         AddPodcastResponse with task status
 
     Raises:
+        HTTPException 401: If not authenticated
         HTTPException 409: If an add podcast task is already running
     """
     task_manager = state.task_manager
@@ -381,7 +423,7 @@ async def add_podcast(
     # Run add podcast in background thread for thread-safety with SQLite
     thread = threading.Thread(
         target=run_add_podcast_task,
-        args=(state, request.url),
+        args=(state, request.url, user.id),
         daemon=True,
     )
     thread.start()

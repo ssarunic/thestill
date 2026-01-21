@@ -26,6 +26,7 @@ import {
   retryFailedEpisode,
   runPipeline,
   cancelPipeline,
+  unfollowPodcast,
 } from '../api/client'
 import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest } from '../api/types'
 
@@ -93,6 +94,18 @@ export function usePodcastEpisodesInfinite(podcastSlug: string, limit = 20) {
     enabled: !!podcastSlug,
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
+  })
+}
+
+export function useUnfollowPodcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (podcastSlug: string) => unfollowPodcast(podcastSlug),
+    onSuccess: () => {
+      // Invalidate podcasts list to refresh the UI
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 }
 

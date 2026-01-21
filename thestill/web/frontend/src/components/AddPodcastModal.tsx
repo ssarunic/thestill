@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAddPodcast, useAddPodcastStatus } from '../hooks/useApi'
 import { useToast } from './Toast'
+import Button, { PlusIcon, CloseIcon } from './Button'
 
 interface AddPodcastModalProps {
   isOpen: boolean
@@ -17,6 +18,8 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
 
   // Track if we're waiting for a result from a task we started
   const [waitingForResult, setWaitingForResult] = useState(false)
+  // Track the timestamp when we started our task (to ignore stale results)
+  const taskStartTimeRef = useRef<number | null>(null)
   // Track the last status we've seen to avoid duplicate toasts
   const lastSeenStatusRef = useRef<string | null>(null)
   // Track the "Adding..." toast ID so we can dismiss it
@@ -42,8 +45,18 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
   useEffect(() => {
     if (!waitingForResult || !status) return
 
-    // Skip if we've already seen this status
-    const statusKey = `${status.status}-${status.started_at}`
+    // Ignore stale results from before we started our task
+    if (status.started_at && taskStartTimeRef.current) {
+      const statusStartTime = new Date(status.started_at).getTime()
+      if (statusStartTime < taskStartTimeRef.current) {
+        // This is a result from a previous task, ignore it
+        return
+      }
+    }
+
+    // Skip if we've already seen this status (include podcast title for uniqueness)
+    const resultTitle = status.result?.podcast_title || ''
+    const statusKey = `${status.status}-${status.started_at}-${resultTitle}`
     if (statusKey === lastSeenStatusRef.current) return
 
     if (status.status === 'completed' && status.result) {
@@ -55,25 +68,25 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
         queryClient.refetchQueries({ queryKey: ['podcasts'] }),
         queryClient.refetchQueries({ queryKey: ['dashboard'] }),
       ]).then(() => {
-        // Dismiss the "Adding..." toast before showing success
+        // Dismiss the "Following..." toast before showing success
         if (pendingToastIdRef.current) {
           dismissToast(pendingToastIdRef.current)
           pendingToastIdRef.current = null
         }
         showToast(
-          `Added: ${resultData.podcast_title} (${resultData.episodes_count} episodes)`,
+          `Following: ${resultData.podcast_title} (${resultData.episodes_count} episodes)`,
           'success'
         )
       })
       setWaitingForResult(false)
     } else if (status.status === 'failed' && status.error) {
       lastSeenStatusRef.current = statusKey
-      // Dismiss the "Adding..." toast before showing error
+      // Dismiss the "Following..." toast before showing error
       if (pendingToastIdRef.current) {
         dismissToast(pendingToastIdRef.current)
         pendingToastIdRef.current = null
       }
-      showToast(`Failed to add podcast: ${status.error}`, 'error')
+      showToast(`Failed to follow podcast: ${status.error}`, 'error')
       setWaitingForResult(false)
     }
   }, [status, waitingForResult, showToast, dismissToast, queryClient])
@@ -84,8 +97,10 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
       // Clear cached status so we don't show old results
       queryClient.removeQueries({ queryKey: ['commands', 'add', 'status'] })
       lastSeenStatusRef.current = null
-      // Show "Adding..." toast and save ID so we can dismiss it later
-      pendingToastIdRef.current = showToast('Adding podcast...', 'info')
+      // Record when we started this task (to ignore stale results)
+      taskStartTimeRef.current = Date.now()
+      // Show "Following..." toast and save ID so we can dismiss it later
+      pendingToastIdRef.current = showToast('Following podcast...', 'info')
       setWaitingForResult(true)
       startAdd({ url: url.trim() })
       onClose()
@@ -112,15 +127,14 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-gray-900">Add Podcast</h2>
-          <button
+          <h2 className="text-xl font-semibold text-gray-900">Follow Podcast</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<CloseIcon />}
             onClick={onClose}
-            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+            aria-label="Close"
+          />
         </div>
 
         {/* Form */}
@@ -151,30 +165,20 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-3 mt-6">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={isPending || !url.trim()}
-              className={`
-                inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm
-                transition-all duration-200
-                ${isPending || !url.trim()
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 shadow-sm hover:shadow'
-                }
-              `}
+              icon={<PlusIcon />}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              <span>Add Podcast</span>
-            </button>
+              Follow
+            </Button>
           </div>
         </form>
       </div>

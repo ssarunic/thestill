@@ -15,16 +15,18 @@
 """
 Podcast API endpoints for thestill.me web UI.
 
-Provides read-only access to podcasts and their episodes.
+Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
+from ...models.user import User
+from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...utils.duration import format_duration
-from ..dependencies import AppState, get_app_state
-from ..responses import api_response, not_found, paginated_response
+from ..dependencies import AppState, get_app_state, require_auth
+from ..responses import api_response, conflict, not_found, paginated_response
 
 router = APIRouter()
 
@@ -34,25 +36,43 @@ async def get_podcasts(
     limit: int = 12,
     offset: int = 0,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> dict:
     """
-    Get tracked podcasts with pagination.
+    Get podcasts the current user follows with pagination.
+
+    Returns only podcasts that the authenticated user is following.
+    Requires authentication.
 
     Args:
         limit: Maximum number of podcasts to return (default 12)
         offset: Number of podcasts to skip for pagination (default 0)
 
     Returns:
-        List of podcasts with their metadata, episode counts, and pagination info.
+        List of followed podcasts with their metadata, episode counts, and pagination info.
     """
+    # Get IDs of podcasts the user follows
+    followed_podcast_ids = set(state.follower_repository.get_followed_podcast_ids(user.id))
+
+    # Get all podcasts with their indexed info
     all_podcasts = state.podcast_service.get_podcasts()
-    total = len(all_podcasts)
+
+    # Filter to only followed podcasts
+    followed_podcasts = [p for p in all_podcasts if p.id in followed_podcast_ids]
+    total = len(followed_podcasts)
 
     # Apply pagination
-    podcasts = all_podcasts[offset : offset + limit]
+    podcasts = followed_podcasts[offset : offset + limit]
+
+    # Add is_following flag (always true for this endpoint)
+    podcast_dicts = []
+    for p in podcasts:
+        podcast_dict = p.model_dump()
+        podcast_dict["is_following"] = True
+        podcast_dicts.append(podcast_dict)
 
     return paginated_response(
-        items=[p.model_dump() for p in podcasts],
+        items=podcast_dicts,
         total=total,
         offset=offset,
         limit=limit,
@@ -273,5 +293,108 @@ async def get_episode_summary_by_slugs(
             "episode_title": episode.title,
             "content": summary,
             "available": not summary.startswith("N/A"),
+        }
+    )
+
+
+# =============================================================================
+# Follow/Unfollow Endpoints
+# =============================================================================
+
+
+@router.post("/{podcast_slug}/follow", status_code=201)
+async def follow_podcast(
+    podcast_slug: str,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+) -> dict:
+    """
+    Follow a podcast.
+
+    Creates a follow relationship between the authenticated user and the podcast.
+    Requires authentication.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+
+    Returns:
+        Success response with follow details.
+
+    Raises:
+        404: Podcast not found
+        409: Already following this podcast
+    """
+    try:
+        follower = state.follower_service.follow_by_slug(user.id, podcast_slug)
+        return api_response(
+            {
+                "message": "Successfully followed podcast",
+                "podcast_slug": podcast_slug,
+                "followed_at": follower.created_at.isoformat(),
+            }
+        )
+    except PodcastNotFoundError:
+        not_found("Podcast", podcast_slug)
+    except AlreadyFollowingError:
+        conflict(f"Already following podcast: {podcast_slug}")
+
+
+@router.delete("/{podcast_slug}/follow", status_code=204)
+async def unfollow_podcast(
+    podcast_slug: str,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+) -> Response:
+    """
+    Unfollow a podcast.
+
+    Removes the follow relationship between the authenticated user and the podcast.
+    The podcast remains in the system (can be re-followed via URL).
+    Requires authentication.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+
+    Returns:
+        204 No Content on success.
+
+    Raises:
+        404: Podcast not found or not following
+    """
+    try:
+        state.follower_service.unfollow_by_slug(user.id, podcast_slug)
+        return Response(status_code=204)
+    except PodcastNotFoundError:
+        not_found("Podcast", podcast_slug)
+    except NotFollowingError:
+        not_found("Follow relationship", podcast_slug)
+
+
+@router.get("/{podcast_slug}/followers/count")
+async def get_podcast_follower_count(
+    podcast_slug: str,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """
+    Get the number of followers for a podcast.
+
+    Args:
+        podcast_slug: URL-safe podcast identifier
+
+    Returns:
+        Follower count for the podcast.
+
+    Raises:
+        404: Podcast not found
+    """
+    count = state.follower_service.get_follower_count_by_slug(podcast_slug)
+
+    if count is None:
+        not_found("Podcast", podcast_slug)
+
+    return api_response(
+        {
+            "podcast_slug": podcast_slug,
+            "follower_count": count,
         }
     )

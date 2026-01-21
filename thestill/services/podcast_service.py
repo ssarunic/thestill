@@ -95,6 +95,7 @@ class TranscriptResult(NamedTuple):
 class PodcastWithIndex(BaseModel):
     """Podcast with human-friendly index number"""
 
+    id: str  # Internal UUID for direct access
     index: int
     title: str
     description: str
@@ -192,27 +193,32 @@ class PodcastService:
 
     def add_podcast(self, url: str) -> Optional[Podcast]:
         """
-        Add a new podcast to tracking.
+        Add a new podcast to tracking, or return existing if already tracked.
+
+        This method is idempotent - calling it multiple times with the same URL
+        will return the same podcast without error.
 
         Args:
             url: RSS URL, Apple Podcast URL, or YouTube channel/playlist URL
 
         Returns:
-            Podcast object if successful, None if failed
+            Podcast object if successful or already exists, None if failed
         """
         logger.info(f"Adding podcast: {url}")
-        success = self.feed_manager.add_podcast(url)
+        added_podcast = self.feed_manager.add_podcast(url)
 
-        if success:
-            # Retrieve the added podcast (it will be the last one added)
-            podcasts = self.feed_manager.list_podcasts()
-            if podcasts:
-                # The newly added podcast is the last one in the list
-                added_podcast = podcasts[-1]
-                logger.info(f"Successfully added podcast: {added_podcast.title}")
-                return added_podcast
+        if added_podcast:
+            logger.info(f"Successfully added podcast: {added_podcast.title}")
+            return added_podcast
 
-        logger.warning(f"Failed to add podcast or already exists: {url}")
+        # Podcast may already exist - return existing one (idempotent behavior)
+        # Note: URL might have been resolved (e.g., Apple Podcasts -> RSS), so check both
+        existing = self.repository.get_by_url(url)
+        if existing:
+            logger.info(f"Podcast already exists: {existing.title}")
+            return existing
+
+        logger.warning(f"Failed to add podcast: {url}")
         return None
 
     def remove_podcast(self, podcast_id: Union[str, int]) -> bool:
@@ -255,6 +261,7 @@ class PodcastService:
             )
             result.append(
                 PodcastWithIndex(
+                    id=podcast.id,
                     index=idx,
                     title=podcast.title,
                     description=podcast.description,

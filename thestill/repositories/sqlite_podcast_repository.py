@@ -114,6 +114,32 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE podcasts ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
             logger.info("Migration complete: language column added to podcasts")
 
+        # Migration: Create podcast_followers table if it doesn't exist (idempotent)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='podcast_followers'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating podcast_followers table")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS podcast_followers (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    user_id TEXT NOT NULL,
+                    podcast_id TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, podcast_id),
+                    CHECK (length(id) = 36)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_podcast_followers_user
+                    ON podcast_followers(user_id);
+
+                CREATE INDEX IF NOT EXISTS idx_podcast_followers_podcast
+                    ON podcast_followers(podcast_id);
+                """
+            )
+            logger.info("Migration complete: podcast_followers table created")
+
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
         conn.executescript(
@@ -237,6 +263,30 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
             CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
+
+            -- ========================================================================
+            -- PODCAST FOLLOWERS TABLE (User-Podcast following relationship)
+            -- ========================================================================
+            -- Many-to-many relationship: users follow podcasts
+            -- Podcasts are shared resources; processing happens once, delivered to many
+            CREATE TABLE IF NOT EXISTS podcast_followers (
+                id TEXT PRIMARY KEY NOT NULL,
+                user_id TEXT NOT NULL,
+                podcast_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE,
+                UNIQUE(user_id, podcast_id),
+                CHECK (length(id) = 36)
+            );
+
+            -- Index for "get podcasts user follows" query
+            CREATE INDEX IF NOT EXISTS idx_podcast_followers_user
+                ON podcast_followers(user_id);
+
+            -- Index for "get followers of podcast" query
+            CREATE INDEX IF NOT EXISTS idx_podcast_followers_podcast
+                ON podcast_followers(podcast_id);
         """
         )
 
@@ -308,6 +358,23 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def get(self, podcast_id: str) -> Optional[Podcast]:
         """Get podcast by internal UUID (primary key)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, created_at, rss_url, title, slug, description, image_url, language, last_processed, updated_at
+                FROM podcasts
+                WHERE id = ?
+            """,
+                (podcast_id,),
+            )
+
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_podcast(row, conn)
+            return None
+
+    def get_by_id(self, podcast_id: str) -> Optional[Podcast]:
+        """Find podcast by internal UUID."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """

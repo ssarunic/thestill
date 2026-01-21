@@ -89,32 +89,28 @@ class RefreshService:
         """
         logger.info("Starting feed refresh...")
 
-        # Get new episodes from all podcasts
+        # Get new episodes - pass podcast_id to filter BEFORE fetching feeds
+        # This avoids fetching all podcasts when only one is needed
         new_episodes = self.feed_manager.get_new_episodes(
             max_episodes_per_podcast=max_episodes_per_podcast,
             progress_callback=progress_callback,
+            podcast_id=str(podcast_id) if podcast_id else None,
         )
 
-        if not new_episodes:
-            logger.info("No new episodes found")
-            return RefreshResult(total_episodes=0, episodes_by_podcast=[])
-
-        # Filter by podcast_id if specified
+        # Determine podcast filter name for response
         podcast_filter_name = None
         if podcast_id:
             podcast = self.podcast_service.get_podcast(podcast_id)
-            if not podcast:
-                raise ValueError(f"Podcast not found: {podcast_id}")
+            if podcast:
+                podcast_filter_name = podcast.title
 
-            # Filter new_episodes to only include the specified podcast
-            new_episodes = [(p, eps) for p, eps in new_episodes if str(p.rss_url) == str(podcast.rss_url)]
-            podcast_filter_name = podcast.title
-
-            if not new_episodes:
-                logger.info(f"No new episodes found for podcast: {podcast.title}")
-                return RefreshResult(
-                    total_episodes=0, episodes_by_podcast=[], podcast_filter_applied=podcast_filter_name
-                )
+        if not new_episodes:
+            logger.info("No new episodes found")
+            return RefreshResult(
+                total_episodes=0,
+                episodes_by_podcast=[],
+                podcast_filter_applied=podcast_filter_name,
+            )
 
         # Apply max_episodes limit per podcast
         episodes_to_add = []
