@@ -28,17 +28,20 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from fastapi import Request
+from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..core.feed_manager import PodcastFeedManager
     from ..core.progress_store import ProgressStore
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
+    from ..models.user import User
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+    from ..repositories.user_repository import UserRepository
     from ..services import PodcastService, RefreshService, StatsService
+    from ..services.auth_service import AuthService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
     from .task_manager import TaskManager
@@ -64,6 +67,8 @@ class AppState:
         queue_manager: SQLite task queue manager
         task_worker: Background task worker
         progress_store: In-memory progress store for real-time updates
+        user_repository: User persistence repository
+        auth_service: Authentication service
     """
 
     config: "Config"
@@ -77,6 +82,8 @@ class AppState:
     queue_manager: "QueueManager"
     task_worker: "TaskWorker"
     progress_store: "ProgressStore"
+    user_repository: "UserRepository"
+    auth_service: "AuthService"
 
 
 def get_app_state(request: Request) -> AppState:
@@ -98,3 +105,88 @@ def get_app_state(request: Request) -> AppState:
             return state.stats_service.get_stats()
     """
     return request.app.state.app_state
+
+
+# Cookie name for authentication token
+AUTH_COOKIE_NAME = "auth_token"
+
+
+def _get_token_from_request(request: Request) -> Optional[str]:
+    """Extract auth token from cookie or Authorization header."""
+    # First try cookie
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if token:
+        return token
+
+    # Fall back to Authorization header (for API clients)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header[7:]
+
+    return None
+
+
+def get_current_user(
+    request: Request,
+    state: AppState = Depends(get_app_state),
+) -> Optional["User"]:
+    """
+    FastAPI dependency to get the current user (optional).
+
+    In single-user mode, always returns the default user.
+    In multi-user mode, returns the authenticated user or None.
+
+    Args:
+        request: FastAPI request object
+        state: Application state
+
+    Returns:
+        User if authenticated, None otherwise
+
+    Example:
+        @router.get("/items")
+        async def list_items(user: Optional[User] = Depends(get_current_user)):
+            if user:
+                return {"items": [...], "user": user.email}
+            return {"items": [...]}
+    """
+    token = _get_token_from_request(request)
+    return state.auth_service.get_current_user(token)
+
+
+def require_auth(
+    request: Request,
+    state: AppState = Depends(get_app_state),
+) -> "User":
+    """
+    FastAPI dependency that requires authentication.
+
+    In single-user mode, always returns the default user.
+    In multi-user mode, requires a valid JWT token.
+
+    Args:
+        request: FastAPI request object
+        state: Application state
+
+    Returns:
+        Authenticated User
+
+    Raises:
+        HTTPException: 401 if not authenticated in multi-user mode
+
+    Example:
+        @router.post("/items")
+        async def create_item(user: User = Depends(require_auth)):
+            return {"created_by": user.email}
+    """
+    token = _get_token_from_request(request)
+    user = state.auth_service.get_current_user(token)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user

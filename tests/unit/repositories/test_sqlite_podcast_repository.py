@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from ..models.podcast import Episode, EpisodeState, Podcast
-from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from thestill.models.podcast import Episode, EpisodeState, Podcast
+from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
 
 @pytest.fixture

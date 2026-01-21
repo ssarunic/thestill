@@ -389,7 +389,7 @@ class TestTransactionContextManager:
             mock_repository.update_episode.assert_not_called()
 
         # Verify: Repository save called ONCE after transaction completes
-        from ..models.podcast import EpisodeState
+        from thestill.models.podcast import EpisodeState
 
         assert mock_repository.save.call_count == 1
         saved_podcast = mock_repository.save.call_args[0][0]

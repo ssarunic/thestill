@@ -13,17 +13,15 @@
 # limitations under the License.
 
 """
-Health check and status endpoints for thestill.me web server.
+Health check endpoint for thestill.me web server.
 
-These endpoints are used for:
-- Load balancer health checks
-- Monitoring and alerting
-- Quick status verification
+This endpoint is mounted at the root level (not under /api) because:
+- Load balancers and Kubernetes probes expect /health or /healthz at root
+- Infrastructure endpoints follow different conventions than application APIs
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from ..dependencies import AppState, get_app_state
 from ..responses import api_response
 
 router = APIRouter()
@@ -38,48 +36,3 @@ async def health_check():
         Health status with timestamp.
     """
     return api_response({}, status="healthy")
-
-
-@router.get("/status")
-async def status(state: AppState = Depends(get_app_state)):
-    """
-    Detailed system status endpoint.
-
-    Returns comprehensive statistics about the system,
-    similar to the CLI 'status' command.
-
-    Args:
-        state: Application state with services
-
-    Returns:
-        System statistics and configuration info.
-    """
-    stats = state.stats_service.get_stats()
-
-    return api_response(
-        {
-            "storage": {
-                "path": str(stats.storage_path),
-                "audio_files": stats.audio_files_count,
-                "transcripts": stats.transcripts_available,
-            },
-            "podcasts": {
-                "tracked": stats.podcasts_tracked,
-                "total_episodes": stats.episodes_total,
-            },
-            "pipeline": {
-                "discovered": stats.episodes_discovered,
-                "downloaded": stats.episodes_downloaded,
-                "downsampled": stats.episodes_downsampled,
-                "transcribed": stats.episodes_transcribed,
-                "cleaned": stats.episodes_cleaned,
-                "summarized": stats.episodes_summarized,
-                "unprocessed": stats.episodes_unprocessed,
-            },
-            "configuration": {
-                "transcription_provider": state.config.transcription_provider,
-                "llm_provider": state.config.llm_provider,
-                "diarization_enabled": state.config.enable_diarization,
-            },
-        }
-    )

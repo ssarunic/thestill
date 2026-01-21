@@ -218,6 +218,25 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_transcript_links_not_downloaded
                 ON episode_transcript_links(episode_id)
                 WHERE downloaded_path IS NULL;
+
+            -- ========================================================================
+            -- USERS TABLE (Authentication)
+            -- ========================================================================
+            -- Supports single-user mode (default user) and multi-user mode (Google OAuth)
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                name TEXT NULL,
+                picture TEXT NULL,
+                google_id TEXT UNIQUE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMP NULL,
+                CHECK (length(id) = 36),
+                CHECK (length(email) > 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+            CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
         """
         )
 
