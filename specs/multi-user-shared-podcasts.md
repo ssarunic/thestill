@@ -730,3 +730,11 @@ Frontend:
 - `src/pages/PodcastDetail.tsx` - Added Unfollow button
 - `src/pages/Podcasts.tsx` - Renamed "Add Podcast" to "Follow"
 - `src/components/AddPodcastModal.tsx` - Renamed header to "Follow Podcast"
+- `src/components/Button.tsx` - Reusable button component with variants
+
+Testing:
+
+- `tests/integration/follower/test_follower_flow.py` - 31 integration tests covering:
+  - `TestFollowerServiceFlow` - Follow/unfollow operations, error handling, get_followed_podcasts
+  - `TestSingleUserModeCompatibility` - Single-user mode works without auth
+  - `TestPodcastFollowerRepository` - Repository operations (add, remove, exists, count)
