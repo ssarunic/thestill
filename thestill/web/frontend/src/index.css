@@ -33,7 +33,7 @@ body {
 
 /* Transcript styling - mobile optimized */
 .transcript-content {
-  @apply font-serif text-base leading-[1.7] sm:text-lg;
+  @apply text-base leading-[1.7] sm:text-lg;
 }
 
 .transcript-content p {

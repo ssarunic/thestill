@@ -170,7 +170,7 @@ export default function TranscriptViewer({ content, isLoading, available, episod
   }
 
   return (
-    <div className="transcript-content font-serif leading-relaxed space-y-4">
+    <div className="transcript-content leading-relaxed space-y-4">
       {/* Raw transcript notice */}
       {transcriptType === 'raw' && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">

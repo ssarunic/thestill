@@ -88,7 +88,7 @@ export default function SummaryViewer({ content, isLoading, available, episodeSt
   }
 
   return (
-    <div className="prose prose-gray max-w-none prose-base sm:prose-lg prose-headings:text-primary-900 prose-h1:text-xl prose-h1:sm:text-2xl prose-h2:text-lg prose-h2:sm:text-xl prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-base prose-h3:sm:text-lg prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
+    <div className="prose prose-gray max-w-none prose-headings:text-primary-900 prose-h1:text-xl prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-base prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>
         {content}
       </ReactMarkdown>
