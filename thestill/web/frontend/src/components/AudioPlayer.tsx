@@ -1,14 +1,31 @@
+import { useEffect, useRef } from 'react'
+import { useAudioPlayerOptional } from '../contexts/AudioPlayerContext'
+
 interface AudioPlayerProps {
   audioUrl: string
   title: string
 }
 
 export default function AudioPlayer({ audioUrl, title }: AudioPlayerProps) {
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const playerContext = useAudioPlayerOptional()
+
+  // Register the audio element with the context when available
+  useEffect(() => {
+    if (playerContext && audioRef.current) {
+      playerContext.registerAudio(audioRef.current)
+      return () => {
+        playerContext.registerAudio(null)
+      }
+    }
+  }, [playerContext, audioUrl])
+
   return (
     <div className="bg-gray-100 rounded-lg p-3 sm:p-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
         {/* Play button / audio element */}
         <audio
+          ref={audioRef}
           controls
           className="w-full sm:flex-1 h-10"
           src={audioUrl}

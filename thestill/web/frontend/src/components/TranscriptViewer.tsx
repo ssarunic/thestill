@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TranscriptType } from '../api/types'
+import { useAudioPlayerOptional } from '../contexts/AudioPlayerContext'
 
 interface TranscriptViewerProps {
   content: string
@@ -11,15 +12,31 @@ interface TranscriptViewerProps {
   transcriptType?: TranscriptType
 }
 
+// Convert timestamp string to seconds
+function parseTimestampToSeconds(timestamp: string): number {
+  const parts = timestamp.split(':').map(Number)
+  if (parts.length === 2) {
+    // MM:SS format
+    return parts[0] * 60 + parts[1]
+  } else if (parts.length === 3) {
+    // HH:MM:SS format
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  }
+  return 0
+}
+
+interface ParsedSegment {
+  type: 'speaker' | 'markdown'
+  content: string
+  speaker?: string
+  timestamp?: string
+  timestampSeconds?: number
+}
+
 // Parse transcript to separate speaker segments from regular markdown
-function parseTranscript(content: string) {
+function parseTranscript(content: string): ParsedSegment[] {
   const lines = content.split('\n')
-  const segments: Array<{
-    type: 'speaker' | 'markdown'
-    content: string
-    speaker?: string
-    timestamp?: string
-  }> = []
+  const segments: ParsedSegment[] = []
 
   let markdownBuffer: string[] = []
 
@@ -38,9 +55,11 @@ function parseTranscript(content: string) {
     const speakerMatch = line.match(/^\[(\d{2}:\d{2}(?::\d{2})?)\]\s*\[([^\]]+)\]\s*(.*)/)
     if (speakerMatch) {
       flushMarkdown()
+      const timestamp = speakerMatch[1]
       segments.push({
         type: 'speaker',
-        timestamp: speakerMatch[1],
+        timestamp,
+        timestampSeconds: parseTimestampToSeconds(timestamp),
         speaker: speakerMatch[2],
         content: speakerMatch[3],
       })
@@ -51,9 +70,11 @@ function parseTranscript(content: string) {
     const timestampedBoldMatch = line.match(/^\[(\d{2}:\d{2}(?::\d{2})?)\]\s*\*\*([^*]+)\*\*:\s*(.*)/)
     if (timestampedBoldMatch) {
       flushMarkdown()
+      const timestamp = timestampedBoldMatch[1]
       segments.push({
         type: 'speaker',
-        timestamp: timestampedBoldMatch[1],
+        timestamp,
+        timestampSeconds: parseTimestampToSeconds(timestamp),
         speaker: timestampedBoldMatch[2],
         content: timestampedBoldMatch[3],
       })
@@ -133,8 +154,82 @@ function getTranscriptStatus(state?: string): { title: string; description: stri
   }
 }
 
+// Find the index of the currently playing segment based on playback time
+function findCurrentSegmentIndex(segments: ParsedSegment[], currentTime: number): number {
+  let currentIndex = -1
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
+    if (segment.type === 'speaker' && segment.timestampSeconds !== undefined) {
+      if (segment.timestampSeconds <= currentTime) {
+        currentIndex = i
+      } else {
+        break
+      }
+    }
+  }
+  return currentIndex
+}
+
+interface TimestampButtonProps {
+  timestamp: string
+  timestampSeconds: number
+  onSeek: (seconds: number) => void
+  isActive: boolean
+}
+
+function TimestampButton({ timestamp, timestampSeconds, onSeek, isActive }: TimestampButtonProps) {
+  return (
+    <button
+      onClick={() => onSeek(timestampSeconds)}
+      className={`font-mono text-xs px-1.5 py-0.5 rounded transition-colors ${
+        isActive
+          ? 'bg-primary-100 text-primary-700 font-medium'
+          : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+      }`}
+      title={`Jump to ${timestamp}`}
+    >
+      [{timestamp}]
+    </button>
+  )
+}
+
 export default function TranscriptViewer({ content, isLoading, available, episodeState, transcriptType }: TranscriptViewerProps) {
   const segments = useMemo(() => parseTranscript(content), [content])
+  const playerContext = useAudioPlayerOptional()
+  const currentTime = playerContext?.currentTime ?? 0
+  const isPlaying = playerContext?.isPlaying ?? false
+  const seekTo = playerContext?.seekTo
+
+  // Find current segment for highlighting
+  const currentSegmentIndex = useMemo(
+    () => (isPlaying ? findCurrentSegmentIndex(segments, currentTime) : -1),
+    [segments, currentTime, isPlaying]
+  )
+
+  // Auto-scroll to current segment when playing
+  const segmentRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+  const lastScrolledIndex = useRef<number>(-1)
+
+  useEffect(() => {
+    if (isPlaying && currentSegmentIndex >= 0 && currentSegmentIndex !== lastScrolledIndex.current) {
+      const element = segmentRefs.current.get(currentSegmentIndex)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        lastScrolledIndex.current = currentSegmentIndex
+      }
+    }
+  }, [currentSegmentIndex, isPlaying])
+
+  // Reset scroll tracking when playback stops
+  useEffect(() => {
+    if (!isPlaying) {
+      lastScrolledIndex.current = -1
+    }
+  }, [isPlaying])
+
+  const handleSeek = (seconds: number) => {
+    seekTo?.(seconds)
+  }
 
   if (isLoading) {
     return (
@@ -190,12 +285,29 @@ export default function TranscriptViewer({ content, isLoading, available, episod
       )}
       {segments.map((segment, index) => {
         if (segment.type === 'speaker') {
+          const isCurrentSegment = index === currentSegmentIndex
           return (
-            <div key={index} className="mb-4">
+            <div
+              key={index}
+              ref={(el) => {
+                if (el) segmentRefs.current.set(index, el)
+                else segmentRefs.current.delete(index)
+              }}
+              className={`mb-4 transition-colors duration-300 rounded-lg -mx-2 px-2 py-1 ${
+                isCurrentSegment ? 'bg-primary-50 ring-1 ring-primary-200' : ''
+              }`}
+            >
               <div className="flex items-center gap-2 mb-1">
-                {segment.timestamp && (
+                {segment.timestamp && segment.timestampSeconds !== undefined && seekTo ? (
+                  <TimestampButton
+                    timestamp={segment.timestamp}
+                    timestampSeconds={segment.timestampSeconds}
+                    onSeek={handleSeek}
+                    isActive={isCurrentSegment}
+                  />
+                ) : segment.timestamp ? (
                   <span className="font-mono text-xs text-gray-400">[{segment.timestamp}]</span>
-                )}
+                ) : null}
                 <span className={`font-sans font-semibold ${getSpeakerColor(segment.speaker || '')}`}>
                   {segment.speaker}:
                 </span>

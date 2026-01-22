@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
+import { AudioPlayerProvider } from '../contexts/AudioPlayerContext'
 import AudioPlayer from '../components/AudioPlayer'
 
 // Lazy load heavy markdown viewer components
@@ -81,6 +82,7 @@ export default function EpisodeDetail() {
   const episode = episodeData?.episode
 
   return (
+    <AudioPlayerProvider>
     <div className="space-y-6">
       {/* Breadcrumb */}
       <nav className="text-sm flex flex-wrap items-center gap-1">
@@ -262,5 +264,6 @@ export default function EpisodeDetail() {
         </div>
       </div>
     </div>
+    </AudioPlayerProvider>
   )
 }
