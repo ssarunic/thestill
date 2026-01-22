@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic.config import ConfigDict
 
+from .file_storage import FileStorage, LocalFileStorage
 from .path_manager import PathManager
 
 
@@ -47,6 +48,23 @@ class Config(BaseModel):
     # Storage Paths
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
+
+    # Storage Backend Configuration
+    storage_backend: str = "local"  # local, s3, or gcs
+
+    # S3 Configuration (when storage_backend=s3)
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_endpoint_url: str = ""  # Empty for AWS, set for LocalStack/MinIO
+    s3_prefix: str = ""  # Optional prefix for all keys
+
+    # GCS Configuration (when storage_backend=gcs)
+    gcs_bucket: str = ""
+    gcs_project: str = ""
+    gcs_prefix: str = ""  # Optional prefix for all keys
+
+    # File Storage (initialized after model creation)
+    file_storage: Optional[FileStorage] = Field(default=None, exclude=True)
 
     # Path Manager (initialized after model creation)
     # All path operations should use path_manager methods instead of direct path attributes
@@ -121,11 +139,39 @@ class Config(BaseModel):
         # Initialize PathManager for centralized path management
         self.path_manager = PathManager(str(self.storage_path))
 
+        # Initialize FileStorage based on backend
+        self.file_storage = self._create_file_storage()
+
         # Set default database path if not provided
         if not self.database_path:
             self.database_path = str(self.storage_path / "podcasts.db")
 
         self._ensure_directories()
+
+    def _create_file_storage(self) -> FileStorage:
+        """Create the appropriate FileStorage instance based on configuration."""
+        if self.storage_backend == "local":
+            return LocalFileStorage(str(self.storage_path))
+        elif self.storage_backend == "s3":
+            # S3 storage will be implemented in Phase 3
+            # For now, raise an error with helpful message
+            raise NotImplementedError(
+                "S3 storage backend is not yet implemented. "
+                "Install 'boto3' and implement S3FileStorage in utils/file_storage.py. "
+                "Use STORAGE_BACKEND=local for now."
+            )
+        elif self.storage_backend == "gcs":
+            # GCS storage will be implemented in Phase 3
+            raise NotImplementedError(
+                "GCS storage backend is not yet implemented. "
+                "Install 'google-cloud-storage' and implement GCSFileStorage in utils/file_storage.py. "
+                "Use STORAGE_BACKEND=local for now."
+            )
+        else:
+            raise ValueError(
+                f"Unknown storage backend: {self.storage_backend}. "
+                "Supported backends: local, s3, gcs"
+            )
 
     def _ensure_directories(self):
         """Create necessary directories if they don't exist"""
@@ -175,6 +221,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
     storage_path = Path(os.getenv("STORAGE_PATH", "./data"))
     database_path = os.getenv("DATABASE_PATH", "")  # Empty string = use default
 
+    # Storage backend configuration
+    storage_backend = os.getenv("STORAGE_BACKEND", "local").lower()
+
     config_data = {
         "openai_api_key": openai_api_key,
         "gemini_api_key": gemini_api_key,
@@ -191,6 +240,15 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "elevenlabs_async_threshold_mb": int(os.getenv("ELEVENLABS_ASYNC_THRESHOLD_MB", "0")),
         "storage_path": storage_path,
         "database_path": database_path,
+        # Storage backend configuration
+        "storage_backend": storage_backend,
+        "s3_bucket": os.getenv("S3_BUCKET", ""),
+        "s3_region": os.getenv("S3_REGION", "us-east-1"),
+        "s3_endpoint_url": os.getenv("S3_ENDPOINT_URL", ""),
+        "s3_prefix": os.getenv("S3_PREFIX", ""),
+        "gcs_bucket": os.getenv("GCS_BUCKET", ""),
+        "gcs_project": os.getenv("GCS_PROJECT", ""),
+        "gcs_prefix": os.getenv("GCS_PREFIX", ""),
         # Note: Path operations should use config.path_manager methods
         # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
         # clean_transcripts_path, summaries_path, evaluations_path
