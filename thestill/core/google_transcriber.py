@@ -527,7 +527,9 @@ class GoogleCloudTranscriber(Transcriber):
                     podcast_slug=options.podcast_slug,
                     episode_slug=options.episode_slug,
                 )
-                transcript_data = self._format_transcript(result, time.time() - start_time, audio_path)
+                transcript_data = self._format_transcript(
+                    result, time.time() - start_time, audio_path, options.language
+                )
 
             processing_time = time.time() - start_time
             transcript_data.processing_time = processing_time
@@ -1136,7 +1138,7 @@ class GoogleCloudTranscriber(Transcriber):
                 transcript = result.transcript
             else:
                 # Normal result - format and adjust timestamps using typed methods
-                transcript = self._format_transcript(result, 0, tmp_path)
+                transcript = self._format_transcript(result, 0, tmp_path, language)
 
                 # Adjust timestamps by chunk offset
                 offset_seconds = start_ms / 1000
@@ -1235,7 +1237,7 @@ class GoogleCloudTranscriber(Transcriber):
                 )
 
                 # Format and adjust timestamps using typed methods
-                transcript = self._format_transcript(result, 0, tmp_path)
+                transcript = self._format_transcript(result, 0, tmp_path, language)
                 offset_seconds = (chunk_start_ms + sub_start) / 1000
                 transcript = transcript.adjust_timestamps(offset_seconds)
 
@@ -1943,7 +1945,7 @@ class GoogleCloudTranscriber(Transcriber):
             transcript_result = self._download_transcript_from_gcs(operation.transcript_gcs_uri)
 
             # Format the transcript
-            transcript = self._format_transcript(transcript_result, 0, "")
+            transcript = self._format_transcript(transcript_result, 0, "", operation.language)
 
             # Adjust timestamps if this is a chunk
             if operation.chunk_start_ms is not None:
@@ -2176,7 +2178,13 @@ class GoogleCloudTranscriber(Transcriber):
             secs = total_seconds % 60
             return f"{hours}:{mins:02d}:{secs:02d}"
 
-    def _format_transcript(self, transcript: Any, processing_time: float, audio_path: str) -> Transcript:
+    def _format_transcript(
+        self,
+        transcript: Any,
+        processing_time: float,
+        audio_path: str,
+        requested_language: Optional[str] = None,
+    ) -> Transcript:
         """
         Format Google Cloud V2 response to match Whisper transcript structure.
 
@@ -2428,9 +2436,15 @@ class GoogleCloudTranscriber(Transcriber):
                 )
             )
 
+        # Use explicitly requested language if provided, otherwise use auto-detected
+        if requested_language:
+            language = requested_language
+        else:
+            language = detected_language
+
         return Transcript(
             audio_file=audio_path,
-            language=detected_language,
+            language=language,
             text=full_text,
             segments=transcript_segments,
             processing_time=processing_time,

@@ -216,7 +216,7 @@ class ElevenLabsTranscriber(Transcriber):
 
         try:
             response_data = self._call_api_sync(audio_path, language, progress_callback)
-            transcript = self._format_response(response_data, audio_path, start_time)
+            transcript = self._format_response(response_data, audio_path, start_time, language)
 
             if output_path:
                 self._save_transcript(transcript, output_path)
@@ -342,7 +342,7 @@ class ElevenLabsTranscriber(Transcriber):
                 return None
 
             # Step 4: Format response and clean up
-            transcript = self._format_response(response_data, audio_path, start_time)
+            transcript = self._format_response(response_data, audio_path, start_time, language)
 
             if self.path_manager:
                 self._remove_pending_operation(transcription_id)
@@ -674,6 +674,7 @@ class ElevenLabsTranscriber(Transcriber):
         response_data: Dict[str, Any],
         audio_path: str,
         start_time: float,
+        requested_language: Optional[str] = None,
     ) -> Transcript:
         """
         Convert ElevenLabs API response to Transcript model.
@@ -682,14 +683,18 @@ class ElevenLabsTranscriber(Transcriber):
             response_data: Raw API response
             audio_path: Original audio file path
             start_time: Transcription start time for processing_time calculation
+            requested_language: Explicitly requested language (preferred over detected)
 
         Returns:
             Formatted Transcript object
         """
         processing_time = time.time() - start_time
 
-        # Extract language
-        language = response_data.get("language_code", "en")
+        # Use explicitly requested language if provided, otherwise use auto-detected
+        if requested_language:
+            language = requested_language
+        else:
+            language = response_data.get("language_code", "en")
 
         # Extract full text
         full_text = response_data.get("text", "")
@@ -948,6 +953,7 @@ class ElevenLabsTranscriber(Transcriber):
                         response_data,
                         op_data.get("audio_path", ""),
                         time.time(),  # We don't have original start time
+                        op_data.get("language"),
                     )
 
                     results.append(

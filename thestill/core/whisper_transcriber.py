@@ -279,7 +279,7 @@ class WhisperTranscriber(Transcriber):
             processing_time = time.time() - start_time
             print(f"Transcription completed in {processing_time:.1f} seconds")
 
-            transcript = self._format_transcript(result, processing_time, audio_path)
+            transcript = self._format_transcript(result, processing_time, audio_path, options.language)
 
             # Note: clean_transcript parameter is deprecated - use 'thestill clean-transcript' instead
 
@@ -292,7 +292,13 @@ class WhisperTranscriber(Transcriber):
             print(f"Error transcribing {audio_path}: {e}")
             return None
 
-    def _format_transcript(self, whisper_result: Dict, processing_time: float, audio_path: str) -> Transcript:
+    def _format_transcript(
+        self,
+        whisper_result: Dict,
+        processing_time: float,
+        audio_path: str,
+        requested_language: Optional[str] = None,
+    ) -> Transcript:
         """Format Whisper output into structured Transcript"""
         segments = []
 
@@ -319,9 +325,15 @@ class WhisperTranscriber(Transcriber):
 
         filtered_segments = self._filter_hallucinations(segments)
 
+        # Use explicitly requested language if provided, otherwise use auto-detected
+        if requested_language:
+            language = requested_language
+        else:
+            language = whisper_result.get("language", "en")
+
         return Transcript(
             audio_file=audio_path,
-            language=whisper_result.get("language", "en"),
+            language=language,
             text=whisper_result.get("text", ""),
             segments=filtered_segments,
             processing_time=processing_time,
@@ -744,7 +756,9 @@ class WhisperXTranscriber(Transcriber):
                 print(f"✓ Speaker diarization: {speakers_detected} speakers identified")
             print(f"✓ Generated {len(result.get('segments', []))} transcript segments")
 
-            transcript = self._format_transcript(result, processing_time, audio_path, speakers_detected)
+            transcript = self._format_transcript(
+                result, processing_time, audio_path, speakers_detected, options.language
+            )
 
             # Note: clean_transcript parameter is deprecated - use 'thestill clean-transcript' instead
 
@@ -866,6 +880,7 @@ class WhisperXTranscriber(Transcriber):
         processing_time: float,
         audio_path: str,
         speakers_detected: Optional[int],
+        requested_language: Optional[str] = None,
     ) -> Transcript:
         """Format WhisperX output into structured Transcript"""
         segments = []
@@ -895,9 +910,15 @@ class WhisperXTranscriber(Transcriber):
 
         full_text = " ".join(seg.text for seg in segments)
 
+        # Use explicitly requested language if provided, otherwise use auto-detected
+        if requested_language:
+            language = requested_language
+        else:
+            language = whisperx_result.get("language", "en")
+
         return Transcript(
             audio_file=audio_path,
-            language=whisperx_result.get("language", "en"),
+            language=language,
             text=full_text,
             segments=segments,
             processing_time=processing_time,
