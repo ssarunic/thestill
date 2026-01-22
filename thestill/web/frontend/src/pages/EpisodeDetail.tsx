@@ -193,9 +193,9 @@ export default function EpisodeDetail() {
             <AudioPlayer audioUrl={episode.audio_url} title={episode.title} />
           </div>
 
-          {episode.description && (
+          {(episode.description_html || episode.description) && (
             <div className="border-t border-gray-100 pt-4">
-              <ExpandableDescription html={episode.description} maxLines={3} />
+              <ExpandableDescription html={episode.description_html || episode.description} maxLines={3} />
             </div>
           )}
         </div>

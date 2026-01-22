@@ -196,6 +196,7 @@ async def get_episode_by_slugs(
                 "podcast_title": podcast.title,
                 "title": episode.title,
                 "description": episode.description,
+                "description_html": episode.description_html,
                 "slug": episode.slug,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "audio_url": str(episode.audio_url),

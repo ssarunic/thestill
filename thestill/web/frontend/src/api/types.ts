@@ -102,7 +102,8 @@ export interface Episode {
   episode_index: number
   title: string
   slug: string
-  description: string
+  description: string  // Plain text description (for CLI, LLM prompts)
+  description_html?: string  // HTML description with links (for web UI)
   pub_date: string | null
   audio_url: string
   duration: number | null  // Duration in seconds
@@ -139,7 +140,8 @@ export interface EpisodeDetail {
   podcast_slug: string
   podcast_title: string
   title: string
-  description: string
+  description: string  // Plain text description (for CLI, LLM prompts)
+  description_html?: string  // HTML description with links (for web UI)
   slug: string
   pub_date: string | null
   audio_url: string

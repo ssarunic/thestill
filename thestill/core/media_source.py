@@ -285,9 +285,11 @@ class RSSMediaSource(MediaSource):
                 if should_include:
                     audio_url = self._extract_audio_url(entry)
                     if audio_url:
+                        description, description_html = self._extract_descriptions(entry)
                         episode = Episode(
                             title=entry.get("title", "Unknown Episode"),
-                            description=entry.get("description", ""),
+                            description=description,
+                            description_html=description_html,
                             pub_date=episode_date,
                             audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                             duration=parse_duration(entry.get("itunes_duration")),
@@ -504,6 +506,34 @@ class RSSMediaSource(MediaSource):
                 return str(href) if href else None
 
         return None
+
+    def _extract_descriptions(self, entry: Any) -> tuple[str, str]:
+        """
+        Extract plain text and HTML descriptions from RSS entry.
+
+        RSS feeds may provide descriptions in multiple formats:
+        - entry.description: Usually plain text (links stripped)
+        - entry.content: List of content objects, may include HTML with <a> tags
+
+        Args:
+            entry: Feedparser entry object
+
+        Returns:
+            Tuple of (plain_text_description, html_description)
+        """
+        plain_text = entry.get("description", "")
+        html_content = ""
+
+        # Check for HTML content in entry.content
+        content_list = entry.get("content", [])
+        for c in content_list:
+            content_type = c.get("type", "")
+            content_value = c.get("value", "")
+            if content_type == "text/html" and content_value:
+                html_content = content_value
+                break
+
+        return plain_text, html_content
 
     def _extract_episode_image(self, entry: Any) -> Optional[str]:
         """

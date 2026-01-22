@@ -160,6 +160,7 @@ async def get_all_episodes(
                 "title": episode.title,
                 "slug": episode.slug,
                 "description": episode.description,
+                "description_html": episode.description_html,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "audio_url": str(episode.audio_url),
                 "duration": episode.duration,

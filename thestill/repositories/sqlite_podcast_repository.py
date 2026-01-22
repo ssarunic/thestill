@@ -114,6 +114,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE podcasts ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
             logger.info("Migration complete: language column added to podcasts")
 
+        # Migration: Add description_html column to episodes (idempotent)
+        if "description_html" not in episode_columns:
+            logger.info("Migrating database: adding description_html column to episodes table")
+            conn.execute("ALTER TABLE episodes ADD COLUMN description_html TEXT NOT NULL DEFAULT ''")
+            logger.info("Migration complete: description_html column added to episodes")
+
         # Migration: Create podcast_followers table if it doesn't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='podcast_followers'")
         if cursor.fetchone() is None:
@@ -178,6 +184,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 title TEXT NOT NULL,
                 slug TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
+                description_html TEXT NOT NULL DEFAULT '',
                 pub_date TIMESTAMP NULL,
                 audio_url TEXT NOT NULL,
                 duration INTEGER NULL,
@@ -661,7 +668,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         # Check if episode exists (by podcast_id + external_id)
         cursor = conn.execute(
             """
-            SELECT id, title, slug, description, pub_date, audio_url, duration, image_url,
+            SELECT id, title, slug, description, description_html, pub_date, audio_url, duration, image_url,
                    audio_path, downsampled_audio_path, raw_transcript_path,
                    clean_transcript_path, summary_path
             FROM episodes
@@ -679,6 +686,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 existing["title"] != episode.title
                 or existing["slug"] != episode.slug
                 or existing["description"] != episode.description
+                or existing["description_html"] != episode.description_html
                 or existing["pub_date"] != pub_date_str
                 or existing["audio_url"] != str(episode.audio_url)
                 or existing["duration"] != episode.duration
@@ -695,7 +703,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute(
                     """
                     UPDATE episodes
-                    SET title = ?, slug = ?, description = ?, pub_date = ?, audio_url = ?,
+                    SET title = ?, slug = ?, description = ?, description_html = ?, pub_date = ?, audio_url = ?,
                         duration = ?, image_url = ?, audio_path = ?, downsampled_audio_path = ?,
                         raw_transcript_path = ?, clean_transcript_path = ?, summary_path = ?,
                         updated_at = ?
@@ -705,6 +713,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         episode.title,
                         episode.slug,
                         episode.description,
+                        episode.description_html,
                         pub_date_str,
                         str(episode.audio_url),
                         episode.duration,
@@ -728,9 +737,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 INSERT INTO episodes (
                     id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                    pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
+                    description_html, pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
                     raw_transcript_path, clean_transcript_path, summary_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     episode.id,
@@ -741,6 +750,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode.title,
                     episode.slug,
                     episode.description,
+                    episode.description_html,
                     episode.pub_date.isoformat() if episode.pub_date else None,
                     str(episode.audio_url),
                     episode.duration,
@@ -797,6 +807,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "title",
             "slug",
             "description",
+            "description_html",
             "duration",
             "image_url",
             # Failure tracking fields
@@ -1229,6 +1240,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             title=row["title"],
             slug=row["slug"] or "",
             description=row["description"],
+            description_html=row["description_html"] if row["description_html"] else "",
             pub_date=datetime.fromisoformat(row["pub_date"]) if row["pub_date"] else None,
             audio_url=row["audio_url"],
             duration=row["duration"],
@@ -1251,10 +1263,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             """
             INSERT INTO episodes (
                 id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
+                description_html, pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
                 raw_transcript_path, clean_transcript_path, summary_path,
                 failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -1265,6 +1277,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.title,
                 episode.slug,
                 episode.description,
+                episode.description_html,
                 episode.pub_date.isoformat() if episode.pub_date else None,
                 str(episode.audio_url),
                 episode.duration,

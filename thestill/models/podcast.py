@@ -116,7 +116,8 @@ class Episode(BaseModel):
     # Episode metadata
     title: str
     slug: str = ""  # URL/filesystem-safe identifier (auto-generated from title if empty)
-    description: str
+    description: str  # Plain text description (for LLM prompts, CLI)
+    description_html: str = ""  # HTML description with links (for web UI)
     pub_date: Optional[datetime] = None
     audio_url: HttpUrl
     duration: Optional[int] = None  # Duration in seconds (parsed from RSS itunes:duration)
@@ -235,12 +236,17 @@ class Episode(BaseModel):
         """
         Extract all links from the episode description.
 
+        Prefers description_html (which contains actual <a> tags) over
+        description (plain text) for link extraction.
+
         Returns:
             List of dicts with 'text' and 'url' keys
         """
         from thestill.utils.html_utils import extract_links_from_html
 
-        return extract_links_from_html(self.description)
+        # Prefer HTML version which has actual <a> tags
+        source = self.description_html if self.description_html else self.description
+        return extract_links_from_html(source)
 
 
 class Podcast(BaseModel):

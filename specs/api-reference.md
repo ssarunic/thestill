@@ -418,7 +418,8 @@ Get a specific episode by podcast and episode slugs.
     "podcast_slug": "podcast-name",
     "podcast_title": "Podcast Name",
     "title": "Episode Title",
-    "description": "...",
+    "description": "Plain text description...",
+    "description_html": "<p>HTML description with <a href=\"...\">links</a>...</p>",
     "slug": "episode-title",
     "pub_date": "2026-01-20T...",
     "audio_url": "https://...",
@@ -438,6 +439,11 @@ Get a specific episode by podcast and episode slugs.
   }
 }
 ```
+
+**Description Fields:**
+
+- `description` - Plain text version (links stripped). Use for LLM prompts, CLI, text processing.
+- `description_html` - HTML version with `<a>` tags preserved. Use for web UI display with clickable links. May be empty if RSS feed doesn't provide HTML content.
 
 ### GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript
 
@@ -514,7 +520,8 @@ Get episodes across all podcasts with filtering and pagination.
       "image_url": "https://...",
       "title": "Episode Title",
       "slug": "episode-title",
-      "description": "...",
+      "description": "Plain text description...",
+      "description_html": "<p>HTML description with <a href=\"...\">links</a>...</p>",
       "pub_date": "2026-01-20T...",
       "audio_url": "https://...",
       "duration": 3600,
@@ -534,6 +541,11 @@ Get episodes across all podcasts with filtering and pagination.
   "next_offset": 20
 }
 ```
+
+**Description Fields:**
+
+- `description` - Plain text version. Use for LLM prompts, CLI, text processing.
+- `description_html` - HTML version with links preserved. Use for web UI display.
 
 ### POST /api/episodes/bulk/process
 
