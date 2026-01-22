@@ -563,9 +563,14 @@ class PodcastFeedManager:
                             episode_date = self._parse_date(entry.get("published_parsed"))
                             audio_url = self._extract_audio_url(entry)
                             if audio_url:
+                                # Extract both plain text and HTML descriptions
+                                rss_source = RSSMediaSource()
+                                description, description_html = rss_source._extract_descriptions(entry)
+
                                 episode = Episode(
                                     title=entry.get("title", "Unknown Episode"),
-                                    description=entry.get("description", ""),
+                                    description=description,
+                                    description_html=description_html,
                                     pub_date=episode_date,
                                     audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                                     duration=parse_duration(entry.get("itunes_duration")),
