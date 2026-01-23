@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic.config import ConfigDict
 
-from .file_storage import FileStorage, LocalFileStorage
+from .file_storage import FileStorage, GCSFileStorage, LocalFileStorage, S3FileStorage
 from .path_manager import PathManager
 
 
@@ -153,19 +153,28 @@ class Config(BaseModel):
         if self.storage_backend == "local":
             return LocalFileStorage(str(self.storage_path))
         elif self.storage_backend == "s3":
-            # S3 storage will be implemented in Phase 3
-            # For now, raise an error with helpful message
-            raise NotImplementedError(
-                "S3 storage backend is not yet implemented. "
-                "Install 'boto3' and implement S3FileStorage in utils/file_storage.py. "
-                "Use STORAGE_BACKEND=local for now."
+            if not self.s3_bucket:
+                raise ValueError(
+                    "S3_BUCKET is required when using S3 storage backend. "
+                    "Set the S3_BUCKET environment variable."
+                )
+            return S3FileStorage(
+                bucket=self.s3_bucket,
+                region=self.s3_region,
+                prefix=self.s3_prefix,
+                endpoint_url=self.s3_endpoint_url or None,
             )
         elif self.storage_backend == "gcs":
-            # GCS storage will be implemented in Phase 3
-            raise NotImplementedError(
-                "GCS storage backend is not yet implemented. "
-                "Install 'google-cloud-storage' and implement GCSFileStorage in utils/file_storage.py. "
-                "Use STORAGE_BACKEND=local for now."
+            if not self.gcs_bucket:
+                raise ValueError(
+                    "GCS_BUCKET is required when using GCS storage backend. "
+                    "Set the GCS_BUCKET environment variable."
+                )
+            return GCSFileStorage(
+                bucket=self.gcs_bucket,
+                project=self.gcs_project or None,
+                prefix=self.gcs_prefix,
+                credentials_path=self.google_app_credentials or None,
             )
         else:
             raise ValueError(

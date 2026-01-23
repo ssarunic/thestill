@@ -15,7 +15,7 @@
 """Utility modules for Thestill application."""
 
 from .exceptions import ThestillError
-from .file_storage import FileStorage, LocalFileStorage
+from .file_storage import FileStorage, GCSFileStorage, LocalFileStorage, S3FileStorage
 from .html_utils import extract_links_from_html, html_to_plain_text
 
 __all__ = [
@@ -24,4 +24,6 @@ __all__ = [
     "extract_links_from_html",
     "FileStorage",
     "LocalFileStorage",
+    "S3FileStorage",
+    "GCSFileStorage",
 ]
