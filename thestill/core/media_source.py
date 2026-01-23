@@ -42,6 +42,7 @@ import requests
 
 from ..models.podcast import Episode, TranscriptLink
 from ..utils.duration import parse_duration
+from ..utils.podcast_categories import validate_category
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -172,7 +173,8 @@ class RSSMediaSource(MediaSource):
             url: RSS feed URL or Apple Podcasts URL
 
         Returns:
-            Dictionary with 'title', 'description', 'rss_url', 'image_url', 'language' or None if extraction fails
+            Dictionary with 'title', 'description', 'rss_url', 'image_url', 'language',
+            and category fields, or None if extraction fails
         """
         try:
             # Resolve Apple Podcasts URLs to RSS first
@@ -180,8 +182,14 @@ class RSSMediaSource(MediaSource):
             if not rss_url:
                 rss_url = url  # Assume it's already an RSS URL
 
-            # Parse RSS feed
-            parsed_feed = feedparser.parse(rss_url)
+            # Fetch raw RSS content for category extraction
+            rss_content = self._fetch_rss_content(rss_url)
+            if not rss_content:
+                logger.warning(f"Failed to fetch RSS content: {rss_url}")
+                return None
+
+            # Parse RSS feed with feedparser for basic metadata
+            parsed_feed = feedparser.parse(rss_content)
             if parsed_feed.bozo:
                 logger.warning(f"Invalid RSS feed: {rss_url}")
                 return None
@@ -217,12 +225,19 @@ class RSSMediaSource(MediaSource):
                 language = feed_language.split("-")[0].lower()[:2]
                 logger.debug(f"Extracted language from RSS: {feed_language} -> {language}")
 
+            # Extract categories from raw XML (feedparser doesn't handle nested categories well)
+            categories = self._extract_categories(rss_content)
+
             return {
                 "title": feed.get("title", "Unknown Podcast"),
                 "description": feed.get("description", ""),
                 "rss_url": rss_url,
                 "image_url": image_url,
                 "language": language,
+                "primary_category": categories.get("primary_category"),
+                "primary_subcategory": categories.get("primary_subcategory"),
+                "secondary_category": categories.get("secondary_category"),
+                "secondary_subcategory": categories.get("secondary_subcategory"),
             }
 
         except Exception as e:
@@ -376,6 +391,125 @@ class RSSMediaSource(MediaSource):
         except Exception as e:
             # Don't fail the refresh if debug save fails
             logger.warning(f"Failed to save debug RSS feed for {podcast_slug}: {e}")
+
+    def _extract_categories(self, rss_content: str) -> Dict[str, Optional[str]]:
+        """
+        Extract and validate podcast categories from raw RSS content.
+
+        Parses itunes:category tags from the channel element. Podcasts can have
+        up to two categories (primary and secondary), each with an optional subcategory.
+
+        RSS structure:
+        ```xml
+        <itunes:category text="Society &amp; Culture">
+            <itunes:category text="Documentary"/>
+        </itunes:category>
+        <itunes:category text="News">
+            <itunes:category text="Politics"/>
+        </itunes:category>
+        ```
+
+        Args:
+            rss_content: Raw RSS XML content
+
+        Returns:
+            Dict with keys: primary_category, primary_subcategory,
+                           secondary_category, secondary_subcategory
+            All values may be None if not found or invalid.
+        """
+        result: Dict[str, Optional[str]] = {
+            "primary_category": None,
+            "primary_subcategory": None,
+            "secondary_category": None,
+            "secondary_subcategory": None,
+        }
+
+        try:
+            root = ET.fromstring(rss_content)
+        except ET.ParseError as e:
+            logger.warning(f"Failed to parse RSS XML for category extraction: {e}")
+            return result
+
+        # Define iTunes namespace
+        ns = {"itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
+
+        # Find channel element
+        channel = root.find("channel")
+        if channel is None:
+            return result
+
+        # Find all top-level itunes:category tags in channel
+        # (not nested ones - those are subcategories)
+        categories = channel.findall("itunes:category", ns)
+        if not categories:
+            return result
+
+        # Process primary category (first itunes:category)
+        if len(categories) >= 1:
+            primary = categories[0]
+            primary_cat = primary.get("text", "")
+
+            # Decode HTML entities (e.g., "&amp;" -> "&")
+            if primary_cat:
+                primary_cat = self._decode_html_entities(primary_cat)
+
+            # Look for nested subcategory
+            primary_sub = None
+            nested = primary.find("itunes:category", ns)
+            if nested is not None:
+                primary_sub = nested.get("text", "")
+                if primary_sub:
+                    primary_sub = self._decode_html_entities(primary_sub)
+
+            # Validate against Apple taxonomy
+            validated = validate_category(primary_cat, primary_sub)
+            result["primary_category"] = validated.category
+            result["primary_subcategory"] = validated.subcategory
+
+            if validated.category:
+                logger.debug(f"Extracted primary category: {validated.category} / {validated.subcategory}")
+
+        # Process secondary category (second itunes:category)
+        if len(categories) >= 2:
+            secondary = categories[1]
+            secondary_cat = secondary.get("text", "")
+
+            if secondary_cat:
+                secondary_cat = self._decode_html_entities(secondary_cat)
+
+            # Look for nested subcategory
+            secondary_sub = None
+            nested = secondary.find("itunes:category", ns)
+            if nested is not None:
+                secondary_sub = nested.get("text", "")
+                if secondary_sub:
+                    secondary_sub = self._decode_html_entities(secondary_sub)
+
+            # Validate against Apple taxonomy
+            validated = validate_category(secondary_cat, secondary_sub)
+            result["secondary_category"] = validated.category
+            result["secondary_subcategory"] = validated.subcategory
+
+            if validated.category:
+                logger.debug(f"Extracted secondary category: {validated.category} / {validated.subcategory}")
+
+        return result
+
+    def _decode_html_entities(self, text: str) -> str:
+        """
+        Decode HTML entities in text.
+
+        Common entities in RSS: &amp; -> &, &quot; -> ", etc.
+
+        Args:
+            text: Text with potential HTML entities
+
+        Returns:
+            Decoded text
+        """
+        import html
+
+        return html.unescape(text)
 
     def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
         """

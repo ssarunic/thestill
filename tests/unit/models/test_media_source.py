@@ -63,13 +63,20 @@ class TestRSSMediaSource:
         mock_feed.bozo = False
         mock_feed.feed = {"title": "Test Podcast", "description": "A test podcast"}
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            metadata = source.extract_metadata("https://example.com/feed.xml")
+        # Mock the RSS content fetch
+        mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
+
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed):
+                metadata = source.extract_metadata("https://example.com/feed.xml")
 
         assert metadata is not None
         assert metadata["title"] == "Test Podcast"
         assert metadata["description"] == "A test podcast"
         assert metadata["rss_url"] == "https://example.com/feed.xml"
+        # Category fields should be present (None if not in feed)
+        assert "primary_category" in metadata
+        assert "secondary_category" in metadata
 
     def test_extract_metadata_invalid_feed(self):
         """Test RSS metadata extraction with invalid feed."""
@@ -78,8 +85,12 @@ class TestRSSMediaSource:
         mock_feed = MagicMock()
         mock_feed.bozo = True  # Indicates malformed feed
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            metadata = source.extract_metadata("https://example.com/feed.xml")
+        # Mock the RSS content fetch
+        mock_rss_content = "<invalid>xml</invalid>"
+
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed):
+                metadata = source.extract_metadata("https://example.com/feed.xml")
 
         assert metadata is None
 
@@ -95,13 +106,17 @@ class TestRSSMediaSource:
         mock_response.read.return_value = b'{"resultCount":1,"results":[{"feedUrl":"https://example.com/rss"}]}'
         mock_urlopen.return_value = mock_response
 
+        # Mock the RSS content fetch
+        mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
+
         # Mock feedparser for RSS extraction
         mock_feed = MagicMock()
         mock_feed.bozo = False
         mock_feed.feed = {"title": "Apple Podcast", "description": "From iTunes"}
 
-        with patch("feedparser.parse", return_value=mock_feed):
-            metadata = source.extract_metadata("https://podcasts.apple.com/us/podcast/id123456")
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed):
+                metadata = source.extract_metadata("https://podcasts.apple.com/us/podcast/id123456")
 
         assert metadata is not None
         assert metadata["title"] == "Apple Podcast"

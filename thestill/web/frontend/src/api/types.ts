@@ -84,6 +84,11 @@ export interface PodcastDetail {
   rss_url: string
   slug: string
   image_url: string | null
+  // Category metadata (Apple Podcasts taxonomy)
+  primary_category: string | null
+  primary_subcategory: string | null
+  secondary_category: string | null
+  secondary_subcategory: string | null
   last_processed: string | null
   episodes_count: number
   episodes_processed: number

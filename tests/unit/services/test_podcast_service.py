@@ -123,22 +123,24 @@ class TestAddPodcast:
 
     def test_add_podcast_success(self, podcast_service, sample_podcasts):
         """Should add podcast and return it."""
-        # Setup mocks
-        podcast_service.feed_manager.add_podcast.return_value = True
-        podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
+        # Setup mocks - add_podcast now returns the Podcast object directly
+        new_podcast = sample_podcasts[0]
+        podcast_service.feed_manager.add_podcast.return_value = new_podcast
 
         # Execute
         result = podcast_service.add_podcast("https://example.com/tech.xml")
 
         # Verify
         assert result is not None
-        assert result.title == "News Daily"  # Last podcast in list
+        assert result.title == new_podcast.title
         podcast_service.feed_manager.add_podcast.assert_called_once_with("https://example.com/tech.xml")
 
-    def test_add_podcast_failure(self, podcast_service):
+    def test_add_podcast_failure(self, podcast_service, mock_repository):
         """Should return None on failure."""
-        # Setup mocks
-        podcast_service.feed_manager.add_podcast.return_value = False
+        # Setup mocks - add_podcast returns None on failure
+        podcast_service.feed_manager.add_podcast.return_value = None
+        # Also mock the repository fallback to return None
+        mock_repository.get_by_url.return_value = None
 
         # Execute
         result = podcast_service.add_podcast("https://example.com/bad.xml")

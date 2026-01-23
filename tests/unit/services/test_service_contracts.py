@@ -330,7 +330,7 @@ class TestRefreshServiceContract:
         assert result.podcast_filter_applied is None or isinstance(result.podcast_filter_applied, str)
 
     def test_refresh_handles_invalid_podcast_gracefully(self, podcast_service, sample_podcast):
-        """Contract: refresh() raises ValueError for invalid podcast_id when podcast not found (and episodes exist)."""
+        """Contract: refresh() returns empty result for invalid podcast_id."""
         from thestill.core.feed_manager import PodcastFeedManager
         from thestill.models.podcast import Episode
 
@@ -353,9 +353,11 @@ class TestRefreshServiceContract:
         # Discover episodes first
         feed_manager.get_new_episodes()
 
-        # Now test with invalid podcast_id - should raise ValueError
-        with pytest.raises(ValueError, match="Podcast not found"):
-            service.refresh(podcast_id=999)  # Non-existent podcast
+        # Test with invalid podcast_id - should return empty result (graceful handling)
+        result = service.refresh(podcast_id=999)  # Non-existent podcast
+        assert isinstance(result, RefreshResult)
+        assert result.total_episodes == 0
+        assert result.episodes_by_podcast == []
 
 
 class TestStatsServiceContract:

@@ -150,19 +150,23 @@ export default function PodcastDetail() {
                 <p className="text-gray-600 mt-2">No description</p>
               )}
 
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 sm:gap-6 mt-4 text-sm">
-                <div className="flex items-center gap-1 text-gray-600">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                  </svg>
-                  <span>{podcast.episodes_count} episodes</span>
-                </div>
-                <div className="flex items-center gap-1 text-green-600">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>{podcast.episodes_processed} processed</span>
-                </div>
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-2 gap-y-1 mt-4 text-sm text-gray-600">
+                {/* Category */}
+                {podcast.primary_category && (
+                  <>
+                    <span>
+                      {podcast.primary_subcategory
+                        ? `${podcast.primary_category} › ${podcast.primary_subcategory}`
+                        : podcast.primary_category}
+                    </span>
+                    <span className="text-gray-300">·</span>
+                  </>
+                )}
+                {/* Episode count */}
+                <span>{podcast.episodes_count} episodes</span>
+                <span className="text-gray-300">·</span>
+                {/* Processed count */}
+                <span className="text-green-600">{podcast.episodes_processed} processed</span>
               </div>
             </div>
           </div>

@@ -266,6 +266,12 @@ class Podcast(BaseModel):
     image_url: Optional[str] = None  # Podcast artwork URL (from itunes:image or RSS image tag)
     language: str = "en"  # ISO 639-1 language code (e.g., "en", "hr", "de") - extracted from RSS <language> tag
 
+    # Category metadata (Apple Podcasts taxonomy via itunes:category RSS tag)
+    primary_category: Optional[str] = None  # Main category (e.g., "Society & Culture")
+    primary_subcategory: Optional[str] = None  # Subcategory of primary (e.g., "Documentary")
+    secondary_category: Optional[str] = None  # Second category if defined
+    secondary_subcategory: Optional[str] = None  # Subcategory of secondary
+
     # Processing status
     last_processed: Optional[datetime] = None
 

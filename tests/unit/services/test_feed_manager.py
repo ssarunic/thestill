@@ -138,44 +138,49 @@ class TestAddPodcast:
         # Execute
         result = feed_manager.add_podcast("https://example.com/feed.xml")
 
-        # Verify
-        assert result is True
+        # Verify - add_podcast returns Podcast object on success, None on failure
+        assert result is not None
+        assert result.title == "Test Podcast"
+        assert str(result.rss_url) == "https://example.com/feed.xml"
         mock_repository.save.assert_called_once()
-        saved_podcast = mock_repository.save.call_args[0][0]
-        assert saved_podcast.title == "Test Podcast"
-        assert str(saved_podcast.rss_url) == "https://example.com/feed.xml"
 
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_add_podcast_already_exists(self, mock_parse, feed_manager, mock_repository):
-        """Should return False if podcast already exists."""
+        """Should return existing podcast if already exists (idempotent)."""
         # Setup
-        mock_feed = Mock()
-        mock_feed.bozo = False
-        mock_feed.feed = {"title": "Existing", "description": ""}
-        mock_parse.return_value = mock_feed
+        mock_source = Mock()
+        mock_source.extract_metadata.return_value = {
+            "title": "Existing Podcast",
+            "description": "Already in DB",
+            "rss_url": "https://example.com/feed.xml",
+        }
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
 
         mock_repository.exists.return_value = True
+        existing_podcast = Mock()
+        existing_podcast.title = "Existing Podcast"
+        mock_repository.get_by_url.return_value = existing_podcast
 
         # Execute
         result = feed_manager.add_podcast("https://example.com/feed.xml")
 
-        # Verify
-        assert result is False
+        # Verify - returns existing podcast (idempotent behavior)
+        assert result is not None
+        assert result.title == "Existing Podcast"
         mock_repository.save.assert_not_called()
 
-    @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_add_podcast_invalid_rss(self, mock_parse, feed_manager):
-        """Should return False for invalid RSS feed."""
-        # Setup - bozo flag indicates invalid feed
-        mock_feed = Mock()
-        mock_feed.bozo = True
-        mock_parse.return_value = mock_feed
+    def test_add_podcast_invalid_rss(self, feed_manager):
+        """Should return None for invalid RSS feed."""
+        # Setup - mock media source that returns None for invalid feed
+        mock_source = Mock()
+        mock_source.extract_metadata.return_value = None
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
 
         # Execute
         result = feed_manager.add_podcast("https://example.com/bad.xml")
 
-        # Verify
-        assert result is False
+        # Verify - returns None when metadata extraction fails
+        assert result is None
 
     def test_add_youtube_podcast(self, feed_manager, mock_repository):
         """Should handle YouTube URLs."""
@@ -185,6 +190,7 @@ class TestAddPodcast:
             "title": "YouTube Podcast",
             "description": "A YouTube channel",
             "rss_url": "https://youtube.com/watch?v=123",
+            "language": "en",
         }
         feed_manager.media_source_factory.detect_source.return_value = mock_source
         mock_repository.exists.return_value = False
@@ -193,8 +199,9 @@ class TestAddPodcast:
         # Execute
         result = feed_manager.add_podcast("https://youtube.com/watch?v=123")
 
-        # Verify
-        assert result is True
+        # Verify - returns Podcast object on success
+        assert result is not None
+        assert result.title == "YouTube Podcast"
         mock_repository.save.assert_called_once()
 
 
@@ -333,14 +340,16 @@ class TestEpisodeMarking:
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
-    @patch("thestill.core.feed_manager.feedparser.parse")
-    def test_add_podcast_network_error(self, mock_parse, feed_manager):
+    def test_add_podcast_network_error(self, feed_manager):
         """Should handle network errors gracefully."""
-        mock_parse.side_effect = Exception("Network error")
+        # Setup - mock media source that raises an error
+        mock_source = Mock()
+        mock_source.extract_metadata.return_value = None  # Network error leads to None
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
 
         result = feed_manager.add_podcast("https://example.com/feed.xml")
 
-        assert result is False
+        assert result is None
 
     @patch("thestill.core.feed_manager.feedparser.parse")
     def test_get_new_episodes_malformed_feed(self, mock_parse, feed_manager, mock_repository):

@@ -151,6 +151,10 @@ class PodcastFeedManager:
                 rss_url=metadata.get("rss_url", url),  # type: ignore[arg-type]  # Pydantic validates to HttpUrl
                 image_url=metadata.get("image_url"),
                 language=metadata.get("language", "en"),
+                primary_category=metadata.get("primary_category"),
+                primary_subcategory=metadata.get("primary_subcategory"),
+                secondary_category=metadata.get("secondary_category"),
+                secondary_subcategory=metadata.get("secondary_subcategory"),
             )
 
             # Save if not already exists, otherwise return existing
@@ -225,23 +229,37 @@ class PodcastFeedManager:
                 }
 
                 # Add podcast_slug for RSS sources to enable debug RSS saving
-                language_changed = False
+                metadata_changed = False
                 if isinstance(source, RSSMediaSource):
                     fetch_kwargs["podcast_slug"] = podcast.slug
 
-                    # Update language from RSS feed if it changed (or was never set)
+                    # Update metadata from RSS feed if it changed
                     metadata = source.extract_metadata(str(podcast.rss_url))
-                    if metadata and metadata.get("language"):
-                        new_language = metadata["language"]
-                        if podcast.language != new_language:
-                            logger.info(f"Updating podcast language: {podcast.language} -> {new_language}")
-                            podcast.language = new_language
-                            language_changed = True
+                    if metadata:
+                        # Update language
+                        if metadata.get("language") and podcast.language != metadata["language"]:
+                            logger.info(f"Updating podcast language: {podcast.language} -> {metadata['language']}")
+                            podcast.language = metadata["language"]
+                            metadata_changed = True
+
+                        # Update categories (overwrite with current values from RSS)
+                        if podcast.primary_category != metadata.get("primary_category"):
+                            podcast.primary_category = metadata.get("primary_category")
+                            metadata_changed = True
+                        if podcast.primary_subcategory != metadata.get("primary_subcategory"):
+                            podcast.primary_subcategory = metadata.get("primary_subcategory")
+                            metadata_changed = True
+                        if podcast.secondary_category != metadata.get("secondary_category"):
+                            podcast.secondary_category = metadata.get("secondary_category")
+                            metadata_changed = True
+                        if podcast.secondary_subcategory != metadata.get("secondary_subcategory"):
+                            podcast.secondary_subcategory = metadata.get("secondary_subcategory")
+                            metadata_changed = True
 
                 episodes = source.fetch_episodes(**fetch_kwargs)
 
-                # Save podcast if language changed (even if no new episodes)
-                if language_changed and not episodes:
+                # Save podcast if metadata changed (even if no new episodes)
+                if metadata_changed and not episodes:
                     self.repository.save_podcast(podcast)
 
                 # Add new episodes to podcast

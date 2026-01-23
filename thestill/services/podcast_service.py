@@ -103,6 +103,11 @@ class PodcastWithIndex(BaseModel):
     slug: str
     image_url: Optional[str] = None
     language: str = "en"  # ISO 639-1 language code
+    # Category fields (Apple Podcasts taxonomy)
+    primary_category: Optional[str] = None
+    primary_subcategory: Optional[str] = None
+    secondary_category: Optional[str] = None
+    secondary_subcategory: Optional[str] = None
     last_processed: Optional[datetime] = None
     episodes_count: int = 0
     episodes_processed: int = 0
@@ -269,6 +274,10 @@ class PodcastService:
                     slug=podcast.slug,
                     image_url=podcast.image_url,
                     language=podcast.language,
+                    primary_category=podcast.primary_category,
+                    primary_subcategory=podcast.primary_subcategory,
+                    secondary_category=podcast.secondary_category,
+                    secondary_subcategory=podcast.secondary_subcategory,
                     last_processed=podcast.last_processed,
                     episodes_count=len(podcast.episodes),
                     episodes_processed=episodes_processed,
