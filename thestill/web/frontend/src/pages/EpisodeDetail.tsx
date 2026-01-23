@@ -176,7 +176,7 @@ export default function EpisodeDetail() {
           )}
 
           {/* Pipeline Action Button */}
-          {!episode.is_failed && (
+          {!episode.is_failed && episode.state !== 'summarized' && (
             <div className="border-t border-gray-100 pt-4">
               <PipelineActionButton
                 podcastSlug={podcastSlug!}
