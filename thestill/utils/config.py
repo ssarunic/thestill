@@ -47,6 +47,7 @@ class Config(BaseModel):
     # Storage Paths
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
+    database_url: str = ""  # PostgreSQL connection URL (overrides database_path if set)
 
     # Path Manager (initialized after model creation)
     # All path operations should use path_manager methods instead of direct path attributes
@@ -174,6 +175,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
     # All paths derived from storage_path for cross-platform compatibility
     storage_path = Path(os.getenv("STORAGE_PATH", "./data"))
     database_path = os.getenv("DATABASE_PATH", "")  # Empty string = use default
+    database_url = os.getenv("DATABASE_URL", "")  # PostgreSQL URL (overrides database_path)
 
     config_data = {
         "openai_api_key": openai_api_key,
@@ -191,6 +193,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "elevenlabs_async_threshold_mb": int(os.getenv("ELEVENLABS_ASYNC_THRESHOLD_MB", "0")),
         "storage_path": storage_path,
         "database_path": database_path,
+        "database_url": database_url,
         # Note: Path operations should use config.path_manager methods
         # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
         # clean_transcripts_path, summaries_path, evaluations_path

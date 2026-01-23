@@ -7,7 +7,7 @@ enabling easy swapping between different storage backends (JSON, SQLite, Postgre
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..models.podcast import Episode, Podcast, TranscriptLink
 
@@ -356,5 +356,57 @@ class EpisodeRepository(ABC):
             episodes, total = repository.get_all_episodes(
                 limit=20, offset=0, state='transcribed'
             )
+        """
+        pass
+
+    @abstractmethod
+    def get_episode_state_counts(self) -> Dict[str, int]:
+        """
+        Get counts of episodes in each processing state.
+
+        This is an optimized query that uses SQL COUNT aggregates instead of
+        loading all episodes into memory. Critical for dashboard performance.
+
+        Returns:
+            Dictionary mapping state names to counts:
+            {
+                'discovered': 10,      # Has audio_url but no audio_path
+                'downloaded': 5,       # Has audio_path but no downsampled_audio_path
+                'downsampled': 3,      # Has downsampled_audio_path but no raw_transcript_path
+                'transcribed': 8,      # Has raw_transcript_path but no clean_transcript_path
+                'cleaned': 2,          # Has clean_transcript_path but no summary_path
+                'summarized': 100,     # Has summary_path (fully processed)
+                'failed': 2,           # Has failed_at_stage set
+                'total': 130,          # Total episodes
+            }
+
+        Performance:
+            O(1) database operations using partial index hints
+            Memory: O(1) - only returns counts, not episode data
+        """
+        pass
+
+    @abstractmethod
+    def get_recent_activity(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[Tuple[Podcast, Episode]]:
+        """
+        Get recently updated episodes for activity feed.
+
+        This is an optimized query that uses SQL ORDER BY and LIMIT instead of
+        loading all episodes and sorting in Python. Critical for dashboard.
+
+        Args:
+            limit: Maximum number of episodes to return (default 20)
+            offset: Number of episodes to skip for pagination (default 0)
+
+        Returns:
+            List of (Podcast, Episode) tuples ordered by episode.updated_at DESC
+
+        Performance:
+            Uses idx_episodes_updated_at index for O(log N) seek
+            Memory: O(limit) - only returns requested page
         """
         pass

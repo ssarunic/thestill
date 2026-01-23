@@ -29,7 +29,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from .podcast_repository import EpisodeRepository, PodcastRepository
@@ -223,6 +223,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_episodes_state_transcribed
                 ON episodes(podcast_id, pub_date DESC)
                 WHERE raw_transcript_path IS NOT NULL AND clean_transcript_path IS NULL;
+
+            -- Index for failed episodes (DLQ queries)
+            CREATE INDEX IF NOT EXISTS idx_episodes_failed
+                ON episodes(failed_at DESC)
+                WHERE failed_at_stage IS NOT NULL;
 
             -- ========================================================================
             -- EPISODE TRANSCRIPT LINKS TABLE (Podcasting 2.0 <podcast:transcript>)
@@ -1172,6 +1177,73 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 results.append((podcast, episode))
 
             return results, total
+
+    def get_episode_state_counts(self) -> Dict[str, int]:
+        """
+        Get counts of episodes in each processing state.
+
+        Uses SQL COUNT aggregates for O(1) memory usage instead of loading all episodes.
+        """
+        with self._get_connection() as conn:
+            # Get all counts in a single query using CASE WHEN
+            cursor = conn.execute(
+                """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN audio_path IS NULL THEN 1 ELSE 0 END) as discovered,
+                    SUM(CASE WHEN audio_path IS NOT NULL AND downsampled_audio_path IS NULL THEN 1 ELSE 0 END) as downloaded,
+                    SUM(CASE WHEN downsampled_audio_path IS NOT NULL AND raw_transcript_path IS NULL THEN 1 ELSE 0 END) as downsampled,
+                    SUM(CASE WHEN raw_transcript_path IS NOT NULL AND clean_transcript_path IS NULL THEN 1 ELSE 0 END) as transcribed,
+                    SUM(CASE WHEN clean_transcript_path IS NOT NULL AND summary_path IS NULL THEN 1 ELSE 0 END) as cleaned,
+                    SUM(CASE WHEN summary_path IS NOT NULL THEN 1 ELSE 0 END) as summarized,
+                    SUM(CASE WHEN failed_at_stage IS NOT NULL THEN 1 ELSE 0 END) as failed
+                FROM episodes
+                """
+            )
+
+            row = cursor.fetchone()
+            return {
+                "total": row["total"] or 0,
+                "discovered": row["discovered"] or 0,
+                "downloaded": row["downloaded"] or 0,
+                "downsampled": row["downsampled"] or 0,
+                "transcribed": row["transcribed"] or 0,
+                "cleaned": row["cleaned"] or 0,
+                "summarized": row["summarized"] or 0,
+                "failed": row["failed"] or 0,
+            }
+
+    def get_recent_activity(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[Tuple[Podcast, Episode]]:
+        """
+        Get recently updated episodes for activity feed.
+
+        Uses SQL ORDER BY and LIMIT instead of loading all episodes.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.language as p_language, p.last_processed, p.updated_at as p_updated_at, e.*
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                ORDER BY e.updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                podcast = self._row_to_podcast_minimal(row)
+                episode = self._row_to_episode(row)
+                results.append((podcast, episode))
+
+            return results
 
     # ============================================================================
     # Helper Methods
