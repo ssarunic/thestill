@@ -15,37 +15,72 @@
 """
 Abstract file storage interface for thestill.
 
-This module provides a storage abstraction layer that allows the application
-to work with different storage backends (local filesystem, S3, GCS) without
-changing the core business logic.
+This module provides a cloud-first storage abstraction layer that allows the
+application to work with different storage backends (local filesystem, S3, GCS)
+without changing the core business logic.
+
+Design Philosophy:
+    - Cloud-native: Interface designed around cloud storage semantics
+    - Efficient: Batch metadata retrieval, idempotent operations
+    - Local adapts to cloud: LocalFileStorage emulates cloud behavior
 
 Usage:
-    from thestill.utils.file_storage import LocalFileStorage
+    from thestill.utils.file_storage import LocalFileStorage, FileMetadata
 
     storage = LocalFileStorage(base_path="./data")
 
-    # Write and read text files
+    # Write and read files
     storage.write_text("transcripts/episode.md", "# Transcript...")
     content = storage.read_text("transcripts/episode.md")
 
-    # Write and read binary files
-    storage.write_bytes("audio/episode.mp3", audio_data)
-    audio = storage.read_bytes("audio/episode.mp3")
+    # Get metadata efficiently (single call for all attributes)
+    metadata = storage.get_metadata("transcripts/episode.md")
+    print(f"Size: {metadata.size}, Modified: {metadata.modified_time}")
 
-    # Check existence and delete
-    if storage.exists("transcripts/episode.md"):
-        storage.delete("transcripts/episode.md")
+    # List files with metadata (no extra API calls needed)
+    for meta in storage.list_files("transcripts/"):
+        print(f"{meta.path}: {meta.size} bytes")
+
+    # Idempotent delete (no existence check needed)
+    storage.delete("transcripts/episode.md")  # Safe even if doesn't exist
+
+    # Batch delete (efficient for cloud - S3 can delete 1000 at once)
+    storage.delete_batch(["file1.txt", "file2.txt", "file3.txt"])
 """
 
 import fnmatch
 import tempfile
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, List, Optional
 
 if TYPE_CHECKING:
-    from mypy_boto3_s3 import S3Client
     from google.cloud.storage import Bucket, Client as GCSClient
+    from mypy_boto3_s3 import S3Client
+
+
+@dataclass
+class FileMetadata:
+    """
+    Metadata for a file in storage.
+
+    This class represents all metadata that can be retrieved in a single
+    API call from cloud storage backends. Using this instead of separate
+    get_size/get_modified_time calls reduces API requests.
+    """
+
+    path: str
+    size: int
+    modified_time: datetime
+    content_type: Optional[str] = None
+    etag: Optional[str] = None
+
+    @property
+    def modified_timestamp(self) -> float:
+        """Get modified time as Unix timestamp for backwards compatibility."""
+        return self.modified_time.timestamp()
 
 
 class FileStorage(ABC):
@@ -57,6 +92,11 @@ class FileStorage(ABC):
 
     All paths are relative to the storage root and use forward slashes
     as separators (e.g., "transcripts/podcast-slug/episode.md").
+
+    Design Principles:
+        - Operations are idempotent where possible (delete won't fail if missing)
+        - Metadata is batched (get_metadata returns all attributes at once)
+        - list_files returns metadata to avoid N+1 API calls
     """
 
     @abstractmethod
@@ -134,6 +174,9 @@ class FileStorage(ABC):
         """
         Check if a file exists.
 
+        Note: Prefer handling FileNotFoundError from read operations
+        rather than checking existence first (saves an API call).
+
         Args:
             path: Relative path to the file (forward slashes)
 
@@ -143,38 +186,80 @@ class FileStorage(ABC):
         pass
 
     @abstractmethod
-    def delete(self, path: str) -> bool:
+    def delete(self, path: str) -> None:
         """
-        Delete a file.
+        Delete a file (idempotent).
+
+        This operation is idempotent - it succeeds even if the file
+        doesn't exist. This matches cloud storage semantics and avoids
+        the need for existence checks.
+
+        Args:
+            path: Relative path to the file (forward slashes)
+        """
+        pass
+
+    @abstractmethod
+    def delete_batch(self, paths: List[str]) -> int:
+        """
+        Delete multiple files efficiently.
+
+        For cloud backends, this can delete many files in a single API call
+        (S3 supports up to 1000 per request). For local storage, this
+        iterates but still provides a consistent interface.
+
+        Args:
+            paths: List of relative paths to delete
+
+        Returns:
+            Number of files that were actually deleted
+        """
+        pass
+
+    @abstractmethod
+    def get_metadata(self, path: str) -> FileMetadata:
+        """
+        Get file metadata in a single call.
+
+        This is the preferred way to get file attributes. Use this instead
+        of separate get_size/get_modified_time calls to reduce API requests.
 
         Args:
             path: Relative path to the file (forward slashes)
 
         Returns:
-            True if file was deleted, False if it didn't exist
+            FileMetadata with size, modified_time, etc.
+
+        Raises:
+            FileNotFoundError: If file does not exist
         """
         pass
 
     @abstractmethod
     def list_files(
         self, prefix: str = "", pattern: Optional[str] = None
-    ) -> Iterator[str]:
+    ) -> Iterator[FileMetadata]:
         """
-        List files with optional prefix and glob pattern.
+        List files with metadata.
+
+        Returns FileMetadata for each file, avoiding the need for
+        separate get_metadata calls. Cloud storage APIs return this
+        information with the listing at no extra cost.
 
         Args:
             prefix: Directory prefix to search in (e.g., "transcripts/")
             pattern: Optional glob pattern (e.g., "*.md", "**/*.json")
 
         Yields:
-            Relative paths of matching files
+            FileMetadata for each matching file
         """
         pass
 
-    @abstractmethod
     def get_size(self, path: str) -> int:
         """
         Get the size of a file in bytes.
+
+        Note: Prefer get_metadata() if you need multiple attributes.
 
         Args:
             path: Relative path to the file (forward slashes)
@@ -185,12 +270,13 @@ class FileStorage(ABC):
         Raises:
             FileNotFoundError: If file does not exist
         """
-        pass
+        return self.get_metadata(path).size
 
-    @abstractmethod
     def get_modified_time(self, path: str) -> float:
         """
         Get the last modified timestamp of a file.
+
+        Note: Prefer get_metadata() if you need multiple attributes.
 
         Args:
             path: Relative path to the file (forward slashes)
@@ -201,7 +287,7 @@ class FileStorage(ABC):
         Raises:
             FileNotFoundError: If file does not exist
         """
-        pass
+        return self.get_metadata(path).modified_timestamp
 
     def get_public_url(
         self, path: str, expires_in: int = 3600
@@ -221,12 +307,12 @@ class FileStorage(ABC):
         """
         return None
 
-    def get_local_path(self, path: str) -> Optional[Path]:
+    def get_local_path(self, path: str) -> Path:
         """
         Get local filesystem path for a file.
 
         For local storage, returns the actual filesystem path.
-        For cloud storage, may download to a temporary file and return that path.
+        For cloud storage, downloads to a temporary file and returns that path.
 
         This is needed for tools that require filesystem access (e.g., pydub, whisper).
 
@@ -234,15 +320,18 @@ class FileStorage(ABC):
             path: Relative path to the file (forward slashes)
 
         Returns:
-            Local Path object, or None if not available
+            Local Path object
+
+        Raises:
+            FileNotFoundError: If file does not exist
         """
-        return None
+        raise NotImplementedError("Subclass must implement get_local_path")
 
     def ensure_directory(self, path: str) -> None:
         """
         Ensure a directory exists (for backends that support directories).
 
-        For cloud storage backends, this may be a no-op since directories
+        For cloud storage backends, this is a no-op since directories
         are implicit in object keys.
 
         Args:
@@ -312,18 +401,37 @@ class LocalFileStorage(FileStorage):
         file_path = self._resolve_path(path)
         return file_path.exists()
 
-    def delete(self, path: str) -> bool:
-        """Delete a file."""
+    def delete(self, path: str) -> None:
+        """Delete a file (idempotent)."""
         file_path = self._resolve_path(path)
-        if file_path.exists():
-            file_path.unlink()
-            return True
-        return False
+        file_path.unlink(missing_ok=True)
+
+    def delete_batch(self, paths: List[str]) -> int:
+        """Delete multiple files."""
+        deleted = 0
+        for path in paths:
+            file_path = self._resolve_path(path)
+            if file_path.exists():
+                file_path.unlink()
+                deleted += 1
+        return deleted
+
+    def get_metadata(self, path: str) -> FileMetadata:
+        """Get file metadata."""
+        file_path = self._resolve_path(path)
+        stat = file_path.stat()
+        return FileMetadata(
+            path=path,
+            size=stat.st_size,
+            modified_time=datetime.fromtimestamp(stat.st_mtime),
+            content_type=None,  # Local filesystem doesn't track content type
+            etag=None,
+        )
 
     def list_files(
         self, prefix: str = "", pattern: Optional[str] = None
-    ) -> Iterator[str]:
-        """List files with optional prefix and glob pattern."""
+    ) -> Iterator[FileMetadata]:
+        """List files with metadata."""
         search_path = self._resolve_path(prefix) if prefix else self.base_path
 
         if not search_path.exists():
@@ -333,29 +441,31 @@ class LocalFileStorage(FileStorage):
             # Use glob pattern
             for file_path in search_path.glob(pattern):
                 if file_path.is_file():
-                    # Return relative path with forward slashes
-                    relative = file_path.relative_to(self.base_path)
-                    yield str(relative).replace("\\", "/")
+                    relative = str(file_path.relative_to(self.base_path)).replace("\\", "/")
+                    stat = file_path.stat()
+                    yield FileMetadata(
+                        path=relative,
+                        size=stat.st_size,
+                        modified_time=datetime.fromtimestamp(stat.st_mtime),
+                    )
         else:
             # List all files recursively
             for file_path in search_path.rglob("*"):
                 if file_path.is_file():
-                    relative = file_path.relative_to(self.base_path)
-                    yield str(relative).replace("\\", "/")
+                    relative = str(file_path.relative_to(self.base_path)).replace("\\", "/")
+                    stat = file_path.stat()
+                    yield FileMetadata(
+                        path=relative,
+                        size=stat.st_size,
+                        modified_time=datetime.fromtimestamp(stat.st_mtime),
+                    )
 
-    def get_size(self, path: str) -> int:
-        """Get the size of a file in bytes."""
-        file_path = self._resolve_path(path)
-        return file_path.stat().st_size
-
-    def get_modified_time(self, path: str) -> float:
-        """Get the last modified timestamp of a file."""
-        file_path = self._resolve_path(path)
-        return file_path.stat().st_mtime
-
-    def get_local_path(self, path: str) -> Optional[Path]:
+    def get_local_path(self, path: str) -> Path:
         """Get local filesystem path for a file."""
-        return self._resolve_path(path)
+        file_path = self._resolve_path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return file_path
 
     def ensure_directory(self, path: str) -> None:
         """Ensure a directory exists."""
@@ -493,21 +603,56 @@ class S3FileStorage(FileStorage):
                 return False
             raise
 
-    def delete(self, path: str) -> bool:
-        """Delete an object from S3."""
-        if not self.exists(path):
-            return False
+    def delete(self, path: str) -> None:
+        """Delete an object from S3 (idempotent)."""
+        key = self._get_key(path)
+        # S3 delete is already idempotent - no error if key doesn't exist
+        self._client.delete_object(Bucket=self.bucket_name, Key=key)
+
+    def delete_batch(self, paths: List[str]) -> int:
+        """Delete multiple objects from S3 efficiently."""
+        if not paths:
+            return 0
+
+        # S3 supports deleting up to 1000 objects per request
+        deleted = 0
+        batch_size = 1000
+
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i : i + batch_size]
+            objects = [{"Key": self._get_key(p)} for p in batch]
+
+            response = self._client.delete_objects(
+                Bucket=self.bucket_name,
+                Delete={"Objects": objects, "Quiet": False},
+            )
+
+            # Count successfully deleted (not errors)
+            deleted += len(response.get("Deleted", []))
+
+        return deleted
+
+    def get_metadata(self, path: str) -> FileMetadata:
+        """Get file metadata in a single API call."""
         key = self._get_key(path)
         try:
-            self._client.delete_object(Bucket=self.bucket_name, Key=key)
-            return True
-        except self._ClientError:
-            return False
+            response = self._client.head_object(Bucket=self.bucket_name, Key=key)
+            return FileMetadata(
+                path=path,
+                size=response["ContentLength"],
+                modified_time=response["LastModified"],
+                content_type=response.get("ContentType"),
+                etag=response.get("ETag", "").strip('"'),
+            )
+        except self._ClientError as e:
+            if e.response["Error"]["Code"] == "404":
+                raise FileNotFoundError(f"File not found: {path}")
+            raise
 
     def list_files(
         self, prefix: str = "", pattern: Optional[str] = None
-    ) -> Iterator[str]:
-        """List objects in S3 with optional prefix and glob pattern."""
+    ) -> Iterator[FileMetadata]:
+        """List objects in S3 with metadata."""
         search_prefix = self._get_key(prefix) if prefix else self.prefix
 
         paginator = self._client.get_paginator("list_objects_v2")
@@ -522,36 +667,20 @@ class S3FileStorage(FileStorage):
 
                 relative_path = self._strip_prefix(key)
 
+                # Apply pattern filter if specified
                 if pattern:
-                    # Apply glob pattern matching
-                    if fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(
-                        relative_path.split("/")[-1], pattern
+                    if not (
+                        fnmatch.fnmatch(relative_path, pattern)
+                        or fnmatch.fnmatch(relative_path.split("/")[-1], pattern)
                     ):
-                        yield relative_path
-                else:
-                    yield relative_path
+                        continue
 
-    def get_size(self, path: str) -> int:
-        """Get the size of an object in S3."""
-        key = self._get_key(path)
-        try:
-            response = self._client.head_object(Bucket=self.bucket_name, Key=key)
-            return response["ContentLength"]
-        except self._ClientError as e:
-            if e.response["Error"]["Code"] == "404":
-                raise FileNotFoundError(f"File not found: {path}")
-            raise
-
-    def get_modified_time(self, path: str) -> float:
-        """Get the last modified timestamp of an object in S3."""
-        key = self._get_key(path)
-        try:
-            response = self._client.head_object(Bucket=self.bucket_name, Key=key)
-            return response["LastModified"].timestamp()
-        except self._ClientError as e:
-            if e.response["Error"]["Code"] == "404":
-                raise FileNotFoundError(f"File not found: {path}")
-            raise
+                yield FileMetadata(
+                    path=relative_path,
+                    size=obj["Size"],
+                    modified_time=obj["LastModified"],
+                    etag=obj.get("ETag", "").strip('"'),
+                )
 
     def get_public_url(
         self, path: str, expires_in: int = 3600
@@ -568,16 +697,8 @@ class S3FileStorage(FileStorage):
         except self._ClientError:
             return None
 
-    def get_local_path(self, path: str) -> Optional[Path]:
-        """
-        Download file to a temporary location and return the path.
-
-        Note: The caller is responsible for cleaning up the temp file.
-        Consider using a context manager or explicit cleanup.
-        """
-        if not self.exists(path):
-            return None
-
+    def get_local_path(self, path: str) -> Path:
+        """Download file to a temporary location and return the path."""
         # Determine file extension for temp file
         suffix = Path(path).suffix or ""
 
@@ -586,7 +707,7 @@ class S3FileStorage(FileStorage):
             delete=False, suffix=suffix, prefix="thestill_s3_"
         )
         try:
-            content = self.read_bytes(path)
+            content = self.read_bytes(path)  # Raises FileNotFoundError if missing
             temp_file.write(content)
             temp_file.close()
             return Path(temp_file.name)
@@ -669,8 +790,8 @@ class GCSFileStorage(FileStorage):
             credentials_path: Path to service account JSON key file
         """
         try:
-            from google.cloud import storage as gcs
             from google.api_core import exceptions as gcs_exceptions
+            from google.cloud import storage as gcs
 
             self._gcs = gcs
             self._gcs_exceptions = gcs_exceptions
@@ -744,20 +865,53 @@ class GCSFileStorage(FileStorage):
         blob = self._bucket.blob(blob_name)
         return blob.exists()
 
-    def delete(self, path: str) -> bool:
-        """Delete a blob from GCS."""
+    def delete(self, path: str) -> None:
+        """Delete a blob from GCS (idempotent)."""
         blob_name = self._get_key(path)
         blob = self._bucket.blob(blob_name)
         try:
             blob.delete()
-            return True
         except self._gcs_exceptions.NotFound:
-            return False
+            pass  # Already deleted - idempotent
+
+    def delete_batch(self, paths: List[str]) -> int:
+        """Delete multiple blobs from GCS."""
+        if not paths:
+            return 0
+
+        deleted = 0
+        for path in paths:
+            blob_name = self._get_key(path)
+            blob = self._bucket.blob(blob_name)
+            try:
+                blob.delete()
+                deleted += 1
+            except self._gcs_exceptions.NotFound:
+                pass  # Already deleted
+
+        return deleted
+
+    def get_metadata(self, path: str) -> FileMetadata:
+        """Get file metadata in a single API call."""
+        blob_name = self._get_key(path)
+        blob = self._bucket.blob(blob_name)
+        blob.reload()  # Fetch metadata
+
+        if blob.size is None:
+            raise FileNotFoundError(f"File not found: {path}")
+
+        return FileMetadata(
+            path=path,
+            size=blob.size,
+            modified_time=blob.updated,
+            content_type=blob.content_type,
+            etag=blob.etag,
+        )
 
     def list_files(
         self, prefix: str = "", pattern: Optional[str] = None
-    ) -> Iterator[str]:
-        """List blobs in GCS with optional prefix and glob pattern."""
+    ) -> Iterator[FileMetadata]:
+        """List blobs in GCS with metadata."""
         search_prefix = self._get_key(prefix) if prefix else self.prefix
 
         blobs = self._client.list_blobs(self._bucket, prefix=search_prefix)
@@ -769,32 +923,21 @@ class GCSFileStorage(FileStorage):
 
             relative_path = self._strip_prefix(blob.name)
 
+            # Apply pattern filter if specified
             if pattern:
-                # Apply glob pattern matching
-                if fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(
-                    relative_path.split("/")[-1], pattern
+                if not (
+                    fnmatch.fnmatch(relative_path, pattern)
+                    or fnmatch.fnmatch(relative_path.split("/")[-1], pattern)
                 ):
-                    yield relative_path
-            else:
-                yield relative_path
+                    continue
 
-    def get_size(self, path: str) -> int:
-        """Get the size of a blob in GCS."""
-        blob_name = self._get_key(path)
-        blob = self._bucket.blob(blob_name)
-        blob.reload()  # Fetch metadata
-        if blob.size is None:
-            raise FileNotFoundError(f"File not found: {path}")
-        return blob.size
-
-    def get_modified_time(self, path: str) -> float:
-        """Get the last modified timestamp of a blob in GCS."""
-        blob_name = self._get_key(path)
-        blob = self._bucket.blob(blob_name)
-        blob.reload()  # Fetch metadata
-        if blob.updated is None:
-            raise FileNotFoundError(f"File not found: {path}")
-        return blob.updated.timestamp()
+            yield FileMetadata(
+                path=relative_path,
+                size=blob.size,
+                modified_time=blob.updated,
+                content_type=blob.content_type,
+                etag=blob.etag,
+            )
 
     def get_public_url(
         self, path: str, expires_in: int = 3600
@@ -813,16 +956,8 @@ class GCSFileStorage(FileStorage):
         except Exception:
             return None
 
-    def get_local_path(self, path: str) -> Optional[Path]:
-        """
-        Download file to a temporary location and return the path.
-
-        Note: The caller is responsible for cleaning up the temp file.
-        Consider using a context manager or explicit cleanup.
-        """
-        if not self.exists(path):
-            return None
-
+    def get_local_path(self, path: str) -> Path:
+        """Download file to a temporary location and return the path."""
         # Determine file extension for temp file
         suffix = Path(path).suffix or ""
 
@@ -831,7 +966,7 @@ class GCSFileStorage(FileStorage):
             delete=False, suffix=suffix, prefix="thestill_gcs_"
         )
         try:
-            content = self.read_bytes(path)
+            content = self.read_bytes(path)  # Raises FileNotFoundError if missing
             temp_file.write(content)
             temp_file.close()
             return Path(temp_file.name)
