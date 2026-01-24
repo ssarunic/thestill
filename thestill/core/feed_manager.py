@@ -155,6 +155,13 @@ class PodcastFeedManager:
                 primary_subcategory=metadata.get("primary_subcategory"),
                 secondary_category=metadata.get("secondary_category"),
                 secondary_subcategory=metadata.get("secondary_subcategory"),
+                # THES-142: New RSS metadata fields
+                author=metadata.get("author"),
+                explicit=metadata.get("explicit"),
+                show_type=metadata.get("show_type"),
+                website_url=metadata.get("website_url"),
+                is_complete=metadata.get("is_complete", False),
+                copyright=metadata.get("copyright"),
             )
 
             # Save if not already exists, otherwise return existing

@@ -62,6 +62,13 @@ export interface PodcastSummary {
   last_processed: string | null
   episodes_count: number
   episodes_processed: number
+  // THES-146: New metadata fields
+  author?: string | null
+  explicit?: boolean | null
+  show_type?: string | null  // 'episodic' or 'serial'
+  website_url?: string | null
+  is_complete?: boolean
+  copyright?: string | null
 }
 
 export interface PodcastsResponse {
@@ -92,6 +99,13 @@ export interface PodcastDetail {
   last_processed: string | null
   episodes_count: number
   episodes_processed: number
+  // THES-146: New metadata fields
+  author?: string | null
+  explicit?: boolean | null
+  show_type?: string | null  // 'episodic' or 'serial'
+  website_url?: string | null
+  is_complete?: boolean
+  copyright?: string | null
 }
 
 export interface PodcastDetailResponse {
@@ -119,6 +133,11 @@ export interface Episode {
   summary_available: boolean
   image_url: string | null  // Episode-specific artwork
   summary_preview: string | null  // Preview text from summary (The Gist section)
+  // THES-146: New metadata fields
+  explicit?: boolean | null
+  episode_type?: string | null  // 'full', 'trailer', or 'bonus'
+  episode_number?: number | null
+  season_number?: number | null
   // Failure info (optional - only present when episode has failed)
   is_failed?: boolean
   failed_at_stage?: string | null
@@ -158,6 +177,12 @@ export interface EpisodeDetail {
   has_summary: boolean
   image_url: string | null  // Episode-specific artwork
   podcast_image_url: string | null  // Fallback: podcast artwork
+  // THES-146: New metadata fields
+  explicit?: boolean | null
+  episode_type?: string | null  // 'full', 'trailer', or 'bonus'
+  episode_number?: number | null
+  season_number?: number | null
+  website_url?: string | null
   // Failure info
   is_failed?: boolean
   failed_at_stage?: string | null

@@ -123,6 +123,19 @@ class Episode(BaseModel):
     duration: Optional[int] = None  # Duration in seconds (parsed from RSS itunes:duration)
     image_url: Optional[str] = None  # Episode-specific artwork (from itunes:image or RSS image tag)
 
+    # THES-143: Essential metadata (itunes:explicit, itunes:episodeType)
+    explicit: Optional[bool] = None  # Content warning flag (from itunes:explicit, "true"/"false")
+    episode_type: Optional[str] = None  # "full" (default), "trailer", or "bonus" (from itunes:episodeType)
+
+    # THES-144: Episode organization (itunes:episode, itunes:season, link)
+    episode_number: Optional[int] = None  # Episode number within season (from itunes:episode)
+    season_number: Optional[int] = None  # Season number (from itunes:season)
+    website_url: Optional[str] = None  # Episode website URL (from item <link>)
+
+    # THES-145: Enclosure metadata
+    audio_file_size: Optional[int] = None  # File size in bytes (from enclosure length attribute)
+    audio_mime_type: Optional[str] = None  # MIME type (from enclosure type attribute, e.g., "audio/mpeg")
+
     # File paths (filenames only, relative to storage directories)
     audio_path: Optional[str] = None  # Filename of the original downloaded audio file (in original_audio/)
     downsampled_audio_path: Optional[str] = None  # Filename of the downsampled WAV file (in downsampled_audio/)
@@ -271,6 +284,18 @@ class Podcast(BaseModel):
     primary_subcategory: Optional[str] = None  # Subcategory of primary (e.g., "Documentary")
     secondary_category: Optional[str] = None  # Second category if defined
     secondary_subcategory: Optional[str] = None  # Subcategory of secondary
+
+    # THES-143: Essential metadata (itunes:author, itunes:explicit)
+    author: Optional[str] = None  # Podcast creator/host name (max 255 chars, from itunes:author)
+    explicit: Optional[bool] = None  # Content warning flag (from itunes:explicit, "true"/"false")
+
+    # THES-144: Show organization (itunes:type, link)
+    show_type: Optional[str] = None  # "episodic" (default, newest first) or "serial" (oldest first)
+    website_url: Optional[str] = None  # Podcast website URL (from channel <link>)
+
+    # THES-145: Feed management (itunes:complete, copyright)
+    is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")
+    copyright: Optional[str] = None  # Copyright notice (from channel <copyright>)
 
     # Processing status
     last_processed: Optional[datetime] = None

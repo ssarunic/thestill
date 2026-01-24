@@ -345,6 +345,341 @@ class TestRSSMediaSource:
         audio_url = source._extract_audio_url(entry)
         assert audio_url is None
 
+    # THES-142: Tests for new RSS parsing functionality
+
+    def test_parse_explicit_flag_true_values(self):
+        """Test parsing explicit flag with true values."""
+        source = RSSMediaSource()
+
+        assert source._parse_explicit_flag("true") is True
+        assert source._parse_explicit_flag("True") is True
+        assert source._parse_explicit_flag("TRUE") is True
+        assert source._parse_explicit_flag("yes") is True
+        assert source._parse_explicit_flag("Yes") is True
+        assert source._parse_explicit_flag("explicit") is True
+        assert source._parse_explicit_flag("Explicit") is True
+
+    def test_parse_explicit_flag_false_values(self):
+        """Test parsing explicit flag with false values."""
+        source = RSSMediaSource()
+
+        assert source._parse_explicit_flag("false") is False
+        assert source._parse_explicit_flag("False") is False
+        assert source._parse_explicit_flag("FALSE") is False
+        assert source._parse_explicit_flag("no") is False
+        assert source._parse_explicit_flag("No") is False
+        assert source._parse_explicit_flag("clean") is False
+        assert source._parse_explicit_flag("Clean") is False
+
+    def test_parse_explicit_flag_none_and_invalid(self):
+        """Test parsing explicit flag with None and invalid values."""
+        source = RSSMediaSource()
+
+        assert source._parse_explicit_flag(None) is None
+        assert source._parse_explicit_flag("") is None
+        assert source._parse_explicit_flag("maybe") is None
+        assert source._parse_explicit_flag("unknown") is None
+
+    def test_parse_int_field_valid(self):
+        """Test parsing integer fields with valid values."""
+        source = RSSMediaSource()
+
+        assert source._parse_int_field("1") == 1
+        assert source._parse_int_field("42") == 42
+        assert source._parse_int_field(100) == 100
+        assert source._parse_int_field("  5  ") == 5
+
+    def test_parse_int_field_invalid(self):
+        """Test parsing integer fields with invalid values."""
+        source = RSSMediaSource()
+
+        assert source._parse_int_field(None) is None
+        assert source._parse_int_field("") is None
+        assert source._parse_int_field("abc") is None
+        assert source._parse_int_field("1.5") is None
+
+    def test_extract_enclosure_info_with_all_attributes(self):
+        """Test enclosure extraction with all attributes present."""
+        source = RSSMediaSource()
+
+        # Use dict for entry since feedparser entries support dict-like access via .get()
+        entry = {
+            "links": [],
+            "enclosures": [
+                {
+                    "href": "https://example.com/episode.mp3",
+                    "length": "12345678",
+                    "type": "audio/mpeg",
+                }
+            ],
+        }
+
+        url, size, mime_type = source._extract_enclosure_info(entry)
+
+        assert url == "https://example.com/episode.mp3"
+        assert size == 12345678
+        assert mime_type == "audio/mpeg"
+
+    def test_extract_enclosure_info_partial_attributes(self):
+        """Test enclosure extraction with partial attributes."""
+        source = RSSMediaSource()
+
+        entry = {
+            "links": [],
+            "enclosures": [
+                {
+                    "href": "https://example.com/episode.mp3",
+                    "type": "audio/mpeg",  # type is needed to match audio/
+                }
+            ],
+        }
+
+        url, size, mime_type = source._extract_enclosure_info(entry)
+
+        assert url == "https://example.com/episode.mp3"
+        assert size is None
+        assert mime_type == "audio/mpeg"
+
+    def test_extract_enclosure_info_no_enclosures(self):
+        """Test enclosure extraction with no enclosures."""
+        source = RSSMediaSource()
+
+        entry = {
+            "links": [],
+            "enclosures": [],
+        }
+
+        url, size, mime_type = source._extract_enclosure_info(entry)
+
+        assert url is None
+        assert size is None
+        assert mime_type is None
+
+    def test_extract_new_feed_url(self):
+        """Test extraction of itunes:new-feed-url for feed migration."""
+        source = RSSMediaSource()
+
+        rss_content = """<?xml version="1.0"?>
+        <rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+            <channel>
+                <itunes:new-feed-url>https://newsite.com/feed.xml</itunes:new-feed-url>
+            </channel>
+        </rss>"""
+
+        new_url = source._extract_new_feed_url(rss_content)
+        assert new_url == "https://newsite.com/feed.xml"
+
+    def test_extract_new_feed_url_not_present(self):
+        """Test extraction when itunes:new-feed-url is not present."""
+        source = RSSMediaSource()
+
+        rss_content = """<?xml version="1.0"?>
+        <rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+            <channel>
+                <title>My Podcast</title>
+            </channel>
+        </rss>"""
+
+        new_url = source._extract_new_feed_url(rss_content)
+        assert new_url is None
+
+    def test_extract_metadata_with_new_fields(self):
+        """Test RSS metadata extraction includes THES-142 fields."""
+        source = RSSMediaSource()
+
+        # Create a mock feed that supports both attribute access and dict-like .get()
+        mock_feed_data = MagicMock()
+        mock_feed_data.bozo = False
+
+        # Create a feed object that supports both attribute and dict access
+        class FeedDict(dict):
+            """Dict that also supports attribute access like feedparser."""
+
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name)
+
+        feed = FeedDict(
+            {
+                "title": "Test Podcast",
+                "description": "A test podcast",
+                "link": "https://example.com/podcast",
+                "rights": "Copyright 2025 Example Inc.",
+            }
+        )
+        # Add attributes that are accessed via hasattr/getattr
+        feed.author = "John Doe"
+        feed.itunes_author = "John Doe"
+        feed.itunes_explicit = "true"
+        feed.itunes_type = "serial"
+        feed.itunes_complete = "Yes"
+
+        mock_feed_data.feed = feed
+
+        mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
+
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed_data):
+                metadata = source.extract_metadata("https://example.com/feed.xml")
+
+        assert metadata is not None
+        assert metadata["author"] == "John Doe"
+        assert metadata["explicit"] is True
+        assert metadata["show_type"] == "serial"
+        assert metadata["website_url"] == "https://example.com/podcast"
+        assert metadata["is_complete"] is True
+        assert metadata["copyright"] == "Copyright 2025 Example Inc."
+
+    def test_extract_metadata_is_complete_parsing(self):
+        """Test various values for itunes:complete parsing."""
+        source = RSSMediaSource()
+
+        # Create a feed object that supports both attribute and dict access
+        class FeedDict(dict):
+            """Dict that also supports attribute access like feedparser."""
+
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name)
+
+        # Test "Yes" value
+        mock_feed_data = MagicMock()
+        mock_feed_data.bozo = False
+
+        feed = FeedDict({"title": "Test Podcast", "description": "A test podcast"})
+        feed.itunes_complete = "Yes"
+        mock_feed_data.feed = feed
+
+        mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
+
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed_data):
+                metadata = source.extract_metadata("https://example.com/feed.xml")
+
+        assert metadata["is_complete"] is True
+
+        # Test missing value defaults to False
+        feed2 = FeedDict({"title": "Test Podcast", "description": "A test podcast"})
+        mock_feed_data.feed = feed2
+
+        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+            with patch("feedparser.parse", return_value=mock_feed_data):
+                metadata = source.extract_metadata("https://example.com/feed.xml")
+
+        assert metadata["is_complete"] is False
+
+    def test_fetch_episodes_with_new_fields(self):
+        """Test RSS episode fetching includes THES-142 fields."""
+        source = RSSMediaSource()
+
+        # Create entry object that supports both dict and attribute access
+        class EntryDict(dict):
+            """Dict that also supports attribute access like feedparser entries."""
+
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name)
+
+        mock_entry = EntryDict(
+            {
+                "title": "Episode 1",
+                "description": "First episode",
+                "guid": "ep1",
+                "published_parsed": struct_time((2025, 1, 10, 12, 0, 0, 0, 0, 0)),
+                "itunes_duration": "60:00",
+                "link": "https://example.com/episodes/ep1",
+                "links": [{"type": "audio/mpeg", "href": "https://example.com/ep1.mp3", "length": "98765432"}],
+                "enclosures": [],
+            }
+        )
+        # Add itunes attributes accessed via getattr
+        mock_entry.itunes_explicit = "false"
+        mock_entry.itunes_episodetype = "full"
+        mock_entry.itunes_episode = "5"
+        mock_entry.itunes_season = "2"
+
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [mock_entry]
+
+        mock_response = MagicMock()
+        mock_response.text = "<rss>fake content</rss>"
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("feedparser.parse", return_value=mock_feed):
+                episodes = source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[],
+                    last_processed=None,
+                    max_episodes=None,
+                )
+
+        assert len(episodes) == 1
+        episode = episodes[0]
+        assert episode.explicit is False
+        assert episode.episode_type == "full"
+        assert episode.episode_number == 5
+        assert episode.season_number == 2
+        assert episode.website_url == "https://example.com/episodes/ep1"
+        assert episode.audio_file_size == 98765432
+        assert episode.audio_mime_type == "audio/mpeg"
+
+    def test_fetch_episodes_episode_type_values(self):
+        """Test parsing different episode type values."""
+        source = RSSMediaSource()
+
+        # Create entry class that supports both dict and attribute access
+        class EntryDict(dict):
+            """Dict that also supports attribute access like feedparser entries."""
+
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name)
+
+        episode_types = ["full", "trailer", "bonus"]
+
+        for ep_type in episode_types:
+            mock_entry = EntryDict(
+                {
+                    "title": f"Episode ({ep_type})",
+                    "description": "Test episode",
+                    "guid": f"ep-{ep_type}",
+                    "published_parsed": struct_time((2025, 1, 10, 12, 0, 0, 0, 0, 0)),
+                    "links": [{"type": "audio/mpeg", "href": "https://example.com/ep.mp3"}],
+                    "enclosures": [],
+                }
+            )
+            mock_entry.itunes_episodetype = ep_type
+
+            mock_feed = MagicMock()
+            mock_feed.bozo = False
+            mock_feed.entries = [mock_entry]
+
+            mock_response = MagicMock()
+            mock_response.text = "<rss>fake content</rss>"
+            mock_response.raise_for_status = MagicMock()
+
+            with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+                with patch("feedparser.parse", return_value=mock_feed):
+                    episodes = source.fetch_episodes(
+                        url="https://example.com/feed.xml",
+                        existing_episodes=[],
+                        last_processed=None,
+                        max_episodes=None,
+                    )
+
+            assert len(episodes) == 1
+            assert episodes[0].episode_type == ep_type
+
 
 class TestYouTubeMediaSource:
     """Test suite for YouTubeMediaSource."""

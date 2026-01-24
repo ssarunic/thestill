@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Episode, EpisodeWithPodcast, FailureType } from '../api/types'
 import { useRetryFailedEpisode } from '../hooks/useApi'
+import { EpisodeNumber } from './EpisodeNumber'
+import { ExplicitBadge } from './ExplicitBadge'
 import FailureDetailsModal from './FailureDetailsModal'
 
 interface EpisodeCardProps {
@@ -149,6 +151,11 @@ export default function EpisodeCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-xs sm:text-sm text-gray-500">
+          <EpisodeNumber
+            seasonNumber={episode.season_number}
+            episodeNumber={episode.episode_number}
+          />
+          <ExplicitBadge explicit={episode.explicit} />
           <span>{formatDate(episode.pub_date)}</span>
           {episode.duration_formatted && (
             <>

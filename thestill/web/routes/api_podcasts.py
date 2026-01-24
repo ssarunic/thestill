@@ -120,6 +120,13 @@ async def get_podcast(
                 "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
                 "episodes_count": len(podcast.episodes),
                 "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
+                # THES-146: New metadata fields
+                "author": podcast.author,
+                "explicit": podcast.explicit,
+                "show_type": podcast.show_type,
+                "website_url": podcast.website_url,
+                "is_complete": podcast.is_complete,
+                "copyright": podcast.copyright,
             },
         }
     )
@@ -212,6 +219,12 @@ async def get_episode_by_slugs(
                 "has_summary": bool(episode.summary_path),
                 "image_url": episode.image_url,
                 "podcast_image_url": podcast.image_url,
+                # THES-146: New metadata fields
+                "explicit": episode.explicit,
+                "episode_type": episode.episode_type,
+                "episode_number": episode.episode_number,
+                "season_number": episode.season_number,
+                "website_url": episode.website_url,
                 # Failure info
                 "is_failed": episode.is_failed,
                 "failed_at_stage": episode.failed_at_stage,

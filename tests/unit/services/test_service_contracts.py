@@ -139,6 +139,13 @@ class TestPodcastServiceContract:
         assert hasattr(podcast, "last_processed")
         assert hasattr(podcast, "episodes_count")
         assert hasattr(podcast, "episodes_processed")
+        # THES-146: New metadata fields
+        assert hasattr(podcast, "author")
+        assert hasattr(podcast, "explicit")
+        assert hasattr(podcast, "show_type")
+        assert hasattr(podcast, "website_url")
+        assert hasattr(podcast, "is_complete")
+        assert hasattr(podcast, "copyright")
 
         # Field types
         assert isinstance(podcast.index, int)
@@ -148,6 +155,13 @@ class TestPodcastServiceContract:
         assert podcast.last_processed is None or isinstance(podcast.last_processed, datetime)
         assert isinstance(podcast.episodes_count, int)
         assert isinstance(podcast.episodes_processed, int)
+        # THES-146: New metadata field types
+        assert podcast.author is None or isinstance(podcast.author, str)
+        assert podcast.explicit is None or isinstance(podcast.explicit, bool)
+        assert podcast.show_type is None or isinstance(podcast.show_type, str)
+        assert podcast.website_url is None or isinstance(podcast.website_url, str)
+        assert isinstance(podcast.is_complete, bool)
+        assert podcast.copyright is None or isinstance(podcast.copyright, str)
 
     def test_get_podcast_signature(self, podcast_service, sample_podcast):
         """Contract: get_podcast(podcast_id: Union[str, int]) -> Optional[Podcast]."""
@@ -217,6 +231,11 @@ class TestPodcastServiceContract:
         assert hasattr(ep, "state")
         assert hasattr(ep, "transcript_available")
         assert hasattr(ep, "summary_available")
+        # THES-146: New metadata fields
+        assert hasattr(ep, "explicit")
+        assert hasattr(ep, "episode_type")
+        assert hasattr(ep, "episode_number")
+        assert hasattr(ep, "season_number")
 
         # Field types
         assert isinstance(ep.podcast_index, int)
@@ -226,9 +245,14 @@ class TestPodcastServiceContract:
         assert isinstance(ep.audio_url, str)
         assert isinstance(ep.external_id, str)
         assert isinstance(ep.state, str)
-        assert ep.state in ["discovered", "downloaded", "downsampled", "transcribed", "cleaned"]
+        assert ep.state in ["discovered", "downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
         assert isinstance(ep.transcript_available, bool)
         assert isinstance(ep.summary_available, bool)
+        # THES-146: New metadata field types
+        assert ep.explicit is None or isinstance(ep.explicit, bool)
+        assert ep.episode_type is None or isinstance(ep.episode_type, str)
+        assert ep.episode_number is None or isinstance(ep.episode_number, int)
+        assert ep.season_number is None or isinstance(ep.season_number, int)
 
     def test_get_transcript_signature(self, podcast_service, sample_podcast):
         """Contract: get_transcript(podcast_id, episode_id) -> Optional[str]."""
@@ -504,6 +528,13 @@ class TestServiceContractStability:
             "last_processed",
             "episodes_count",
             "episodes_processed",
+            # THES-146: New metadata fields
+            "author",
+            "explicit",
+            "show_type",
+            "website_url",
+            "is_complete",
+            "copyright",
         ]
 
         # Check model fields (use model_fields for Pydantic v2)
@@ -528,6 +559,11 @@ class TestServiceContractStability:
             "state",  # Changed from "processed" (bool) to "state" (str)
             "transcript_available",
             "summary_available",
+            # THES-146: New metadata fields
+            "explicit",
+            "episode_type",
+            "episode_number",
+            "season_number",
         ]
 
         model_fields = (

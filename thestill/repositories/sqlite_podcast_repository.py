@@ -159,6 +159,41 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: podcast_followers table created")
 
+        # Refresh column info after previous migrations
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns = {row["name"] for row in cursor.fetchall()}
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns = {row["name"] for row in cursor.fetchall()}
+
+        # THES-142 Migration: Add RSS parser enhancement columns to podcasts (idempotent)
+        if "author" not in podcast_columns:
+            logger.info("Migrating database: adding THES-142 columns to podcasts table")
+            # THES-143: Essential metadata
+            conn.execute("ALTER TABLE podcasts ADD COLUMN author TEXT NULL")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN explicit INTEGER NULL")
+            # THES-144: Show organization
+            conn.execute("ALTER TABLE podcasts ADD COLUMN show_type TEXT NULL")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN website_url TEXT NULL")
+            # THES-145: Feed management
+            conn.execute("ALTER TABLE podcasts ADD COLUMN is_complete INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN copyright TEXT NULL")
+            logger.info("Migration complete: THES-142 columns added to podcasts")
+
+        # THES-142 Migration: Add RSS parser enhancement columns to episodes (idempotent)
+        if "explicit" not in episode_columns:
+            logger.info("Migrating database: adding THES-142 columns to episodes table")
+            # THES-143: Essential metadata
+            conn.execute("ALTER TABLE episodes ADD COLUMN explicit INTEGER NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN episode_type TEXT NULL")
+            # THES-144: Episode organization
+            conn.execute("ALTER TABLE episodes ADD COLUMN episode_number INTEGER NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN season_number INTEGER NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN website_url TEXT NULL")
+            # THES-145: Enclosure metadata
+            conn.execute("ALTER TABLE episodes ADD COLUMN audio_file_size INTEGER NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN audio_mime_type TEXT NULL")
+            logger.info("Migration complete: THES-142 columns added to episodes")
+
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
         conn.executescript(
@@ -180,6 +215,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 primary_subcategory TEXT NULL,
                 secondary_category TEXT NULL,
                 secondary_subcategory TEXT NULL,
+                -- THES-143: Essential metadata
+                author TEXT NULL,
+                explicit INTEGER NULL,  -- Boolean: 0=false, 1=true, NULL=unknown
+                -- THES-144: Show organization
+                show_type TEXT NULL,  -- "episodic" or "serial"
+                website_url TEXT NULL,
+                -- THES-145: Feed management
+                is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
+                copyright TEXT NULL,
                 last_processed TIMESTAMP NULL,
                 CHECK (length(id) = 36),
                 CHECK (length(rss_url) > 0)
@@ -207,6 +251,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 audio_url TEXT NOT NULL,
                 duration INTEGER NULL,
                 image_url TEXT NULL,
+                -- THES-143: Essential metadata
+                explicit INTEGER NULL,  -- Boolean: 0=false, 1=true, NULL=unknown
+                episode_type TEXT NULL,  -- "full", "trailer", or "bonus"
+                -- THES-144: Episode organization
+                episode_number INTEGER NULL,
+                season_number INTEGER NULL,
+                website_url TEXT NULL,
+                -- THES-145: Enclosure metadata
+                audio_file_size INTEGER NULL,  -- File size in bytes
+                audio_mime_type TEXT NULL,  -- e.g., "audio/mpeg"
+                -- File paths
                 audio_path TEXT NULL,
                 downsampled_audio_path TEXT NULL,
                 raw_transcript_path TEXT NULL,
@@ -370,6 +425,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -390,6 +446,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -409,6 +466,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -428,6 +486,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
@@ -450,6 +509,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -473,6 +533,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, updated_at
                 FROM podcasts
                 WHERE slug = ?
@@ -513,8 +574,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute(
                 """
                 INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, language,
-                                      primary_category, primary_subcategory, secondary_category, secondary_subcategory, last_processed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                                      author, explicit, show_type, website_url, is_complete, copyright, last_processed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rss_url) DO UPDATE SET
                     title = excluded.title,
                     slug = excluded.slug,
@@ -525,6 +587,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     primary_subcategory = excluded.primary_subcategory,
                     secondary_category = excluded.secondary_category,
                     secondary_subcategory = excluded.secondary_subcategory,
+                    author = excluded.author,
+                    explicit = excluded.explicit,
+                    show_type = excluded.show_type,
+                    website_url = excluded.website_url,
+                    is_complete = excluded.is_complete,
+                    copyright = excluded.copyright,
                     last_processed = excluded.last_processed,
                     updated_at = ?
             """,
@@ -542,6 +610,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     podcast.primary_subcategory,
                     podcast.secondary_category,
                     podcast.secondary_subcategory,
+                    podcast.author,
+                    1 if podcast.explicit is True else (0 if podcast.explicit is False else None),
+                    podcast.show_type,
+                    podcast.website_url,
+                    1 if podcast.is_complete else 0,
+                    podcast.copyright,
                     podcast.last_processed.isoformat() if podcast.last_processed else None,
                     now.isoformat(),  # Set updated_at explicitly (no trigger)
                 ),
@@ -582,6 +656,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT id, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed
                 FROM podcasts WHERE rss_url = ?
                 """,
@@ -593,6 +668,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 # Compare fields to see if anything changed
                 last_processed_str = podcast.last_processed.isoformat() if podcast.last_processed else None
                 existing_last_processed = existing["last_processed"]
+                explicit_int = 1 if podcast.explicit is True else (0 if podcast.explicit is False else None)
 
                 changed = (
                     existing["title"] != podcast.title
@@ -604,6 +680,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     or existing["primary_subcategory"] != podcast.primary_subcategory
                     or existing["secondary_category"] != podcast.secondary_category
                     or existing["secondary_subcategory"] != podcast.secondary_subcategory
+                    or existing["author"] != podcast.author
+                    or existing["explicit"] != explicit_int
+                    or existing["show_type"] != podcast.show_type
+                    or existing["website_url"] != podcast.website_url
+                    or existing["is_complete"] != (1 if podcast.is_complete else 0)
+                    or existing["copyright"] != podcast.copyright
                     or existing_last_processed != last_processed_str
                 )
 
@@ -614,6 +696,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         UPDATE podcasts
                         SET title = ?, slug = ?, description = ?, image_url = ?, language = ?,
                             primary_category = ?, primary_subcategory = ?, secondary_category = ?, secondary_subcategory = ?,
+                            author = ?, explicit = ?, show_type = ?, website_url = ?, is_complete = ?, copyright = ?,
                             last_processed = ?, updated_at = ?
                         WHERE rss_url = ?
                         """,
@@ -627,6 +710,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                             podcast.primary_subcategory,
                             podcast.secondary_category,
                             podcast.secondary_subcategory,
+                            podcast.author,
+                            explicit_int,
+                            podcast.show_type,
+                            podcast.website_url,
+                            1 if podcast.is_complete else 0,
+                            podcast.copyright,
                             last_processed_str,
                             now.isoformat(),
                             str(podcast.rss_url),
@@ -640,8 +729,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute(
                     """
                     INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, language,
-                                          primary_category, primary_subcategory, secondary_category, secondary_subcategory, last_processed)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                          primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                                          author, explicit, show_type, website_url, is_complete, copyright, last_processed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         podcast.id,
@@ -657,6 +747,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         podcast.primary_subcategory,
                         podcast.secondary_category,
                         podcast.secondary_subcategory,
+                        podcast.author,
+                        1 if podcast.explicit is True else (0 if podcast.explicit is False else None),
+                        podcast.show_type,
+                        podcast.website_url,
+                        1 if podcast.is_complete else 0,
+                        podcast.copyright,
                         podcast.last_processed.isoformat() if podcast.last_processed else None,
                     ),
                 )
@@ -725,6 +821,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute(
             """
             SELECT id, title, slug, description, description_html, pub_date, audio_url, duration, image_url,
+                   explicit, episode_type, episode_number, season_number, website_url,
+                   audio_file_size, audio_mime_type,
                    audio_path, downsampled_audio_path, raw_transcript_path,
                    clean_transcript_path, summary_path
             FROM episodes
@@ -737,6 +835,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if existing:
             # Compare fields to see if anything changed
             pub_date_str = episode.pub_date.isoformat() if episode.pub_date else None
+            explicit_int = 1 if episode.explicit is True else (0 if episode.explicit is False else None)
 
             changed = (
                 existing["title"] != episode.title
@@ -747,6 +846,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 or existing["audio_url"] != str(episode.audio_url)
                 or existing["duration"] != episode.duration
                 or existing["image_url"] != episode.image_url
+                or existing["explicit"] != explicit_int
+                or existing["episode_type"] != episode.episode_type
+                or existing["episode_number"] != episode.episode_number
+                or existing["season_number"] != episode.season_number
+                or existing["website_url"] != episode.website_url
+                or existing["audio_file_size"] != episode.audio_file_size
+                or existing["audio_mime_type"] != episode.audio_mime_type
                 or existing["audio_path"] != episode.audio_path
                 or existing["downsampled_audio_path"] != episode.downsampled_audio_path
                 or existing["raw_transcript_path"] != episode.raw_transcript_path
@@ -760,7 +866,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                     UPDATE episodes
                     SET title = ?, slug = ?, description = ?, description_html = ?, pub_date = ?, audio_url = ?,
-                        duration = ?, image_url = ?, audio_path = ?, downsampled_audio_path = ?,
+                        duration = ?, image_url = ?,
+                        explicit = ?, episode_type = ?, episode_number = ?, season_number = ?, website_url = ?,
+                        audio_file_size = ?, audio_mime_type = ?,
+                        audio_path = ?, downsampled_audio_path = ?,
                         raw_transcript_path = ?, clean_transcript_path = ?, summary_path = ?,
                         updated_at = ?
                     WHERE podcast_id = ? AND external_id = ?
@@ -774,6 +883,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         str(episode.audio_url),
                         episode.duration,
                         episode.image_url,
+                        explicit_int,
+                        episode.episode_type,
+                        episode.episode_number,
+                        episode.season_number,
+                        episode.website_url,
+                        episode.audio_file_size,
+                        episode.audio_mime_type,
                         episode.audio_path,
                         episode.downsampled_audio_path,
                         episode.raw_transcript_path,
@@ -793,9 +909,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 INSERT INTO episodes (
                     id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                    description_html, pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
-                    raw_transcript_path, clean_transcript_path, summary_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description_html, pub_date, audio_url, duration, image_url,
+                    explicit, episode_type, episode_number, season_number, website_url,
+                    audio_file_size, audio_mime_type,
+                    audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path, summary_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     episode.id,
@@ -811,6 +929,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     str(episode.audio_url),
                     episode.duration,
                     episode.image_url,
+                    1 if episode.explicit is True else (0 if episode.explicit is False else None),
+                    episode.episode_type,
+                    episode.episode_number,
+                    episode.season_number,
+                    episode.website_url,
+                    episode.audio_file_size,
+                    episode.audio_mime_type,
                     episode.audio_path,
                     episode.downsampled_audio_path,
                     episode.raw_transcript_path,
@@ -866,6 +991,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "description_html",
             "duration",
             "image_url",
+            # THES-142: New fields
+            "explicit",
+            "episode_type",
+            "episode_number",
+            "season_number",
+            "website_url",
+            "audio_file_size",
+            "audio_mime_type",
             # Failure tracking fields
             "failed_at_stage",
             "failure_reason",
@@ -995,6 +1128,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.language as p_language, p.primary_category as p_primary_category,
                        p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
                        p.secondary_subcategory as p_secondary_subcategory,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
@@ -1043,6 +1178,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.language as p_language, p.primary_category as p_primary_category,
                        p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
                        p.secondary_subcategory as p_secondary_subcategory,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
@@ -1089,6 +1226,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.language as p_language, p.primary_category as p_primary_category,
                        p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
                        p.secondary_subcategory as p_secondary_subcategory,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
@@ -1134,6 +1273,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.language as p_language, p.primary_category as p_primary_category,
                        p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
                        p.secondary_subcategory as p_secondary_subcategory,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
@@ -1227,6 +1368,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.language as p_language, p.primary_category as p_primary_category,
                        p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
                        p.secondary_subcategory as p_secondary_subcategory,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
@@ -1261,6 +1404,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             episodes = [self._row_to_episode(ep_row) for ep_row in cursor.fetchall()]
 
+            # Convert explicit from INTEGER to Optional[bool]
+            explicit = None
+            if row["explicit"] is not None:
+                explicit = row["explicit"] == 1
+
             return Podcast(
                 id=row["id"],
                 created_at=datetime.fromisoformat(row["created_at"]),
@@ -1274,6 +1422,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 primary_subcategory=row["primary_subcategory"],
                 secondary_category=row["secondary_category"],
                 secondary_subcategory=row["secondary_subcategory"],
+                # THES-142: New fields
+                author=row["author"],
+                explicit=explicit,
+                show_type=row["show_type"],
+                website_url=row["website_url"],
+                is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
+                copyright=row["copyright"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
                 episodes=episodes,
             )
@@ -1283,6 +1438,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def _row_to_podcast_minimal(self, row: sqlite3.Row) -> Podcast:
         """Convert database row to Podcast model without episodes."""
+        # Convert explicit from INTEGER to Optional[bool]
+        explicit = None
+        if row["p_explicit"] is not None:
+            explicit = row["p_explicit"] == 1
+
         return Podcast(
             id=row["p_id"],
             created_at=datetime.fromisoformat(row["p_created_at"]),
@@ -1296,6 +1456,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             primary_subcategory=row["p_primary_subcategory"],
             secondary_category=row["p_secondary_category"],
             secondary_subcategory=row["p_secondary_subcategory"],
+            # THES-142: New fields
+            author=row["p_author"],
+            explicit=explicit,
+            show_type=row["p_show_type"],
+            website_url=row["p_website_url"],
+            is_complete=row["p_is_complete"] == 1 if row["p_is_complete"] is not None else False,
+            copyright=row["p_copyright"],
             last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
             episodes=[],  # Episodes not loaded
         )
@@ -1309,6 +1476,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 failure_type = FailureType(row["failure_type"])
             except ValueError:
                 logger.warning(f"Unknown failure_type '{row['failure_type']}' for episode {row['id']}")
+
+        # Convert explicit from INTEGER to Optional[bool]
+        explicit = None
+        if row["explicit"] is not None:
+            explicit = row["explicit"] == 1
 
         return Episode(
             id=row["id"],
@@ -1324,6 +1496,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             audio_url=row["audio_url"],
             duration=row["duration"],
             image_url=row["image_url"],
+            # THES-142: New fields
+            explicit=explicit,
+            episode_type=row["episode_type"],
+            episode_number=row["episode_number"],
+            season_number=row["season_number"],
+            website_url=row["website_url"],
+            audio_file_size=row["audio_file_size"],
+            audio_mime_type=row["audio_mime_type"],
+            # File paths
             audio_path=row["audio_path"],
             downsampled_audio_path=row["downsampled_audio_path"],
             raw_transcript_path=row["raw_transcript_path"],
@@ -1342,10 +1523,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             """
             INSERT INTO episodes (
                 id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                description_html, pub_date, audio_url, duration, image_url, audio_path, downsampled_audio_path,
-                raw_transcript_path, clean_transcript_path, summary_path,
+                description_html, pub_date, audio_url, duration, image_url,
+                explicit, episode_type, episode_number, season_number, website_url,
+                audio_file_size, audio_mime_type,
+                audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path, summary_path,
                 failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -1361,6 +1544,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 str(episode.audio_url),
                 episode.duration,
                 episode.image_url,
+                # THES-142: New fields
+                1 if episode.explicit is True else (0 if episode.explicit is False else None),
+                episode.episode_type,
+                episode.episode_number,
+                episode.season_number,
+                episode.website_url,
+                episode.audio_file_size,
+                episode.audio_mime_type,
+                # File paths
                 episode.audio_path,
                 episode.downsampled_audio_path,
                 episode.raw_transcript_path,

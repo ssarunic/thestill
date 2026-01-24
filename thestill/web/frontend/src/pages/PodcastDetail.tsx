@@ -4,6 +4,8 @@ import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast } from '../h
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
+import { ExplicitBadge } from '../components/ExplicitBadge'
+import { ExternalLink } from '../components/ExternalLink'
 import Button, { MinusIcon } from '../components/Button'
 
 export default function PodcastDetail() {
@@ -118,7 +120,10 @@ export default function PodcastDetail() {
             <div className="flex-1 text-center sm:text-left">
               {/* Title row with Unfollow button aligned right */}
               <div className="flex items-start justify-between gap-4">
-                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
+                  <ExplicitBadge explicit={podcast.explicit} />
+                </div>
                 <Button
                   variant="secondary"
                   icon={<MinusIcon />}
@@ -142,6 +147,10 @@ export default function PodcastDetail() {
                   Unfollow
                 </Button>
               </div>
+              {/* Author */}
+              {podcast.author && (
+                <p className="text-gray-600 text-sm mt-1">By {podcast.author}</p>
+              )}
               {podcast.description ? (
                 <div className="mt-2">
                   <ExpandableDescription html={podcast.description} maxLines={3} />
@@ -167,7 +176,30 @@ export default function PodcastDetail() {
                 <span className="text-gray-300">·</span>
                 {/* Processed count */}
                 <span className="text-green-600">{podcast.episodes_processed} processed</span>
+                {/* Website link */}
+                {podcast.website_url && (
+                  <>
+                    <span className="text-gray-300">·</span>
+                    <ExternalLink href={podcast.website_url} className="text-sm">
+                      {(() => {
+                        try {
+                          return new URL(podcast.website_url).hostname
+                        } catch {
+                          return 'Website'
+                        }
+                      })()}
+                    </ExternalLink>
+                  </>
+                )}
               </div>
+              {/* Complete series indicator */}
+              {podcast.is_complete && (
+                <p className="text-sm text-gray-500 mt-2">Complete series · No new episodes</p>
+              )}
+              {/* Copyright */}
+              {podcast.copyright && (
+                <p className="text-xs text-gray-400 mt-4">{podcast.copyright}</p>
+              )}
             </div>
           </div>
         </div>

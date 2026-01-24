@@ -228,6 +228,39 @@ class RSSMediaSource(MediaSource):
             # Extract categories from raw XML (feedparser doesn't handle nested categories well)
             categories = self._extract_categories(rss_content)
 
+            # THES-143: Extract author (itunes:author)
+            author = None
+            if hasattr(feed, "author") and feed.author:
+                author = str(feed.author)[:255]  # Max 255 chars per Apple spec
+            elif hasattr(feed, "itunes_author") and feed.itunes_author:
+                author = str(feed.itunes_author)[:255]
+
+            # THES-143: Extract explicit flag (itunes:explicit)
+            explicit = self._parse_explicit_flag(getattr(feed, "itunes_explicit", None))
+
+            # THES-144: Extract show type (itunes:type) - "episodic" or "serial"
+            show_type = None
+            itunes_type = getattr(feed, "itunes_type", None)
+            if itunes_type and itunes_type.lower() in ("episodic", "serial"):
+                show_type = itunes_type.lower()
+
+            # THES-144: Extract website URL (channel <link>)
+            website_url = feed.get("link")
+
+            # THES-145: Extract is_complete flag (itunes:complete)
+            is_complete = False
+            itunes_complete = getattr(feed, "itunes_complete", None)
+            if itunes_complete and str(itunes_complete).lower() == "yes":
+                is_complete = True
+
+            # THES-145: Extract copyright
+            copyright_text = feed.get("rights") or feed.get("copyright")
+
+            # THES-145: Detect feed migration (itunes:new-feed-url)
+            new_feed_url = self._extract_new_feed_url(rss_content)
+            if new_feed_url:
+                logger.warning(f"Feed migration detected! New URL: {new_feed_url}")
+
             return {
                 "title": feed.get("title", "Unknown Podcast"),
                 "description": feed.get("description", ""),
@@ -238,6 +271,16 @@ class RSSMediaSource(MediaSource):
                 "primary_subcategory": categories.get("primary_subcategory"),
                 "secondary_category": categories.get("secondary_category"),
                 "secondary_subcategory": categories.get("secondary_subcategory"),
+                # THES-143: Essential metadata
+                "author": author,
+                "explicit": explicit,
+                # THES-144: Show organization
+                "show_type": show_type,
+                "website_url": website_url,
+                # THES-145: Feed management
+                "is_complete": is_complete,
+                "copyright": copyright_text,
+                "new_feed_url": new_feed_url,  # For caller to handle migration
             }
 
         except Exception as e:
@@ -298,9 +341,26 @@ class RSSMediaSource(MediaSource):
                 )  # Assume most feeds have >3 episodes
 
                 if should_include:
-                    audio_url = self._extract_audio_url(entry)
+                    audio_url, audio_file_size, audio_mime_type = self._extract_enclosure_info(entry)
                     if audio_url:
                         description, description_html = self._extract_descriptions(entry)
+
+                        # THES-143: Extract explicit flag
+                        explicit = self._parse_explicit_flag(getattr(entry, "itunes_explicit", None))
+
+                        # THES-143: Extract episode type (full, trailer, bonus)
+                        episode_type = None
+                        itunes_episode_type = getattr(entry, "itunes_episodetype", None)
+                        if itunes_episode_type and itunes_episode_type.lower() in ("full", "trailer", "bonus"):
+                            episode_type = itunes_episode_type.lower()
+
+                        # THES-144: Extract episode and season numbers
+                        episode_number = self._parse_int_field(getattr(entry, "itunes_episode", None))
+                        season_number = self._parse_int_field(getattr(entry, "itunes_season", None))
+
+                        # THES-144: Extract episode website URL
+                        website_url = entry.get("link")
+
                         episode = Episode(
                             title=entry.get("title", "Unknown Episode"),
                             description=description,
@@ -310,6 +370,16 @@ class RSSMediaSource(MediaSource):
                             duration=parse_duration(entry.get("itunes_duration")),
                             external_id=episode_external_id,
                             image_url=self._extract_episode_image(entry),
+                            # THES-143: Essential metadata
+                            explicit=explicit,
+                            episode_type=episode_type,
+                            # THES-144: Episode organization
+                            episode_number=episode_number,
+                            season_number=season_number,
+                            website_url=website_url,
+                            # THES-145: Enclosure metadata
+                            audio_file_size=audio_file_size,
+                            audio_mime_type=audio_mime_type,
                         )
                         episodes.append(episode)
 
@@ -511,6 +581,58 @@ class RSSMediaSource(MediaSource):
 
         return html.unescape(text)
 
+    def _parse_explicit_flag(self, value: Any) -> Optional[bool]:
+        """
+        Parse itunes:explicit value to boolean.
+
+        Apple Podcasts accepts: "true", "false", "yes", "no", "clean", "explicit"
+        Legacy values "clean" and "explicit" are still supported.
+
+        Args:
+            value: Raw value from RSS feed
+
+        Returns:
+            True if explicit, False if clean, None if not specified
+        """
+        if value is None:
+            return None
+
+        value_str = str(value).lower().strip()
+        if value_str in ("true", "yes", "explicit"):
+            return True
+        if value_str in ("false", "no", "clean"):
+            return False
+        return None
+
+    def _extract_new_feed_url(self, rss_content: str) -> Optional[str]:
+        """
+        Extract itunes:new-feed-url from RSS content.
+
+        This tag indicates the podcast has moved to a new RSS URL.
+        Used for feed migration detection.
+
+        Args:
+            rss_content: Raw RSS XML content
+
+        Returns:
+            New feed URL if found, None otherwise
+        """
+        try:
+            root = ET.fromstring(rss_content)
+        except ET.ParseError:
+            return None
+
+        ns = {"itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
+        channel = root.find("channel")
+        if channel is None:
+            return None
+
+        new_feed_url = channel.find("itunes:new-feed-url", ns)
+        if new_feed_url is not None and new_feed_url.text:
+            return new_feed_url.text.strip()
+
+        return None
+
     def _extract_rss_from_apple_url(self, url: str) -> Optional[str]:
         """
         Extract RSS feed URL from Apple Podcast URL using iTunes Lookup API.
@@ -629,17 +751,60 @@ class RSSMediaSource(MediaSource):
         Returns:
             Audio URL if found, None otherwise
         """
+        url, _, _ = self._extract_enclosure_info(entry)
+        return url
+
+    def _extract_enclosure_info(self, entry: Any) -> tuple[Optional[str], Optional[int], Optional[str]]:
+        """
+        Extract audio enclosure info from feed entry.
+
+        THES-145: Returns URL plus length and type attributes from enclosure tag.
+
+        Args:
+            entry: Feedparser entry object
+
+        Returns:
+            Tuple of (audio_url, file_size_bytes, mime_type)
+        """
+        # Check links first
         for link in entry.get("links", []):
-            if link.get("type", "").startswith("audio/"):
+            mime_type = link.get("type", "")
+            if mime_type.startswith("audio/"):
                 href = link.get("href")
-                return str(href) if href else None
+                if href:
+                    length = self._parse_int_field(link.get("length"))
+                    return str(href), length, mime_type
 
+        # Check enclosures
         for enclosure in entry.get("enclosures", []):
-            if enclosure.get("type", "").startswith("audio/"):
+            mime_type = enclosure.get("type", "")
+            if mime_type.startswith("audio/"):
                 href = enclosure.get("href")
-                return str(href) if href else None
+                if href:
+                    length = self._parse_int_field(enclosure.get("length"))
+                    return str(href), length, mime_type
 
-        return None
+        return None, None, None
+
+    def _parse_int_field(self, value: Any) -> Optional[int]:
+        """
+        Parse a value to integer, returning None if invalid.
+
+        Used for episode/season numbers and file sizes.
+
+        Args:
+            value: Value to parse (string or int)
+
+        Returns:
+            Integer value or None if parsing fails
+        """
+        if value is None:
+            return None
+        try:
+            result = int(value)
+            return result if result > 0 else None  # Only positive integers
+        except (ValueError, TypeError):
+            return None
 
     def _extract_descriptions(self, entry: Any) -> tuple[str, str]:
         """

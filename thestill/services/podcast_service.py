@@ -111,6 +111,13 @@ class PodcastWithIndex(BaseModel):
     last_processed: Optional[datetime] = None
     episodes_count: int = 0
     episodes_processed: int = 0
+    # THES-146: New metadata fields
+    author: Optional[str] = None
+    explicit: Optional[bool] = None
+    show_type: Optional[str] = None
+    website_url: Optional[str] = None
+    is_complete: bool = False
+    copyright: Optional[str] = None
 
     @computed_field  # type: ignore[misc]
     @property
@@ -140,6 +147,11 @@ class EpisodeWithIndex(BaseModel):
     summary_available: bool = False
     image_url: Optional[str] = None  # Episode-specific artwork
     summary_preview: Optional[str] = None  # Preview text from summary (The Gist section)
+    # THES-146: New metadata fields
+    explicit: Optional[bool] = None
+    episode_type: Optional[str] = None
+    episode_number: Optional[int] = None
+    season_number: Optional[int] = None
 
     @computed_field  # type: ignore[misc]
     @property
@@ -281,6 +293,13 @@ class PodcastService:
                     last_processed=podcast.last_processed,
                     episodes_count=len(podcast.episodes),
                     episodes_processed=episodes_processed,
+                    # THES-146: New metadata fields
+                    author=podcast.author,
+                    explicit=podcast.explicit,
+                    show_type=podcast.show_type,
+                    website_url=podcast.website_url,
+                    is_complete=podcast.is_complete,
+                    copyright=podcast.copyright,
                 )
             )
 
@@ -477,6 +496,11 @@ class PodcastService:
                     ),
                     image_url=episode.image_url,
                     summary_preview=summary_preview,
+                    # THES-146: New metadata fields
+                    explicit=episode.explicit,
+                    episode_type=episode.episode_type,
+                    episode_number=episode.episode_number,
+                    season_number=episode.season_number,
                 )
             )
 

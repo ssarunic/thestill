@@ -170,6 +170,12 @@ async def get_all_episodes(
                 "transcript_available": bool(episode.clean_transcript_path),
                 "summary_available": bool(episode.summary_path),
                 "summary_preview": summary_preview,
+                # THES-146: New metadata fields
+                "explicit": episode.explicit,
+                "episode_type": episode.episode_type,
+                "episode_number": episode.episode_number,
+                "season_number": episode.season_number,
+                "website_url": episode.website_url,
             }
         )
 
