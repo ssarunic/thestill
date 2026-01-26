@@ -568,6 +568,7 @@ class WhisperXTranscriber(Transcriber):
         console: Optional[ConsoleOutput] = None,
     ):
         self.model_name = model_name
+        self.console = console or ConsoleOutput()
         # Resolve devices for each stage (hybrid approach for Mac)
         self.transcription_device, self.alignment_device, self.diarization_device = self._resolve_hybrid_devices(device)
         # Keep self.device for backward compatibility (used by fallback and progress monitor)
@@ -578,7 +579,6 @@ class WhisperXTranscriber(Transcriber):
         self.max_speakers = max_speakers
         self.diarization_model = diarization_model
         self.progress_callback = progress_callback
-        self.console = console or ConsoleOutput()
         self._model = None
         self._whisper_fallback: Optional[WhisperTranscriber] = None
 
