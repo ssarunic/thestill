@@ -1245,10 +1245,10 @@ async def retry_dlq_task(
     if not task:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
 
-    if task.status != QueueTaskStatus.DEAD:
+    if task.status not in (QueueTaskStatus.DEAD, QueueTaskStatus.FAILED):
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not in DLQ (status={task.status.value}). Only dead tasks can be retried from DLQ.",
+            detail=f"Task is not in terminal failure state (status={task.status.value}). Only dead/failed tasks can be retried.",
         )
 
     # Move task back to pending
@@ -1296,10 +1296,10 @@ async def skip_dlq_task(
     if not task:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
 
-    if task.status != QueueTaskStatus.DEAD:
+    if task.status not in (QueueTaskStatus.DEAD, QueueTaskStatus.FAILED):
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not in DLQ (status={task.status.value}). Only dead tasks can be skipped.",
+            detail=f"Task is not in terminal failure state (status={task.status.value}). Only dead/failed tasks can be skipped.",
         )
 
     # Mark task as completed (skipped)

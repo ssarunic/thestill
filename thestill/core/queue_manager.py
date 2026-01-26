@@ -827,19 +827,22 @@ class QueueManager:
 
     def get_dead_tasks(self, limit: int = 100) -> List[Task]:
         """
-        Get tasks in the Dead Letter Queue.
+        Get tasks in the Dead Letter Queue (terminal failure states).
+
+        Includes both 'dead' (fatal errors) and 'failed' (transient errors
+        that exhausted retries) tasks.
 
         Args:
             limit: Maximum number of tasks to return
 
         Returns:
-            List of dead tasks, ordered by most recent first
+            List of dead/failed tasks, ordered by most recent first
         """
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 SELECT * FROM tasks
-                WHERE status = 'dead'
+                WHERE status IN ('dead', 'failed')
                 ORDER BY completed_at DESC
                 LIMIT ?
             """,
@@ -850,13 +853,13 @@ class QueueManager:
 
     def retry_dead_task(self, task_id: str) -> Optional[Task]:
         """
-        Move a dead task back to pending for manual retry.
+        Move a dead or failed task back to pending for manual retry.
 
         Args:
-            task_id: ID of the dead task to retry
+            task_id: ID of the dead/failed task to retry
 
         Returns:
-            Updated Task object, or None if task not found or not dead
+            Updated Task object, or None if task not found or not in terminal state
         """
         now = datetime.utcnow().isoformat()
 
@@ -873,16 +876,19 @@ class QueueManager:
                     started_at = NULL,
                     completed_at = NULL,
                     updated_at = ?
-                WHERE id = ? AND status = 'dead'
+                WHERE id = ? AND status IN ('dead', 'failed')
             """,
                 (now, task_id),
             )
 
             if cursor.rowcount == 0:
-                logger.warning(f"Cannot retry task {task_id}: not found or not dead")
+                logger.warning(
+                    "Cannot retry task: not found or not in terminal state",
+                    task_id=task_id,
+                )
                 return None
 
-        logger.info(f"Task {task_id} moved from DLQ back to pending")
+        logger.info("Task moved from DLQ back to pending", task_id=task_id)
         return self.get_task(task_id)
 
     def cancel_retry(self, task_id: str) -> Optional[Task]:
