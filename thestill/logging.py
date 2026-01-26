@@ -79,9 +79,9 @@ def _cloudwatch_processor(logger: Any, method_name: str, event_dict: dict) -> di
     if "event" in event_dict:
         event_dict["message"] = event_dict.pop("event")
 
-    # Add @timestamp alias (CloudWatch convention)
+    # Rename timestamp to @timestamp (CloudWatch convention)
     if "timestamp" in event_dict:
-        event_dict["@timestamp"] = event_dict["timestamp"]
+        event_dict["@timestamp"] = event_dict.pop("timestamp")
 
     # Ensure level is uppercase (CloudWatch severity convention)
     if "level" in event_dict:
