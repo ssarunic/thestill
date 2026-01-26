@@ -819,3 +819,242 @@ def test_save_episodes_requires_podcast_id(temp_db, sample_episode):
 
     with pytest.raises(ValueError, match="podcast_id must be set"):
         temp_db.save_episodes([sample_episode])
+
+
+# ============================================================================
+# get_all_episodes() State Filtering Tests
+# ============================================================================
+
+
+def test_get_all_episodes_state_filter_downloaded_excludes_summarized(temp_db, sample_podcast):
+    """Test that filtering by DOWNLOADED state excludes episodes in SUMMARIZED state.
+
+    This verifies the fix for the bug where filtering by an earlier state would
+    incorrectly include episodes that had progressed to later states.
+    """
+    # Create episode in DOWNLOADED state (has audio_path, no downsampled)
+    downloaded_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-downloaded",
+        title="Downloaded Episode",
+        description="Description",
+        audio_url="https://example.com/audio1.mp3",
+        audio_path="audio1.mp3",
+        downsampled_audio_path=None,
+        raw_transcript_path=None,
+        clean_transcript_path=None,
+        summary_path=None,
+    )
+
+    # Create episode in SUMMARIZED state (has everything including summary_path)
+    summarized_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440102",
+        external_id="guid-summarized",
+        title="Summarized Episode",
+        description="Description",
+        audio_url="https://example.com/audio2.mp3",
+        audio_path="audio2.mp3",
+        downsampled_audio_path="audio2.wav",
+        raw_transcript_path="transcript2.json",
+        clean_transcript_path="cleaned2.md",
+        summary_path="summary2.json",
+    )
+
+    sample_podcast.episodes = [downloaded_episode, summarized_episode]
+    temp_db.save(sample_podcast)
+
+    # Filter by DOWNLOADED - should NOT include SUMMARIZED episode
+    results, total = temp_db.get_all_episodes(state=EpisodeState.DOWNLOADED.value)
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][1].title == "Downloaded Episode"
+
+
+def test_get_all_episodes_state_filter_transcribed_excludes_cleaned(temp_db, sample_podcast):
+    """Test that filtering by TRANSCRIBED state excludes episodes in CLEANED state."""
+    # Create episode in TRANSCRIBED state
+    transcribed_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-transcribed",
+        title="Transcribed Episode",
+        description="Description",
+        audio_url="https://example.com/audio1.mp3",
+        audio_path="audio1.mp3",
+        downsampled_audio_path="audio1.wav",
+        raw_transcript_path="transcript1.json",
+        clean_transcript_path=None,
+        summary_path=None,
+    )
+
+    # Create episode in CLEANED state
+    cleaned_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440102",
+        external_id="guid-cleaned",
+        title="Cleaned Episode",
+        description="Description",
+        audio_url="https://example.com/audio2.mp3",
+        audio_path="audio2.mp3",
+        downsampled_audio_path="audio2.wav",
+        raw_transcript_path="transcript2.json",
+        clean_transcript_path="cleaned2.md",
+        summary_path=None,
+    )
+
+    sample_podcast.episodes = [transcribed_episode, cleaned_episode]
+    temp_db.save(sample_podcast)
+
+    # Filter by TRANSCRIBED - should NOT include CLEANED episode
+    results, total = temp_db.get_all_episodes(state=EpisodeState.TRANSCRIBED.value)
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][1].title == "Transcribed Episode"
+
+
+def test_get_all_episodes_state_filter_failed(temp_db, sample_podcast):
+    """Test that FAILED state filter correctly identifies failed episodes."""
+    # Create a normal DOWNLOADED episode
+    downloaded_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-downloaded",
+        title="Downloaded Episode",
+        description="Description",
+        audio_url="https://example.com/audio1.mp3",
+        audio_path="audio1.mp3",
+    )
+
+    # Create a FAILED episode (has failed_at_stage set)
+    failed_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440102",
+        external_id="guid-failed",
+        title="Failed Episode",
+        description="Description",
+        audio_url="https://example.com/audio2.mp3",
+        audio_path="audio2.mp3",
+        failed_at_stage="transcribe",
+    )
+
+    sample_podcast.episodes = [downloaded_episode, failed_episode]
+    temp_db.save(sample_podcast)
+
+    # Filter by FAILED - should only return the failed episode
+    results, total = temp_db.get_all_episodes(state=EpisodeState.FAILED.value)
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][1].title == "Failed Episode"
+
+
+def test_get_all_episodes_state_filter_failed_excluded_from_other_states(temp_db, sample_podcast):
+    """Test that FAILED episodes are excluded when filtering by other states.
+
+    A failed episode should not appear when filtering by its apparent state
+    (e.g., a failed episode with audio_path should not appear in DOWNLOADED filter).
+    """
+    # Create a failed episode that would otherwise be in DOWNLOADED state
+    failed_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-failed",
+        title="Failed Episode",
+        description="Description",
+        audio_url="https://example.com/audio.mp3",
+        audio_path="audio.mp3",
+        downsampled_audio_path=None,
+        failed_at_stage="downsample",
+    )
+
+    sample_podcast.episodes = [failed_episode]
+    temp_db.save(sample_podcast)
+
+    # Filter by DOWNLOADED - should NOT include the failed episode
+    results, total = temp_db.get_all_episodes(state=EpisodeState.DOWNLOADED.value)
+
+    assert total == 0
+    assert len(results) == 0
+
+
+def test_get_all_episodes_state_filter_discovered_excludes_all_progressed(temp_db, sample_podcast):
+    """Test that DISCOVERED filter only returns truly new episodes."""
+    # Create a DISCOVERED episode (nothing set)
+    discovered_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-discovered",
+        title="Discovered Episode",
+        description="Description",
+        audio_url="https://example.com/audio1.mp3",
+        audio_path=None,
+        downsampled_audio_path=None,
+        raw_transcript_path=None,
+        clean_transcript_path=None,
+        summary_path=None,
+    )
+
+    # Create a SUMMARIZED episode (everything set)
+    summarized_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440102",
+        external_id="guid-summarized",
+        title="Summarized Episode",
+        description="Description",
+        audio_url="https://example.com/audio2.mp3",
+        audio_path="audio2.mp3",
+        downsampled_audio_path="audio2.wav",
+        raw_transcript_path="transcript2.json",
+        clean_transcript_path="cleaned2.md",
+        summary_path="summary2.json",
+    )
+
+    sample_podcast.episodes = [discovered_episode, summarized_episode]
+    temp_db.save(sample_podcast)
+
+    # Filter by DISCOVERED
+    results, total = temp_db.get_all_episodes(state=EpisodeState.DISCOVERED.value)
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][1].title == "Discovered Episode"
+
+
+def test_get_all_episodes_state_filter_summarized(temp_db, sample_podcast):
+    """Test that SUMMARIZED filter returns fully processed episodes."""
+    # Create episodes in each state
+    discovered = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        external_id="guid-1",
+        title="Discovered",
+        description="Description",
+        audio_url="https://example.com/1.mp3",
+    )
+    cleaned = Episode(
+        id="660e8400-e29b-41d4-a716-446655440102",
+        external_id="guid-2",
+        title="Cleaned",
+        description="Description",
+        audio_url="https://example.com/2.mp3",
+        audio_path="2.mp3",
+        downsampled_audio_path="2.wav",
+        raw_transcript_path="2.json",
+        clean_transcript_path="2.md",
+    )
+    summarized = Episode(
+        id="660e8400-e29b-41d4-a716-446655440103",
+        external_id="guid-3",
+        title="Summarized",
+        description="Description",
+        audio_url="https://example.com/3.mp3",
+        audio_path="3.mp3",
+        downsampled_audio_path="3.wav",
+        raw_transcript_path="3.json",
+        clean_transcript_path="3.md",
+        summary_path="3-summary.json",
+    )
+
+    sample_podcast.episodes = [discovered, cleaned, summarized]
+    temp_db.save(sample_podcast)
+
+    # Filter by SUMMARIZED
+    results, total = temp_db.get_all_episodes(state=EpisodeState.SUMMARIZED.value)
+
+    assert total == 1
+    assert len(results) == 1
+    assert results[0][1].title == "Summarized"
