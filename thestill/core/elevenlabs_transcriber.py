@@ -126,18 +126,15 @@ class ElevenLabsTranscriber(Transcriber):
         self.async_threshold_mb = async_threshold_mb
         self.wait_for_webhook = wait_for_webhook
 
-        logger.info(f"Initialized ElevenLabs transcriber with model: {self.model}")
-        logger.info(f"Async mode: {'enabled' if self.use_async else 'disabled'}")
-        if self.use_async:
-            if self.async_threshold_mb > 0:
-                logger.info(f"Async threshold: {self.async_threshold_mb} MB")
-            else:
-                logger.info("Async threshold: 0 MB (always use async)")
-            if self.wait_for_webhook:
-                logger.info("Webhook mode: enabled (will not poll, waiting for webhook callback)")
-        if self.enable_diarization:
-            speakers_info = f"num_speakers={self.num_speakers}" if self.num_speakers else "auto-detect"
-            logger.info(f"Diarization enabled ({speakers_info})")
+        logger.info(
+            "ElevenLabs transcriber initialized",
+            model=self.model,
+            async_mode=self.use_async,
+            async_threshold_mb=self.async_threshold_mb if self.use_async else None,
+            webhook_mode=self.wait_for_webhook if self.use_async else None,
+            diarization_enabled=self.enable_diarization,
+            num_speakers=self.num_speakers if self.enable_diarization else None,
+        )
 
     def load_model(self) -> None:
         """No-op for cloud-based transcriber. Model is loaded server-side."""
@@ -169,11 +166,11 @@ class ElevenLabsTranscriber(Transcriber):
         """
         audio_file = Path(audio_path)
         if not audio_file.exists():
-            logger.error(f"Audio file not found: {audio_path}")
+            logger.error("Audio file not found", audio_path=audio_path)
             return None
 
         file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-        logger.info(f"Transcribing {audio_file.name} ({file_size_mb:.1f} MB)")
+        logger.info("Starting transcription", file_name=audio_file.name, file_size_mb=round(file_size_mb, 1))
 
         # Decide sync vs async based on file size and settings
         # Use instance threshold (0 = always async when use_async=True)
@@ -181,7 +178,7 @@ class ElevenLabsTranscriber(Transcriber):
         use_async_mode = self.use_async and file_size_mb > threshold
 
         if use_async_mode:
-            logger.info(f"Using async mode (file > {threshold}MB threshold)")
+            logger.info("Using async mode", threshold_mb=threshold)
             return self._transcribe_async(
                 audio_path=audio_path,
                 output_path=output_path,
@@ -224,13 +221,13 @@ class ElevenLabsTranscriber(Transcriber):
             return transcript
 
         except requests.exceptions.HTTPError as e:
-            logger.error(f"ElevenLabs API error: {e}")
+            logger.error("ElevenLabs API error", error=str(e))
             if hasattr(e, "response") and e.response is not None:
                 try:
                     error_detail = e.response.json()
-                    logger.error(f"API error details: {error_detail}")
+                    logger.error("API error details", details=error_detail)
                 except Exception:
-                    logger.error(f"Response text: {e.response.text}")
+                    logger.error("API response text", response_text=e.response.text)
             return None
         except Exception as e:
             self._log_error(e)
@@ -298,7 +295,7 @@ class ElevenLabsTranscriber(Transcriber):
                 logger.error("No transcription_id in async response. Falling back to sync mode.")
                 return self._transcribe_sync(audio_path, output_path, language, progress_callback)
 
-            logger.info(f"Transcription submitted. ID: {transcription_id}")
+            logger.info("Transcription submitted", transcription_id=transcription_id)
 
             # Step 2: Save pending operation for resume capability
             if self.path_manager and episode_id:
@@ -324,13 +321,16 @@ class ElevenLabsTranscriber(Transcriber):
                 if episode_id:
                     tracker.add_pending(episode_id)
                     logger.info(
-                        f"Webhook mode: Transcription {transcription_id} submitted for episode {episode_id}. "
-                        "Waiting for webhook callback to deliver results."
+                        "Webhook mode transcription submitted",
+                        transcription_id=transcription_id,
+                        episode_id=episode_id,
+                        status="waiting_for_webhook",
                     )
                 else:
                     logger.warning(
-                        f"Webhook mode: Transcription {transcription_id} submitted but no episode_id provided. "
-                        "Cannot track completion - webhook callback may not trigger auto-exit."
+                        "Webhook mode transcription submitted without episode_id",
+                        transcription_id=transcription_id,
+                        note="Cannot track completion - webhook callback may not trigger auto-exit",
                     )
                 return None
 
@@ -369,7 +369,7 @@ class ElevenLabsTranscriber(Transcriber):
                         error_msg = f"{error_msg} - Details: {error_detail}"
                     except Exception:
                         error_msg = f"{error_msg} - Response: {cause.response.text[:500]}"
-        logger.error(f"Transcription error: {error_msg}")
+        logger.error("Transcription error", error=error_msg)
 
     def _build_request_data(
         self,
@@ -447,7 +447,12 @@ class ElevenLabsTranscriber(Transcriber):
             # Log progress at intervals
             if pct >= last_logged_pct + UPLOAD_PROGRESS_LOG_INTERVAL or pct == 100:
                 last_logged_pct = (pct // UPLOAD_PROGRESS_LOG_INTERVAL) * UPLOAD_PROGRESS_LOG_INTERVAL
-                logger.info(f"Upload progress: {pct}% ({mb_uploaded:.1f} MB / {file_size_mb:.1f} MB)")
+                logger.info(
+                    "Upload progress",
+                    progress_pct=pct,
+                    uploaded_mb=round(mb_uploaded, 1),
+                    total_mb=round(file_size_mb, 1),
+                )
 
             # Call progress callback for web UI
             if progress_callback:
@@ -517,8 +522,8 @@ class ElevenLabsTranscriber(Transcriber):
         """
         data = self._build_request_data(language, async_mode=False)
 
-        logger.info(f"Calling ElevenLabs API (sync, timeout={SYNC_REQUEST_TIMEOUT}s)...")
-        logger.debug(f"Request data: {data}")
+        logger.info("Calling ElevenLabs API", mode="sync", timeout_seconds=SYNC_REQUEST_TIMEOUT)
+        logger.debug("API request data", data=data)
 
         # Create upload monitor with progress tracking
         monitor, headers = self._create_upload_monitor(audio_path, data, progress_callback)
@@ -532,7 +537,9 @@ class ElevenLabsTranscriber(Transcriber):
             )
             response.raise_for_status()
         except requests.exceptions.Timeout:
-            logger.error(f"Request timed out after {SYNC_REQUEST_TIMEOUT}s. Consider using async mode.")
+            logger.error(
+                "Request timed out", timeout_seconds=SYNC_REQUEST_TIMEOUT, suggestion="Consider using async mode"
+            )
             raise
         except requests.exceptions.HTTPError as e:
             self._log_http_error(e)
@@ -571,8 +578,8 @@ class ElevenLabsTranscriber(Transcriber):
         """
         data = self._build_request_data(language, async_mode=True, webhook_metadata=webhook_metadata)
 
-        logger.info(f"Submitting async transcription (upload timeout={UPLOAD_TIMEOUT}s)...")
-        logger.debug(f"Request data: {data}")
+        logger.info("Submitting async transcription", upload_timeout_seconds=UPLOAD_TIMEOUT)
+        logger.debug("API request data", data=data)
 
         # Create upload monitor with progress tracking
         monitor, headers = self._create_upload_monitor(audio_path, data, progress_callback)
@@ -586,14 +593,14 @@ class ElevenLabsTranscriber(Transcriber):
             )
             response.raise_for_status()
         except requests.exceptions.Timeout:
-            logger.error(f"Upload timed out after {UPLOAD_TIMEOUT}s.")
+            logger.error("Upload timed out", timeout_seconds=UPLOAD_TIMEOUT)
             raise
         except requests.exceptions.HTTPError as e:
             self._log_http_error(e)
             raise
 
         result = response.json()
-        logger.info(f"Async submission successful: {result.get('message', 'OK')}")
+        logger.info("Async submission successful", message=result.get("message", "OK"))
         return result
 
     def _poll_for_transcript(self, transcription_id: str) -> Optional[Dict[str, Any]]:
@@ -612,7 +619,7 @@ class ElevenLabsTranscriber(Transcriber):
         start_time = time.time()
         poll_count = 0
 
-        logger.info(f"Polling for transcript (max {MAX_POLL_DURATION}s)...")
+        logger.info("Polling for transcript", max_duration_seconds=MAX_POLL_DURATION)
 
         while (time.time() - start_time) < MAX_POLL_DURATION:
             poll_count += 1
@@ -625,49 +632,51 @@ class ElevenLabsTranscriber(Transcriber):
                     result = response.json()
                     # Check if we got actual transcript data (has 'text' field)
                     if "text" in result:
-                        logger.info(f"Transcript ready after {elapsed}s ({poll_count} polls)")
+                        logger.info("Transcript ready", elapsed_seconds=elapsed, poll_count=poll_count)
                         return result
                     else:
                         # Got a response but no transcript yet
-                        logger.debug(f"Poll {poll_count}: No transcript data yet")
+                        logger.debug("No transcript data yet", poll_count=poll_count)
 
                 elif response.status_code == 404:
                     # Transcript not ready yet - keep polling
-                    logger.debug(f"Poll {poll_count} ({elapsed}s): Transcript not ready (404)")
+                    logger.debug(
+                        "Transcript not ready", poll_count=poll_count, elapsed_seconds=elapsed, status_code=404
+                    )
 
                 elif response.status_code == 202:
                     # Processing - keep polling
-                    logger.debug(f"Poll {poll_count} ({elapsed}s): Still processing (202)")
+                    logger.debug("Still processing", poll_count=poll_count, elapsed_seconds=elapsed, status_code=202)
 
                 else:
                     # Unexpected status
-                    logger.warning(f"Poll {poll_count}: Unexpected status {response.status_code}")
+                    logger.warning("Unexpected poll status", poll_count=poll_count, status_code=response.status_code)
 
             except requests.exceptions.Timeout:
-                logger.debug(f"Poll {poll_count}: Request timed out, retrying...")
+                logger.debug("Poll request timed out, retrying", poll_count=poll_count)
             except requests.exceptions.RequestException as e:
-                logger.warning(f"Poll {poll_count}: Request error: {e}")
+                logger.warning("Poll request error", poll_count=poll_count, error=str(e))
 
             # Log progress every 30 seconds
             if poll_count % 3 == 0:
                 remaining = MAX_POLL_DURATION - elapsed
-                logger.info(f"Still waiting for transcript... ({elapsed}s elapsed, ~{remaining}s remaining)")
+                logger.info("Waiting for transcript", elapsed_seconds=elapsed, remaining_seconds=remaining)
 
             time.sleep(POLL_INTERVAL)
 
-        logger.error(f"Polling timed out after {MAX_POLL_DURATION}s ({poll_count} polls)")
+        logger.error("Polling timed out", timeout_seconds=MAX_POLL_DURATION, poll_count=poll_count)
         return None
 
     def _log_http_error(self, e: requests.exceptions.HTTPError) -> None:
         """Log HTTP error with details."""
         status_code = e.response.status_code if e.response is not None else "unknown"
-        logger.error(f"HTTP error {status_code}: {e}")
+        logger.error("HTTP error", status_code=status_code, error=str(e))
         if e.response is not None:
             try:
                 error_body = e.response.json()
-                logger.error(f"Error details: {error_body}")
+                logger.error("Error details", details=error_body)
             except Exception:
-                logger.error(f"Response body: {e.response.text[:1000]}")
+                logger.error("Response body", body=e.response.text[:1000])
 
     def _format_response(
         self,
@@ -854,7 +863,7 @@ class ElevenLabsTranscriber(Transcriber):
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False, default=str)
 
-        logger.info(f"Transcript saved to {output_path}")
+        logger.info("Transcript saved", output_path=output_path)
 
     # =========================================================================
     # Pending Operation Persistence (for resume capability)
@@ -905,14 +914,14 @@ class ElevenLabsTranscriber(Transcriber):
         with open(op_path, "w", encoding="utf-8") as f:
             json.dump(operation_data, f, indent=2)
 
-        logger.debug(f"Saved pending operation: {op_path}")
+        logger.debug("Saved pending operation", operation_path=str(op_path))
 
     def _remove_pending_operation(self, transcription_id: str) -> None:
         """Remove pending operation file after successful completion."""
         op_path = self._get_pending_operation_path(transcription_id)
         if op_path and op_path.exists():
             op_path.unlink()
-            logger.debug(f"Removed pending operation: {op_path}")
+            logger.debug("Removed pending operation", operation_path=str(op_path))
 
     def resume_pending_operations(self) -> List[Dict[str, Any]]:
         """
@@ -942,7 +951,7 @@ class ElevenLabsTranscriber(Transcriber):
                 if not transcription_id:
                     continue
 
-                logger.info(f"Found pending operation: {transcription_id}")
+                logger.info("Found pending operation", transcription_id=transcription_id)
 
                 # Try to get the transcript
                 response_data = self._poll_for_transcript(transcription_id)
@@ -967,12 +976,12 @@ class ElevenLabsTranscriber(Transcriber):
 
                     # Clean up the pending file
                     op_file.unlink()
-                    logger.info(f"Resumed and completed: {transcription_id}")
+                    logger.info("Resumed and completed", transcription_id=transcription_id)
                 else:
-                    logger.warning(f"Could not retrieve transcript for {transcription_id}")
+                    logger.warning("Could not retrieve transcript", transcription_id=transcription_id)
 
             except Exception as e:
-                logger.error(f"Error resuming operation {op_file}: {e}")
+                logger.error("Error resuming operation", operation_file=str(op_file), error=str(e))
 
         return results
 
@@ -999,6 +1008,6 @@ class ElevenLabsTranscriber(Transcriber):
                     op_data = json.load(f)
                 operations.append(op_data)
             except Exception as e:
-                logger.error(f"Error reading operation {op_file}: {e}")
+                logger.error("Error reading operation", operation_file=str(op_file), error=str(e))
 
         return operations

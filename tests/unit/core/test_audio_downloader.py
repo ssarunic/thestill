@@ -469,10 +469,8 @@ class TestCleanupOldFiles:
         # Should have counted the old file
         assert count == 1
 
-    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, caplog):
+    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, capsys):
         """Should log correct messages in dry-run mode."""
-        import logging
-
         # Create multiple old files
         old_file1 = temp_storage / "old_file1.mp3"
         old_file1.write_text("content1")
@@ -485,17 +483,18 @@ class TestCleanupOldFiles:
         os.utime(old_file2, (old_time, old_time))
 
         # Execute cleanup with dry-run
-        with caplog.at_level(logging.INFO):
-            count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
+        count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
 
         # Verify return count
         assert count == 2
 
-        # Verify log messages contain "Would delete"
-        log_messages = [record.message for record in caplog.records]
-        assert any("Would delete: old_file1.mp3" in msg for msg in log_messages)
-        assert any("Would delete: old_file2.mp3" in msg for msg in log_messages)
-        assert any("Would clean up 2 old audio files (dry-run)" in msg for msg in log_messages)
+        # Verify structured log output (structlog writes to stdout)
+        captured = capsys.readouterr()
+        assert "would_delete_old_file" in captured.out
+        assert "old_file1.mp3" in captured.out
+        assert "old_file2.mp3" in captured.out
+        assert "cleanup_summary" in captured.out
+        assert "files_count=2" in captured.out
 
     def test_cleanup_returns_count(self, audio_downloader, temp_storage):
         """Should return correct count of deleted files."""

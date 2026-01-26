@@ -602,7 +602,7 @@ class GoogleCloudTranscriber(Transcriber):
         if episode_id:
             pending_ops = self.get_pending_operations_for_episode(episode_id)
             if pending_ops:
-                logger.info(f"Found {len(pending_ops)} pending chunk operations for episode {episode_id}")
+                logger.info("Found pending chunk operations", chunk_count=len(pending_ops), episode_id=episode_id)
                 self.console.info(f"   Resuming: Found {len(pending_ops)} pending chunk operation(s)")
 
                 for op in pending_ops:
@@ -625,7 +625,7 @@ class GoogleCloudTranscriber(Transcriber):
                                     chunks_to_transcribe.remove(op.chunk_index)
                                 self.console.success(f"Chunk {op.chunk_index + 1}/{len(chunks)} resumed from GCS")
                             elif updated_op.state == TranscriptionOperationState.FAILED:
-                                logger.warning(f"Chunk {op.chunk_index} failed: {updated_op.error}")
+                                logger.warning("Chunk failed", chunk_index=op.chunk_index, error=updated_op.error)
                                 self._delete_operation(op.operation_id)
                                 # Keep in chunks_to_transcribe to retry
                             else:
@@ -633,13 +633,13 @@ class GoogleCloudTranscriber(Transcriber):
                                 chunks_in_progress.append(op.chunk_index)
                                 if op.chunk_index in chunks_to_transcribe:
                                     chunks_to_transcribe.remove(op.chunk_index)
-                                logger.info(f"Chunk {op.chunk_index} still in progress on GCS, skipping")
+                                logger.info("Chunk still in progress on GCS", chunk_index=op.chunk_index)
                                 self.console.progress(
                                     f"Chunk {op.chunk_index + 1}/{len(chunks)} still in progress on GCS"
                                 )
 
                         except Exception as e:
-                            logger.warning(f"Failed to resume chunk {op.chunk_index}: {e}")
+                            logger.warning("Failed to resume chunk", chunk_index=op.chunk_index, error=str(e))
                             self._delete_operation(op.operation_id)
                             # Keep in chunks_to_transcribe to retry
 
@@ -648,8 +648,10 @@ class GoogleCloudTranscriber(Transcriber):
         available_slots = max(0, self.parallel_chunks - len(chunks_in_progress))
         if chunks_in_progress and available_slots < len(chunks_to_transcribe):
             logger.info(
-                f"Limiting new chunks to {available_slots} (parallel_chunks={self.parallel_chunks}, "
-                f"in_progress={len(chunks_in_progress)})"
+                "Limiting new chunks",
+                available_slots=available_slots,
+                parallel_chunks=self.parallel_chunks,
+                in_progress=len(chunks_in_progress),
             )
             self.console.info(
                 f"   ℹ️ {len(chunks_in_progress)} chunk(s) running on GCS, "
@@ -688,7 +690,7 @@ class GoogleCloudTranscriber(Transcriber):
                                 newly_completed.append(op.chunk_index)
                                 self.console.success(f"Chunk {op.chunk_index + 1}/{len(chunks)} completed")
                             elif updated_op.state == TranscriptionOperationState.FAILED:
-                                logger.warning(f"Chunk {op.chunk_index} failed: {updated_op.error}")
+                                logger.warning("Chunk failed", chunk_index=op.chunk_index, error=updated_op.error)
                                 self._delete_operation(op.operation_id)
                                 # Add back to chunks_to_transcribe for retry
                                 chunks_to_transcribe.append(op.chunk_index)
@@ -696,7 +698,7 @@ class GoogleCloudTranscriber(Transcriber):
                             else:
                                 still_pending.append(op.chunk_index)
                         except Exception as e:
-                            logger.warning(f"Error checking chunk {op.chunk_index}: {e}")
+                            logger.warning("Error checking chunk", chunk_index=op.chunk_index, error=str(e))
                             still_pending.append(op.chunk_index)
 
                 # Update in-progress list
@@ -745,8 +747,11 @@ class GoogleCloudTranscriber(Transcriber):
         if chunk_tasks:
             chunk_indices = [t.chunk_index for t in chunk_tasks]
             logger.info(
-                f"Will transcribe {len(chunk_tasks)} chunks: indices {chunk_indices} "
-                f"(total_chunks={total_chunks}, resumed={len(resumed_results)})"
+                "Will transcribe chunks",
+                chunk_count=len(chunk_tasks),
+                chunk_indices=chunk_indices,
+                total_chunks=total_chunks,
+                resumed_count=len(resumed_results),
             )
             if resumed_results:
                 self.console.info(f"   Will transcribe chunks: {[i+1 for i in chunk_indices]} of {total_chunks}")
@@ -800,7 +805,7 @@ class GoogleCloudTranscriber(Transcriber):
         if len(sorted_results) == 1:
             return sorted_results[0].transcript
 
-        logger.info(f"Merging {len(sorted_results)} chunk transcripts...")
+        logger.info("Merging chunk transcripts", chunk_count=len(sorted_results))
 
         # Reconcile speakers across chunks using overlap regions, then merge
         # Each chunk has overlap with the next, so we process sequentially
@@ -827,14 +832,20 @@ class GoogleCloudTranscriber(Transcriber):
                 if speaker_mapping:
                     # Apply mapping to current chunk before merging
                     curr_transcript = curr_result.transcript.apply_speaker_mapping(speaker_mapping)
-                    mapping_str = ", ".join(f"{k}->{v}" for k, v in speaker_mapping.items())
-                    logger.info(f"Chunk {i}->{i+1}: Speaker mapping applied: {mapping_str}")
+                    logger.info(
+                        "Speaker mapping applied",
+                        from_chunk=i,
+                        to_chunk=i + 1,
+                        mapping=speaker_mapping,
+                    )
                 else:
                     curr_transcript = curr_result.transcript
-                    logger.debug(f"Chunk {i}->{i+1}: No mapping (insufficient matches in overlap)")
+                    logger.debug(
+                        "No speaker mapping", from_chunk=i, to_chunk=i + 1, reason="insufficient matches in overlap"
+                    )
             else:
                 curr_transcript = curr_result.transcript
-                logger.debug(f"Chunk {i}->{i+1}: No overlap")
+                logger.debug("No speaker mapping", from_chunk=i, to_chunk=i + 1, reason="no overlap")
 
             # Merge current chunk into accumulated transcript
             merged_transcript = merged_transcript.merge(curr_transcript)
@@ -1076,7 +1087,12 @@ class GoogleCloudTranscriber(Transcriber):
         end_ms = task.end_ms
         chunk_audio = task.audio_segment
 
-        logger.debug(f"Chunk {i+1}: Starting transcription ({start_ms/1000:.1f}s - {end_ms/1000:.1f}s)")
+        logger.debug(
+            "Starting chunk transcription",
+            chunk_num=i + 1,
+            start_seconds=round(start_ms / 1000, 1),
+            end_seconds=round(end_ms / 1000, 1),
+        )
 
         if progress_tracker:
             progress_tracker.chunk_started(i)
@@ -1093,7 +1109,12 @@ class GoogleCloudTranscriber(Transcriber):
 
             for attempt in range(MAX_CHUNK_RETRIES + 1):
                 try:
-                    logger.debug(f"Chunk {i+1}: Calling _transcribe_batch (attempt {attempt+1}/{MAX_CHUNK_RETRIES+1})")
+                    logger.debug(
+                        "Calling _transcribe_batch",
+                        chunk_num=i + 1,
+                        attempt=attempt + 1,
+                        max_attempts=MAX_CHUNK_RETRIES + 1,
+                    )
                     result = self._transcribe_batch(
                         tmp_path,
                         language,
@@ -1106,11 +1127,15 @@ class GoogleCloudTranscriber(Transcriber):
                         chunk_end_ms=end_ms,
                         total_chunks=total_chunks,
                     )
-                    logger.debug(f"Chunk {i+1}: _transcribe_batch completed successfully")
+                    logger.debug("Chunk transcribe_batch completed successfully", chunk_num=i + 1)
                     break  # Success
                 except TimeoutError as e:
                     last_error = e
-                    logger.warning(f"Chunk {i+1}: Timeout on attempt {attempt+1}, will retry with split")
+                    logger.warning(
+                        "Chunk timeout, will retry with split",
+                        chunk_num=i + 1,
+                        attempt=attempt + 1,
+                    )
                     # Timeout retry is silent - progress tracker will show overall progress
                     if attempt < MAX_CHUNK_RETRIES:
                         # Retry by splitting this chunk in half
@@ -1402,7 +1427,7 @@ class GoogleCloudTranscriber(Transcriber):
 
             # Get operation name for debugging and potential resumption
             operation_name = getattr(operation.operation, "name", None) or str(operation.operation)
-            logger.debug(f"Started BatchRecognize operation: {operation_name}")
+            logger.debug("Started BatchRecognize operation", operation_name=operation_name)
 
             # Extract short operation ID from full name (last segment)
             # Format: projects/xxx/locations/yyy/operations/OPERATION_ID
@@ -1428,7 +1453,12 @@ class GoogleCloudTranscriber(Transcriber):
                     state=TranscriptionOperationState.PENDING,
                 )
                 self._save_operation(persisted_operation)
-                logger.info(f"Saved operation state: {operation_id} for {podcast_slug}/{episode_slug}")
+                logger.info(
+                    "Saved operation state",
+                    operation_id=operation_id,
+                    podcast_slug=podcast_slug,
+                    episode_slug=episode_slug,
+                )
 
             # Wait for completion
             op_start_time = time.time()
@@ -1452,7 +1482,7 @@ class GoogleCloudTranscriber(Transcriber):
                                     self.console.progress(f"Progress: {progress}%")
                                     last_progress = progress
                 except Exception as e:
-                    logger.debug(f"Could not get progress: {e}")
+                    logger.debug("Could not get progress", error=str(e))
 
                 time.sleep(OPERATION_POLL_INTERVAL_SECONDS)
 
@@ -1500,7 +1530,7 @@ class GoogleCloudTranscriber(Transcriber):
             if not transcript_gcs_uri:
                 raise RuntimeError("No transcript URI in response")
 
-            logger.debug(f"Transcript written to: {transcript_gcs_uri}")
+            logger.debug("Transcript written to GCS", transcript_gcs_uri=transcript_gcs_uri)
 
             # Download and parse the transcript from GCS
             transcript = self._download_transcript_from_gcs(transcript_gcs_uri)
@@ -1509,12 +1539,12 @@ class GoogleCloudTranscriber(Transcriber):
             try:
                 self._delete_gcs_file(transcript_gcs_uri)
             except Exception as e:
-                logger.warning(f"Failed to delete transcript from GCS: {e}")
+                logger.warning("Failed to delete transcript from GCS", error=str(e))
 
             # Delete the persisted operation file since we completed successfully
             if persisted_operation:
                 self._delete_operation(persisted_operation.operation_id)
-                logger.debug(f"Deleted operation state: {persisted_operation.operation_id}")
+                logger.debug("Deleted operation state", operation_id=persisted_operation.operation_id)
 
             return transcript
 
@@ -1576,7 +1606,7 @@ class GoogleCloudTranscriber(Transcriber):
         """
         match = re.match(r"gs://([^/]+)/(.*)", gcs_uri)
         if not match:
-            logger.warning(f"Invalid GCS URI, cannot delete: {gcs_uri}")
+            logger.warning("Invalid GCS URI, cannot delete", gcs_uri=gcs_uri)
             return
 
         bucket_name, blob_path = match.groups()
@@ -1585,9 +1615,9 @@ class GoogleCloudTranscriber(Transcriber):
 
         try:
             blob.delete()
-            logger.debug(f"Deleted GCS file: {gcs_uri}")
+            logger.debug("Deleted GCS file", gcs_uri=gcs_uri)
         except Exception as e:
-            logger.warning(f"Failed to delete {gcs_uri}: {e}")
+            logger.warning("Failed to delete GCS file", gcs_uri=gcs_uri, error=str(e))
 
     # =========================================================================
     # Operation persistence methods for resuming after app restart
@@ -1608,7 +1638,7 @@ class GoogleCloudTranscriber(Transcriber):
         with open(operation_file, "w", encoding="utf-8") as f:
             f.write(operation.model_dump_json(indent=2))
 
-        logger.debug(f"Saved operation state: {operation_file}")
+        logger.debug("Saved operation state", operation_file=str(operation_file))
 
     def _load_operation(self, operation_id: str) -> Optional[TranscriptionOperation]:
         """
@@ -1630,7 +1660,7 @@ class GoogleCloudTranscriber(Transcriber):
                 data = json.load(f)
             return TranscriptionOperation.model_validate(data)
         except Exception as e:
-            logger.warning(f"Failed to load operation {operation_id}: {e}")
+            logger.warning("Failed to load operation", operation_id=operation_id, error=str(e))
             return None
 
     def _delete_operation(self, operation_id: str) -> None:
@@ -1645,9 +1675,9 @@ class GoogleCloudTranscriber(Transcriber):
         try:
             if operation_file.exists():
                 operation_file.unlink()
-                logger.debug(f"Deleted operation state: {operation_file}")
+                logger.debug("Deleted operation state", operation_file=str(operation_file))
         except Exception as e:
-            logger.warning(f"Failed to delete operation file {operation_id}: {e}")
+            logger.warning("Failed to delete operation file", operation_id=operation_id, error=str(e))
 
     def list_pending_operations(self) -> List[TranscriptionOperation]:
         """
@@ -1670,7 +1700,7 @@ class GoogleCloudTranscriber(Transcriber):
                 if op.state == TranscriptionOperationState.PENDING:
                     operations.append(op)
             except Exception as e:
-                logger.warning(f"Failed to load operation from {op_file}: {e}")
+                logger.warning("Failed to load operation from file", operation_file=str(op_file), error=str(e))
 
         return operations
 
@@ -1718,7 +1748,7 @@ class GoogleCloudTranscriber(Transcriber):
         if not pending_ops:
             return results
 
-        logger.info(f"Resetting {len(pending_ops)} pending operations...")
+        logger.info("Resetting pending operations", operation_count=len(pending_ops))
 
         for op in pending_ops:
             try:
@@ -1748,7 +1778,7 @@ class GoogleCloudTranscriber(Transcriber):
                         )
 
             except Exception as e:
-                logger.error(f"Error checking operation {op.operation_id}: {e}")
+                logger.error("Error checking operation", operation_id=op.operation_id, error=str(e))
                 # Try to cancel anyway, then delete tracking file
                 try:
                     self._cancel_operation(op)
@@ -1773,7 +1803,7 @@ class GoogleCloudTranscriber(Transcriber):
         try:
             operations_client = self.speech_client._transport.operations_client
             operations_client.cancel_operation(name=operation.operation_name)
-            logger.info(f"Cancelled GCP operation: {operation.operation_id}")
+            logger.info("Cancelled GCP operation", operation_id=operation.operation_id)
             return True
         except Exception as e:
             # Common reasons for cancel to fail:
@@ -1829,13 +1859,13 @@ class GoogleCloudTranscriber(Transcriber):
                     update_time = metadata_dict.get("updateTime")
                     if create_time and update_time:
                         # Just log that we have timing info (progress not available via this API)
-                        logger.debug(f"Operation created: {create_time}, last update: {update_time}")
+                        logger.debug("Operation metadata", create_time=create_time, update_time=update_time)
                 except Exception as e:
-                    logger.debug(f"Could not extract metadata: {e}")
+                    logger.debug("Could not extract metadata", error=str(e))
 
             if not grpc_operation.done:
                 # Still running
-                logger.debug(f"Operation {operation.operation_id} still in progress")
+                logger.debug("Operation still in progress", operation_id=operation.operation_id)
                 return operation
 
             # Operation completed - check for errors
@@ -1857,7 +1887,7 @@ class GoogleCloudTranscriber(Transcriber):
                 response = cloud_speech.BatchRecognizeResponse.deserialize(grpc_operation.response.value)
             except Exception as e:
                 parse_error = e
-                logger.debug(f"Strategy 1 (deserialize) failed: {e}")
+                logger.debug("Strategy 1 (deserialize) failed", error=str(e))
 
             # Strategy 2: Try from_json if the response has a type_url we can use
             if response is None:
@@ -1874,7 +1904,7 @@ class GoogleCloudTranscriber(Transcriber):
                             ignore_unknown_fields=True,
                         )
                 except Exception as e:
-                    logger.debug(f"Strategy 2 (json) failed: {e}")
+                    logger.debug("Strategy 2 (json) failed", error=str(e))
 
             # Strategy 3: Direct Unpack (may work with some protobuf versions)
             if response is None:
@@ -1882,7 +1912,7 @@ class GoogleCloudTranscriber(Transcriber):
                     response = cloud_speech.BatchRecognizeResponse()
                     grpc_operation.response.Unpack(response)
                 except Exception as e:
-                    logger.debug(f"Strategy 3 (Unpack) failed: {e}")
+                    logger.debug("Strategy 3 (Unpack) failed", error=str(e))
 
             if response is None:
                 raise RuntimeError(f"Failed to parse operation response after all strategies: {parse_error}")
@@ -1922,11 +1952,15 @@ class GoogleCloudTranscriber(Transcriber):
             operation.completed_at = datetime.now(timezone.utc)
             self._save_operation(operation)
 
-            logger.info(f"Operation {operation.operation_id} completed, transcript at: {transcript_gcs_uri}")
+            logger.info(
+                "Operation completed",
+                operation_id=operation.operation_id,
+                transcript_gcs_uri=transcript_gcs_uri,
+            )
             return operation
 
         except Exception as e:
-            logger.error(f"Failed to check operation {operation.operation_id}: {e}")
+            logger.error("Failed to check operation", operation_id=operation.operation_id, error=str(e))
             raise RuntimeError(f"Failed to check operation: {e}")
 
     def download_completed_operation(self, operation: TranscriptionOperation) -> Transcript:
@@ -1965,7 +1999,7 @@ class GoogleCloudTranscriber(Transcriber):
             try:
                 self._delete_gcs_file(operation.transcript_gcs_uri)
             except Exception as e:
-                logger.warning(f"Failed to delete transcript from GCS: {e}")
+                logger.warning("Failed to delete transcript from GCS", error=str(e))
 
             # Try to delete audio file if it still exists
             try:
@@ -1983,7 +2017,9 @@ class GoogleCloudTranscriber(Transcriber):
             return transcript
 
         except Exception as e:
-            logger.error(f"Failed to download transcript for operation {operation.operation_id}: {e}")
+            logger.error(
+                "Failed to download transcript for operation", operation_id=operation.operation_id, error=str(e)
+            )
             raise RuntimeError(f"Failed to download transcript: {e}")
 
     def resume_pending_operations(self) -> List[Tuple[TranscriptionOperation, Optional[Transcript]]]:
@@ -2006,7 +2042,7 @@ class GoogleCloudTranscriber(Transcriber):
         if not pending_ops:
             return results
 
-        logger.info(f"Found {len(pending_ops)} pending operations to resume")
+        logger.info("Found pending operations to resume", operation_count=len(pending_ops))
 
         for op in pending_ops:
             try:
@@ -2018,14 +2054,14 @@ class GoogleCloudTranscriber(Transcriber):
                     transcript_data = self.download_completed_operation(updated_op)
                     results.append((updated_op, transcript_data))
                 elif updated_op.state == TranscriptionOperationState.FAILED:
-                    logger.warning(f"Operation {op.operation_id} failed: {updated_op.error}")
+                    logger.warning("Operation failed", operation_id=op.operation_id, error=updated_op.error)
                     results.append((updated_op, None))
                 else:
                     # Still pending
                     results.append((updated_op, None))
 
             except Exception as e:
-                logger.error(f"Error resuming operation {op.operation_id}: {e}")
+                logger.error("Error resuming operation", operation_id=op.operation_id, error=str(e))
                 op.state = TranscriptionOperationState.FAILED
                 op.error = str(e)
                 self._save_operation(op)
@@ -2059,7 +2095,11 @@ class GoogleCloudTranscriber(Transcriber):
         if not pending_ops:
             return results
 
-        logger.info(f"Waiting for {len(pending_ops)} pending operations (timeout: {timeout_minutes} min)...")
+        logger.info(
+            "Waiting for pending operations",
+            operation_count=len(pending_ops),
+            timeout_minutes=timeout_minutes,
+        )
         start_time = time.time()
         timeout_seconds = timeout_minutes * 60
 
@@ -2087,7 +2127,7 @@ class GoogleCloudTranscriber(Transcriber):
                         remaining_ops[op_id] = updated_op
 
                 except Exception as e:
-                    logger.error(f"Error checking operation {op_id}: {e}")
+                    logger.error("Error checking operation", operation_id=op_id, error=str(e))
                     op.state = TranscriptionOperationState.FAILED
                     op.error = str(e)
                     self._save_operation(op)
@@ -2109,7 +2149,7 @@ class GoogleCloudTranscriber(Transcriber):
 
         # Handle timed-out operations
         for op_id, op in remaining_ops.items():
-            logger.warning(f"Operation {op_id} timed out after {timeout_minutes} minutes")
+            logger.warning("Operation timed out", operation_id=op_id, timeout_minutes=timeout_minutes)
             op.error = f"Timed out waiting after {timeout_minutes} minutes"
             # Don't mark as failed - it might still complete later
             results.append((op, None))

@@ -552,7 +552,11 @@ def get_max_output_tokens(model_name: str) -> int:
     elif "claude" in model_lower:
         return 64000  # Claude 4.x default
 
-    logger.warning(f"Model '{model_name}' not found in MODEL_CONFIGS, " f"using default {DEFAULT_MAX_OUTPUT_TOKENS}")
+    logger.warning(
+        "Model not found in MODEL_CONFIGS, using default",
+        model=model_name,
+        default_max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+    )
     return DEFAULT_MAX_OUTPUT_TOKENS
 
 
@@ -801,7 +805,9 @@ class OpenAIProvider(LLMProvider):
             # Log token usage if available
             if hasattr(response, "usage") and response.usage:
                 logger.debug(
-                    f"Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}"
+                    "Token usage",
+                    input_tokens=response.usage.prompt_tokens,
+                    output_tokens=response.usage.completion_tokens,
                 )
 
             # Check finish_reason
@@ -809,7 +815,7 @@ class OpenAIProvider(LLMProvider):
 
             if finish_reason == "length":  # Equivalent to max_tokens
                 if enable_continuation and attempt < max_attempts - 1:
-                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info("Response truncated, continuing", attempt=attempt + 2, max_attempts=max_attempts)
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
@@ -859,7 +865,7 @@ class OpenAIProvider(LLMProvider):
             )
             return True
         except Exception as e:
-            logger.error(f"OpenAI health check failed: {e}")
+            logger.error("OpenAI health check failed", error=str(e))
             return False
 
     def get_model_name(self) -> str:
@@ -890,7 +896,7 @@ class OpenAIProvider(LLMProvider):
         if self._is_reasoning_model():
             # Reasoning models don't support structured output or response_format
             # We rely on prompt engineering to get JSON output
-            logger.warning(f"Model {self.model} doesn't support structured output, using JSON mode fallback")
+            logger.warning("Model doesn't support structured output, using JSON mode fallback", model=self.model)
 
             # Add JSON instruction to the last user message if not already there
             modified_messages = messages.copy()
@@ -1064,13 +1070,15 @@ class OllamaProvider(LLMProvider):
             # Log token counts if available
             if "prompt_eval_count" in response and "eval_count" in response:
                 logger.debug(
-                    f"Token usage - Input: {response.get('prompt_eval_count', 0)}, Output: {response.get('eval_count', 0)}"
+                    "Token usage",
+                    input_tokens=response.get("prompt_eval_count", 0),
+                    output_tokens=response.get("eval_count", 0),
                 )
 
             # Check if response was truncated (hit max_tokens limit)
             if max_tokens and "eval_count" in response:
                 if response["eval_count"] >= max_tokens:
-                    logger.warning(f"Ollama response may be truncated (reached max_tokens: {max_tokens})")
+                    logger.warning("Ollama response may be truncated", max_tokens=max_tokens)
                     logger.info("Consider increasing max_tokens or using smaller chunks")
 
             return response_text
@@ -1110,14 +1118,14 @@ class OllamaProvider(LLMProvider):
             model_available = any(self.model == name or self.model == name.split(":")[0] for name in model_names)
 
             if not model_available:
-                logger.warning(f"Model '{self.model}' not found in Ollama.")
-                logger.info(f"Available models: {', '.join(model_names)}")
-                logger.info(f"Run: ollama pull {self.model}")
+                logger.warning("Model not found in Ollama", model=self.model)
+                logger.info("Available Ollama models", models=model_names)
+                logger.info("Pull model command", command=f"ollama pull {self.model}")
                 return False
 
             return True
         except Exception as e:
-            logger.error(f"Cannot connect to Ollama: {e}")
+            logger.error("Cannot connect to Ollama", error=str(e))
             logger.info("Make sure Ollama is running: ollama serve")
             return False
 
@@ -1146,7 +1154,7 @@ class OllamaProvider(LLMProvider):
         Ollama doesn't support native schema-validated output, so we use
         JSON mode and validate with Pydantic after parsing.
         """
-        logger.debug(f"Ollama using JSON mode fallback for structured output")
+        logger.debug("Ollama using JSON mode fallback for structured output")
 
         response = self.chat_completion(
             messages=messages,
@@ -1384,9 +1392,14 @@ class AnthropicProvider(LLMProvider):
                         total_wait = retry_after + buffer_time
 
                         logger.warning(
-                            f"Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) "
-                            f"before retry (total retry {total_retry_count}/{max_total_retries}, "
-                            f"current attempt {retry_attempt + 2}/{max_retries})..."
+                            "Rate limit exceeded, waiting before retry",
+                            total_wait_seconds=total_wait,
+                            retry_after_seconds=retry_after,
+                            buffer_seconds=buffer_time,
+                            total_retry_count=total_retry_count,
+                            max_total_retries=max_total_retries,
+                            current_attempt=retry_attempt + 2,
+                            max_retries=max_retries,
                         )
 
                         # Show progress during long waits (>10 seconds)
@@ -1397,7 +1410,7 @@ class AnthropicProvider(LLMProvider):
                                 elapsed += 10
                                 remaining = max(0, total_wait - elapsed)
                                 if remaining > 0:
-                                    logger.debug(f"...{remaining}s remaining...")
+                                    logger.debug("Waiting", remaining_seconds=remaining)
                         else:
                             time.sleep(total_wait)
 
@@ -1406,13 +1419,15 @@ class AnthropicProvider(LLMProvider):
                     else:
                         # Max retries for this attempt exceeded, re-raise the error
                         logger.error(
-                            f"Rate limit retry failed after {max_retries} attempts (total retries: {total_retry_count})"
+                            "Rate limit retry failed",
+                            max_retries=max_retries,
+                            total_retry_count=total_retry_count,
                         )
                         raise
                 except BadRequestError as e:
                     # Permanent error - do NOT retry - fail fast with clear error message
                     error_str = str(e)
-                    logger.error(f"BadRequest error (not retrying): {e}")
+                    logger.error("BadRequest error (not retrying)", error=error_str)
 
                     # Check for billing/credit balance errors
                     if "credit balance" in error_str.lower() or "billing" in error_str.lower():
@@ -1432,31 +1447,39 @@ class AnthropicProvider(LLMProvider):
                     # Client errors (400, 401, 403, 404) should not be retried
                     if e.status_code in (500, 529):
                         total_retry_count += 1
-                        logger.warning(f"Server error {e.status_code}, will retry: {e}")
+                        logger.warning("Server error, will retry", status_code=e.status_code, error=str(e))
                         if retry_attempt < max_retries - 1:
                             retry_after = 30
                             logger.info(
-                                f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})"
+                                "Waiting before retry",
+                                wait_seconds=retry_after,
+                                attempt=retry_attempt + 2,
+                                max_retries=max_retries,
                             )
                             time.sleep(retry_after)
                             continue
-                        logger.error(f"Server error retry failed after {max_retries} attempts")
+                        logger.error("Server error retry failed", max_retries=max_retries)
                         raise
                     # Other API status errors (4xx) - fail fast
-                    logger.error(f"API error (status {e.status_code}): {e}")
+                    logger.error("API error", status_code=e.status_code, error=str(e))
                     raise
 
                 except Exception as e:
                     # Connection errors, timeouts - these are transient, retry
                     total_retry_count += 1
                     error_type = type(e).__name__
-                    logger.warning(f"Connection error ({error_type}): {e}")
+                    logger.warning("Connection error", error_type=error_type, error=str(e))
                     if retry_attempt < max_retries - 1:
                         retry_after = 30  # Wait 30 seconds for connection errors
-                        logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
+                        logger.info(
+                            "Waiting before retry",
+                            wait_seconds=retry_after,
+                            attempt=retry_attempt + 2,
+                            max_retries=max_retries,
+                        )
                         time.sleep(retry_after)
                         continue
-                    logger.error(f"Connection error retry failed after {max_retries} attempts")
+                    logger.error("Connection error retry failed", max_retries=max_retries)
                     raise
 
             # Extract text from current response
@@ -1469,7 +1492,9 @@ class AnthropicProvider(LLMProvider):
             # Log token usage if available
             if hasattr(response, "usage"):
                 logger.debug(
-                    f"Token usage - Input: {response.usage.input_tokens}, Output: {response.usage.output_tokens}"
+                    "Token usage",
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
                 )
 
             # Check stop_reason for handling different completion scenarios
@@ -1477,7 +1502,7 @@ class AnthropicProvider(LLMProvider):
 
             if stop_reason == "max_tokens":
                 if enable_continuation and attempt < max_attempts - 1:
-                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info("Response truncated, continuing", attempt=attempt + 2, max_attempts=max_attempts)
                     # Continue from where we left off
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
@@ -1511,7 +1536,7 @@ class AnthropicProvider(LLMProvider):
             self.client.messages.create(model=self.model, messages=[{"role": "user", "content": "test"}], max_tokens=1)
             return True
         except Exception as e:
-            logger.error(f"Anthropic health check failed: {e}")
+            logger.error("Anthropic health check failed", error=str(e))
             return False
 
     def get_model_name(self) -> str:
@@ -1563,7 +1588,7 @@ class AnthropicProvider(LLMProvider):
 
         if not self.supports_structured_output() or not beta_header:
             # Fallback for models without structured output support
-            logger.warning(f"Model {self.model} doesn't support structured output, using JSON mode fallback")
+            logger.warning("Model doesn't support structured output, using JSON mode fallback", model=self.model)
             response = self.chat_completion(
                 messages=messages,
                 temperature=temperature,
@@ -1623,7 +1648,7 @@ class AnthropicProvider(LLMProvider):
 
         except Exception as e:
             # If beta API fails, fall back to JSON mode
-            logger.warning(f"Anthropic structured output failed, using fallback: {e}")
+            logger.warning("Anthropic structured output failed, using fallback", error=str(e))
             response = self.chat_completion(
                 messages=messages,
                 temperature=temperature,
@@ -1698,7 +1723,7 @@ class AnthropicProvider(LLMProvider):
         for retry_attempt in range(max_retries):
             try:
                 full_response = ""
-                logger.debug(f"Opening stream (attempt {retry_attempt + 1}/{max_retries})...")
+                logger.debug("Opening stream", attempt=retry_attempt + 1, max_retries=max_retries)
                 # Use the stream() context manager method (not a parameter!)
                 with self.client.messages.stream(**params) as stream:
                     logger.debug("Stream opened, waiting for data...")
@@ -1729,8 +1754,12 @@ class AnthropicProvider(LLMProvider):
                     total_wait = retry_after + buffer_time
 
                     logger.warning(
-                        f"Rate limit exceeded. Waiting {total_wait}s ({retry_after}s + {buffer_time}s buffer) "
-                        f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                        "Rate limit exceeded, waiting before retry",
+                        total_wait_seconds=total_wait,
+                        retry_after_seconds=retry_after,
+                        buffer_seconds=buffer_time,
+                        attempt=retry_attempt + 2,
+                        max_retries=max_retries,
                     )
 
                     # Show progress during long waits (>10 seconds)
@@ -1741,20 +1770,20 @@ class AnthropicProvider(LLMProvider):
                             elapsed += 10
                             remaining = max(0, total_wait - elapsed)
                             if remaining > 0:
-                                logger.debug(f"...{remaining}s remaining...")
+                                logger.debug("Waiting", remaining_seconds=remaining)
                     else:
                         time.sleep(total_wait)
 
                     logger.info("Retrying now...")
                     continue  # Explicitly continue to next retry attempt
                 else:
-                    logger.error(f"Rate limit retry failed after {max_retries} attempts")
+                    logger.error("Rate limit retry failed", max_retries=max_retries)
                     raise
 
             except BadRequestError as e:
                 # Permanent error - invalid request parameters
                 # Do NOT retry - fail fast with clear error message
-                logger.error(f"BadRequest error in streaming (not retrying): {e}")
+                logger.error("BadRequest error in streaming (not retrying)", error=str(e))
                 raise ValueError(
                     f"Invalid Anthropic API request: {e}. "
                     f"This may be due to invalid parameters for model {self.model}."
@@ -1763,28 +1792,38 @@ class AnthropicProvider(LLMProvider):
             except APIStatusError as e:
                 # Server errors (500, 529 overloaded) are transient - retry
                 if e.status_code in (500, 529):
-                    logger.warning(f"Server error {e.status_code} in streaming, will retry: {e}")
+                    logger.warning("Server error in streaming, will retry", status_code=e.status_code, error=str(e))
                     if retry_attempt < max_retries - 1:
                         retry_after = 30
-                        logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
+                        logger.info(
+                            "Waiting before retry",
+                            wait_seconds=retry_after,
+                            attempt=retry_attempt + 2,
+                            max_retries=max_retries,
+                        )
                         time.sleep(retry_after)
                         continue
-                    logger.error(f"Server error retry failed after {max_retries} attempts")
+                    logger.error("Server error retry failed", max_retries=max_retries)
                     raise
                 # Other API status errors (4xx) - fail fast
-                logger.error(f"API error in streaming (status {e.status_code}): {e}")
+                logger.error("API error in streaming", status_code=e.status_code, error=str(e))
                 raise
 
             except Exception as e:
                 # Connection errors, timeouts - these are transient, retry
                 error_type = type(e).__name__
-                logger.warning(f"Connection error in streaming ({error_type}): {e}")
+                logger.warning("Connection error in streaming", error_type=error_type, error=str(e))
                 if retry_attempt < max_retries - 1:
                     retry_after = 30  # Wait 30 seconds for connection errors
-                    logger.info(f"Waiting {retry_after}s before retry (attempt {retry_attempt + 2}/{max_retries})")
+                    logger.info(
+                        "Waiting before retry",
+                        wait_seconds=retry_after,
+                        attempt=retry_attempt + 2,
+                        max_retries=max_retries,
+                    )
                     time.sleep(retry_after)
                     continue
-                logger.error(f"Connection error retry failed after {max_retries} attempts")
+                logger.error("Connection error retry failed", max_retries=max_retries)
                 raise
 
         # Should never reach here, but return empty string as fallback
@@ -2024,7 +2063,7 @@ class GeminiProvider(LLMProvider):
                 break
             elif "MAX_TOKENS" in finish_reason_str:
                 if enable_continuation and attempt < max_attempts - 1:
-                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info("Response truncated, continuing", attempt=attempt + 2, max_attempts=max_attempts)
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
                         {"role": "user", "content": "Please continue from where you left off."},
@@ -2034,9 +2073,10 @@ class GeminiProvider(LLMProvider):
                     char_count = len(full_response) if full_response else 0
                     estimated_tokens = char_count // 4
                     logger.warning(
-                        f"Gemini response truncated due to max_tokens limit. "
-                        f"Limit: {max_tokens if max_tokens else 'default (8192)'} tokens, "
-                        f"Generated: ~{estimated_tokens} tokens ({char_count} characters)"
+                        "Gemini response truncated due to max_tokens limit",
+                        limit_tokens=max_tokens if max_tokens else "default (8192)",
+                        estimated_tokens=estimated_tokens,
+                        char_count=char_count,
                     )
                     if not enable_continuation:
                         logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
@@ -2055,7 +2095,9 @@ class GeminiProvider(LLMProvider):
                 )
             else:
                 if full_response:
-                    logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
+                    logger.warning(
+                        "Gemini finished with unexpected reason but returned content", finish_reason=finish_reason
+                    )
                     break
                 raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
 
@@ -2108,7 +2150,7 @@ class GeminiProvider(LLMProvider):
             )
             return True
         except Exception as e:
-            logger.error(f"Gemini health check failed: {e}")
+            logger.error("Gemini health check failed", error=str(e))
             return False
 
     def get_model_name(self) -> str:
@@ -2270,7 +2312,9 @@ class GeminiProvider(LLMProvider):
                 elif finish_reason_str:
                     if not full_response:
                         raise RuntimeError(f"Gemini finished with unexpected reason: {finish_reason}")
-                    logger.warning(f"Gemini finished with reason {finish_reason} but returned content")
+                    logger.warning(
+                        "Gemini finished with unexpected reason but returned content", finish_reason=finish_reason
+                    )
                     break
 
             # If we didn't hit MAX_TOKENS, we're done
@@ -2386,28 +2430,32 @@ class MistralProvider(LLMProvider):
                         if retry_attempt < max_retries - 1:
                             retry_after = 60
                             logger.warning(
-                                f"Mistral rate limit exceeded. Waiting {retry_after}s "
-                                f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                                "Mistral rate limit exceeded, waiting before retry",
+                                wait_seconds=retry_after,
+                                attempt=retry_attempt + 2,
+                                max_retries=max_retries,
                             )
                             time.sleep(retry_after)
                             continue
-                        logger.error(f"Rate limit retry failed after {max_retries} attempts")
+                        logger.error("Rate limit retry failed", max_retries=max_retries)
                         raise
                     # Server errors (5xx) - retry
                     elif "500" in error_str or "502" in error_str or "503" in error_str:
                         if retry_attempt < max_retries - 1:
                             retry_after = 30
                             logger.warning(
-                                f"Mistral server error. Waiting {retry_after}s "
-                                f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                                "Mistral server error, waiting before retry",
+                                wait_seconds=retry_after,
+                                attempt=retry_attempt + 2,
+                                max_retries=max_retries,
                             )
                             time.sleep(retry_after)
                             continue
-                        logger.error(f"Server error retry failed after {max_retries} attempts")
+                        logger.error("Server error retry failed", max_retries=max_retries)
                         raise
                     # Other errors - fail fast
                     else:
-                        logger.error(f"Mistral API error: {e}")
+                        logger.error("Mistral API error", error=str(e))
                         raise
 
             # Extract content
@@ -2420,8 +2468,9 @@ class MistralProvider(LLMProvider):
             # Log token usage if available
             if hasattr(response, "usage") and response.usage:
                 logger.debug(
-                    f"Token usage - Input: {response.usage.prompt_tokens}, "
-                    f"Output: {response.usage.completion_tokens}"
+                    "Token usage",
+                    input_tokens=response.usage.prompt_tokens,
+                    output_tokens=response.usage.completion_tokens,
                 )
 
             # Check finish_reason
@@ -2431,7 +2480,7 @@ class MistralProvider(LLMProvider):
 
             if finish_reason == "length":
                 if enable_continuation and attempt < max_attempts - 1:
-                    logger.info(f"Response truncated, continuing (attempt {attempt + 2}/{max_attempts})...")
+                    logger.info("Response truncated, continuing", attempt=attempt + 2, max_attempts=max_attempts)
                     current_messages = messages + [
                         {"role": "assistant", "content": full_response},
                         {"role": "user", "content": "Please continue from where you left off."},
@@ -2439,7 +2488,8 @@ class MistralProvider(LLMProvider):
                     continue
                 else:
                     logger.warning(
-                        f"Mistral response truncated due to max_tokens limit (limit: {max_tokens or 'default'})"
+                        "Mistral response truncated due to max_tokens limit",
+                        limit=max_tokens or "default",
                     )
                     if not enable_continuation:
                         logger.info("Consider using smaller chunks or chat_completion_with_continuation()")
@@ -2510,28 +2560,32 @@ class MistralProvider(LLMProvider):
                     if retry_attempt < max_retries - 1:
                         retry_after = 60
                         logger.warning(
-                            f"Mistral rate limit exceeded in streaming. Waiting {retry_after}s "
-                            f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                            "Mistral rate limit exceeded in streaming, waiting before retry",
+                            wait_seconds=retry_after,
+                            attempt=retry_attempt + 2,
+                            max_retries=max_retries,
                         )
                         time.sleep(retry_after)
                         continue
-                    logger.error(f"Rate limit retry failed after {max_retries} attempts")
+                    logger.error("Rate limit retry failed", max_retries=max_retries)
                     raise
                 # Server errors (5xx) - retry
                 elif "500" in error_str or "502" in error_str or "503" in error_str:
                     if retry_attempt < max_retries - 1:
                         retry_after = 30
                         logger.warning(
-                            f"Mistral server error in streaming. Waiting {retry_after}s "
-                            f"before retry (attempt {retry_attempt + 2}/{max_retries})..."
+                            "Mistral server error in streaming, waiting before retry",
+                            wait_seconds=retry_after,
+                            attempt=retry_attempt + 2,
+                            max_retries=max_retries,
                         )
                         time.sleep(retry_after)
                         continue
-                    logger.error(f"Server error retry failed after {max_retries} attempts")
+                    logger.error("Server error retry failed", max_retries=max_retries)
                     raise
                 # Other errors - fail fast
                 else:
-                    logger.error(f"Mistral streaming API error: {e}")
+                    logger.error("Mistral streaming API error", error=str(e))
                     raise
 
         return ""
@@ -2550,7 +2604,7 @@ class MistralProvider(LLMProvider):
             )
             return True
         except Exception as e:
-            logger.error(f"Mistral health check failed: {e}")
+            logger.error("Mistral health check failed", error=str(e))
             return False
 
     def get_model_name(self) -> str:
@@ -2607,7 +2661,7 @@ class MistralProvider(LLMProvider):
             # If parse fails, fall back to JSON mode + manual parsing
             error_str = str(e).lower()
             if "parse" in error_str or "schema" in error_str:
-                logger.warning(f"Mistral parse failed, using JSON mode fallback: {e}")
+                logger.warning("Mistral parse failed, using JSON mode fallback", error=str(e))
                 response = self.chat_completion(
                     messages=messages,
                     temperature=temperature,
