@@ -25,6 +25,8 @@ from typing import Optional, Tuple
 
 from pydub import AudioSegment
 
+from thestill.utils.console import ConsoleOutput
+
 
 class AudioPreprocessor:
     """Preprocesses audio files for optimal transcription performance"""
@@ -34,21 +36,23 @@ class AudioPreprocessor:
     TARGET_SAMPLE_WIDTH = 2  # 16-bit (2 bytes)
     TARGET_CHANNELS = 1  # Mono
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, console: Optional[ConsoleOutput] = None):
         """
         Initialize the audio preprocessor.
 
         Args:
-            logger: Optional logger instance for output
+            logger: Optional logger instance for output (deprecated, use console)
+            console: ConsoleOutput instance for user-facing messages
         """
         self.logger = logger
+        self.console = console or ConsoleOutput()
 
     def _log(self, message: str):
-        """Log a message using logger if available, otherwise print"""
+        """Log a message using logger if available, otherwise console"""
         if self.logger:
             self.logger.info(message)
         else:
-            print(message)
+            self.console.info(message)
 
     def needs_preprocessing(self, audio_path: str) -> Tuple[bool, dict]:
         """

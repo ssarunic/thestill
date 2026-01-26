@@ -29,13 +29,14 @@ Usage:
         classify_and_raise(e, context="downloading audio")
 """
 
-import logging
 import re
 from typing import Optional
 
+from structlog import get_logger
+
 from thestill.utils.exceptions import FatalError, TransientError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # HTTP status codes that indicate transient errors (should retry)
 TRANSIENT_HTTP_CODES = {

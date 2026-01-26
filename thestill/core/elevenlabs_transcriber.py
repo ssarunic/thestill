@@ -23,7 +23,6 @@ Features:
 - Audio event detection (optional)
 """
 
-import logging
 import mimetypes
 import time
 from datetime import datetime, timezone
@@ -32,6 +31,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
+from structlog import get_logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from thestill.models.transcript import Segment, Transcript, Word
@@ -41,7 +41,7 @@ from thestill.utils.path_manager import PathManager
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ElevenLabs API configuration
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/speech-to-text"

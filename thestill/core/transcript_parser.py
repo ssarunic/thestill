@@ -22,15 +22,16 @@ locally-generated transcripts.
 
 import html
 import json
-import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from structlog import get_logger
+
 from ..models.transcript import Segment
 from ..utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def parse_srt(content: str) -> List[Segment]:

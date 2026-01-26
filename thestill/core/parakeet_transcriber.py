@@ -27,6 +27,7 @@ import torch
 
 from thestill.models.transcript import Segment, Transcript
 from thestill.models.transcription import TranscribeOptions
+from thestill.utils.console import ConsoleOutput
 
 from .transcriber import Transcriber
 
@@ -39,9 +40,10 @@ class ParakeetTranscriber(Transcriber):
     Parameters for these features are accepted for API compatibility but ignored.
     """
 
-    def __init__(self, device: str = "auto"):
+    def __init__(self, device: str = "auto", console: Optional[ConsoleOutput] = None):
         self.model_name = "nvidia/parakeet-tdt-1.1b"
         self.device = self._resolve_device(device)
+        self.console = console or ConsoleOutput()
         self._model = None
         self._processor = None
 
@@ -53,7 +55,7 @@ class ParakeetTranscriber(Transcriber):
         try:
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
-            print(f"Loading Parakeet model: {self.model_name}")
+            self.console.info(f"Loading Parakeet model: {self.model_name}")
             self._processor = AutoProcessor.from_pretrained(self.model_name)
             self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 self.model_name,
@@ -61,11 +63,11 @@ class ParakeetTranscriber(Transcriber):
                 low_cpu_mem_usage=True,
             )
             self._model.to(self.device)
-            print("Model loaded successfully")
+            self.console.success("Model loaded successfully")
         except ImportError:
             raise ImportError("Parakeet requires the transformers library. Install with: pip install transformers")
         except Exception as e:
-            print(f"Error loading Parakeet model: {e}")
+            self.console.error(f"Error loading Parakeet model: {e}")
             raise
 
     def transcribe_audio(
@@ -93,11 +95,11 @@ class ParakeetTranscriber(Transcriber):
         try:
             self.load_model()
 
-            print(f"Starting transcription of: {Path(audio_path).name}")
+            self.console.info(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
             audio_duration = self._get_audio_duration_minutes(audio_path)
-            print(f"Audio duration: {audio_duration:.1f} minutes")
+            self.console.info(f"Audio duration: {audio_duration:.1f} minutes")
 
             import librosa  # pylint: disable=import-error
 
@@ -126,7 +128,7 @@ class ParakeetTranscriber(Transcriber):
                 full_text = self._transcribe_chunk(audio_array, sample_rate)
 
             processing_time = time.time() - start_time
-            print(f"Transcription completed in {processing_time:.1f} seconds")
+            self.console.success(f"Transcription completed in {processing_time:.1f} seconds")
 
             transcript = self._format_transcript(full_text, processing_time, audio_path)
 
@@ -136,7 +138,7 @@ class ParakeetTranscriber(Transcriber):
             return transcript
 
         except Exception as e:
-            print(f"Error transcribing {audio_path}: {e}")
+            self.console.error(f"Error transcribing {audio_path}: {e}")
             return None
 
     def _transcribe_chunk(self, audio_array, sample_rate: int) -> str:

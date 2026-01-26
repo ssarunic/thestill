@@ -35,10 +35,11 @@ Usage:
     worker.stop()  # Graceful shutdown
 """
 
-import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
+
+import structlog
 
 from thestill.utils.exceptions import FatalError, TransientError
 
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from .progress_store import ProgressStore
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class TaskWorker:
@@ -104,13 +105,13 @@ class TaskWorker:
         """
         with self._lock:
             if self._running:
-                logger.warning("TaskWorker already running")
+                logger.warning("task_worker_already_running")
                 return
 
             self._running = True
             self._thread = threading.Thread(target=self._worker_loop, daemon=True, name="TaskWorker")
             self._thread.start()
-            logger.info("TaskWorker started")
+            logger.info("task_worker_started")
 
     def stop(self, timeout: float = 10.0) -> None:
         """
@@ -121,19 +122,19 @@ class TaskWorker:
         """
         with self._lock:
             if not self._running:
-                logger.debug("TaskWorker already stopped")
+                logger.debug("task_worker_already_stopped")
                 return
 
             self._running = False
 
         if self._thread and self._thread.is_alive():
-            logger.info("Waiting for TaskWorker to finish current task...")
+            logger.info("waiting_for_task_worker", action="finishing_current_task")
             self._thread.join(timeout=timeout)
 
             if self._thread.is_alive():
-                logger.warning("TaskWorker did not stop within timeout")
+                logger.warning("task_worker_timeout", timeout_seconds=timeout)
             else:
-                logger.info("TaskWorker stopped")
+                logger.info("task_worker_stopped")
 
     def is_running(self) -> bool:
         """Check if worker is running."""
@@ -158,7 +159,7 @@ class TaskWorker:
 
     def _worker_loop(self) -> None:
         """Main worker loop that polls and processes tasks."""
-        logger.info("TaskWorker loop started")
+        logger.info("task_worker_loop_started")
 
         # Reset any stale tasks from previous runs on startup
         self._reset_stale_tasks()
@@ -176,10 +177,10 @@ class TaskWorker:
 
             except Exception as e:
                 # Unexpected error in worker loop - log and continue
-                logger.exception(f"Unexpected error in TaskWorker loop: {e}")
+                logger.exception("unexpected_error_in_worker_loop", error=str(e), exc_info=True)
                 time.sleep(self.poll_interval)
 
-        logger.info("TaskWorker loop ended")
+        logger.info("task_worker_loop_ended")
 
     def _process_task(self, task: Task) -> None:
         """
@@ -196,73 +197,91 @@ class TaskWorker:
             task: Task to process
         """
         self._current_task = task
-        handler = self.task_handlers.get(task.stage)
 
-        if not handler:
-            error_msg = f"No handler registered for stage: {task.stage.value}"
-            logger.error(error_msg)
-            self.queue_manager.mark_dead(task.id, error_msg)
-            self._current_task = None
-            return
+        # Bind correlation ID for task processing
+        import uuid
 
-        logger.info(f"Processing task {task.id}: {task.stage.value} for episode {task.episode_id}")
-
-        # Create progress callback if progress store is available
-        progress_callback: ProgressCallback | None = None
-        if self.progress_store:
-
-            def progress_callback(update: ProgressUpdate) -> None:
-                self.progress_store.update_from_callback(task.id, update)
+        worker_id = str(uuid.uuid4())[:8]
+        structlog.contextvars.bind_contextvars(
+            worker_id=worker_id,
+            task_id=task.id,
+            episode_id=task.episode_id,
+            stage=task.stage.value,
+            retry_count=task.retry_count,
+        )
 
         try:
-            # Execute the handler with optional progress callback
-            handler(task, progress_callback)
+            handler = self.task_handlers.get(task.stage)
 
-            # Handler completed successfully - mark task complete
-            self.queue_manager.complete_task(task.id)
-            logger.info(f"Task {task.id} completed successfully")
+            if not handler:
+                error_msg = f"No handler registered for stage: {task.stage.value}"
+                logger.error("no_handler_for_stage", stage=task.stage.value)
+                self.queue_manager.mark_dead(task.id, error_msg)
+                self._current_task = None
+                return
 
-            # Chain enqueue next stage if running full pipeline
-            self._maybe_enqueue_next_stage(task)
+            logger.info("task_processing_started")
 
-        except FatalError as e:
-            # Fatal error - move to DLQ, no retry
-            error_msg = str(e)
-            logger.error(f"Task {task.id} fatal error (DLQ): {error_msg}")
-            self.queue_manager.mark_dead(task.id, error_msg)
-            self._mark_episode_failed(task, error_msg, "fatal")
-            self._report_failure(task.id, error_msg)
+            # Create progress callback if progress store is available
+            progress_callback: ProgressCallback | None = None
+            if self.progress_store:
 
-        except TransientError as e:
-            # Transient error - schedule retry with backoff
-            error_msg = str(e)
-            logger.warning(f"Task {task.id} transient error (will retry): {error_msg}")
-            updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
-            # Check if retries exhausted (task marked as failed)
-            if updated_task and updated_task.status.value == "failed":
-                self._mark_episode_failed(task, error_msg, "transient")
-            self._report_failure(task.id, error_msg)
+                def progress_callback(update: ProgressUpdate) -> None:
+                    self.progress_store.update_from_callback(task.id, update)
 
-        except Exception as e:
-            # Unknown exception - treat as transient and retry
-            error_msg = str(e)
-            logger.exception(f"Task {task.id} failed with unexpected error: {error_msg}")
-            updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
-            # Check if retries exhausted (task marked as failed)
-            if updated_task and updated_task.status.value == "failed":
-                self._mark_episode_failed(task, error_msg, "transient")
-            self._report_failure(task.id, error_msg)
+            try:
+                # Execute the handler with optional progress callback
+                handler(task, progress_callback)
+
+                # Handler completed successfully - mark task complete
+                self.queue_manager.complete_task(task.id)
+                logger.info("task_completed_successfully")
+
+                # Chain enqueue next stage if running full pipeline
+                self._maybe_enqueue_next_stage(task)
+
+            except FatalError as e:
+                # Fatal error - move to DLQ, no retry
+                error_msg = str(e)
+                logger.error("task_fatal_error", error=error_msg, destination="dlq", exc_info=True)
+                self.queue_manager.mark_dead(task.id, error_msg)
+                self._mark_episode_failed(task, error_msg, "fatal")
+                self._report_failure(task.id, error_msg)
+
+            except TransientError as e:
+                # Transient error - schedule retry with backoff
+                error_msg = str(e)
+                logger.warning("task_transient_error", error=error_msg, will_retry=True, exc_info=True)
+                updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+                # Check if retries exhausted (task marked as failed)
+                if updated_task and updated_task.status.value == "failed":
+                    self._mark_episode_failed(task, error_msg, "transient")
+                self._report_failure(task.id, error_msg)
+
+            except Exception as e:
+                # Unknown exception - treat as transient and retry
+                error_msg = str(e)
+                logger.exception("task_unexpected_error", error=error_msg, exc_info=True)
+                updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+                # Check if retries exhausted (task marked as failed)
+                if updated_task and updated_task.status.value == "failed":
+                    self._mark_episode_failed(task, error_msg, "transient")
+                self._report_failure(task.id, error_msg)
+
+            finally:
+                self._current_task = None
+                # Clean up progress store after a delay to allow final updates to be delivered
+                if self.progress_store:
+                    # Schedule cleanup in a separate thread to avoid blocking
+                    def cleanup():
+                        time.sleep(5.0)  # Allow 5 seconds for clients to receive final update
+                        self.progress_store.cleanup(task.id)
+
+                    threading.Thread(target=cleanup, daemon=True).start()
 
         finally:
-            self._current_task = None
-            # Clean up progress store after a delay to allow final updates to be delivered
-            if self.progress_store:
-                # Schedule cleanup in a separate thread to avoid blocking
-                def cleanup():
-                    time.sleep(5.0)  # Allow 5 seconds for clients to receive final update
-                    self.progress_store.cleanup(task.id)
-
-                threading.Thread(target=cleanup, daemon=True).start()
+            # Clear correlation context
+            structlog.contextvars.clear_contextvars()
 
     def _maybe_enqueue_next_stage(self, task: Task) -> None:
         """
@@ -276,7 +295,7 @@ class TaskWorker:
 
         next_stage = get_next_stage(task.stage)
         if next_stage is None:
-            logger.info(f"Pipeline complete for episode {task.episode_id}")
+            logger.info("pipeline_complete")
             return
 
         # Check if we've reached the target state
@@ -291,11 +310,11 @@ class TaskWorker:
         target_state = task.metadata.get("target_state", "summarized")
         resulting_state = STAGE_TO_STATE.get(task.stage.value)
         if resulting_state == target_state:
-            logger.info(f"Pipeline reached target state '{target_state}' for episode {task.episode_id}")
+            logger.info("pipeline_target_reached", target_state=target_state)
             return
 
         # Enqueue next stage with same metadata
-        logger.info(f"Chain enqueueing {next_stage.value} for episode {task.episode_id}")
+        logger.info("chain_enqueueing_next_stage", next_stage=next_stage.value)
         self.queue_manager.add_task(
             episode_id=task.episode_id,
             stage=next_stage,

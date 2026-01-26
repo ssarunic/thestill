@@ -20,15 +20,16 @@ async subscription support for SSE streaming.
 """
 
 import asyncio
-import logging
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from structlog import get_logger
+
 from .progress import ProgressUpdate, TranscriptionStage
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

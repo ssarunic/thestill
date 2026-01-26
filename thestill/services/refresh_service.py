@@ -16,16 +16,16 @@
 Refresh service - Business logic for feed refreshing and episode discovery
 """
 
-import logging
 from typing import Callable, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
+from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
 from .podcast_service import PodcastService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RefreshResult(BaseModel):

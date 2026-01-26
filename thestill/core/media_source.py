@@ -28,7 +28,6 @@ Benefits:
 """
 
 import json
-import logging
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -39,6 +38,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import feedparser
 import requests
+from structlog import get_logger
 
 from ..models.podcast import Episode, TranscriptLink
 from ..utils.duration import parse_duration
@@ -48,7 +48,7 @@ from .youtube_downloader import YouTubeDownloader
 if TYPE_CHECKING:
     from ..utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MediaSource(ABC):

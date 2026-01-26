@@ -21,15 +21,16 @@ This processor orchestrates:
 """
 
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from structlog import get_logger
+
 from .llm_provider import LLMProvider
 from .transcript_formatter import TranscriptFormatter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TranscriptCleaningProcessor:

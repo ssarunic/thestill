@@ -21,13 +21,13 @@ with concurrency protection and progress tracking.
 
 import asyncio
 import json
-import logging
 import threading
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from structlog import get_logger
 
 from ...core.queue_manager import QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
@@ -37,7 +37,7 @@ from ...models.user import User
 from ..dependencies import AppState, get_app_state, require_auth
 from ..task_manager import TaskStatus, TaskType
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

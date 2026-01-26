@@ -16,17 +16,17 @@
 Stats service - System statistics and status information
 """
 
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
 from pydantic import BaseModel
+from structlog import get_logger
 
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ActivityItem(BaseModel):

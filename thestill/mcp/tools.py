@@ -20,10 +20,10 @@ Includes pipeline operations: refresh, download, downsample, transcribe, clean.
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
+import structlog
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
@@ -35,8 +35,9 @@ from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService, RefreshService, StatsService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
+from .middleware.stdio_adapter import log_mcp_stdio
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def setup_tools(server: Server, storage_path: str):
@@ -61,9 +62,10 @@ def setup_tools(server: Server, storage_path: str):
     audio_preprocessor = AudioPreprocessor()
 
     @server.list_tools()
+    @log_mcp_stdio
     async def list_tools() -> list[Tool]:
         """List available tools."""
-        logger.debug("Listing available tools")
+        logger.debug("listing_available_tools")
         return [
             Tool(
                 name="add_podcast",

@@ -95,11 +95,62 @@ data/
 
 **Markdown Style**: Follow `.markdownlint.yaml` - blank lines before/after code blocks and lists.
 
+## Logging
+
+Thestill uses `structlog` for structured, machine-readable logging. All `print()` statements have been eliminated in favor of structured logging.
+
+### Quick Start
+
+```python
+from structlog import get_logger
+
+logger = get_logger()
+
+# Always use structured context
+logger.info("Episode downloaded", episode_id=episode.guid, file_size_mb=45.2)
+logger.error("Download failed", episode_id=episode.guid, error=str(e), exc_info=True)
+```
+
+### Environment Configuration
+
+```bash
+# Development: colored console output
+export LOG_FORMAT=console
+export LOG_LEVEL=DEBUG
+
+# Production: JSON output for cloud platforms
+export LOG_FORMAT=json
+export LOG_LEVEL=INFO
+
+# View logs with jq
+LOG_FORMAT=json thestill status 2>&1 | jq .
+```
+
+### Correlation IDs
+
+Logs automatically include correlation IDs for request tracking:
+
+- `request_id`: HTTP requests (web layer)
+- `command_id`: CLI commands
+- `mcp_request_id`: MCP tool invocations
+- `task_id`, `worker_id`, `episode_id`: Task processing
+
+These IDs enable tracing requests across all layers of the application.
+
+### Best Practices
+
+- Always use structured context (keyword arguments) instead of string formatting
+- Include relevant entity IDs (episode_id, podcast_id, etc.) for filtering
+- Use `exc_info=True` when logging exceptions
+- Never log secrets, API keys, or PII
+- See [docs/logging-configuration.md](docs/logging-configuration.md) for full guide
+
 ## Documentation
 
 ### User Documentation (`docs/`)
 
 - [configuration.md](docs/configuration.md) - Environment variables and settings
+- [logging-configuration.md](docs/logging-configuration.md) - Structured logging setup and usage
 - [transcription-providers.md](docs/transcription-providers.md) - Provider setup guides
 - [web-server.md](docs/web-server.md) - API endpoints and webhooks
 - [mcp-usage.md](docs/mcp-usage.md) - MCP server usage

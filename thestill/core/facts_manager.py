@@ -19,15 +19,16 @@ Facts are stored as human-editable Markdown files that can be easily embedded
 into LLM prompts and version-controlled.
 """
 
-import logging
 import re
 from pathlib import Path
 from typing import Optional
 
+from structlog import get_logger
+
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 from thestill.utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FactsManager:
@@ -100,7 +101,7 @@ class FactsManager:
         """
         path = self.get_podcast_facts_path(podcast_slug)
         if not path.exists():
-            logger.debug(f"No podcast facts found at {path}")
+            logger.debug("No podcast facts found", podcast_slug=podcast_slug, path=str(path))
             return None
 
         content = path.read_text(encoding="utf-8")
@@ -121,7 +122,7 @@ class FactsManager:
         path = self.get_podcast_facts_path(podcast_slug)
         content = self._render_podcast_facts(facts)
         path.write_text(content, encoding="utf-8")
-        logger.info(f"Saved podcast facts to {path}")
+        logger.info("Saved podcast facts", podcast_slug=podcast_slug, path=str(path))
         return path
 
     def load_episode_facts(self, podcast_slug: str, episode_slug: str) -> Optional[EpisodeFacts]:
@@ -137,7 +138,7 @@ class FactsManager:
         """
         path = self.get_episode_facts_path(podcast_slug, episode_slug)
         if not path.exists():
-            logger.debug(f"No episode facts found at {path}")
+            logger.debug("No episode facts found", podcast_slug=podcast_slug, episode_slug=episode_slug, path=str(path))
             return None
 
         content = path.read_text(encoding="utf-8")
@@ -161,7 +162,7 @@ class FactsManager:
         path.parent.mkdir(parents=True, exist_ok=True)
         content = self._render_episode_facts(facts)
         path.write_text(content, encoding="utf-8")
-        logger.info(f"Saved episode facts to {path}")
+        logger.info("Saved episode facts", podcast_slug=podcast_slug, episode_slug=episode_slug, path=str(path))
         return path
 
     def _render_podcast_facts(self, facts: PodcastFacts) -> str:

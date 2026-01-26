@@ -19,11 +19,12 @@ This module provides a thread-safe mechanism to track pending webhook
 callbacks and signal when all expected callbacks have been received.
 """
 
-import logging
 import threading
 from typing import Dict, Optional, Set
 
-logger = logging.getLogger(__name__)
+from structlog import get_logger
+
+logger = get_logger(__name__)
 
 
 class WebhookTracker:
@@ -49,7 +50,7 @@ class WebhookTracker:
         with self._lock:
             self._pending.add(episode_id)
             self._all_done.clear()
-            logger.debug(f"Added pending episode: {episode_id} (total pending: {len(self._pending)})")
+            logger.debug("Added pending episode", episode_id=episode_id, total_pending=len(self._pending))
 
     def mark_completed(self, episode_id: str, success: bool = True) -> None:
         """Mark an episode as completed (callback received)."""
@@ -58,15 +59,17 @@ class WebhookTracker:
                 self._pending.discard(episode_id)
                 self._completed[episode_id] = success
                 logger.info(
-                    f"Episode transcription completed: {episode_id} "
-                    f"(success={success}, remaining={len(self._pending)})"
+                    "Episode transcription completed",
+                    episode_id=episode_id,
+                    success=success,
+                    remaining=len(self._pending),
                 )
                 if not self._pending:
                     logger.info("All pending transcriptions completed!")
                     self._all_done.set()
             else:
                 # Callback for unknown episode (maybe from another session)
-                logger.debug(f"Received callback for unknown episode: {episode_id}")
+                logger.debug("Received callback for unknown episode", episode_id=episode_id)
 
     @property
     def pending_count(self) -> int:

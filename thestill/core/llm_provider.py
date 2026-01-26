@@ -17,7 +17,6 @@ Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, 
 """
 
 import json
-import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, NamedTuple, Optional, Type, TypeVar
@@ -29,11 +28,12 @@ from google.genai import types as genai_types
 from mistralai import Mistral
 from openai import OpenAI
 from pydantic import BaseModel
+from structlog import get_logger
 
 # TypeVar for generic structured output return type
 T = TypeVar("T", bound=BaseModel)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default max output tokens for unknown models
 DEFAULT_MAX_OUTPUT_TOKENS = 8192

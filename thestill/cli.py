@@ -35,11 +35,14 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
+from .logging import configure_structlog
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .services import PodcastService, RefreshService, StatsService
 from .utils.cli_formatter import CLIFormatter
+from .utils.cli_logging import log_command
 from .utils.config import load_config
+from .utils.console import ConsoleOutput
 from .utils.duration import format_duration, format_speed_stats, get_audio_duration
 from .utils.logger import setup_logger
 from .utils.path_manager import PathManager
@@ -59,6 +62,7 @@ class CLIContext:
         audio_downloader,
         audio_preprocessor,
         external_transcript_downloader,
+        console: ConsoleOutput,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -69,6 +73,7 @@ class CLIContext:
         self.audio_downloader = audio_downloader
         self.audio_preprocessor = audio_preprocessor
         self.external_transcript_downloader = external_transcript_downloader
+        self.console = console
 
 
 def require_config(f):
@@ -99,15 +104,28 @@ def require_config(f):
 
 @click.group()
 @click.option("--config", "-c", help="Path to config file")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output")
 @click.pass_context
-def main(ctx, config):
+def main(ctx, config, quiet):
     """thestill.me - Automated podcast transcription and summarization"""
-    # Initialize logging to stderr (important for MCP server compatibility)
+    # Load .env file first so LOG_* environment variables are available
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    # Configure structlog for backend logging (logs go to stderr)
+    configure_structlog()
+
+    # Keep legacy logger setup for any remaining code that uses it
     setup_logger("thestill", log_level="INFO", console_output=True)
+
+    # Create console output instance (respects --quiet flag)
+    console = ConsoleOutput(quiet=quiet)
 
     try:
         config_obj = load_config(config)
-        click.echo("✓ Configuration loaded successfully")
+        if not quiet:
+            click.echo("✓ Configuration loaded successfully")
 
         # Initialize all shared services once (dependency injection)
         storage_path = config_obj.storage_path  # Path object
@@ -117,7 +135,7 @@ def main(ctx, config):
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(repository, path_manager)
         audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
-        audio_preprocessor = AudioPreprocessor()
+        audio_preprocessor = AudioPreprocessor(console=console)
         external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager)
 
         # Store all services in typed context object
@@ -131,6 +149,7 @@ def main(ctx, config):
             audio_downloader=audio_downloader,
             audio_preprocessor=audio_preprocessor,
             external_transcript_downloader=external_transcript_downloader,
+            console=console,
         )
 
     except Exception as e:
@@ -142,6 +161,7 @@ def main(ctx, config):
 @click.argument("rss_url")
 @click.pass_context
 @require_config
+@log_command
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
     podcast = ctx.obj.podcast_service.add_podcast(rss_url)
@@ -155,6 +175,7 @@ def add(ctx, rss_url):
 @click.argument("podcast_id")
 @click.pass_context
 @require_config
+@log_command
 def remove(ctx, podcast_id):
     """Remove a podcast by RSS URL or index number"""
     if ctx.obj.podcast_service.remove_podcast(podcast_id):
@@ -166,6 +187,7 @@ def remove(ctx, podcast_id):
 @main.command()
 @click.pass_context
 @require_config
+@log_command
 def list(ctx):
     """List all tracked podcasts"""
 
@@ -180,6 +202,7 @@ def list(ctx):
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be discovered without updating feeds.json")
 @click.pass_context
 @require_config
+@log_command
 def refresh(ctx, podcast_id, max_episodes, dry_run):
     """Refresh podcast feeds and discover new episodes (step 1)"""
     # Use shared services from context
@@ -234,6 +257,7 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be downloaded without downloading")
 @click.pass_context
 @require_config
+@log_command
 def download(ctx, podcast_id, max_episodes, dry_run):
     """Download audio files for episodes that need downloading (step 2)"""
     # Use shared services from context
@@ -363,6 +387,7 @@ def download(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be downsampled")
 @click.pass_context
 @require_config
+@log_command
 def downsample(ctx, podcast_id, max_episodes, dry_run):
     """Downsample downloaded audio to 16kHz, 16-bit, mono WAV format"""
     # Use shared services from context
@@ -518,6 +543,7 @@ def downsample(ctx, podcast_id, max_episodes, dry_run):
 @click.option("--stream", "-s", is_flag=True, help="Stream LLM output in real-time")
 @click.pass_context
 @require_config
+@log_command
 def clean_transcript(ctx, dry_run, max_episodes, force, stream):
     """Clean transcripts using facts-based two-pass approach"""
     import json
@@ -972,6 +998,7 @@ def facts_extract(ctx, podcast_id, episode_id, force):
 @main.command()
 @click.pass_context
 @require_config
+@log_command
 def status(ctx):
     """Show system status and statistics"""
     # Use shared services from context
@@ -1105,6 +1132,7 @@ def status(ctx):
 @click.option("--limit", "-l", type=int, default=20, help="Number of items to show (default: 20)")
 @click.pass_context
 @require_config
+@log_command
 def activity(ctx, limit):
     """Show recent processing activity log"""
     # Get activity from service
@@ -1119,6 +1147,7 @@ def activity(ctx, limit):
 @click.option("--dry-run", is_flag=True, help="Preview what would be deleted without actually deleting")
 @click.pass_context
 @require_config
+@log_command
 def cleanup(ctx, dry_run):
     """Clean up old audio files and sync database.
 
@@ -1239,6 +1268,7 @@ def cleanup(ctx, dry_run):
 )
 @click.pass_context
 @require_config
+@log_command
 def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes, dry_run, cancel_pending, language):
     """Transcribe audio files to JSON transcripts.
 
@@ -1267,6 +1297,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 max_speakers=config.max_speakers,
                 parallel_chunks=config.max_workers,
                 path_manager=config.path_manager,
+                console=ctx.obj.console,
             )
 
             # Check for pending operations from previous runs
@@ -1366,7 +1397,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         click.echo("🎤 Using NVIDIA Parakeet Speech-to-Text")
         from .core.parakeet_transcriber import ParakeetTranscriber
 
-        transcriber = ParakeetTranscriber(config.whisper_device)
+        transcriber = ParakeetTranscriber(config.whisper_device, console=ctx.obj.console)
     elif config.enable_diarization:
         click.echo("🎤 Using WhisperX with speaker diarization enabled")
         transcriber = WhisperXTranscriber(
@@ -1377,10 +1408,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
             min_speakers=config.min_speakers,
             max_speakers=config.max_speakers,
             diarization_model=config.diarization_model,
+            console=ctx.obj.console,
         )
     else:
         click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
-        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device)
+        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device, console=ctx.obj.console)
 
     # Mode 1: Standalone file transcription
     if audio_path:
@@ -1762,6 +1794,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 @click.option("--force", "-f", is_flag=True, help="Re-summarize even if summary exists")
 @click.pass_context
 @require_config
+@log_command
 def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     """Summarize cleaned transcripts with comprehensive analysis.
 
@@ -1782,7 +1815,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         click.echo(f"Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    summarizer = TranscriptSummarizer(llm_provider)
+    summarizer = TranscriptSummarizer(llm_provider, console=ctx.obj.console)
 
     # If transcript_path provided, summarize that specific file
     if transcript_path:
@@ -1986,7 +2019,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    evaluator = TranscriptEvaluator(llm_provider)
+    evaluator = TranscriptEvaluator(llm_provider, console=ctx.obj.console)
 
     # Standalone mode: evaluate a specific file
     if transcript_path:
@@ -2003,7 +2036,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
 
         try:
             evaluation = evaluator.evaluate(transcript_data, output)
-            print_evaluation_summary(evaluation, "transcript")
+            print_evaluation_summary(evaluation, "transcript", console=ctx.obj.console)
             click.echo(f"📄 Detailed report saved to: {output}")
         except Exception as e:
             click.echo(f"❌ Error during evaluation: {e}", err=True)
@@ -2091,7 +2124,7 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
 
             click.echo(f"   📊 Evaluating with {llm_provider.get_model_name()}...")
             evaluation = evaluator.evaluate(transcript_data, str(eval_path))
-            print_evaluation_summary(evaluation, "transcript")
+            print_evaluation_summary(evaluation, "transcript", console=ctx.obj.console)
             click.echo(f"   ✓ Saved: {eval_path}")
             total_processed += 1
 
@@ -2139,7 +2172,7 @@ def evaluate_clean_transcript(
         click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
         ctx.exit(1)
 
-    evaluator = PostProcessorEvaluator(llm_provider)
+    evaluator = PostProcessorEvaluator(llm_provider, console=ctx.obj.console)
 
     # Standalone mode: evaluate a specific file
     if transcript_path:
@@ -2166,7 +2199,7 @@ def evaluate_clean_transcript(
 
         try:
             evaluation = evaluator.evaluate(transcript_data, original_data, output)
-            print_evaluation_summary(evaluation, "clean-transcript")
+            print_evaluation_summary(evaluation, "clean-transcript", console=ctx.obj.console)
             click.echo(f"📄 Detailed report saved to: {output}")
         except Exception as e:
             click.echo(f"❌ Error during evaluation: {e}", err=True)
@@ -2265,7 +2298,7 @@ def evaluate_clean_transcript(
 
             click.echo(f"   📊 Evaluating with {llm_provider.get_model_name()}...")
             evaluation = evaluator.evaluate(transcript_data, original_data, str(eval_path))
-            print_evaluation_summary(evaluation, "clean-transcript")
+            print_evaluation_summary(evaluation, "clean-transcript", console=ctx.obj.console)
             click.echo(f"   ✓ Saved: {eval_path}")
             total_processed += 1
 
@@ -2287,6 +2320,7 @@ def evaluate_clean_transcript(
 @click.option("--workers", "-w", default=1, type=int, help="Number of worker processes (default: 1)")
 @click.pass_context
 @require_config
+@log_command
 def server(ctx, host, port, reload, workers):
     """Start the web server for webhooks and API.
 

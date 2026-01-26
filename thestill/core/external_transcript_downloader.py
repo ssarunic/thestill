@@ -20,16 +20,16 @@ Downloads external transcripts from RSS feeds in all available formats
 These transcripts are stored separately from locally-generated transcripts.
 """
 
-import logging
 from typing import Dict, List, Optional
 
 import requests
+from structlog import get_logger
 
 from ..models.podcast import TranscriptLink
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Timeout for transcript downloads (seconds)
 DOWNLOAD_TIMEOUT = 30

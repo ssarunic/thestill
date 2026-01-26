@@ -38,7 +38,6 @@ Usage:
 """
 
 import json
-import logging
 import random
 import sqlite3
 import uuid
@@ -49,7 +48,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from structlog import get_logger
+
+logger = get_logger(__name__)
 
 
 class TaskStage(str, Enum):

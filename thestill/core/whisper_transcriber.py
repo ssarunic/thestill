@@ -32,6 +32,7 @@ from pydub.effects import normalize
 
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.models.transcription import TranscribeOptions
+from thestill.utils.console import ConsoleOutput
 from thestill.utils.device import resolve_hybrid_devices
 from thestill.utils.duration import get_audio_duration_float
 from thestill.utils.stdout_capture import WHISPERX_PROGRESS_PATTERN, StdoutProgressCapture
@@ -71,6 +72,7 @@ class DiarizationProgressMonitor:
         progress_callback: Optional[ProgressCallback] = None,
         progress_base_pct: int = 10,
         progress_range_pct: int = 80,
+        console: Optional[ConsoleOutput] = None,
     ):
         """
         Initialize the progress monitor.
@@ -81,12 +83,14 @@ class DiarizationProgressMonitor:
             progress_callback: Optional callback for progress updates
             progress_base_pct: Base percentage for diarization stage (default 10%)
             progress_range_pct: Range of percentage for diarization (default 80%, so 10-90%)
+            console: ConsoleOutput instance for user-facing messages (optional)
         """
         self.audio_duration = audio_duration_seconds
         self.device = device
         self.progress_callback = progress_callback
         self.progress_base_pct = progress_base_pct
         self.progress_range_pct = progress_range_pct
+        self.console = console or ConsoleOutput()
         self.start_time: Optional[float] = None
         self.stop_event = threading.Event()
         self.monitor_thread: Optional[threading.Thread] = None
@@ -157,21 +161,27 @@ class DiarizationProgressMonitor:
                 )
 
             # Also print to console for CLI usage
-            elapsed_str = self._format_time(elapsed)
-            estimated_str = self._format_time(initial_estimate)
-            remaining_str = self._format_time(remaining_seconds) if remaining_seconds > 0 else "finishing..."
+            if not self.console.quiet:
+                elapsed_str = self._format_time(elapsed)
+                estimated_str = self._format_time(initial_estimate)
+                remaining_str = self._format_time(remaining_seconds) if remaining_seconds > 0 else "finishing..."
 
-            bar_width = 30
-            filled = int(bar_width * diarization_progress_pct / 100)
-            bar = "█" * filled + "░" * (bar_width - filled)
+                bar_width = 30
+                filled = int(bar_width * diarization_progress_pct / 100)
+                bar = "█" * filled + "░" * (bar_width - filled)
 
-            print(
-                f"\r  Progress: [{bar}] {diarization_progress_pct}% | {elapsed_str} / ~{estimated_str} | ~{remaining_str}",
-                end="",
-                flush=True,
-            )
+                import sys
+
+                sys.stdout.write(
+                    f"\r  Progress: [{bar}] {diarization_progress_pct}% | {elapsed_str} / ~{estimated_str} | ~{remaining_str}"
+                )
+                sys.stdout.flush()
             self.stop_event.wait(1.0)
-        print()
+        if not self.console.quiet:
+            import sys
+
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
     def start(self) -> None:
         """Start the progress monitor"""
@@ -187,7 +197,7 @@ class DiarizationProgressMonitor:
             self.monitor_thread.join(timeout=2.0)
             if self.start_time:
                 elapsed = time.time() - self.start_time
-                print(f"  ✓ Completed in {self._format_time(elapsed)}")
+                self.console.success(f"Completed in {self._format_time(elapsed)}")
 
 
 class WhisperTranscriber(Transcriber):
@@ -202,32 +212,33 @@ class WhisperTranscriber(Transcriber):
     - Optional LLM-based transcript cleaning
     """
 
-    def __init__(self, model_name: str = "base", device: str = "auto"):
+    def __init__(self, model_name: str = "base", device: str = "auto", console: Optional[ConsoleOutput] = None):
         self.model_name = model_name
         self.device = self._resolve_device(device)
         self._model = None
+        self.console = console or ConsoleOutput()
 
     def load_model(self) -> None:
         """Lazy load the Whisper model"""
         if self._model is not None:
             return
 
-        print(f"Loading Whisper model: {self.model_name}")
+        self.console.info(f"Loading Whisper model: {self.model_name}")
         try:
             self._model = whisper.load_model(self.model_name, device=self.device)
-            print("Model loaded successfully")
+            self.console.success("Model loaded successfully")
         except Exception as e:
-            print(f"Error loading model: {e}")
+            self.console.error(f"Error loading model: {e}")
             if "don't know how to restore data location" in str(e):
-                print("Model cache corruption detected, clearing cache and retrying...")
+                self.console.info("Model cache corruption detected, clearing cache and retrying...")
                 self._clear_model_cache()
                 self._model = whisper.load_model(self.model_name, device=self.device)
-                print("Model loaded successfully after cache clear")
+                self.console.success("Model loaded successfully after cache clear")
             elif "SparseMPS" in str(e) or "_sparse_coo_tensor_with_dims_and_tensors" in str(e):
-                print("MPS sparse tensor issue detected, falling back to CPU...")
+                self.console.warning("MPS sparse tensor issue detected, falling back to CPU...")
                 self.device = "cpu"
                 self._model = whisper.load_model(self.model_name, device="cpu")
-                print("Model loaded successfully on CPU")
+                self.console.success("Model loaded successfully on CPU")
             else:
                 raise
 
@@ -236,7 +247,7 @@ class WhisperTranscriber(Transcriber):
         cache_dir = Path.home() / ".cache" / "whisper"
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
-            print(f"Cleared Whisper cache: {cache_dir}")
+            self.console.info(f"Cleared Whisper cache: {cache_dir}")
 
     def transcribe_audio(
         self,
@@ -256,11 +267,11 @@ class WhisperTranscriber(Transcriber):
         try:
             self.load_model()
 
-            print(f"Starting transcription of: {Path(audio_path).name}")
+            self.console.info(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
             audio_duration = self._get_audio_duration_minutes(audio_path)
-            print(f"Audio duration: {audio_duration:.1f} minutes")
+            self.console.info(f"Audio duration: {audio_duration:.1f} minutes")
 
             transcribe_options = {
                 "language": options.language,
@@ -277,7 +288,7 @@ class WhisperTranscriber(Transcriber):
             result = self._model.transcribe(audio_path, **transcribe_options)
 
             processing_time = time.time() - start_time
-            print(f"Transcription completed in {processing_time:.1f} seconds")
+            self.console.success(f"Transcription completed in {processing_time:.1f} seconds")
 
             transcript = self._format_transcript(result, processing_time, audio_path, options.language)
 
@@ -289,7 +300,7 @@ class WhisperTranscriber(Transcriber):
             return transcript
 
         except Exception as e:
-            print(f"Error transcribing {audio_path}: {e}")
+            self.console.error(f"Error transcribing {audio_path}: {e}")
             return None
 
     def _format_transcript(
@@ -394,13 +405,13 @@ class WhisperTranscriber(Transcriber):
 
             if self._is_hallucination(segment):
                 hallucination_count += 1
-                print(f"Detected hallucination in segment {segment.id}: {text[:100]}...")
+                self.console.info(f"Detected hallucination in segment {segment.id}: {text[:100]}...")
                 continue
 
             filtered_segments.append(segment)
 
         if hallucination_count > 0:
-            print(f"Filtered out {hallucination_count} hallucinated segments")
+            self.console.info(f"Filtered out {hallucination_count} hallucinated segments")
 
         return filtered_segments
 
@@ -482,7 +493,7 @@ class WhisperTranscriber(Transcriber):
     def _preprocess_audio(self, audio_path: str) -> str:
         """Preprocess audio to reduce conditions that cause hallucinations"""
         try:
-            print("Preprocessing audio to reduce noise and normalize volume...")
+            self.console.progress("Preprocessing audio to reduce noise and normalize volume...")
 
             audio = AudioSegment.from_file(audio_path)
             audio = normalize(audio)
@@ -502,11 +513,11 @@ class WhisperTranscriber(Transcriber):
             temp_path = audio_path.replace(input_ext, "_processed.mp3")
             processed_audio.export(temp_path, format="mp3", bitrate="128k")
 
-            print(f"Audio preprocessed and saved to: {temp_path}")
+            self.console.success(f"Audio preprocessed and saved to: {temp_path}")
             return temp_path
 
         except Exception as e:
-            print(f"Error preprocessing audio: {e}")
+            self.console.error(f"Error preprocessing audio: {e}")
             return audio_path
 
     def _split_on_silence(self, audio: AudioSegment, silence_thresh: int) -> List[AudioSegment]:
@@ -554,6 +565,7 @@ class WhisperXTranscriber(Transcriber):
         max_speakers: Optional[int] = None,
         diarization_model: str = "pyannote/speaker-diarization-3.1",
         progress_callback: Optional[ProgressCallback] = None,
+        console: Optional[ConsoleOutput] = None,
     ):
         self.model_name = model_name
         # Resolve devices for each stage (hybrid approach for Mac)
@@ -566,15 +578,16 @@ class WhisperXTranscriber(Transcriber):
         self.max_speakers = max_speakers
         self.diarization_model = diarization_model
         self.progress_callback = progress_callback
+        self.console = console or ConsoleOutput()
         self._model = None
         self._whisper_fallback: Optional[WhisperTranscriber] = None
 
         if enable_diarization and not WHISPERX_AVAILABLE:
-            print("WARNING: Diarization requested but WhisperX not available. Falling back to standard Whisper.")
+            self.console.warning("Diarization requested but WhisperX not available. Falling back to standard Whisper.")
             self.enable_diarization = False
 
         if enable_diarization and not hf_token:
-            print("WARNING: Diarization enabled but no HuggingFace token provided. Diarization will be disabled.")
+            self.console.warning("Diarization enabled but no HuggingFace token provided. Diarization will be disabled.")
             self.enable_diarization = False
 
     def _resolve_hybrid_devices(self, device: str) -> tuple:
@@ -586,30 +599,32 @@ class WhisperXTranscriber(Transcriber):
         Returns:
             tuple: (transcription_device, alignment_device, diarization_device)
         """
-        return resolve_hybrid_devices(device, verbose=True)
+        return resolve_hybrid_devices(device, console=self.console)
 
     def load_model(self) -> None:
         """Load WhisperX model on transcription device"""
         if self._model is not None or not WHISPERX_AVAILABLE:
             return
 
-        print(f"Loading WhisperX model: {self.model_name} (device: {self.transcription_device})")
+        self.console.info(f"Loading WhisperX model: {self.model_name} (device: {self.transcription_device})")
         try:
             self._model = whisperx.load_model(
                 self.model_name,
                 device=self.transcription_device,
                 compute_type="float16" if self.transcription_device == "cuda" else "int8",
             )
-            print("WhisperX model loaded successfully")
+            self.console.success("WhisperX model loaded successfully")
         except Exception as e:
-            print(f"Error loading WhisperX model: {e}")
-            print("Falling back to standard Whisper")
+            self.console.error(f"Error loading WhisperX model: {e}")
+            self.console.info("Falling back to standard Whisper")
             self._load_whisper_fallback()
 
     def _load_whisper_fallback(self) -> None:
         """Load standard Whisper as fallback"""
         if self._whisper_fallback is None:
-            self._whisper_fallback = WhisperTranscriber(model_name=self.model_name, device=self.device)
+            self._whisper_fallback = WhisperTranscriber(
+                model_name=self.model_name, device=self.device, console=self.console
+            )
 
     def _report_progress(
         self,
@@ -681,7 +696,7 @@ class WhisperXTranscriber(Transcriber):
                     options=options,
                 )
 
-            print(f"Starting transcription of: {Path(audio_path).name}")
+            self.console.info(f"Starting transcription of: {Path(audio_path).name}")
             start_time = time.time()
 
             processed_audio_path = audio_path
@@ -692,7 +707,7 @@ class WhisperXTranscriber(Transcriber):
                 transcribe_base,
                 "Transcribing audio with WhisperX...",
             )
-            print("Step 1: Transcribing audio with WhisperX...")
+            self.console.info("Step 1: Transcribing audio with WhisperX...")
 
             def on_transcribe_progress(whisperx_pct: float) -> None:
                 """Scale WhisperX's 0-100% to our allocated range."""
@@ -717,12 +732,14 @@ class WhisperXTranscriber(Transcriber):
                 align_pct,
                 f"Aligning timestamps for {len(result.get('segments', []))} segments...",
             )
-            print("Step 2: Aligning timestamps for word-level accuracy...")
-            print(f"  - Loading alignment model for {result['language']} (device: {self.alignment_device})...")
+            self.console.info("Step 2: Aligning timestamps for word-level accuracy...")
+            self.console.info(
+                f"  - Loading alignment model for {result['language']} (device: {self.alignment_device})..."
+            )
             model_a, metadata = whisperx.load_align_model(
                 language_code=result["language"], device=self.alignment_device
             )
-            print(f"  - Running alignment on {len(result.get('segments', []))} segments...")
+            self.console.info(f"  - Running alignment on {len(result.get('segments', []))} segments...")
             result = whisperx.align(
                 result["segments"],
                 model_a,
@@ -731,7 +748,7 @@ class WhisperXTranscriber(Transcriber):
                 self.alignment_device,
                 return_char_alignments=False,
             )
-            print("  ✓ Alignment complete")
+            self.console.success("Alignment complete")
 
             # Step 3: Speaker diarization
             speakers_detected = None
@@ -751,10 +768,10 @@ class WhisperXTranscriber(Transcriber):
             )
 
             processing_time = time.time() - start_time
-            print(f"\n✓ Transcription completed in {processing_time:.1f} seconds")
+            self.console.success(f"Transcription completed in {processing_time:.1f} seconds")
             if speakers_detected:
-                print(f"✓ Speaker diarization: {speakers_detected} speakers identified")
-            print(f"✓ Generated {len(result.get('segments', []))} transcript segments")
+                self.console.success(f"Speaker diarization: {speakers_detected} speakers identified")
+            self.console.success(f"Generated {len(result.get('segments', []))} transcript segments")
 
             transcript = self._format_transcript(
                 result, processing_time, audio_path, speakers_detected, options.language
@@ -775,8 +792,8 @@ class WhisperXTranscriber(Transcriber):
             return transcript
 
         except Exception as e:
-            print(f"WhisperX transcription failed: {e}")
-            print("Falling back to standard Whisper")
+            self.console.error(f"WhisperX transcription failed: {e}")
+            self.console.info("Falling back to standard Whisper")
             self._load_whisper_fallback()
             return self._whisper_fallback.transcribe_audio(
                 audio_path,
@@ -803,8 +820,10 @@ class WhisperXTranscriber(Transcriber):
             Number of speakers detected, or None if diarization failed
         """
         try:
-            print("Step 3: Performing speaker diarization...")
-            print(f"  - Loading diarization model ({self.diarization_model}) on {self.diarization_device}...")
+            self.console.info("Step 3: Performing speaker diarization...")
+            self.console.info(
+                f"  - Loading diarization model ({self.diarization_model}) on {self.diarization_device}..."
+            )
 
             if not PYANNOTE_AVAILABLE:
                 raise ImportError("pyannote.audio is required for speaker diarization")
@@ -814,10 +833,10 @@ class WhisperXTranscriber(Transcriber):
             if self.diarization_device != "cpu":
                 diarize_model.to(torch.device(self.diarization_device))
 
-            print("  - Analyzing audio for speaker patterns...")
+            self.console.info("  - Analyzing audio for speaker patterns...")
             if self.min_speakers or self.max_speakers:
                 constraint_msg = f"min={self.min_speakers or 'auto'}, max={self.max_speakers or 'auto'}"
-                print(f"  - Speaker constraints: {constraint_msg}")
+                self.console.info(f"  - Speaker constraints: {constraint_msg}")
 
             audio_duration_seconds = self._get_audio_duration_seconds(audio_path)
 
@@ -827,6 +846,7 @@ class WhisperXTranscriber(Transcriber):
                 progress_callback=self.progress_callback,
                 progress_base_pct=progress_base_pct,
                 progress_range_pct=progress_range_pct,
+                console=self.console,
             )
             progress_monitor.start()
 
@@ -839,7 +859,7 @@ class WhisperXTranscriber(Transcriber):
             finally:
                 progress_monitor.stop()
 
-            print("  - Assigning speakers to transcript segments...")
+            self.console.info("  - Assigning speakers to transcript segments...")
 
             import pandas as pd
 
@@ -850,7 +870,7 @@ class WhisperXTranscriber(Transcriber):
                 ]
             )
 
-            print(f"  - Converted {len(diarize_df)} diarization segments")
+            self.console.info(f"  - Converted {len(diarize_df)} diarization segments")
             whisperx.assign_word_speakers(diarize_df, result)
 
             speakers = set()
@@ -859,15 +879,15 @@ class WhisperXTranscriber(Transcriber):
                     speakers.add(segment["speaker"])
 
             speakers_detected = len(speakers)
-            print(f"  ✓ Detected {speakers_detected} unique speaker(s): {', '.join(sorted(speakers))}")
+            self.console.success(f"Detected {speakers_detected} unique speaker(s): {', '.join(sorted(speakers))}")
             return speakers_detected
 
         except Exception as e:
-            print(f"  ✗ Diarization failed: {type(e).__name__}: {e}")
+            self.console.error(f"Diarization failed: {type(e).__name__}: {e}")
             import traceback
 
             traceback.print_exc()
-            print("  → Continuing without speaker identification")
+            self.console.info("Continuing without speaker identification")
             return None
 
     def _get_audio_duration_seconds(self, audio_path: str) -> float:

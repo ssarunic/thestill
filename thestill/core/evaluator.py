@@ -19,7 +19,9 @@ Uses LLM to generate structured evaluation reports.
 
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
+
+from thestill.utils.console import ConsoleOutput
 
 from .llm_provider import LLMProvider
 
@@ -63,14 +65,16 @@ Schema:
 
 Return ONLY valid JSON following this exact schema. Do not include any explanatory text before or after the JSON."""
 
-    def __init__(self, provider: LLMProvider):
+    def __init__(self, provider: LLMProvider, console: Optional[ConsoleOutput] = None):
         """
         Initialize transcript evaluator with an LLM provider.
 
         Args:
             provider: LLMProvider instance (OpenAI or Ollama)
+            console: ConsoleOutput instance for user-facing messages (optional)
         """
         self.provider = provider
+        self.console = console or ConsoleOutput()
 
     def evaluate(self, transcript_data: Dict, output_path: str = None) -> Dict:
         """
@@ -83,7 +87,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         Returns:
             Dict containing the structured evaluation report
         """
-        print(f"Evaluating transcript quality with {self.provider.get_model_name()}...")
+        self.console.info(f"Evaluating transcript quality with {self.provider.get_model_name()}...")
 
         transcript_json = json.dumps(transcript_data, indent=2)
 
@@ -103,11 +107,11 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
             if output_path:
                 self._save_evaluation(evaluation, output_path)
 
-            print("Transcript evaluation completed successfully")
+            self.console.success("Transcript evaluation completed successfully")
             return evaluation
 
         except Exception as e:
-            print(f"Error during transcript evaluation: {e}")
+            self.console.error(f"Error during transcript evaluation: {e}")
             raise
 
     def _save_evaluation(self, evaluation: Dict, output_path: str):
@@ -118,7 +122,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(evaluation, f, indent=2, ensure_ascii=False)
 
-        print(f"Transcript evaluation saved to {output_path}")
+        self.console.success(f"Transcript evaluation saved to {output_path}")
 
 
 class PostProcessorEvaluator:
@@ -162,14 +166,16 @@ Schema:
 
 Return ONLY valid JSON following this exact schema. Do not include any explanatory text before or after the JSON."""
 
-    def __init__(self, provider: LLMProvider):
+    def __init__(self, provider: LLMProvider, console: Optional[ConsoleOutput] = None):
         """
         Initialize post-processor evaluator with an LLM provider.
 
         Args:
             provider: LLMProvider instance (OpenAI or Ollama)
+            console: ConsoleOutput instance for user-facing messages (optional)
         """
         self.provider = provider
+        self.console = console or ConsoleOutput()
 
     def evaluate(self, processed_content: Dict, original_transcript: Dict = None, output_path: str = None) -> Dict:
         """
@@ -183,7 +189,7 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         Returns:
             Dict containing the structured evaluation report
         """
-        print(f"Evaluating post-processing quality with {self.provider.get_model_name()}...")
+        self.console.info(f"Evaluating post-processing quality with {self.provider.get_model_name()}...")
 
         # Build the user message
         user_message = f"Evaluate this processed transcript:\n\n{json.dumps(processed_content, indent=2)}"
@@ -204,11 +210,11 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
             if output_path:
                 self._save_evaluation(evaluation, output_path)
 
-            print("Post-processing evaluation completed successfully")
+            self.console.success("Post-processing evaluation completed successfully")
             return evaluation
 
         except Exception as e:
-            print(f"Error during post-processing evaluation: {e}")
+            self.console.error(f"Error during post-processing evaluation: {e}")
             raise
 
     def _save_evaluation(self, evaluation: Dict, output_path: str):
@@ -219,55 +225,57 @@ Return ONLY valid JSON following this exact schema. Do not include any explanato
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(evaluation, f, indent=2, ensure_ascii=False)
 
-        print(f"Post-processing evaluation saved to {output_path}")
+        self.console.success(f"Post-processing evaluation saved to {output_path}")
 
 
-def print_evaluation_summary(evaluation: Dict, eval_type: str = "transcript"):
+def print_evaluation_summary(evaluation: Dict, eval_type: str = "transcript", console: Optional[ConsoleOutput] = None):
     """Pretty print an evaluation summary to console"""
-    print(f"\n{'='*60}")
-    print(f"📊 {eval_type.upper()} EVALUATION REPORT")
-    print(f"{'='*60}\n")
+    console = console or ConsoleOutput()
+
+    console.info(f"\n{'='*60}")
+    console.info(f"📊 {eval_type.upper()} EVALUATION REPORT")
+    console.info(f"{'='*60}\n")
 
     if eval_type == "transcript":
         # Transcript evaluation format
         scores = evaluation.get("scores", {})
-        print("Scores:")
-        print(f"  Accuracy: {scores.get('accuracy', 0)}/10")
-        print(f"  Completeness: {scores.get('completeness', 0)}/10")
-        print(f"  Entity Handling: {scores.get('entity_handling', 0)}/10")
-        print(f"  Structural Clarity: {scores.get('structural_clarity', 0)}/10")
+        console.info("Scores:")
+        console.info(f"  Accuracy: {scores.get('accuracy', 0)}/10")
+        console.info(f"  Completeness: {scores.get('completeness', 0)}/10")
+        console.info(f"  Entity Handling: {scores.get('entity_handling', 0)}/10")
+        console.info(f"  Structural Clarity: {scores.get('structural_clarity', 0)}/10")
 
         accuracy = evaluation.get("accuracy", {})
-        print(f"\nAccuracy Issues:")
-        print(f"  Name errors: {accuracy.get('name_errors', {}).get('count', 0)}")
-        print(f"  Entity errors: {accuracy.get('entity_errors', {}).get('count', 0)}")
-        print(f"  Word errors: {accuracy.get('word_errors', {}).get('count', 0)}")
+        console.info(f"\nAccuracy Issues:")
+        console.info(f"  Name errors: {accuracy.get('name_errors', {}).get('count', 0)}")
+        console.info(f"  Entity errors: {accuracy.get('entity_errors', {}).get('count', 0)}")
+        console.info(f"  Word errors: {accuracy.get('word_errors', {}).get('count', 0)}")
 
     else:
         # Post-processor evaluation format
         scores = evaluation.get("scores", {})
-        print("Scores:")
-        print(f"  Fidelity: {scores.get('fidelity', 0)}/10")
-        print(f"  Formatting Clarity: {scores.get('formatting_clarity', 0)}/10")
-        print(f"  Readability: {scores.get('readability', 0)}/10")
-        print(f"  Enhancements Value: {scores.get('enhancements_value', 0)}/10")
+        console.info("Scores:")
+        console.info(f"  Fidelity: {scores.get('fidelity', 0)}/10")
+        console.info(f"  Formatting Clarity: {scores.get('formatting_clarity', 0)}/10")
+        console.info(f"  Readability: {scores.get('readability', 0)}/10")
+        console.info(f"  Enhancements Value: {scores.get('enhancements_value', 0)}/10")
 
         enhancements = evaluation.get("enhancements", {})
-        print(f"\nEnhancements:")
-        print(f"  Notable quotes: {enhancements.get('notable_quotes', {}).get('count', 0)}")
-        print(f"  Social snippets: {enhancements.get('social_snippets', {}).get('count', 0)}")
+        console.info(f"\nEnhancements:")
+        console.info(f"  Notable quotes: {enhancements.get('notable_quotes', {}).get('count', 0)}")
+        console.info(f"  Social snippets: {enhancements.get('social_snippets', {}).get('count', 0)}")
 
     summary = evaluation.get("summary", {})
-    print(f"\nVerdict: {summary.get('verdict', 'N/A')}")
+    console.info(f"\nVerdict: {summary.get('verdict', 'N/A')}")
 
     if summary.get("strengths"):
-        print(f"\nStrengths:")
+        console.info(f"\nStrengths:")
         for strength in summary["strengths"]:
-            print(f"  ✓ {strength}")
+            console.info(f"  ✓ {strength}")
 
     if summary.get("weaknesses"):
-        print(f"\nWeaknesses:")
+        console.info(f"\nWeaknesses:")
         for weakness in summary["weaknesses"]:
-            print(f"  ✗ {weakness}")
+            console.info(f"  ✗ {weakness}")
 
-    print(f"\n{'='*60}\n")
+    console.info(f"\n{'='*60}\n")

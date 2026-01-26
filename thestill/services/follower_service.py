@@ -19,16 +19,17 @@ Handles the business logic for following and unfollowing podcasts,
 supporting the multi-user shared podcasts architecture.
 """
 
-import logging
 import sqlite3
 from typing import List, Optional
+
+from structlog import get_logger
 
 from ..models.podcast import Podcast
 from ..models.user import PodcastFollower
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 from ..repositories.podcast_repository import PodcastRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FollowerServiceError(Exception):

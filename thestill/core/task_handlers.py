@@ -27,10 +27,11 @@ Usage:
 """
 
 import json
-import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Tuple
+
+from structlog import get_logger
 
 from thestill.utils.exceptions import FatalError, TransientError
 
@@ -45,7 +46,7 @@ from .queue_manager import Task, TaskStage
 if TYPE_CHECKING:
     from ..web.dependencies import AppState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================

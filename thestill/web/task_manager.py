@@ -40,14 +40,15 @@ Usage:
         task_manager.fail_task(TaskType.REFRESH, str(e))
 """
 
-import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+from structlog import get_logger
+
+logger = get_logger(__name__)
 
 
 class TaskType(str, Enum):

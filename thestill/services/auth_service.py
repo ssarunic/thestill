@@ -19,7 +19,6 @@ Single-user mode (MULTI_USER=false): Auto-creates a default user, no login requi
 Multi-user mode (MULTI_USER=true): Requires Google OAuth authentication.
 """
 
-import logging
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -28,13 +27,14 @@ from urllib.parse import urlencode
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
+from structlog import get_logger
 
 from ..models.user import TokenPayload, User
 from ..repositories.user_repository import UserRepository
 from ..utils.config import Config
 from ..utils.jwt import create_access_token, decode_token
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default user constants for single-user mode
 DEFAULT_USER_EMAIL = "local@thestill.me"

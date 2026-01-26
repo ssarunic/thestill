@@ -18,15 +18,15 @@ JWT utilities for token encoding and decoding.
 Uses PyJWT for secure token handling with proper error management.
 """
 
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
+from structlog import get_logger
 
 from ..models.user import TokenPayload
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def create_access_token(

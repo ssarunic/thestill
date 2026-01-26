@@ -31,18 +31,18 @@ def require_file_exists(self, file_path: Path, error_message: str) -> Path:
 
 ### 2. Structured Logging
 
-All `print()` statements have been replaced with structured logging:
+All logging uses `structlog` for structured, machine-readable output:
 
 ```python
-import logging
-logger = logging.getLogger(__name__)
+from structlog import get_logger
+logger = get_logger()
 
-# Log levels by severity
-logger.debug("Detailed diagnostic info")
-logger.info("Episode downloaded successfully")
-logger.warning("Retry attempt 2/3 after network timeout")
-logger.error("Download failed for episode XYZ")
-logger.critical("Cannot load configuration file")
+# Log levels with structured context
+logger.debug("Detailed diagnostic info", module="downloader", step=1)
+logger.info("Episode downloaded", episode_id="abc123", file_size_mb=45.2)
+logger.warning("Retry attempt", attempt=2, max_attempts=3, reason="network_timeout")
+logger.error("Download failed", episode_id="xyz789", error="404_not_found")
+logger.critical("Cannot load config", config_file="/path/to/config.yaml")
 ```
 
 **Logging Levels**:
@@ -52,6 +52,15 @@ logger.critical("Cannot load configuration file")
 - `WARNING`: Recoverable issues (retry after failure)
 - `ERROR`: Failures that affect single operations
 - `CRITICAL`: System-wide failures
+
+**Correlation IDs**:
+
+Logs include correlation IDs for tracing requests across layers:
+
+- `request_id`: HTTP request tracking (web layer)
+- `command_id`: CLI command tracking
+- `mcp_request_id`: MCP tool invocation tracking
+- `task_id`, `worker_id`, `episode_id`: Task processing tracking
 
 **Never Log**:
 
@@ -88,7 +97,7 @@ except Exception:
 try:
     process_episode(episode)
 except ProcessingError as e:
-    logger.error(f"Failed to process episode {episode.guid}: {e}")
+    logger.error("Failed to process episode", episode_guid=episode.guid, error=str(e))
     raise  # Re-raise for caller to handle
 ```
 
@@ -97,8 +106,11 @@ except ProcessingError as e:
 - **Never catch bare `except:`** - always specify exception types
 - **Never silently fail** - always log errors before handling
 - **Early returns** - use guard clauses to reduce nesting
-- **Context in logs** - include episode GUID, podcast URL, file paths
+- **Context in logs** - include structured context (episode_id, podcast_url, file paths, correlation IDs)
 - **User-friendly CLI errors** - catch and format for end users
+- **Use structlog** - all logging should use `structlog.get_logger()` for structured output
+
+See [docs/logging-configuration.md](../docs/logging-configuration.md) for detailed logging setup and usage.
 
 ## Error Classification (`core/error_classifier.py`)
 

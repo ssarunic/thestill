@@ -26,6 +26,7 @@ from typing import Optional
 
 from thestill.models.transcript import Transcript
 from thestill.models.transcription import TranscribeOptions
+from thestill.utils.console import ConsoleOutput
 from thestill.utils.device import resolve_device
 from thestill.utils.duration import get_audio_duration_minutes
 
@@ -75,9 +76,12 @@ class Transcriber(ABC):
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False)
-            print(f"Transcript saved to: {output_path}")
+            # Use console if available on instance, otherwise create one
+            console = getattr(self, "console", None) or ConsoleOutput()
+            console.success(f"Transcript saved to: {output_path}")
         except Exception as e:
-            print(f"Error saving transcript: {e}")
+            console = getattr(self, "console", None) or ConsoleOutput()
+            console.error(f"Error saving transcript: {e}")
 
     def _get_audio_duration_minutes(self, audio_path: str) -> float:
         """Get audio duration in minutes using ffprobe."""

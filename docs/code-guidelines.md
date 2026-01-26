@@ -315,23 +315,34 @@ class FeedParseError(Exception):
 
 ### Logging
 
-Use structured logging with context:
+Use `structlog` for all logging. This provides structured, machine-readable output with automatic context:
 
 ```python
-import logging
+from structlog import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 def download_episode(self, episode: Episode) -> Optional[str]:
     """Download episode audio"""
-    logger.info(f"Downloading episode: {episode.title}")
+    logger.info("Downloading episode", episode_id=episode.guid, title=episode.title)
 
     try:
         audio_path = self._download(episode.audio_url)
-        logger.info(f"Downloaded successfully: {audio_path}")
+        logger.info(
+            "Downloaded successfully",
+            episode_id=episode.guid,
+            audio_path=str(audio_path),
+            file_size_mb=audio_path.stat().st_size / 1024 / 1024
+        )
         return audio_path
     except Exception as e:
-        logger.error(f"Download failed for {episode.title}: {e}")
+        logger.error(
+            "Download failed",
+            episode_id=episode.guid,
+            title=episode.title,
+            error=str(e),
+            exc_info=True
+        )
         return None
 ```
 
@@ -343,11 +354,36 @@ def download_episode(self, episode: Episode) -> Optional[str]:
 - `ERROR`: Failures that affect single operations
 - `CRITICAL`: System-wide failures
 
+**Structured Context**:
+
+Always include relevant context as keyword arguments:
+
+```python
+# Good: Structured context
+logger.info("Task started", task_id=task.id, worker_id=worker.id, episode_id=episode.guid)
+
+# Bad: String formatting
+logger.info(f"Task {task.id} started by worker {worker.id} for episode {episode.guid}")
+```
+
+**Correlation IDs**:
+
+Logs automatically include correlation IDs from context:
+
+- `request_id`: HTTP requests (web layer)
+- `command_id`: CLI commands
+- `mcp_request_id`: MCP tool invocations
+- `task_id`, `worker_id`, `episode_id`: Task processing
+
 **Never Log**:
 
 - API keys, tokens, credentials
 - Full file contents
 - PII (personally identifiable information)
+
+**Configuration**:
+
+See [docs/logging-configuration.md](logging-configuration.md) for environment variables, output formats, and cloud deployment.
 
 ### No Silent Failures
 
@@ -362,7 +398,7 @@ except Exception:
 try:
     process_episode(episode)
 except ProcessingError as e:
-    logger.error(f"Failed to process episode {episode.guid}: {e}")
+    logger.error("Failed to process episode", episode_guid=episode.guid, error=str(e), exc_info=True)
     raise  # Re-raise for caller to handle
 ```
 

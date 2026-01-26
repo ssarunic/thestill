@@ -13,16 +13,16 @@
 # limitations under the License.
 
 import hashlib
-import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yt_dlp
+from structlog import get_logger
 
 from ..models.podcast import Episode
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class YouTubeDownloader:

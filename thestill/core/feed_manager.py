@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import feedparser
+from structlog import get_logger
 
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
@@ -26,7 +26,7 @@ from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
 from .media_source import MediaSourceFactory, RSSMediaSource
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PodcastFeedManager:
@@ -141,7 +141,7 @@ class PodcastFeedManager:
             metadata = source.extract_metadata(url)
 
             if not metadata:
-                logger.error(f"Could not extract metadata from {url}")
+                logger.error("Could not extract metadata", url=url)
                 return None
 
             # Create podcast entry
@@ -168,15 +168,15 @@ class PodcastFeedManager:
             podcast_url = str(podcast.rss_url)
             if not self.repository.exists(podcast_url):
                 self.repository.save(podcast)
-                logger.info(f"Added podcast: {podcast.title}")
+                logger.info("Added podcast", podcast_title=podcast.title, rss_url=podcast_url)
                 return podcast
             # Return existing podcast (idempotent behavior)
             existing = self.repository.get_by_url(podcast_url)
-            logger.info(f"Podcast already exists: {existing.title if existing else podcast_url}")
+            logger.info("Podcast already exists", podcast_title=existing.title if existing else podcast_url)
             return existing
 
         except Exception as e:
-            logger.error(f"Error adding podcast {url}: {e}")
+            logger.error("Error adding podcast", url=url, error=str(e), exc_info=True)
             return None
 
     def remove_podcast(self, rss_url: str) -> bool:
@@ -212,7 +212,7 @@ class PodcastFeedManager:
             if not podcast:
                 podcast = self.repository.get_by_id(podcast_id)
             if not podcast:
-                logger.warning(f"Podcast not found for refresh: {podcast_id}")
+                logger.warning("Podcast not found for refresh", podcast_id=podcast_id)
                 return []
             podcasts = [podcast]
         else:
@@ -245,7 +245,12 @@ class PodcastFeedManager:
                     if metadata:
                         # Update language
                         if metadata.get("language") and podcast.language != metadata["language"]:
-                            logger.info(f"Updating podcast language: {podcast.language} -> {metadata['language']}")
+                            logger.info(
+                                "Updating podcast language",
+                                podcast_slug=podcast.slug,
+                                old_language=podcast.language,
+                                new_language=metadata["language"],
+                            )
                             podcast.language = metadata["language"]
                             metadata_changed = True
 
@@ -313,7 +318,7 @@ class PodcastFeedManager:
                         self._save_transcript_links_for_episodes(podcast, episodes, source)
 
             except Exception as e:
-                logger.error(f"Error checking feed {podcast.rss_url}: {e}")
+                logger.error("Error checking feed", podcast_rss_url=str(podcast.rss_url), error=str(e), exc_info=True)
                 continue
 
         return new_episodes
@@ -340,7 +345,7 @@ class PodcastFeedManager:
             # Read the debug RSS file (saved during fetch_episodes)
             debug_file = self.path_manager.debug_feed_file(podcast.slug)
             if not debug_file.exists():
-                logger.debug(f"No debug RSS file found for {podcast.slug}, skipping transcript link extraction")
+                logger.debug("No debug RSS file found, skipping transcript link extraction", podcast_slug=podcast.slug)
                 return
 
             rss_content = debug_file.read_text(encoding="utf-8")
@@ -359,14 +364,28 @@ class PodcastFeedManager:
                     saved = self.repository.add_transcript_links(episode.id, links)
                     if saved > 0:
                         total_saved += saved
-                        logger.debug(f"Saved {saved} transcript links for episode {episode.title[:50]}...")
+                        logger.debug(
+                            "Saved transcript links for episode",
+                            count=saved,
+                            episode_title=episode.title[:50],
+                        )
 
             if total_saved > 0:
-                logger.info(f"Saved {total_saved} transcript links for {len(episodes)} new episodes in {podcast.title}")
+                logger.info(
+                    "Saved transcript links for new episodes",
+                    total_saved=total_saved,
+                    episode_count=len(episodes),
+                    podcast_title=podcast.title,
+                )
 
         except Exception as e:
             # Don't fail episode discovery if transcript link extraction fails
-            logger.warning(f"Failed to extract transcript links for {podcast.title}: {e}")
+            logger.warning(
+                "Failed to extract transcript links",
+                podcast_title=podcast.title,
+                error=str(e),
+                exc_info=True,
+            )
 
     def mark_episode_downloaded(
         self,
@@ -393,11 +412,13 @@ class PodcastFeedManager:
                         episode.audio_path = audio_path
                         if duration is not None:
                             episode.duration = duration
-                        logger.info(f"Marked episode as downloaded (in transaction): {episode_external_id}")
+                        logger.info(
+                            "Marked episode as downloaded (in transaction)", episode_external_id=episode_external_id
+                        )
                         return
-                logger.warning(f"Episode not found for download marking: {episode_external_id}")
+                logger.warning("Episode not found for download marking", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Podcast not found: {podcast_rss_url}")
+                logger.warning("Podcast not found", podcast_rss_url=podcast_rss_url)
         else:
             # Direct repository update
             updates = {"audio_path": audio_path}
@@ -405,9 +426,9 @@ class PodcastFeedManager:
                 updates["duration"] = duration
             success = self.repository.update_episode(podcast_rss_url, episode_external_id, updates)
             if success:
-                logger.info(f"Marked episode as downloaded: {episode_external_id}")
+                logger.info("Marked episode as downloaded", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Episode not found for download marking: {episode_external_id}")
+                logger.warning("Episode not found for download marking", episode_external_id=episode_external_id)
 
     def mark_episode_downsampled(
         self,
@@ -434,11 +455,13 @@ class PodcastFeedManager:
                         episode.downsampled_audio_path = downsampled_audio_path
                         if duration is not None:
                             episode.duration = duration
-                        logger.info(f"Marked episode as downsampled (in transaction): {episode_external_id}")
+                        logger.info(
+                            "Marked episode as downsampled (in transaction)", episode_external_id=episode_external_id
+                        )
                         return
-                logger.warning(f"Episode not found for downsample marking: {episode_external_id}")
+                logger.warning("Episode not found for downsample marking", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Podcast not found: {podcast_rss_url}")
+                logger.warning("Podcast not found", podcast_rss_url=podcast_rss_url)
         else:
             # Direct repository update
             updates = {"downsampled_audio_path": downsampled_audio_path}
@@ -446,9 +469,9 @@ class PodcastFeedManager:
                 updates["duration"] = duration
             success = self.repository.update_episode(podcast_rss_url, episode_external_id, updates)
             if success:
-                logger.info(f"Marked episode as downsampled: {episode_external_id}")
+                logger.info("Marked episode as downsampled", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Episode not found for downsample marking: {episode_external_id}")
+                logger.warning("Episode not found for downsample marking", episode_external_id=episode_external_id)
 
     def clear_episode_audio_path(
         self,
@@ -469,18 +492,18 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
                         episode.audio_path = None
-                        logger.info(f"Cleared audio_path (in transaction): {episode_external_id}")
+                        logger.info("Cleared audio_path (in transaction)", episode_external_id=episode_external_id)
                         return
-                logger.warning(f"Episode not found for clearing audio_path: {episode_external_id}")
+                logger.warning("Episode not found for clearing audio_path", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Podcast not found: {podcast_rss_url}")
+                logger.warning("Podcast not found", podcast_rss_url=podcast_rss_url)
         else:
             # Direct repository update
             success = self.repository.update_episode(podcast_rss_url, episode_external_id, {"audio_path": None})
             if success:
-                logger.info(f"Cleared audio_path: {episode_external_id}")
+                logger.info("Cleared audio_path", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Episode not found for clearing audio_path: {episode_external_id}")
+                logger.warning("Episode not found for clearing audio_path", episode_external_id=episode_external_id)
 
     def clear_episode_downsampled_audio_path(
         self,
@@ -501,20 +524,26 @@ class PodcastFeedManager:
                 for episode in podcast.episodes:
                     if episode.external_id == episode_external_id:
                         episode.downsampled_audio_path = None
-                        logger.info(f"Cleared downsampled_audio_path (in transaction): {episode_external_id}")
+                        logger.info(
+                            "Cleared downsampled_audio_path (in transaction)", episode_external_id=episode_external_id
+                        )
                         return
-                logger.warning(f"Episode not found for clearing downsampled_audio_path: {episode_external_id}")
+                logger.warning(
+                    "Episode not found for clearing downsampled_audio_path", episode_external_id=episode_external_id
+                )
             else:
-                logger.warning(f"Podcast not found: {podcast_rss_url}")
+                logger.warning("Podcast not found", podcast_rss_url=podcast_rss_url)
         else:
             # Direct repository update
             success = self.repository.update_episode(
                 podcast_rss_url, episode_external_id, {"downsampled_audio_path": None}
             )
             if success:
-                logger.info(f"Cleared downsampled_audio_path: {episode_external_id}")
+                logger.info("Cleared downsampled_audio_path", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Episode not found for clearing downsampled_audio_path: {episode_external_id}")
+                logger.warning(
+                    "Episode not found for clearing downsampled_audio_path", episode_external_id=episode_external_id
+                )
 
     def mark_episode_processed(
         self,
@@ -550,14 +579,16 @@ class PodcastFeedManager:
                         if summary_path is not None:
                             episode.summary_path = summary_path if summary_path else None
                         podcast.last_processed = datetime.now()
-                        logger.info(f"Marked episode as processed (in transaction): {episode_external_id}")
+                        logger.info(
+                            "Marked episode as processed (in transaction)", episode_external_id=episode_external_id
+                        )
                         episode_found = True
                         break
 
                 if not episode_found:
-                    logger.warning(f"Episode not found for processing marking: {episode_external_id}")
+                    logger.warning("Episode not found for processing marking", episode_external_id=episode_external_id)
             else:
-                logger.warning(f"Podcast not found: {podcast_rss_url}")
+                logger.warning("Podcast not found", podcast_rss_url=podcast_rss_url)
         else:
             # Direct repository update (original logic)
             # Build updates dictionary - only file paths, state will be auto-computed
@@ -578,7 +609,7 @@ class PodcastFeedManager:
                 try:
                     podcast = self.repository.get_by_url(podcast_rss_url)
                     if not podcast:
-                        logger.error(f"Podcast not found: {podcast_rss_url}")
+                        logger.error("Podcast not found", podcast_rss_url=podcast_rss_url)
                         return
 
                     parsed_feed = feedparser.parse(str(podcast.rss_url))
@@ -609,10 +640,15 @@ class PodcastFeedManager:
                                 self.repository.save_episode(episode)
                                 podcast.last_processed = datetime.now()
                                 self.repository.save_podcast(podcast)
-                                logger.info(f"Added and marked new episode as processed: {episode.title}")
+                                logger.info("Added and marked new episode as processed", episode_title=episode.title)
                                 return
                 except Exception as e:
-                    logger.error(f"Error fetching episode info for {episode_external_id}: {e}")
+                    logger.error(
+                        "Error fetching episode info",
+                        episode_external_id=episode_external_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
                     return
 
             # Episode update succeeded - just update podcast last_processed timestamp
@@ -621,7 +657,7 @@ class PodcastFeedManager:
             if podcast:
                 podcast.last_processed = datetime.now()
                 self.repository.save_podcast(podcast)
-                logger.info(f"Marked episode as processed: {episode_external_id}")
+                logger.info("Marked episode as processed", episode_external_id=episode_external_id)
 
     def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:
         """

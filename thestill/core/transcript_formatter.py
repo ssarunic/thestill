@@ -20,14 +20,17 @@ Performs format-only cleanup, no language editing yet.
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from thestill.utils.console import ConsoleOutput
 
 
 class TranscriptFormatter:
     """Format JSON transcripts into clean, readable Markdown"""
 
-    def __init__(self):
+    def __init__(self, console: Optional[ConsoleOutput] = None):
         self.timecode_interval = 300  # Show timecode every 5 minutes (300 seconds)
+        self.console = console or ConsoleOutput()
 
     def format_transcript(self, transcript_data: Dict) -> str:
         """
@@ -165,5 +168,5 @@ class TranscriptFormatter:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(markdown)
 
-        print(f"Formatted transcript saved to: {output_path}")
+        self.console.success(f"Formatted transcript saved to: {output_path}")
         return markdown

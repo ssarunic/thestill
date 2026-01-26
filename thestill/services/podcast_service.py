@@ -16,12 +16,12 @@
 Podcast service - Business logic for podcast and episode management
 """
 
-import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, computed_field
+from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
@@ -29,7 +29,7 @@ from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
 from ..utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]

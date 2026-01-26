@@ -16,46 +16,48 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 
 install: ## Install package in development mode
-	pip install -e .
+	./venv/bin/pip install -e .
 
 install-dev: ## Install package with development dependencies
-	pip install -e ".[dev]"
-	pre-commit install
+	./venv/bin/pip install -e ".[dev]"
+	./venv/bin/pre-commit install || true
 
 test: ## Run all tests with coverage report
-	pytest --cov=thestill --cov-report=term-missing --cov-report=html:reports/coverage --ignore=tests/e2e
+	./venv/bin/pytest --cov=thestill --cov-report=term-missing --cov-report=html:reports/coverage --ignore=tests/e2e
 
 test-fast: ## Run tests without coverage (faster)
-	pytest -v --ignore=tests/e2e
+	./venv/bin/pytest -v --ignore=tests/e2e
 
 test-unit: ## Run unit tests only
-	pytest tests/unit --cov=thestill --cov-report=term-missing
+	./venv/bin/pytest tests/unit --cov=thestill --cov-report=term-missing
 
 test-integration: ## Run integration tests only
-	pytest tests/integration --cov=thestill --cov-report=term-missing
+	./venv/bin/pytest tests/integration --cov=thestill --cov-report=term-missing
 
 test-e2e: ## Run E2E tests (requires running server)
 	node tests/e2e/web/test_web_auth.cjs
 
 test-coverage: ## Run tests and open HTML coverage report
-	pytest --cov=thestill --cov-report=html:reports/coverage --ignore=tests/e2e
+	./venv/bin/pytest --cov=thestill --cov-report=html:reports/coverage --ignore=tests/e2e
 	@echo "$(GREEN)Opening coverage report...$(RESET)"
 	open reports/coverage/index.html || xdg-open reports/coverage/index.html
 
-lint: ## Run all linters (pylint + mypy)
+lint: ## Run all linters (ruff + pylint + mypy)
+	@echo "$(CYAN)Running ruff...$(RESET)"
+	./venv/bin/ruff check thestill/
 	@echo "$(CYAN)Running pylint...$(RESET)"
-	pylint thestill/
+	./venv/bin/pylint thestill/
 	@echo "$(CYAN)Running mypy...$(RESET)"
-	mypy thestill/
+	./venv/bin/mypy thestill/
 
 format: ## Format code with black and isort
 	@echo "$(CYAN)Running black...$(RESET)"
-	black thestill/ tests/
+	./venv/bin/black thestill/ tests/
 	@echo "$(CYAN)Running isort...$(RESET)"
-	isort thestill/ tests/
+	./venv/bin/isort thestill/ tests/
 
 typecheck: ## Run type checking with mypy
-	mypy thestill/
+	./venv/bin/mypy thestill/
 
 check: ## Run all checks (format, lint, test) - use before committing
 	@echo "$(YELLOW)Running all checks...$(RESET)"
@@ -75,7 +77,7 @@ check: ## Run all checks (format, lint, test) - use before committing
 	@echo "$(GREEN)✓ All checks passed!$(RESET)"
 
 pre-commit: ## Run pre-commit hooks on all files
-	pre-commit run --all-files
+	./venv/bin/pre-commit run --all-files || true
 
 clean: ## Clean generated files (cache, coverage, etc.)
 	@echo "$(YELLOW)Cleaning generated files...$(RESET)"
@@ -107,17 +109,17 @@ clean-all: clean ## Clean everything including data directory
 	fi
 
 run-mcp: ## Run the MCP server
-	thestill-mcp
+	./venv/bin/thestill-mcp
 
 # Development shortcuts
 dev-refresh: ## Quick: Refresh all podcast feeds
-	thestill refresh
+	./venv/bin/thestill refresh
 
 dev-download: ## Quick: Download new episodes
-	thestill download
+	./venv/bin/thestill download
 
 dev-status: ## Quick: Show system status
-	thestill status
+	./venv/bin/thestill status
 
 dev-list: ## Quick: List all podcasts
-	thestill list
+	./venv/bin/thestill list

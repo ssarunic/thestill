@@ -24,17 +24,18 @@ Design principles:
 - Cache-friendly: no database triggers or cascades
 """
 
-import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
+from structlog import get_logger
+
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):

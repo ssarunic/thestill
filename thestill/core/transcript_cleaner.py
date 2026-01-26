@@ -23,14 +23,15 @@ Input: Pre-formatted markdown (from TranscriptFormatter), NOT raw JSON.
 This significantly reduces token usage since markdown is much smaller than JSON.
 """
 
-import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
+
+from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Type alias for prompt save callback
 PromptSaveCallback = Callable[[Dict[str, Any]], None]
@@ -195,9 +196,10 @@ class TranscriptCleaner:
         effective_chunk_size = min(self.chunk_size, max_output_chars)
 
         logger.debug(
-            f"Chunk sizing: input={len(formatted_transcript)} chars, "
-            f"max_output_tokens={max_output_tokens}, "
-            f"effective_chunk_size={effective_chunk_size} chars"
+            "Chunk sizing",
+            input_chars=len(formatted_transcript),
+            max_output_tokens=max_output_tokens,
+            effective_chunk_size=effective_chunk_size,
         )
 
         # Handle chunking for large transcripts
@@ -215,7 +217,7 @@ class TranscriptCleaner:
 
         # Get max tokens for this model
         max_tokens = self.provider.get_max_output_tokens()
-        logger.debug(f"Using max_tokens={max_tokens} for model {self.provider.get_model_name()}")
+        logger.debug("Using max_tokens for model", max_tokens=max_tokens, model_name=self.provider.get_model_name())
 
         # Prepare messages
         messages = [
@@ -276,15 +278,17 @@ class TranscriptCleaner:
         cleaned_chunks = []
 
         logger.info(
-            f"Splitting transcript into {len(chunks)} chunks "
-            f"(chunk_size={chunk_size} chars, total={len(formatted_transcript)} chars)"
+            "Splitting transcript into chunks",
+            chunk_count=len(chunks),
+            chunk_size=chunk_size,
+            total_chars=len(formatted_transcript),
         )
 
         # Get max tokens for this model
         max_tokens = self.provider.get_max_output_tokens()
 
         for i, chunk in enumerate(chunks):
-            logger.info(f"Processing chunk {i + 1}/{len(chunks)}...")
+            logger.info("Processing chunk", chunk_number=i + 1, total_chunks=len(chunks))
 
             user_prompt = self._build_cleanup_user_prompt(
                 formatted_transcript=chunk,

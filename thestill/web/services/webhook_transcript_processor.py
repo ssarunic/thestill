@@ -23,17 +23,18 @@ This service processes incoming webhook transcripts and:
 """
 
 import json
-import logging
 import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from structlog import get_logger
+
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.utils.path_manager import PathManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class WebhookTranscriptProcessor:

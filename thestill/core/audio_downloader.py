@@ -13,19 +13,19 @@
 # limitations under the License.
 
 import hashlib
-import logging
 import os
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
 import requests
+import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..models.podcast import Episode, Podcast
 from .media_source import MediaSourceFactory
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class AudioDownloader:
@@ -92,7 +92,7 @@ class AudioDownloader:
             from .youtube_downloader import YouTubeDownloader
 
             if YouTubeDownloader.is_youtube_url(str(episode.audio_url)):
-                logger.error(f"YouTube download failed for {episode.title}, no fallback available")
+                logger.error("youtube_download_failed", episode_title=episode.title, reason="no_fallback_available")
                 return None
 
             # Handle standard HTTP downloads (RSS feeds)
@@ -117,22 +117,22 @@ class AudioDownloader:
             relative_path = f"{safe_podcast}/{filename}"
 
             if local_path.exists():
-                logger.info(f"File already exists: {relative_path}")
+                logger.info("audio_file_exists", relative_path=relative_path)
                 return relative_path
 
-            logger.info(f"Downloading episode: {episode.title}")
+            logger.info("downloading_episode", episode_title=episode.title, relative_path=relative_path)
 
             # Use retry-enabled download method for network operations
             self._download_with_retry(str(episode.audio_url), local_path)
 
-            logger.info(f"Download completed: {relative_path}")
+            logger.info("download_completed", relative_path=relative_path, episode_title=episode.title)
             return relative_path
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Network error downloading {episode.title}: {e}")
+            logger.error("network_error_downloading", episode_title=episode.title, error=str(e), exc_info=True)
             return None
         except Exception as e:
-            logger.error(f"Error downloading {episode.title}: {e}")
+            logger.error("error_downloading_episode", episode_title=episode.title, error=str(e), exc_info=True)
             return None
 
     @retry(
@@ -185,21 +185,21 @@ class AudioDownloader:
             True if file was deleted or didn't exist, False on error
         """
         if not episode.audio_path:
-            logger.debug(f"No audio_path set for episode {episode.title}")
+            logger.debug("no_audio_path", episode_title=episode.title)
             return True
 
         file_path = self.storage_path / episode.audio_path
 
         if not file_path.exists():
-            logger.debug(f"Audio file already deleted: {episode.audio_path}")
+            logger.debug("audio_file_already_deleted", audio_path=episode.audio_path)
             return True
 
         try:
             file_path.unlink()
-            logger.info(f"Deleted original audio: {episode.audio_path}")
+            logger.info("deleted_original_audio", audio_path=episode.audio_path)
             return True
         except Exception as e:
-            logger.error(f"Error deleting audio file {episode.audio_path}: {e}")
+            logger.error("error_deleting_audio_file", audio_path=episode.audio_path, error=str(e), exc_info=True)
             return False
 
     def cleanup_old_files(self, days: int = 30, dry_run: bool = False) -> int:
@@ -221,21 +221,21 @@ class AudioDownloader:
         for file_path in self.storage_path.glob("**/*"):
             if file_path.is_file() and file_path.stat().st_mtime < cutoff_time:
                 if dry_run:
-                    logger.info(f"Would delete: {file_path.name}")
+                    logger.info("would_delete_old_file", filename=file_path.name)
                     removed_count += 1
                 else:
                     try:
                         file_path.unlink()
-                        logger.info(f"Deleted old file: {file_path.name}")
+                        logger.info("deleted_old_file", filename=file_path.name)
                         removed_count += 1
                     except Exception as e:
-                        logger.error(f"Error removing {file_path}: {e}")
+                        logger.error("error_removing_file", filepath=str(file_path), error=str(e), exc_info=True)
 
         if removed_count > 0:
             if dry_run:
-                logger.info(f"Would clean up {removed_count} old audio files (dry-run)")
+                logger.info("cleanup_summary", files_count=removed_count, mode="dry_run")
             else:
-                logger.info(f"Cleaned up {removed_count} old audio files")
+                logger.info("cleanup_completed", files_count=removed_count)
 
         return removed_count
 

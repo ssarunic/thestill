@@ -29,7 +29,6 @@ when async transcription jobs complete.
 import hashlib
 import hmac
 import json
-import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,12 +36,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
+from structlog import get_logger
 
 from ...webhook import get_tracker
 from ..dependencies import AppState, get_app_state
 from ..services import WebhookTranscriptProcessor
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

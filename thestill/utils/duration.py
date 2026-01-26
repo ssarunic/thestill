@@ -15,12 +15,13 @@
 """Duration parsing and formatting utilities."""
 
 import json
-import logging
 import subprocess
 from pathlib import Path
 from typing import Optional, Union
 
-logger = logging.getLogger(__name__)
+from structlog import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_duration(duration: Optional[str]) -> Optional[int]:

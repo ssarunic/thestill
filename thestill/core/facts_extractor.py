@@ -24,17 +24,17 @@ Uses structured output (when supported) for reliable JSON schema validation.
 """
 
 import json
-import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
+from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
 from thestill.core.transcript_formatter import TranscriptFormatter
 from thestill.models.facts import EpisodeFacts, PodcastFacts
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Response models for structured output

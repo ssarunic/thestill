@@ -27,16 +27,16 @@ Routes:
 - GET /auth/me - Get current user info
 """
 
-import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from structlog import get_logger
 
 from ..dependencies import AppState, get_app_state
 from ..responses import api_response
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

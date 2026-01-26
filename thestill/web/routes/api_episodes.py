@@ -18,12 +18,12 @@ Episodes API endpoints for thestill.me web UI.
 Provides cross-podcast episode listing, search, and bulk operations.
 """
 
-import logging
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from structlog import get_logger
 
 from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
@@ -32,7 +32,7 @@ from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 from ..responses import bad_request, conflict, not_found, paginated_response
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter()
 

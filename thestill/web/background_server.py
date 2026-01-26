@@ -20,7 +20,6 @@ in a background thread, allowing CLI commands like `transcribe` to receive
 webhook callbacks from ElevenLabs without requiring a separate server process.
 """
 
-import logging
 import socket
 import threading
 import time
@@ -29,10 +28,11 @@ from typing import Generator, Optional
 
 import requests
 import uvicorn
+from structlog import get_logger
 
 from thestill.utils.config import Config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def is_thestill_server_running(host: str, port: int, timeout: float = 2.0) -> bool:

@@ -16,25 +16,27 @@
 MCP Server for thestill.me
 
 Main MCP server implementation using STDIO transport.
+
+NOTE: This server uses stdio transport. When migrating to HTTP/SSE transport,
+use LoggingMiddleware from thestill.mcp.middleware instead of the stdio adapter.
 """
 
 import asyncio
-import logging
 import sys
 from pathlib import Path
-from typing import Any
 
+import structlog
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from ..logging import configure_structlog
 from ..utils.config import load_config
-from ..utils.logger import setup_logger
 from .resources import setup_resources
 from .tools import setup_tools
 
-# Configure logging to stderr only (stdout is reserved for MCP protocol)
-setup_logger("thestill.mcp", log_level="INFO", console_output=True)
-logger = logging.getLogger(__name__)
+# Configure structlog for MCP server (logs go to stderr, stdout reserved for MCP protocol)
+configure_structlog()
+logger = structlog.get_logger(__name__)
 
 
 class ThestillMCPServer:
@@ -53,20 +55,20 @@ class ThestillMCPServer:
         """
         self.storage_path = Path(storage_path)
         self.server = Server("thestill-mcp")
-        logger.info(f"Initializing MCP server with storage: {storage_path}")
+        logger.info("initializing_mcp_server", storage_path=storage_path, transport="stdio")
 
         # Set up resources and tools
         setup_resources(self.server, storage_path)
         setup_tools(self.server, storage_path)
 
-        logger.info("MCP server initialized successfully")
+        logger.info("mcp_server_initialized")
 
     async def run(self):
         """Run the MCP server with STDIO transport."""
-        logger.info("Starting MCP server with STDIO transport")
+        logger.info("starting_mcp_server", transport="stdio")
 
         async with stdio_server() as (read_stream, write_stream):
-            logger.info("STDIO transport established")
+            logger.info("stdio_transport_established")
             await self.server.run(read_stream, write_stream, self.server.create_initialization_options())
 
 
@@ -80,17 +82,17 @@ def main():
     try:
         # Load configuration
         config = load_config()
-        logger.info("Configuration loaded successfully")
+        logger.info("configuration_loaded")
 
         # Create and run server
         server = ThestillMCPServer(str(config.storage_path))
         asyncio.run(server.run())
 
     except KeyboardInterrupt:
-        logger.info("MCP server shutting down (KeyboardInterrupt)")
+        logger.info("mcp_server_shutting_down", reason="keyboard_interrupt")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Fatal error in MCP server: {e}", exc_info=True)
+        logger.error("fatal_error_in_mcp_server", error=str(e), exc_info=True)
         sys.exit(1)
 
 

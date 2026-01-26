@@ -26,11 +26,11 @@ Usage:
     app = create_app()
 """
 
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -51,10 +51,11 @@ from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
+from .middleware import LoggingMiddleware
 from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, api_status, auth, health, webhooks
 from .task_manager import get_task_manager
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class CachedStaticFiles(StaticFiles):
@@ -145,9 +146,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         """Application lifespan manager for startup/shutdown."""
         import asyncio
 
-        logger.info("Starting thestill web server...")
-        logger.info(f"Storage path: {config.storage_path}")
-        logger.info(f"Database: {config.database_path}")
+        logger.info("starting_web_server")
+        logger.info("server_configuration", storage_path=str(config.storage_path), database=str(config.database_path))
 
         # Recover any tasks that were interrupted by a previous server restart
         # Exclude transcribe tasks if using cloud providers (they may still be running)
@@ -157,13 +157,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         if config.transcription_provider.lower() in ("google", "elevenlabs"):
             excluded_stages.append(TaskStage.TRANSCRIBE)
             logger.info(
-                f"Using cloud transcription provider ({config.transcription_provider}), "
-                "transcribe tasks will not be auto-recovered"
+                "cloud_transcription_provider",
+                provider=config.transcription_provider,
+                note="transcribe_tasks_not_auto_recovered",
             )
 
         recovered = queue_manager.recover_interrupted_tasks(excluded_stages=excluded_stages)
         if recovered > 0:
-            logger.info(f"Recovered {recovered} interrupted task(s) from previous session")
+            logger.info("recovered_interrupted_tasks", count=recovered)
 
         # Store state in app for access in routes
         app.state.app_state = app_state
@@ -180,26 +181,26 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 for podcast in podcasts_to_follow:
                     try:
                         follower_service.follow(default_user.id, podcast.id)
-                        logger.info(f"Auto-followed podcast for default user: {podcast.title}")
+                        logger.info("auto_followed_podcast", podcast_title=podcast.title, user_id=default_user.id)
                     except Exception as e:
-                        logger.warning(f"Failed to auto-follow podcast {podcast.title}: {e}")
-                logger.info(f"Single-user mode: auto-followed {len(podcasts_to_follow)} existing podcast(s)")
+                        logger.warning("auto_follow_failed", podcast_title=podcast.title, error=str(e))
+                logger.info("single_user_auto_follow_complete", count=len(podcasts_to_follow))
 
         # Set event loop in progress store for cross-thread async operations
         progress_store.set_event_loop(asyncio.get_event_loop())
 
         # Start background task worker
         task_worker.start()
-        logger.info("Task worker started")
+        logger.info("task_worker_started")
 
         yield
 
         # Cleanup on shutdown
-        logger.info("Shutting down thestill web server...")
+        logger.info("shutting_down_web_server")
 
         # Stop task worker gracefully
         task_worker.stop()
-        logger.info("Task worker stopped")
+        logger.info("task_worker_stopped")
 
     # Create FastAPI application
     app = FastAPI(
@@ -210,6 +211,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+
+    # Add logging middleware for request/response tracking
+    app.add_middleware(LoggingMiddleware)
 
     # Add CORS middleware for frontend development
     app.add_middleware(
@@ -258,10 +262,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 return FileResponse(str(index_file))
             return FileResponse(str(static_dir / "index.html"))
 
-        logger.info(f"Serving static frontend from: {static_dir}")
+        logger.info("serving_static_frontend", directory=str(static_dir))
     else:
-        logger.warning(f"Static directory not found: {static_dir} - frontend not available")
+        logger.warning("static_directory_not_found", directory=str(static_dir), note="frontend_not_available")
 
-    logger.info("FastAPI application created successfully")
+    logger.info("fastapi_application_created")
 
     return app

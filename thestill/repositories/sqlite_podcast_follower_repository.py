@@ -21,17 +21,18 @@ Design principles:
 - Thread-safe via connection-per-operation
 """
 
-import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import List
 
+from structlog import get_logger
+
 from ..models.user import PodcastFollower
 from .podcast_follower_repository import PodcastFollowerRepository
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SqlitePodcastFollowerRepository(PodcastFollowerRepository):

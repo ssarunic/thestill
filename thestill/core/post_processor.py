@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from thestill.utils.console import ConsoleOutput
+
 # Import ModelLimits and MODEL_CONFIGS from llm_provider (canonical location)
 # Re-export for backward compatibility with existing imports
 from .llm_provider import MODEL_CONFIGS, LLMProvider, ModelLimits
@@ -168,21 +170,25 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
     * Patient outcomes improve when AI assists (not replaces) doctors.
   * **Source:** [12:45, 15:20, 28:15]"""
 
-    def __init__(self, provider: LLMProvider, max_tokens: Optional[int] = None):
+    def __init__(
+        self, provider: LLMProvider, max_tokens: Optional[int] = None, console: Optional[ConsoleOutput] = None
+    ):
         """
         Initialize transcript summarizer with an LLM provider.
 
         Args:
             provider: LLMProvider instance (OpenAI, Anthropic, Gemini, or Ollama)
             max_tokens: Maximum tokens per chunk (optional, auto-calculated if not provided)
+            console: ConsoleOutput instance for user-facing messages (optional)
         """
         self.provider = provider
+        self.console = console or ConsoleOutput()
         model = provider.get_model_name()
 
         # Get model limits and calculate optimal chunk size
         self.model_limits = MODEL_CONFIGS.get(model)
         if self.model_limits is None:
-            print(f"Warning: Model '{model}' not in config table. Using conservative defaults.")
+            self.console.warning(f"Model '{model}' not in config table. Using conservative defaults.")
             self.model_limits = ModelLimits(tpm=30000, rpm=500, tpd=90000, context_window=128000)
 
         # Calculate max tokens per chunk if not provided
@@ -196,8 +202,8 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         else:
             self.max_tokens = max_tokens
 
-        print(f"Model: {model}")
-        print(f"   TPM Limit: {self.model_limits.tpm:,} | Max chunk size: {self.max_tokens:,} tokens")
+        self.console.info(f"Model: {model}")
+        self.console.info(f"   TPM Limit: {self.model_limits.tpm:,} | Max chunk size: {self.max_tokens:,} tokens")
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough token estimation: ~4 chars per token"""
@@ -261,7 +267,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
             return response
 
         except Exception as e:
-            print(f"Error processing chunk {chunk_num}/{total_chunks}: {e}")
+            self.console.error(f"Error processing chunk {chunk_num}/{total_chunks}: {e}")
             raise
 
     def summarize(
@@ -283,8 +289,8 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         """
         estimated_tokens = self._estimate_tokens(transcript_text)
 
-        print(f"Summarizing transcript with {self.provider.get_model_name()}...")
-        print(f"Estimated tokens: ~{estimated_tokens:,}")
+        self.console.info(f"Summarizing transcript with {self.provider.get_model_name()}...")
+        self.console.info(f"Estimated tokens: ~{estimated_tokens:,}")
 
         # Format system prompt with metadata
         system_prompt = self._get_formatted_system_prompt(metadata)
@@ -292,14 +298,14 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         chunks = self._chunk_transcript(transcript_text)
 
         if len(chunks) > 1:
-            print(f"Large transcript detected. Splitting into {len(chunks)} chunks...")
+            self.console.info(f"Large transcript detected. Splitting into {len(chunks)} chunks...")
 
         try:
             chunk_outputs = []
 
             for i, chunk in enumerate(chunks, 1):
                 if len(chunks) > 1:
-                    print(f"Processing chunk {i}/{len(chunks)}...")
+                    self.console.progress(f"Processing chunk {i}/{len(chunks)}...")
 
                 output_text = self._process_single_chunk(chunk, i, len(chunks), system_prompt)
                 chunk_outputs.append(output_text)
@@ -315,11 +321,11 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(output_path, "w", encoding="utf-8") as f:
                     f.write(final_output)
-                print(f"Summary saved to {output_path}")
+                self.console.success(f"Summary saved to {output_path}")
 
-            print("Summarization completed successfully")
+            self.console.success("Summarization completed successfully")
             return final_output
 
         except Exception as e:
-            print(f"Error during summarization: {e}")
+            self.console.error(f"Error during summarization: {e}")
             raise

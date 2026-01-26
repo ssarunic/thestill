@@ -19,12 +19,12 @@ Provides MCP resources for podcasts, episodes, and transcripts.
 """
 
 import json
-import logging
 from typing import Any
 from urllib.parse import unquote
 
 from mcp.server import Server
 from mcp.types import Resource, TextContent
+from structlog import get_logger
 
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService
@@ -32,7 +32,7 @@ from ..utils.config import load_config
 from ..utils.path_manager import PathManager
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def setup_resources(server: Server, storage_path: str):
