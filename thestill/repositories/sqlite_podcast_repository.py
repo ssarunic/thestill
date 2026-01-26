@@ -1322,14 +1322,35 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             params.append(podcast_id)
 
         if state:
-            # Map state to SQL condition (same logic as get_unprocessed_episodes)
+            # Map state to SQL condition matching the Episode.state computed property logic.
+            # The model checks states from most-progressed first: FAILED > SUMMARIZED > CLEANED >
+            # TRANSCRIBED > DOWNSAMPLED > DOWNLOADED > DISCOVERED.
+            # Each SQL condition must exclude episodes that would be classified as a more-progressed state.
             state_conditions = {
-                EpisodeState.DISCOVERED.value: "e.audio_path IS NULL",
-                EpisodeState.DOWNLOADED.value: "e.audio_path IS NOT NULL AND e.downsampled_audio_path IS NULL",
-                EpisodeState.DOWNSAMPLED.value: "e.downsampled_audio_path IS NOT NULL AND e.raw_transcript_path IS NULL",
-                EpisodeState.TRANSCRIBED.value: "e.raw_transcript_path IS NOT NULL AND e.clean_transcript_path IS NULL",
-                EpisodeState.CLEANED.value: "e.clean_transcript_path IS NOT NULL AND e.summary_path IS NULL",
-                EpisodeState.SUMMARIZED.value: "e.summary_path IS NOT NULL",
+                EpisodeState.FAILED.value: "e.failed_at_stage IS NOT NULL",
+                EpisodeState.SUMMARIZED.value: ("e.summary_path IS NOT NULL AND e.failed_at_stage IS NULL"),
+                EpisodeState.CLEANED.value: (
+                    "e.clean_transcript_path IS NOT NULL AND e.summary_path IS NULL " "AND e.failed_at_stage IS NULL"
+                ),
+                EpisodeState.TRANSCRIBED.value: (
+                    "e.raw_transcript_path IS NOT NULL AND e.clean_transcript_path IS NULL "
+                    "AND e.summary_path IS NULL AND e.failed_at_stage IS NULL"
+                ),
+                EpisodeState.DOWNSAMPLED.value: (
+                    "e.downsampled_audio_path IS NOT NULL AND e.raw_transcript_path IS NULL "
+                    "AND e.clean_transcript_path IS NULL AND e.summary_path IS NULL "
+                    "AND e.failed_at_stage IS NULL"
+                ),
+                EpisodeState.DOWNLOADED.value: (
+                    "e.audio_path IS NOT NULL AND e.downsampled_audio_path IS NULL "
+                    "AND e.raw_transcript_path IS NULL AND e.clean_transcript_path IS NULL "
+                    "AND e.summary_path IS NULL AND e.failed_at_stage IS NULL"
+                ),
+                EpisodeState.DISCOVERED.value: (
+                    "e.audio_path IS NULL AND e.downsampled_audio_path IS NULL "
+                    "AND e.raw_transcript_path IS NULL AND e.clean_transcript_path IS NULL "
+                    "AND e.summary_path IS NULL AND e.failed_at_stage IS NULL"
+                ),
             }
             condition = state_conditions.get(state)
             if condition:

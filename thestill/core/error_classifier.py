@@ -86,6 +86,7 @@ TRANSIENT_PATTERNS = [
     r"ssl.*error",
     r"database.*locked",
     r"sqlite.*locked",
+    r"broken pipe",
 ]
 
 # Error message patterns that indicate fatal errors
