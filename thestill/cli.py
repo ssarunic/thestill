@@ -2504,11 +2504,17 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
 
         successful_episodes = []
         failed_episodes = []
+        missing_episode_ids = []
 
         for episode_id in digest_model.episode_ids:
             # Get episode and podcast from repository
             episode_data = repository.get_episode_by_id(episode_id)
             if not episode_data:
+                missing_episode_ids.append(episode_id)
+                click.echo(
+                    f"⚠️  Episode not found in database: {episode_id}",
+                    file=sys.stderr,
+                )
                 continue
 
             podcast, episode = episode_data
@@ -2555,6 +2561,11 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         click.echo(f"\n🎉 Digest finalized!")
         click.echo(f"   Output: {output_path}")
         click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
+        if missing_episode_ids:
+            click.echo(
+                f"   ⚠️  {len(missing_episode_ids)} episode(s) not found in database (may have been deleted)",
+                file=sys.stderr,
+            )
 
 
 @main.command("evaluate-raw-transcript")
