@@ -43,6 +43,7 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
+from ..repositories.sqlite_digest_repository import SqliteDigestRepository
 from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
@@ -52,7 +53,17 @@ from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
 from .middleware import LoggingMiddleware
-from .routes import api_commands, api_dashboard, api_episodes, api_podcasts, api_status, auth, health, webhooks
+from .routes import (
+    api_commands,
+    api_dashboard,
+    api_digests,
+    api_episodes,
+    api_podcasts,
+    api_status,
+    auth,
+    health,
+    webhooks,
+)
 from .task_manager import get_task_manager
 
 logger = structlog.get_logger(__name__)
@@ -117,6 +128,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     follower_repository = SqlitePodcastFollowerRepository(db_path=config.database_path)
     follower_service = FollowerService(follower_repository, repository)
 
+    # Initialize digest repository
+    digest_repository = SqliteDigestRepository(db_path=config.database_path)
+
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
@@ -134,6 +148,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         auth_service=auth_service,
         follower_repository=follower_repository,
         follower_service=follower_service,
+        digest_repository=digest_repository,
     )
 
     # Create task worker with handlers that have access to app_state
@@ -240,6 +255,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+    app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files

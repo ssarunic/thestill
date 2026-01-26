@@ -533,3 +533,117 @@ export interface ExtendedEpisodeTasksResponse {
     pending_stages: PipelineStage[]
   }
 }
+
+// ============================================================================
+// Digest Types
+// ============================================================================
+
+export type DigestStatus = 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed'
+
+export interface Digest {
+  id: string
+  user_id: string
+  created_at: string
+  updated_at: string
+  period_start: string
+  period_end: string
+  status: DigestStatus
+  file_path: string | null
+  episode_ids: string[]
+  episodes_total: number
+  episodes_completed: number
+  episodes_failed: number
+  processing_time_seconds: number | null
+  error_message: string | null
+  success_rate: number
+  is_complete: boolean
+}
+
+export interface DigestsResponse {
+  status: string
+  timestamp: string
+  digests: Digest[]
+  count: number
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+  next_offset: number | null
+}
+
+export interface DigestDetailResponse {
+  status: string
+  timestamp: string
+  digest: Digest
+}
+
+export interface DigestContentResponse {
+  status: string
+  timestamp: string
+  digest_id: string
+  content: string | null
+  available: boolean
+  error?: string
+}
+
+export interface DigestEpisodeInfo {
+  episode_id: string
+  episode_title: string
+  episode_slug: string
+  podcast_id: string
+  podcast_title: string
+  podcast_slug: string
+  state: string
+  pub_date: string | null
+  duration: number | null
+  image_url: string | null
+}
+
+export interface DigestEpisodesResponse {
+  status: string
+  timestamp: string
+  digest_id: string
+  episodes: DigestEpisodeInfo[]
+  count: number
+}
+
+export interface CreateDigestRequest {
+  since_days?: number
+  max_episodes?: number
+  podcast_id?: string
+  ready_only?: boolean
+  exclude_digested?: boolean
+}
+
+export interface CreateDigestResponse {
+  status: string
+  timestamp: string
+  message: string
+  digest_id: string | null
+  episodes_selected: number
+}
+
+export interface DigestPreviewEpisode {
+  episode_id: string
+  episode_title: string
+  episode_slug: string
+  podcast_id: string
+  podcast_title: string
+  podcast_slug: string
+  state: string
+  pub_date: string | null
+}
+
+export interface DigestPreviewResponse {
+  status: string
+  timestamp: string
+  episodes: DigestPreviewEpisode[]
+  total_matching: number
+  criteria: {
+    since_days: number
+    max_episodes: number
+    podcast_id: string | null
+    ready_only: boolean
+    exclude_digested: boolean
+  }
+}

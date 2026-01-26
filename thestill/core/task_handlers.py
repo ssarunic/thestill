@@ -231,8 +231,8 @@ def handle_downsample(task: Task, state: "AppState") -> None:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Downsample
-        preprocessor = AudioPreprocessor()
+        # Downsample - use structlog logger to avoid stdout conflicts in worker thread
+        preprocessor = AudioPreprocessor(logger=logger)
         downsampled_path = preprocessor.downsample_audio(str(original_audio_file), str(output_dir))
 
         if not downsampled_path:
@@ -362,7 +362,7 @@ def handle_transcribe(
         if config.delete_audio_after_processing and episode.downsampled_audio_path:
             from .audio_preprocessor import AudioPreprocessor
 
-            preprocessor = AudioPreprocessor()
+            preprocessor = AudioPreprocessor(logger=logger)
             if preprocessor.delete_downsampled_audio(
                 episode.downsampled_audio_path,
                 str(config.path_manager.downsampled_audio_dir()),

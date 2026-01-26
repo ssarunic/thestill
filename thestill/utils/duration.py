@@ -24,6 +24,69 @@ from structlog import get_logger
 logger = get_logger(__name__)
 
 
+def parse_time_window(duration_str: str) -> int:
+    """
+    Parse a human-readable time window string to days.
+
+    Handles formats like:
+    - "7d" -> 7 (days)
+    - "24h" -> 1 (days, rounded up)
+    - "30d" -> 30 (days)
+    - "2w" -> 14 (days)
+    - "1m" -> 30 (days, approximate month)
+    - Plain number like "7" -> 7 (days)
+
+    Args:
+        duration_str: Duration string like "7d", "24h", "2w"
+
+    Returns:
+        Number of days as integer
+
+    Raises:
+        ValueError: If the duration string cannot be parsed
+    """
+    import re
+
+    duration_str = duration_str.strip().lower()
+    if not duration_str:
+        raise ValueError("Duration string cannot be empty")
+
+    # Try plain integer (days)
+    try:
+        return int(duration_str)
+    except ValueError:
+        pass
+
+    # Parse format like "7d", "24h", "2w", "1m"
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([dhwm])$", duration_str)
+    if not match:
+        raise ValueError(
+            f"Invalid duration format: '{duration_str}'. "
+            "Expected format like '7d' (days), '24h' (hours), '2w' (weeks), '1m' (months)"
+        )
+
+    value = float(match.group(1))
+    unit = match.group(2)
+
+    if unit == "d":
+        days = value
+    elif unit == "h":
+        # Convert hours to days (round up to nearest day)
+        days = (value + 23) // 24  # Round up
+    elif unit == "w":
+        days = value * 7
+    elif unit == "m":
+        days = value * 30  # Approximate month
+    else:
+        raise ValueError(f"Unknown time unit: '{unit}'")
+
+    result = int(days)
+    if result < 1:
+        result = 1  # Minimum 1 day
+
+    return result
+
+
 def parse_duration(duration: Optional[str]) -> Optional[int]:
     """
     Parse duration string to seconds.

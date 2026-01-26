@@ -108,6 +108,10 @@ class Config(BaseModel):
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
 
+    # Digest Configuration
+    digest_default_since_days: int = 7  # Default time window for digest (days)
+    digest_default_max_episodes: int = 10  # Default max episodes per digest
+
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
     google_client_id: str = ""  # Google OAuth client ID (required for multi-user)
@@ -228,6 +232,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
+        # Digest
+        "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
+        "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

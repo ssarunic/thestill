@@ -19,6 +19,9 @@ This package contains business logic services that can be used by multiple
 presentation layers (CLI, MCP server, web API, etc.)
 """
 
+from .batch_processor import BatchQueueResult, BatchQueueService, QueuedEpisode
+from .digest_generator import DigestContent, DigestEpisodeInfo, DigestGenerator, DigestStats
+from .digest_selector import DigestEpisodeSelector, DigestSelectionCriteria, DigestSelectionResult
 from .follower_service import (
     AlreadyFollowingError,
     FollowerService,
@@ -31,6 +34,16 @@ from .refresh_service import RefreshResult, RefreshService
 from .stats_service import ActivityItem, StatsService, SystemStats
 
 __all__ = [
+    "BatchQueueResult",
+    "BatchQueueService",
+    "QueuedEpisode",
+    "DigestContent",
+    "DigestEpisodeInfo",
+    "DigestGenerator",
+    "DigestStats",
+    "DigestEpisodeSelector",
+    "DigestSelectionCriteria",
+    "DigestSelectionResult",
     "PodcastService",
     "PodcastWithIndex",
     "EpisodeWithIndex",

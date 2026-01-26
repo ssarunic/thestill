@@ -195,6 +195,50 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN audio_mime_type TEXT NULL")
             logger.info("Migration complete: THES-142 columns added to episodes")
 
+        # THES-153 Migration: Create digests tables if they don't exist (idempotent)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating digests tables for THES-153")
+            conn.executescript(
+                """
+                -- Digest metadata table
+                -- user_id references users table (required, uses default user in CLI mode)
+                CREATE TABLE IF NOT EXISTS digests (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    user_id TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    period_start TIMESTAMP NOT NULL,
+                    period_end TIMESTAMP NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    file_path TEXT NULL,
+                    episodes_total INTEGER NOT NULL DEFAULT 0,
+                    episodes_completed INTEGER NOT NULL DEFAULT 0,
+                    episodes_failed INTEGER NOT NULL DEFAULT 0,
+                    processing_time_seconds REAL NULL,
+                    error_message TEXT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CHECK (length(id) = 36),
+                    CHECK (status IN ('pending', 'in_progress', 'completed', 'partial', 'failed'))
+                );
+
+                -- Junction table linking digests to episodes
+                -- Note: No FK on episode_id to preserve digest history if episodes are deleted
+                CREATE TABLE IF NOT EXISTS digest_episodes (
+                    digest_id TEXT NOT NULL,
+                    episode_id TEXT NOT NULL,
+                    PRIMARY KEY (digest_id, episode_id),
+                    FOREIGN KEY (digest_id) REFERENCES digests(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at);
+                CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
+                CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
+                CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
+                """
+            )
+            logger.info("Migration complete: digests tables created for THES-153")
+
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
         conn.executescript(
@@ -368,6 +412,48 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             -- Index for "get followers of podcast" query
             CREATE INDEX IF NOT EXISTS idx_podcast_followers_podcast
                 ON podcast_followers(podcast_id);
+
+            -- ========================================================================
+            -- DIGESTS TABLE (THES-153: Digest persistence)
+            -- ========================================================================
+            -- Stores metadata about generated digests for tracking and querying.
+            -- user_id references users table (required, uses default user in CLI mode).
+            CREATE TABLE IF NOT EXISTS digests (
+                id TEXT PRIMARY KEY NOT NULL,
+                user_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                period_start TIMESTAMP NOT NULL,
+                period_end TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                file_path TEXT NULL,
+                episodes_total INTEGER NOT NULL DEFAULT 0,
+                episodes_completed INTEGER NOT NULL DEFAULT 0,
+                episodes_failed INTEGER NOT NULL DEFAULT 0,
+                processing_time_seconds REAL NULL,
+                error_message TEXT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                CHECK (length(id) = 36),
+                CHECK (status IN ('pending', 'in_progress', 'completed', 'partial', 'failed'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at);
+            CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
+            CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
+
+            -- ========================================================================
+            -- DIGEST_EPISODES TABLE (THES-153: Digest-Episode junction)
+            -- ========================================================================
+            -- Many-to-many relationship: which episodes are included in each digest.
+            -- Note: No FK on episode_id to preserve digest history if episodes are deleted.
+            CREATE TABLE IF NOT EXISTS digest_episodes (
+                digest_id TEXT NOT NULL,
+                episode_id TEXT NOT NULL,
+                PRIMARY KEY (digest_id, episode_id),
+                FOREIGN KEY (digest_id) REFERENCES digests(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
         """
         )
 

@@ -31,8 +31,18 @@ from ..core.audio_downloader import AudioDownloader
 from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
+from ..repositories.sqlite_digest_repository import SqliteDigestRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
-from ..services import PodcastService, RefreshService, StatsService
+from ..repositories.sqlite_user_repository import SqliteUserRepository
+from ..services import (
+    DigestEpisodeSelector,
+    DigestGenerator,
+    DigestSelectionCriteria,
+    PodcastService,
+    RefreshService,
+    StatsService,
+)
+from ..services.auth_service import AuthService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
 from .middleware.stdio_adapter import log_mcp_stdio
@@ -54,12 +64,17 @@ def setup_tools(server: Server, storage_path: str):
     # Initialize shared components
     path_manager = PathManager(storage_path)
     repository = SqlitePodcastRepository(db_path=config.database_path)
+    digest_repository = SqliteDigestRepository(db_path=config.database_path)
     podcast_service = PodcastService(storage_path, repository, path_manager)
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(repository, path_manager)
     refresh_service = RefreshService(feed_manager, podcast_service)
     audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
-    audio_preprocessor = AudioPreprocessor()
+    audio_preprocessor = AudioPreprocessor(logger=logger)
+    user_repository = SqliteUserRepository(db_path=config.database_path)
+    auth_service = AuthService(config, user_repository)
+    digest_generator = DigestGenerator(path_manager)
+    digest_selector = DigestEpisodeSelector(repository, digest_repository)
 
     @server.list_tools()
     @log_mcp_stdio
@@ -282,6 +297,70 @@ def setup_tools(server: Server, storage_path: str):
                         },
                     },
                     "required": ["podcast_id", "episode_id"],
+                },
+            ),
+            # Digest tools
+            Tool(
+                name="generate_digest",
+                description="Generate a morning briefing digest from summarized podcast episodes. Creates a consolidated markdown document with episode summaries grouped by podcast.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "since_days": {
+                            "type": "integer",
+                            "description": "Only include episodes from the last N days (default: 7)",
+                            "default": 7,
+                        },
+                        "max_episodes": {
+                            "type": "integer",
+                            "description": "Maximum number of episodes to include (default: 10)",
+                            "default": 10,
+                        },
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Optional: Filter to specific podcast (index, URL, or UUID)",
+                        },
+                        "exclude_digested": {
+                            "type": "boolean",
+                            "description": "Exclude episodes already included in a previous digest (default: false)",
+                            "default": False,
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="list_digests",
+                description="List all generated digests with their metadata (date, episode count, status).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of digests to return (default: 10)",
+                            "default": 10,
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status: pending, in_progress, completed, partial, failed",
+                            "enum": ["pending", "in_progress", "completed", "partial", "failed"],
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="get_digest",
+                description="Get a specific digest by ID or get the latest digest. Returns the full markdown content and metadata.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "digest_id": {
+                            "type": "string",
+                            "description": "Digest UUID. If not provided, returns the latest digest.",
+                        },
+                    },
+                    "required": [],
                 },
             ),
         ]
@@ -1380,6 +1459,189 @@ def setup_tools(server: Server, storage_path: str):
 
                 # Return the summary content directly (not JSON-encoded)
                 return [TextContent(type="text", text=summary)]
+
+            elif name == "generate_digest":
+                from datetime import datetime, timezone
+
+                from ..models.digest import Digest
+
+                since_days = arguments.get("since_days", 7)
+                max_episodes = arguments.get("max_episodes", 10)
+                podcast_id = arguments.get("podcast_id")
+                exclude_digested = arguments.get("exclude_digested", False)
+
+                # Resolve podcast_id to UUID if provided
+                resolved_podcast_id = None
+                if podcast_id:
+                    if isinstance(podcast_id, str) and podcast_id.isdigit():
+                        podcast_id = int(podcast_id)
+                    podcast = podcast_service.get_podcast(podcast_id)
+                    if not podcast:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=json.dumps({"success": False, "error": f"Podcast not found: {podcast_id}"}),
+                            )
+                        ]
+                    resolved_podcast_id = podcast.id
+
+                # Select summarized episodes (ready-only mode for MCP)
+                criteria = DigestSelectionCriteria(
+                    since_days=since_days,
+                    max_episodes=max_episodes,
+                    podcast_id=resolved_podcast_id,
+                    ready_only=True,  # MCP always uses ready-only (no processing)
+                    exclude_digested=exclude_digested,
+                )
+
+                selection = digest_selector.select(criteria)
+
+                if not selection.episodes:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "success": True,
+                                    "message": "No summarized episodes found for digest",
+                                    "hint": "Use summarize_episodes first or adjust the time window",
+                                }
+                            ),
+                        )
+                    ]
+
+                # Generate digest
+                import time
+
+                start_time = time.time()
+                digest_content = digest_generator.generate(
+                    episodes=selection.episodes,
+                    processing_time_seconds=0,
+                    failures=[],
+                )
+                processing_time = time.time() - start_time
+
+                # Write digest file (store just filename since it's in default digests directory)
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                digest_filename = f"digest_{timestamp}.md"
+                output_path = path_manager.digest_file(digest_filename)
+                digest_generator.write(digest_content, output_path)
+
+                # Persist to database
+                default_user = auth_service.get_or_create_default_user()
+                digest_model = Digest(
+                    user_id=default_user.id,
+                    period_start=criteria.date_from,
+                    period_end=datetime.now(timezone.utc),
+                    episode_ids=[ep.id for _, ep in selection.episodes],
+                    episodes_total=digest_content.stats.total_episodes,
+                )
+                digest_model.mark_completed(
+                    file_path=digest_filename,
+                    episodes_completed=digest_content.stats.successful_episodes,
+                    episodes_failed=digest_content.stats.failed_episodes,
+                    processing_time_seconds=processing_time,
+                )
+                digest_repository.save(digest_model)
+
+                result = {
+                    "success": True,
+                    "message": f"Digest generated with {digest_content.stats.successful_episodes} episode(s)",
+                    "digest_id": digest_model.id,
+                    "file_path": str(output_path),
+                    "stats": {
+                        "total_episodes": digest_content.stats.total_episodes,
+                        "successful_episodes": digest_content.stats.successful_episodes,
+                        "podcasts_count": digest_content.stats.podcasts_count,
+                    },
+                }
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            elif name == "list_digests":
+                from ..models.digest import DigestStatus
+
+                limit = arguments.get("limit", 10)
+                status_str = arguments.get("status")
+
+                status_filter = DigestStatus(status_str) if status_str else None
+
+                digests = digest_repository.get_all(limit=limit, status=status_filter)
+
+                result = {
+                    "digests": [
+                        {
+                            "id": d.id,
+                            "created_at": d.created_at.isoformat(),
+                            "status": d.status.value,
+                            "episodes_total": d.episodes_total,
+                            "episodes_completed": d.episodes_completed,
+                            "episodes_failed": d.episodes_failed,
+                            "file_path": d.file_path,
+                            "period_start": d.period_start.isoformat(),
+                            "period_end": d.period_end.isoformat(),
+                        }
+                        for d in digests
+                    ]
+                }
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            elif name == "get_digest":
+                digest_id = arguments.get("digest_id")
+
+                if digest_id:
+                    digest_model = digest_repository.get_by_id(digest_id)
+                    if not digest_model:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=json.dumps({"success": False, "error": f"Digest not found: {digest_id}"}),
+                            )
+                        ]
+                else:
+                    # Get latest digest
+                    digest_model = digest_repository.get_latest()
+                    if not digest_model:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=json.dumps(
+                                    {
+                                        "success": False,
+                                        "error": "No digests found. Use generate_digest first.",
+                                    }
+                                ),
+                            )
+                        ]
+
+                # Read the digest content if file exists
+                content = None
+                if digest_model.file_path:
+                    try:
+                        digest_path = Path(digest_model.file_path)
+                        if digest_path.exists():
+                            with open(digest_path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to read digest file",
+                            digest_id=digest_model.id,
+                            error=str(e),
+                        )
+
+                result = {
+                    "id": digest_model.id,
+                    "created_at": digest_model.created_at.isoformat(),
+                    "status": digest_model.status.value,
+                    "episodes_total": digest_model.episodes_total,
+                    "episodes_completed": digest_model.episodes_completed,
+                    "episodes_failed": digest_model.episodes_failed,
+                    "file_path": digest_model.file_path,
+                    "period_start": digest_model.period_start.isoformat(),
+                    "period_end": digest_model.period_end.isoformat(),
+                    "processing_time_seconds": digest_model.processing_time_seconds,
+                    "content": content,
+                }
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             else:
                 logger.error(f"Unknown tool: {name}")

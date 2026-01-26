@@ -70,6 +70,7 @@ class PathManager:
         self._debug_feeds = "debug_feeds"
         self._pending_operations = "pending_operations"
         self._external_transcripts = "external_transcripts"
+        self._digests = "digests"
         self._feeds_file = "feeds.json"
 
     # Directory path methods
@@ -117,6 +118,10 @@ class PathManager:
     def external_transcripts_dir(self) -> Path:
         """Get path to external transcripts directory (stores downloaded RSS transcripts)"""
         return self.storage_path / self._external_transcripts
+
+    def digests_dir(self) -> Path:
+        """Get path to digests directory (stores generated digest markdown files)"""
+        return self.storage_path / self._digests
 
     # File path methods
 
@@ -217,6 +222,18 @@ class PathManager:
             Full path to the summary file in summaries directory
         """
         return self.summaries_dir() / filename
+
+    def digest_file(self, filename: str) -> Path:
+        """
+        Get full path to a digest file.
+
+        Args:
+            filename: Name of the digest file (e.g., "digest_2025-01-26_120000.md")
+
+        Returns:
+            Full path to the digest file in digests directory
+        """
+        return self.digests_dir() / filename
 
     def external_transcript_file(self, podcast_slug: str, episode_slug: str, extension: str) -> Path:
         """
@@ -388,6 +405,7 @@ class PathManager:
             self.episode_facts_dir(),
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
+            self.digests_dir(),
         ]
 
         for directory in directories:

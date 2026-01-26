@@ -27,8 +27,16 @@ import {
   runPipeline,
   cancelPipeline,
   unfollowPodcast,
+  getDigests,
+  getDigest,
+  getLatestDigest,
+  getDigestContent,
+  getDigestEpisodes,
+  previewDigest,
+  createDigest,
+  deleteDigest,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -387,6 +395,88 @@ export function useCancelPipeline() {
       // Invalidate episode and task data
       queryClient.invalidateQueries({ queryKey: ['episodes'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// ============================================================================
+// Digest hooks
+// ============================================================================
+
+export function useDigests(limit = 50, status?: DigestStatus) {
+  return useQuery({
+    queryKey: ['digests', limit, status],
+    queryFn: () => getDigests(limit, 0, status),
+  })
+}
+
+export function useDigestsInfinite(limit = 20, status?: DigestStatus) {
+  return useInfiniteQuery({
+    queryKey: ['digests', 'infinite', limit, status],
+    queryFn: ({ pageParam = 0 }) => getDigests(limit, pageParam, status),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset,
+  })
+}
+
+export function useDigest(digestId: string | null) {
+  return useQuery({
+    queryKey: ['digests', digestId],
+    queryFn: () => getDigest(digestId!),
+    enabled: !!digestId,
+  })
+}
+
+export function useLatestDigest() {
+  return useQuery({
+    queryKey: ['digests', 'latest'],
+    queryFn: getLatestDigest,
+  })
+}
+
+export function useDigestContent(digestId: string | null) {
+  return useQuery({
+    queryKey: ['digests', digestId, 'content'],
+    queryFn: () => getDigestContent(digestId!),
+    enabled: !!digestId,
+    staleTime: 60000, // 1 minute
+  })
+}
+
+export function useDigestEpisodes(digestId: string | null) {
+  return useQuery({
+    queryKey: ['digests', digestId, 'episodes'],
+    queryFn: () => getDigestEpisodes(digestId!),
+    enabled: !!digestId,
+  })
+}
+
+export function usePreviewDigest() {
+  return useMutation({
+    mutationFn: (request: CreateDigestRequest) => previewDigest(request),
+  })
+}
+
+export function useCreateDigest() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (request: CreateDigestRequest) => createDigest(request),
+    onSuccess: () => {
+      // Invalidate digests list to show the new digest
+      queryClient.invalidateQueries({ queryKey: ['digests'] })
+    },
+  })
+}
+
+export function useDeleteDigest() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (digestId: string) => deleteDigest(digestId),
+    onSuccess: () => {
+      // Invalidate digests list
+      queryClient.invalidateQueries({ queryKey: ['digests'] })
     },
   })
 }

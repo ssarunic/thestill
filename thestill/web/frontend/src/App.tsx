@@ -9,6 +9,8 @@ const Podcasts = lazy(() => import('./pages/Podcasts'))
 const PodcastDetail = lazy(() => import('./pages/PodcastDetail'))
 const EpisodeDetail = lazy(() => import('./pages/EpisodeDetail'))
 const Episodes = lazy(() => import('./pages/Episodes'))
+const Digests = lazy(() => import('./pages/Digests'))
+const DigestDetail = lazy(() => import('./pages/DigestDetail'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const Login = lazy(() => import('./pages/Login'))
 
@@ -60,6 +62,16 @@ function App() {
         <Route path="episodes" element={
           <Suspense fallback={<PageLoader />}>
             <Episodes />
+          </Suspense>
+        } />
+        <Route path="digests" element={
+          <Suspense fallback={<PageLoader />}>
+            <Digests />
+          </Suspense>
+        } />
+        <Route path="digests/:digestId" element={
+          <Suspense fallback={<PageLoader />}>
+            <DigestDetail />
           </Suspense>
         } />
         <Route path="failed" element={

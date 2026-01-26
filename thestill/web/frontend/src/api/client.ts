@@ -30,6 +30,14 @@ import type {
   RunPipelineResponse,
   CancelPipelineResponse,
   ExtendedEpisodeTasksResponse,
+  DigestsResponse,
+  DigestDetailResponse,
+  DigestContentResponse,
+  DigestEpisodesResponse,
+  CreateDigestRequest,
+  CreateDigestResponse,
+  DigestPreviewResponse,
+  DigestStatus,
 } from './types'
 
 const API_BASE = '/api'
@@ -347,4 +355,94 @@ export async function cancelPipeline(episodeId: string): Promise<CancelPipelineR
 
 export async function getEpisodeTasksExtended(episodeId: string): Promise<ExtendedEpisodeTasksResponse> {
   return fetchApi<ExtendedEpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
+}
+
+// ============================================================================
+// Digest API
+// ============================================================================
+
+export async function getDigests(
+  limit: number = 50,
+  offset: number = 0,
+  status?: DigestStatus
+): Promise<DigestsResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', limit.toString())
+  params.set('offset', offset.toString())
+  if (status) params.set('status', status)
+
+  return fetchApi<DigestsResponse>(`/digests?${params.toString()}`)
+}
+
+export async function getDigest(digestId: string): Promise<DigestDetailResponse> {
+  return fetchApi<DigestDetailResponse>(`/digests/${digestId}`)
+}
+
+export async function getLatestDigest(): Promise<DigestDetailResponse> {
+  return fetchApi<DigestDetailResponse>('/digests/latest')
+}
+
+export async function getDigestContent(digestId: string): Promise<DigestContentResponse> {
+  return fetchApi<DigestContentResponse>(`/digests/${digestId}/content`)
+}
+
+export async function getDigestEpisodes(digestId: string): Promise<DigestEpisodesResponse> {
+  return fetchApi<DigestEpisodesResponse>(`/digests/${digestId}/episodes`)
+}
+
+export async function previewDigest(request: CreateDigestRequest): Promise<DigestPreviewResponse> {
+  const response = await fetch(`${API_BASE}/digests/preview`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function createDigest(request: CreateDigestRequest): Promise<CreateDigestResponse> {
+  const response = await fetch(`${API_BASE}/digests`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function deleteDigest(digestId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/digests/${digestId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
 }

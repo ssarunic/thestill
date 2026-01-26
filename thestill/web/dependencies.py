@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
     from ..models.user import User
+    from ..repositories.digest_repository import DigestRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
@@ -72,6 +73,7 @@ class AppState:
         auth_service: Authentication service
         follower_repository: Podcast follower relationship repository
         follower_service: Follower management service
+        digest_repository: Digest persistence repository
     """
 
     config: "Config"
@@ -89,6 +91,7 @@ class AppState:
     auth_service: "AuthService"
     follower_repository: "PodcastFollowerRepository"
     follower_service: "FollowerService"
+    digest_repository: "DigestRepository"
 
 
 def get_app_state(request: Request) -> AppState:
