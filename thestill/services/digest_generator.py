@@ -29,6 +29,7 @@ from structlog import get_logger
 
 from ..models.podcast import Episode, Podcast
 from ..utils.path_manager import PathManager
+from ..utils.url_generator import UrlGenerator
 
 logger = get_logger(__name__)
 
@@ -91,14 +92,16 @@ class DigestGenerator:
         generator.write(content, output_path)
     """
 
-    def __init__(self, path_manager: PathManager):
+    def __init__(self, path_manager: PathManager, url_generator: UrlGenerator | None = None):
         """
         Initialize digest generator.
 
         Args:
             path_manager: PathManager for resolving file paths
+            url_generator: UrlGenerator for creating web URLs (optional, creates default if not provided)
         """
         self.path_manager = path_manager
+        self.url_generator = url_generator or UrlGenerator()
 
     def generate(
         self,
@@ -329,11 +332,9 @@ class DigestGenerator:
         lines = []
         episode = info.episode
 
-        # Title with optional link to summary
-        if info.summary_link:
-            lines.append(f"### [{episode.title}]({info.summary_link})")
-        else:
-            lines.append(f"### {episode.title}")
+        # Title with link to episode page
+        episode_url = self.url_generator.episode(info.podcast.slug, episode.slug)
+        lines.append(f"### [{episode.title}]({episode_url})")
 
         # Metadata line
         meta_parts = []
