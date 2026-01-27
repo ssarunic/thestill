@@ -103,8 +103,12 @@ class BatchQueueResult:
 
 
 # Type alias for progress callback
-# Args: (queued_episode, current_status, current_stage)
-ProgressCallback = Callable[[QueuedEpisode, TaskStatus, TaskStage], None]
+# Called with (queued_episode, current_status, current_stage) during wait loop
+# Status and stage may be None if task state cannot be determined
+ProgressCallback = Callable[
+    [QueuedEpisode, Optional[TaskStatus], Optional[TaskStage]],
+    None,
+]
 
 
 class BatchQueueService:

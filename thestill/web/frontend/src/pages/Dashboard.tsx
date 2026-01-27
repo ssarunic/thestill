@@ -4,6 +4,7 @@ import ActivityFeed from '../components/ActivityFeed'
 import PipelineStatus from '../components/PipelineStatus'
 import RefreshButton from '../components/RefreshButton'
 import MobileSummaryBar from '../components/MobileSummaryBar'
+import MorningBriefingWidget from '../components/MorningBriefingWidget'
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats()
@@ -95,6 +96,9 @@ export default function Dashboard() {
           }
         />
       </div>
+
+      {/* Morning Briefing Widget */}
+      <MorningBriefingWidget />
 
       {/* Pipeline Status - hidden on mobile */}
       <div className="hidden sm:block bg-white rounded-lg border border-gray-200 p-6">

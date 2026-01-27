@@ -1387,11 +1387,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         state: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        updated_from: Optional[datetime] = None,
         sort_by: str = "pub_date",
         sort_order: str = "desc",
     ) -> Tuple[List[Tuple[Podcast, Episode]], int]:
         """
         Get episodes across all podcasts with filtering and pagination.
+
+        Args:
+            date_from: Filter by publication date (pub_date >= date_from)
+            date_to: Filter by publication date (pub_date <= date_to)
+            updated_from: Filter by last modified date (updated_at >= updated_from)
 
         Returns (episodes_with_podcasts, total_count).
         """
@@ -1459,6 +1465,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if date_to:
             conditions.append("e.pub_date <= ?")
             params.append(date_to.isoformat())
+
+        if updated_from:
+            conditions.append("e.updated_at >= ?")
+            params.append(updated_from.isoformat())
 
         # Build WHERE clause
         where_clause = " AND ".join(conditions) if conditions else "1=1"

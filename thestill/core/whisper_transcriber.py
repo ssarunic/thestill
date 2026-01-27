@@ -718,7 +718,13 @@ class WhisperXTranscriber(Transcriber):
                     f"Transcribing: {whisperx_pct:.0f}%",
                 )
 
-            with StdoutProgressCapture(WHISPERX_PROGRESS_PATTERN, on_transcribe_progress):
+            # Disable stdout passthrough when console is quiet to avoid broken pipe
+            # errors in web worker context where stdout may not be connected
+            with StdoutProgressCapture(
+                WHISPERX_PROGRESS_PATTERN,
+                on_transcribe_progress,
+                passthrough=not self.console.quiet,
+            ):
                 result = self._model.transcribe(
                     processed_audio_path,
                     batch_size=16,

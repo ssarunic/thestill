@@ -89,6 +89,32 @@ def completed_digest():
     )
 
 
+@pytest.fixture
+def make_digest():
+    """Factory fixture to create digests with custom parameters."""
+    import uuid
+
+    def _make_digest(
+        digest_id: str = None,
+        user_id: str = TEST_USER_ID,
+        status: DigestStatus = DigestStatus.PENDING,
+    ) -> Digest:
+        now = datetime.now(timezone.utc)
+        return Digest(
+            id=digest_id or str(uuid.uuid4()),
+            user_id=user_id,
+            created_at=now,
+            updated_at=now,
+            period_start=now - timedelta(days=7),
+            period_end=now,
+            status=status,
+            episode_ids=[],
+            episodes_total=0,
+        )
+
+    return _make_digest
+
+
 # ============================================================================
 # Basic CRUD Tests
 # ============================================================================
@@ -249,6 +275,76 @@ class TestDigestRepositoryDelete:
         # Verify episode associations are gone
         episode_ids = temp_db.get_episodes_in_digest(sample_digest.id)
         assert len(episode_ids) == 0
+
+
+# ============================================================================
+# Count Tests
+# ============================================================================
+
+
+class TestDigestRepositoryCount:
+    """Tests for count operations."""
+
+    def test_count_returns_zero_when_empty(self, temp_db):
+        """Test that count returns 0 when no digests exist."""
+        count = temp_db.count()
+        assert count == 0
+
+    def test_count_returns_total(self, temp_db, sample_digest, make_digest):
+        """Test that count returns total number of digests."""
+        temp_db.save(sample_digest)
+        temp_db.save(make_digest())
+
+        count = temp_db.count()
+        assert count == 2
+
+    def test_count_filters_by_status(self, temp_db, make_digest):
+        """Test that count filters by status."""
+        d1 = make_digest(status=DigestStatus.COMPLETED)
+        d2 = make_digest(status=DigestStatus.PENDING)
+        d3 = make_digest(status=DigestStatus.COMPLETED)
+        temp_db.save(d1)
+        temp_db.save(d2)
+        temp_db.save(d3)
+
+        completed_count = temp_db.count(status=DigestStatus.COMPLETED)
+        pending_count = temp_db.count(status=DigestStatus.PENDING)
+
+        assert completed_count == 2
+        assert pending_count == 1
+
+    def test_count_filters_by_user_id(self, temp_db, make_digest):
+        """Test that count filters by user_id."""
+        # Create digests for the test user
+        d1 = make_digest()
+        d2 = make_digest()
+        temp_db.save(d1)
+        temp_db.save(d2)
+
+        # Count for the test user should return 2
+        user_count = temp_db.count(user_id=TEST_USER_ID)
+        assert user_count == 2
+
+        # Count for a non-existent user should return 0
+        other_count = temp_db.count(user_id="non-existent-user-id")
+        assert other_count == 0
+
+    def test_count_filters_by_both_status_and_user(self, temp_db, make_digest):
+        """Test that count filters by both status and user_id."""
+        d1 = make_digest(status=DigestStatus.COMPLETED)
+        d2 = make_digest(status=DigestStatus.PENDING)
+        d3 = make_digest(status=DigestStatus.COMPLETED)
+        temp_db.save(d1)
+        temp_db.save(d2)
+        temp_db.save(d3)
+
+        # Count completed digests for the test user
+        count = temp_db.count(status=DigestStatus.COMPLETED, user_id=TEST_USER_ID)
+        assert count == 2
+
+        # Count pending digests for the test user
+        pending_count = temp_db.count(status=DigestStatus.PENDING, user_id=TEST_USER_ID)
+        assert pending_count == 1
 
 
 # ============================================================================

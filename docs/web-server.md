@@ -53,6 +53,19 @@ thestill server --workers 4        # Multiple worker processes
 | `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
 | `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
 
+### Digests (`/api/digests`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/digests` | GET | List digests (filterable by status) |
+| `/api/digests` | POST | Create new digest |
+| `/api/digests/latest` | GET | Get most recent digest |
+| `/api/digests/preview` | POST | Preview episode selection |
+| `/api/digests/{digest_id}` | GET | Get digest details |
+| `/api/digests/{digest_id}` | DELETE | Delete digest |
+| `/api/digests/{digest_id}/content` | GET | Get digest markdown content |
+| `/api/digests/{digest_id}/episodes` | GET | Get episodes in digest |
+
 ### Authentication (`/auth`)
 
 | Endpoint | Method | Description |
@@ -86,6 +99,7 @@ thestill/web/
 │   ├── api_podcasts.py      # Podcast CRUD endpoints
 │   ├── api_episodes.py      # Episode content endpoints
 │   ├── api_commands.py      # Processing commands (pipeline, DLQ)
+│   ├── api_digests.py       # Digest CRUD and content endpoints
 │   └── auth.py              # Authentication endpoints (OAuth, JWT)
 ├── frontend/                # React SPA
 │   ├── src/
@@ -95,6 +109,8 @@ thestill/web/
 │   │   │   ├── Podcasts.tsx
 │   │   │   ├── Episodes.tsx
 │   │   │   ├── EpisodeDetail.tsx
+│   │   │   ├── Digests.tsx          # Digest list with create modal
+│   │   │   ├── DigestDetail.tsx     # Digest content and episodes
 │   │   │   ├── FailedTasks.tsx
 │   │   │   └── Login.tsx            # Google OAuth login page
 │   │   ├── contexts/
@@ -105,6 +121,7 @@ thestill/web/
 │   │   │   ├── PipelineActionButton.tsx
 │   │   │   ├── FailureBanner.tsx
 │   │   │   ├── FailureDetailsModal.tsx
+│   │   │   ├── MorningBriefingWidget.tsx  # Dashboard digest widget
 │   │   │   ├── ProtectedRoute.tsx   # Route protection wrapper
 │   │   │   └── UserMenu.tsx         # User avatar dropdown
 │   │   └── api/
@@ -205,3 +222,68 @@ When "Run Full Pipeline" is triggered from the Web UI:
 2. Each stage completion automatically enqueues the next stage
 3. Pipeline continues until summarization or failure
 4. Progress is tracked in real-time via polling
+
+## Digest Interface
+
+The web UI provides a full interface for creating and viewing digests - consolidated summaries of multiple podcast episodes.
+
+### Dashboard Widget
+
+The **Morning Briefing Widget** on the dashboard provides quick access to digest functionality:
+
+- Shows count of episodes ready to summarize
+- Displays status of the latest digest
+- **Quick Catch-Up** button creates a digest with default settings:
+  - Last 7 days of episodes
+  - Maximum 10 episodes
+  - Only already-summarized episodes (`ready_only=true`)
+  - Excludes previously digested episodes
+
+### Digests Page (`/digests`)
+
+The digests page provides:
+
+- **Stats cards**: Total digests, completed count, partial count
+- **Digest list**: All digests with status badges and episode counts
+- **Progress indicators**: Active digests show real-time progress with polling
+- **Create modal**: Configure and create new digests
+
+### Creating a Digest
+
+1. Click "New Digest" button
+2. Configure options:
+   - **Time range**: Episodes from last N days (1-365)
+   - **Max episodes**: Limit number of episodes (1-100)
+   - **Podcast filter**: Optional - limit to specific podcast
+   - **Ready only**: Only include already-summarized episodes
+   - **Exclude digested**: Skip episodes already in other digests
+3. Click "Preview" to see which episodes would be included
+4. Click "Create Digest" to generate
+
+**Digest Status Values**:
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Digest created, episodes being processed |
+| `in_progress` | Actively generating digest content |
+| `completed` | Successfully generated with all episodes |
+| `partial` | Completed with some episode failures |
+| `failed` | Generation failed |
+
+### Digest Detail Page (`/digests/{id}`)
+
+Shows complete digest information:
+
+- **Header**: Creation date, period covered, status badge
+- **Stats**: Episode counts (total/completed/failed), success rate, processing time
+- **Content tab**: Rendered markdown digest document
+- **Episodes tab**: List of included episodes with links to episode details
+- **Delete action**: Remove digest with confirmation
+
+### Real-Time Progress
+
+When a digest is being processed (status `pending` or `in_progress`):
+
+- Digest list automatically polls every 3 seconds
+- Progress bar shows episodes completed vs total
+- Status updates as processing progresses

@@ -168,3 +168,23 @@ class DigestRepository(ABC):
             List of digests with overlapping periods
         """
         pass
+
+    @abstractmethod
+    def count(
+        self,
+        status: Optional[DigestStatus] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
+        """
+        Count digests with optional filtering.
+
+        More efficient than get_all() when only the count is needed.
+
+        Args:
+            status: Optional status filter
+            user_id: Optional user ID filter (None for all users)
+
+        Returns:
+            Total count of matching digests
+        """
+        pass

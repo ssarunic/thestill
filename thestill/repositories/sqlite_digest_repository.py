@@ -338,6 +338,35 @@ class SqliteDigestRepository(DigestRepository):
 
             return digests
 
+    def count(
+        self,
+        status: Optional[DigestStatus] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
+        """Count digests with optional filtering."""
+        with self._get_connection() as conn:
+            # Build WHERE clause dynamically
+            conditions = []
+            params = []
+
+            if status:
+                conditions.append("status = ?")
+                params.append(status.value)
+
+            if user_id is not None:
+                conditions.append("user_id = ?")
+                params.append(user_id)
+
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+            cursor = conn.execute(
+                f"SELECT COUNT(*) as cnt FROM digests {where_clause}",
+                tuple(params),
+            )
+
+            row = cursor.fetchone()
+            return row["cnt"] if row else 0
+
     def _load_episode_ids(self, conn: sqlite3.Connection, digest_id: str) -> List[str]:
         """Load episode IDs for a digest."""
         cursor = conn.execute(

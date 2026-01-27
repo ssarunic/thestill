@@ -72,7 +72,9 @@ def parse_time_window(duration_str: str) -> int:
         days = value
     elif unit == "h":
         # Convert hours to days (round up to nearest day)
-        days = (value + 23) // 24  # Round up
+        import math
+
+        days = math.ceil(value / 24)
     elif unit == "w":
         days = value * 7
     elif unit == "m":

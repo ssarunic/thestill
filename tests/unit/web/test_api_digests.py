@@ -109,6 +109,7 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
     state.digest_repository.get_by_id.return_value = sample_digest
     state.digest_repository.save.return_value = sample_digest
     state.digest_repository.delete.return_value = True
+    state.digest_repository.count.return_value = 1
 
     # Mock podcast repository
     state.repository = MagicMock()

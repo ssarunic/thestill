@@ -2025,7 +2025,9 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 @click.option("--output", "-o", type=click.Path(), help="Custom output path for digest file")
 @click.option("--ready-only", is_flag=True, help="Only include already-summarized episodes (skip processing)")
 @click.option("--exclude-digested", is_flag=True, help="Exclude episodes already included in a previous digest")
-@click.option("--async", "async_mode", is_flag=True, help="Queue processing and return immediately with digest ID")
+@click.option(
+    "--async", "async_mode", is_flag=True, help="Queue processing and return immediately (requires worker process)"
+)
 @click.pass_context
 @require_config
 @log_command
@@ -2054,7 +2056,8 @@ def digest(
     transcription and summarization.
 
     Use --async to queue episodes for background processing and return immediately.
-    Check progress with 'thestill digest-status <digest-id>'.
+    Check progress with 'thestill digest-status <digest-id>'. Note: async mode
+    requires a separate worker process to be running ('thestill worker').
 
     By default, processes up to 10 episodes from the last 7 days. Use --no-limit
     to process all matching episodes, or adjust with --since and --max-episodes.
@@ -2248,8 +2251,16 @@ def digest(
         # Progress callback for CLI output
         current_episode_idx = [0]  # Use list for mutable closure
         last_reported_stage = [None]
+        last_episode_id = [None]
 
         def progress_callback(queued_episode, status, stage):
+            # Track episode changes to update the counter
+            if queued_episode.episode.id != last_episode_id[0]:
+                if last_episode_id[0] is not None:
+                    current_episode_idx[0] += 1
+                last_episode_id[0] = queued_episode.episode.id
+                last_reported_stage[0] = None  # Reset stage tracking for new episode
+
             episode_title = queued_episode.episode.title[:50]
             if stage != last_reported_stage[0]:
                 stage_name = stage.value if stage else "unknown"
@@ -2309,15 +2320,17 @@ def digest(
     )
 
     # Determine output path and stored file_path
-    # For custom paths (--output), store full path; for default, store just filename
+    # Always store just the filename for consistency and API compatibility
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    digest_filename = f"digest_{timestamp}.md"
+
     if output:
         output_path = Path(output)
-        stored_file_path = str(output_path.resolve())  # Full absolute path for custom location
+        # Store just the filename - API access only works for files in default directory
+        stored_file_path = digest_filename
     else:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        digest_filename = f"digest_{timestamp}.md"
         output_path = path_manager.digest_file(digest_filename)
-        stored_file_path = digest_filename  # Just filename for default location
+        stored_file_path = digest_filename
 
     generator.write(digest_content, output_path)
 

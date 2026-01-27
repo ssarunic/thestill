@@ -37,6 +37,7 @@ from thestill.utils.exceptions import FatalError, TransientError
 
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
+from ..utils.console import ConsoleOutput
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
 from .error_classifier import classify_and_raise
@@ -175,11 +176,9 @@ def handle_download(task: Task, state: "AppState") -> None:
 
     with _handler_error_context(f"downloading audio for {episode.title}"):
         # Create downloader and download
+        # Note: download_episode raises DownloadError on failure (no longer returns None)
         downloader = AudioDownloader(str(state.path_manager.original_audio_dir()))
         audio_path = downloader.download_episode(episode, podcast)
-
-        if not audio_path:
-            raise TransientError(f"Download returned no path for episode: {episode.title}")
 
         # Get duration from downloaded file
         from ..utils.duration import get_audio_duration
@@ -411,7 +410,11 @@ def handle_clean(task: Task, state: "AppState") -> None:
 
         llm_provider = create_llm_provider_from_config(config)
 
-        cleaning_processor = TranscriptCleaningProcessor(llm_provider)
+        # Use quiet console to avoid broken pipe errors in web worker context
+        cleaning_processor = TranscriptCleaningProcessor(
+            llm_provider,
+            console=ConsoleOutput(quiet=True),
+        )
 
         # Generate output path
         base_name = transcript_path.stem
@@ -498,7 +501,8 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
         llm_provider = create_llm_provider_from_config(config)
 
-        summarizer = TranscriptSummarizer(llm_provider)
+        # Use quiet console to avoid broken pipe errors in web worker context
+        summarizer = TranscriptSummarizer(llm_provider, console=ConsoleOutput(quiet=True))
 
         # Create metadata for accurate summary
         metadata = EpisodeMetadata(
@@ -564,6 +568,7 @@ def _create_transcriber(
     if config.transcription_provider.lower() == "google":
         from .google_transcriber import GoogleCloudTranscriber
 
+        # Use quiet console to avoid broken pipe errors in web worker context
         return GoogleCloudTranscriber(
             credentials_path=config.google_app_credentials or None,
             project_id=config.google_cloud_project_id or None,
@@ -573,6 +578,7 @@ def _create_transcriber(
             max_speakers=config.max_speakers,
             parallel_chunks=config.max_workers,
             path_manager=path_manager,
+            console=ConsoleOutput(quiet=True),
         )
     elif config.transcription_provider.lower() == "elevenlabs":
         from .elevenlabs_transcriber import ElevenLabsTranscriber
@@ -588,6 +594,8 @@ def _create_transcriber(
     elif config.enable_diarization:
         from .whisper_transcriber import WhisperXTranscriber
 
+        # Use quiet console to avoid broken pipe errors in web worker context
+        # (stdout may not be connected when running as background task)
         return WhisperXTranscriber(
             model_name=config.whisper_model,
             device=config.whisper_device,
@@ -597,11 +605,17 @@ def _create_transcriber(
             max_speakers=config.max_speakers,
             diarization_model=config.diarization_model,
             progress_callback=progress_callback,
+            console=ConsoleOutput(quiet=True),
         )
     else:
         from .whisper_transcriber import WhisperTranscriber
 
-        return WhisperTranscriber(config.whisper_model, config.whisper_device)
+        # Use quiet console to avoid broken pipe errors in web worker context
+        return WhisperTranscriber(
+            config.whisper_model,
+            config.whisper_device,
+            console=ConsoleOutput(quiet=True),
+        )
 
 
 def create_task_handlers(

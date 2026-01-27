@@ -329,6 +329,7 @@ class EpisodeRepository(ABC):
         state: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        updated_from: Optional[datetime] = None,
         sort_by: str = "pub_date",
         sort_order: str = "desc",
     ) -> Tuple[List[Tuple[Podcast, Episode]], int]:
@@ -343,6 +344,7 @@ class EpisodeRepository(ABC):
             state: Filter by processing state (optional)
             date_from: Only include episodes published on/after this date (optional)
             date_to: Only include episodes published on/before this date (optional)
+            updated_from: Only include episodes updated on/after this date (optional)
             sort_by: Sort field - 'pub_date', 'title', or 'updated_at' (default 'pub_date')
             sort_order: Sort direction - 'asc' or 'desc' (default 'desc')
 

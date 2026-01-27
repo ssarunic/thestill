@@ -446,3 +446,28 @@ export async function deleteDigest(digestId: string): Promise<void> {
     throw new Error(message)
   }
 }
+
+// ============================================================================
+// Morning Briefing API (uses server-configured defaults)
+// ============================================================================
+
+export async function getMorningBriefing(): Promise<DigestPreviewResponse> {
+  return fetchApi<DigestPreviewResponse>('/digests/morning-briefing')
+}
+
+export async function createMorningBriefing(): Promise<CreateDigestResponse> {
+  const response = await fetch(`${API_BASE}/digests/morning-briefing`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}

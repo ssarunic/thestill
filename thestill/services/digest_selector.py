@@ -141,14 +141,28 @@ class DigestEpisodeSelector:
 
         # Query episodes without state filter - we'll filter in Python
         # Using a large limit to get all candidates, then apply our own limit
-        episodes, total = self.repository.get_all_episodes(
-            limit=1000,  # Get more than we need to count total matching
-            offset=0,
-            podcast_id=criteria.podcast_id,
-            date_from=criteria.date_from,
-            sort_by="pub_date",
-            sort_order="desc",
-        )
+        #
+        # For ready_only mode (morning briefing), filter by updated_at (when episode was
+        # summarized) instead of pub_date (when episode was published). This ensures we
+        # find episodes that were recently processed, not just recently published.
+        if criteria.ready_only:
+            episodes, total = self.repository.get_all_episodes(
+                limit=1000,
+                offset=0,
+                podcast_id=criteria.podcast_id,
+                updated_from=criteria.date_from,  # Filter by summarization date
+                sort_by="updated_at",
+                sort_order="desc",
+            )
+        else:
+            episodes, total = self.repository.get_all_episodes(
+                limit=1000,
+                offset=0,
+                podcast_id=criteria.podcast_id,
+                date_from=criteria.date_from,  # Filter by publication date
+                sort_by="pub_date",
+                sort_order="desc",
+            )
 
         if criteria.ready_only:
             # Ready-only mode: only select SUMMARIZED episodes

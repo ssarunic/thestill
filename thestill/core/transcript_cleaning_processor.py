@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from structlog import get_logger
 
+from ..utils.console import ConsoleOutput
 from .llm_provider import LLMProvider
 from .transcript_formatter import TranscriptFormatter
 
@@ -46,6 +47,7 @@ class TranscriptCleaningProcessor:
         self,
         provider: LLMProvider,
         chunk_size: Optional[int] = None,
+        console: Optional[ConsoleOutput] = None,
     ):
         """
         Initialize transcript cleaning processor with an LLM provider.
@@ -58,9 +60,10 @@ class TranscriptCleaningProcessor:
                        - Claude 3.5 Sonnet: 180K chars (~45K tokens from 200K context)
                        - GPT-4/GPT-4o: 100K chars (~25K tokens from 128K context)
                        - Ollama/Other: 30K chars (conservative default)
+            console: ConsoleOutput instance for user-facing messages (optional)
         """
         self.provider = provider
-        self.formatter = TranscriptFormatter()
+        self.formatter = TranscriptFormatter(console=console)
 
         # Auto-set chunk_size based on provider if not specified
         if chunk_size is None:

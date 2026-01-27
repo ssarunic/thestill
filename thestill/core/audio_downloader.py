@@ -28,6 +28,12 @@ from .media_source import MediaSourceFactory
 logger = structlog.get_logger(__name__)
 
 
+class DownloadError(Exception):
+    """Raised when episode download fails."""
+
+    pass
+
+
 class AudioDownloader:
     """
     Downloads podcast audio files from RSS feeds and YouTube.
@@ -93,7 +99,7 @@ class AudioDownloader:
 
             if YouTubeDownloader.is_youtube_url(str(episode.audio_url)):
                 logger.error("youtube_download_failed", episode_title=episode.title, reason="no_fallback_available")
-                return None
+                raise DownloadError(f"YouTube download failed for '{episode.title}' (yt-dlp error)")
 
             # Handle standard HTTP downloads (RSS feeds)
             # Use slugs for filename generation (fall back to sanitized titles for backwards compatibility)
@@ -130,10 +136,10 @@ class AudioDownloader:
 
         except requests.exceptions.RequestException as e:
             logger.error("network_error_downloading", episode_title=episode.title, error=str(e), exc_info=True)
-            return None
+            raise DownloadError(f"Network error downloading '{episode.title}': {e}") from e
         except Exception as e:
             logger.error("error_downloading_episode", episode_title=episode.title, error=str(e), exc_info=True)
-            return None
+            raise DownloadError(f"Failed to download '{episode.title}': {e}") from e
 
     @retry(
         stop=stop_after_attempt(3),

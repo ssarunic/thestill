@@ -35,6 +35,8 @@ import {
   previewDigest,
   createDigest,
   deleteDigest,
+  getMorningBriefing,
+  createMorningBriefing,
 } from '../api/client'
 import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus } from '../api/types'
 
@@ -407,6 +409,14 @@ export function useDigests(limit = 50, status?: DigestStatus) {
   return useQuery({
     queryKey: ['digests', limit, status],
     queryFn: () => getDigests(limit, 0, status),
+    refetchInterval: (query) => {
+      // Poll every 3 seconds while there are pending or in_progress digests
+      const digests = query.state.data?.digests || []
+      const hasActiveDigest = digests.some(
+        (d) => d.status === 'pending' || d.status === 'in_progress'
+      )
+      return hasActiveDigest ? 3000 : false
+    },
   })
 }
 
@@ -454,6 +464,29 @@ export function useDigestEpisodes(digestId: string | null) {
 export function usePreviewDigest() {
   return useMutation({
     mutationFn: (request: CreateDigestRequest) => previewDigest(request),
+  })
+}
+
+// Hook for fetching morning briefing count (uses server-configured defaults)
+export function useMorningBriefingCount() {
+  return useQuery({
+    queryKey: ['morning-briefing'],
+    queryFn: getMorningBriefing,
+    staleTime: 60000, // Cache for 1 minute
+  })
+}
+
+// Hook for creating morning briefing (uses server-configured defaults)
+export function useCreateMorningBriefing() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: createMorningBriefing,
+    onSuccess: () => {
+      // Invalidate digests list and morning briefing preview
+      queryClient.invalidateQueries({ queryKey: ['digests'] })
+      queryClient.invalidateQueries({ queryKey: ['morning-briefing'] })
+    },
   })
 }
 

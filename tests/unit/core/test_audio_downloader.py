@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 import requests
 
-from thestill.core.audio_downloader import AudioDownloader
+from thestill.core.audio_downloader import AudioDownloader, DownloadError
 from thestill.models.podcast import Episode, Podcast
 
 
@@ -145,43 +145,49 @@ class TestDownloadEpisode:
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_network_error(self, mock_get, audio_downloader, sample_episode, sample_podcast):
-        """Should handle network errors gracefully after retries."""
+        """Should raise DownloadError with descriptive message after retries."""
         # Setup mock to raise exception (will retry 3 times)
         mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
-        # Execute
-        result = audio_downloader.download_episode(sample_episode, sample_podcast)
+        # Execute - should raise DownloadError with actual error message
+        with pytest.raises(DownloadError) as exc_info:
+            audio_downloader.download_episode(sample_episode, sample_podcast)
 
-        # Verify - should fail after 3 retry attempts
-        assert result is None
+        # Verify - error message should contain the actual network error
+        assert "Network error" in str(exc_info.value)
+        assert sample_episode.title in str(exc_info.value)
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_timeout(self, mock_get, audio_downloader, sample_episode, sample_podcast):
-        """Should handle timeout errors after retries."""
+        """Should raise DownloadError with descriptive message after timeout retries."""
         # Setup mock to raise timeout (will retry 3 times)
         mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
 
-        # Execute
-        result = audio_downloader.download_episode(sample_episode, sample_podcast)
+        # Execute - should raise DownloadError with actual error message
+        with pytest.raises(DownloadError) as exc_info:
+            audio_downloader.download_episode(sample_episode, sample_podcast)
 
-        # Verify - should fail after 3 retry attempts
-        assert result is None
+        # Verify - error message should contain timeout info
+        assert "Request timed out" in str(exc_info.value)
+        assert sample_episode.title in str(exc_info.value)
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
     def test_download_http_error(self, mock_get, audio_downloader, sample_episode, sample_podcast):
-        """Should handle HTTP errors (404, 500, etc) after retries."""
+        """Should raise DownloadError with descriptive message for HTTP errors."""
         # Setup mock to raise HTTP error (will retry 3 times)
         mock_response = Mock()
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
         mock_get.return_value = mock_response
 
-        # Execute
-        result = audio_downloader.download_episode(sample_episode, sample_podcast)
+        # Execute - should raise DownloadError with actual error message
+        with pytest.raises(DownloadError) as exc_info:
+            audio_downloader.download_episode(sample_episode, sample_podcast)
 
-        # Verify - should fail after 3 retry attempts
-        assert result is None
+        # Verify - error message should contain HTTP error info
+        assert "404 Not Found" in str(exc_info.value)
+        assert sample_episode.title in str(exc_info.value)
         assert mock_get.call_count == 3  # MAX_RETRY_ATTEMPTS
 
     @patch("thestill.core.audio_downloader.requests.get")
@@ -580,9 +586,11 @@ class TestEdgeCases:
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
-        # Mock open to raise exception
+        # Mock open to raise exception - should raise DownloadError
         with patch("builtins.open", side_effect=IOError("Disk full")):
-            result = audio_downloader.download_episode(episode, podcast)
+            with pytest.raises(DownloadError) as exc_info:
+                audio_downloader.download_episode(episode, podcast)
 
-        # Verify
-        assert result is None
+        # Verify - error message should contain the actual failure reason
+        assert "Disk full" in str(exc_info.value)
+        assert episode.title in str(exc_info.value)

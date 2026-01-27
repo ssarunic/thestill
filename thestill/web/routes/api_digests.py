@@ -177,13 +177,10 @@ async def list_digests(
     )
 
     # Get total count for pagination
-    total_digests = state.digest_repository.get_all(
-        limit=10000,
-        offset=0,
+    total = state.digest_repository.count(
         status=status_enum,
         user_id=user.id,
     )
-    total = len(total_digests)
 
     digest_responses = [_digest_to_response(d) for d in digests]
 
@@ -212,6 +209,151 @@ async def get_latest_digest(
         not_found("Digest", "latest")
 
     return api_response({"digest": _digest_to_response(digests[0]).model_dump()})
+
+
+@router.get("/morning-briefing")
+async def get_morning_briefing(
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """
+    Get morning briefing preview using server-configured defaults.
+
+    Returns episodes that would be included in a quick catch-up digest,
+    using DIGEST_DEFAULT_SINCE_DAYS and DIGEST_DEFAULT_MAX_EPISODES from config.
+    """
+    criteria = DigestSelectionCriteria(
+        since_days=state.config.digest_default_since_days,
+        max_episodes=state.config.digest_default_max_episodes,
+        ready_only=True,
+        exclude_digested=True,
+    )
+
+    selector = DigestEpisodeSelector(
+        episode_repository=state.repository,
+        digest_repository=state.digest_repository,
+    )
+
+    result = selector.preview(criteria)
+
+    episodes = []
+    for podcast, episode in result.episodes:
+        episodes.append(
+            DigestPreviewEpisode(
+                episode_id=episode.id,
+                episode_title=episode.title,
+                episode_slug=episode.slug,
+                podcast_id=podcast.id,
+                podcast_title=podcast.title,
+                podcast_slug=podcast.slug,
+                state=episode.state.value,
+                pub_date=episode.pub_date.isoformat() if episode.pub_date else None,
+            )
+        )
+
+    return api_response(
+        {
+            "episodes": [e.model_dump() for e in episodes],
+            "total_matching": result.total_matching,
+            "criteria": {
+                "since_days": criteria.since_days,
+                "max_episodes": criteria.max_episodes,
+                "ready_only": criteria.ready_only,
+                "exclude_digested": criteria.exclude_digested,
+            },
+        }
+    )
+
+
+@router.post("/morning-briefing")
+async def create_morning_briefing(
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """
+    Create a morning briefing digest using server-configured defaults.
+
+    Uses DIGEST_DEFAULT_SINCE_DAYS and DIGEST_DEFAULT_MAX_EPISODES from config.
+    Only includes already-summarized episodes and excludes previously digested ones.
+    """
+    import time
+
+    criteria = DigestSelectionCriteria(
+        since_days=state.config.digest_default_since_days,
+        max_episodes=state.config.digest_default_max_episodes,
+        ready_only=True,
+        exclude_digested=True,
+    )
+
+    selector = DigestEpisodeSelector(
+        episode_repository=state.repository,
+        digest_repository=state.digest_repository,
+    )
+
+    result = selector.select(criteria)
+
+    if not result.episodes:
+        return api_response(
+            {
+                "status": "no_episodes",
+                "message": "No episodes match the selection criteria",
+                "digest_id": None,
+                "episodes_selected": 0,
+            }
+        )
+
+    # Create digest record
+    now = datetime.now(timezone.utc)
+    digest = Digest(
+        user_id=user.id,
+        period_start=criteria.date_from,
+        period_end=now,
+        episode_ids=[ep.id for _, ep in result.episodes],
+        episodes_total=len(result.episodes),
+    )
+
+    # Generate digest immediately from summarized episodes
+    start_time = time.time()
+
+    generator = DigestGenerator(state.path_manager)
+    content = generator.generate(
+        episodes=result.episodes,
+        processing_time_seconds=0,
+        failures=[],
+    )
+
+    # Write digest to file
+    output_filename = f"digest_{now.strftime('%Y%m%d_%H%M%S')}.md"
+    output_path = state.path_manager.digests_dir() / output_filename
+    generator.write(content, output_path)
+
+    processing_time = time.time() - start_time
+
+    # Update digest with completion info
+    digest.mark_completed(
+        file_path=output_filename,
+        episodes_completed=len(result.episodes),
+        episodes_failed=0,
+        processing_time_seconds=processing_time,
+    )
+
+    state.digest_repository.save(digest)
+
+    logger.info(
+        "Morning briefing digest created",
+        digest_id=digest.id,
+        episodes_count=len(result.episodes),
+        file_path=output_filename,
+    )
+
+    return api_response(
+        {
+            "status": "completed",
+            "message": f"Digest created with {len(result.episodes)} episodes",
+            "digest_id": digest.id,
+            "episodes_selected": len(result.episodes),
+        }
+    )
 
 
 @router.get("/{digest_id}")
@@ -263,7 +405,7 @@ async def get_digest_content(
         )
 
     # Read digest file
-    digest_file = state.path_manager.digests_dir / digest.file_path
+    digest_file = state.path_manager.digests_dir() / digest.file_path
     if not digest_file.exists():
         return api_response(
             {
@@ -466,7 +608,7 @@ async def create_digest(
 
         # Write digest to file
         output_filename = f"digest_{now.strftime('%Y%m%d_%H%M%S')}.md"
-        output_path = state.path_manager.digests_dir / output_filename
+        output_path = state.path_manager.digests_dir() / output_filename
         generator.write(content, output_path)
 
         processing_time = time.time() - start_time
@@ -535,7 +677,7 @@ async def delete_digest(
 
     # Delete the file if it exists
     if digest.file_path:
-        digest_file = state.path_manager.digests_dir / digest.file_path
+        digest_file = state.path_manager.digests_dir() / digest.file_path
         if digest_file.exists():
             try:
                 digest_file.unlink()
