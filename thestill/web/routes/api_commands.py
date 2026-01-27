@@ -137,7 +137,7 @@ def run_add_podcast_task(
             # Refresh only for newly added podcasts to discover episodes
             max_episodes_per_podcast = state.config.max_episodes_per_podcast
             result = state.refresh_service.refresh(
-                podcast_id=str(podcast.rss_url),
+                podcast_id=str(podcast.id),
                 max_episodes_per_podcast=max_episodes_per_podcast,
             )
         else:

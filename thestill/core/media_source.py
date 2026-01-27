@@ -425,7 +425,9 @@ class RSSMediaSource(MediaSource):
             RSS content as string, or None if fetch fails
         """
         try:
-            response = requests.get(url, timeout=30)
+            # Use custom User-Agent to avoid being blocked by some podcast hosts (e.g., Buzzsprout)
+            headers = {"User-Agent": "thestill/1.0 (+https://thestill.me)"}
+            response = requests.get(url, timeout=30, headers=headers)
             response.raise_for_status()
             rss_content = response.text
 
