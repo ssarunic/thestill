@@ -21,6 +21,9 @@ import {
   retryDLQTask,
   skipDLQTask,
   retryAllDLQTasks,
+  getQueueTasks,
+  bumpQueueTask,
+  cancelQueueTask,
   getFailedEpisodes,
   getEpisodeFailure,
   retryFailedEpisode,
@@ -327,6 +330,49 @@ export function useRetryAllDLQTasks() {
       queryClient.invalidateQueries({ queryKey: ['dlq'] })
       queryClient.invalidateQueries({ queryKey: ['episodes'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// ============================================================================
+// Queue Viewer hooks
+// ============================================================================
+
+export function useQueueTasks(completedLimit = 10) {
+  return useQuery({
+    queryKey: ['queue', 'tasks', completedLimit],
+    queryFn: () => getQueueTasks(completedLimit),
+    refetchInterval: (query) => {
+      // Poll every 5 seconds while there are active tasks, 15 seconds when idle
+      const data = query.state.data
+      if (!data) return 5000 // Poll while loading
+      const hasActiveTasks =
+        data.processing_task || data.pending_count > 0 || data.retry_scheduled_count > 0
+      return hasActiveTasks ? 5000 : 15000
+    },
+  })
+}
+
+export function useBumpQueueTask() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (taskId: string) => bumpQueueTask(taskId),
+    onSuccess: () => {
+      // Invalidate queue data to refresh task order
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+    },
+  })
+}
+
+export function useCancelQueueTask() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (taskId: string) => cancelQueueTask(taskId),
+    onSuccess: () => {
+      // Invalidate queue data to refresh task list
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
 }

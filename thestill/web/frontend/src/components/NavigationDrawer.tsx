@@ -86,6 +86,12 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
     </svg>
   )
 
+  const queueIcon = (
+    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+    </svg>
+  )
+
   return (
     <>
       {/* Overlay */}
@@ -130,6 +136,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
           <NavItem to="/episodes" icon={episodesIcon} label="Episodes" onClick={onClose} />
           <NavItem to="/digests" icon={digestsIcon} label="Digests" onClick={onClose} />
           <NavItem to="/failed" icon={failedIcon} label="Failed Tasks" onClick={onClose} />
+          <NavItem to="/queue" icon={queueIcon} label="Task Queue" onClick={onClose} />
         </nav>
 
         {/* Footer */}

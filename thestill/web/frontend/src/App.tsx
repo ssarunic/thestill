@@ -12,6 +12,7 @@ const Episodes = lazy(() => import('./pages/Episodes'))
 const Digests = lazy(() => import('./pages/Digests'))
 const DigestDetail = lazy(() => import('./pages/DigestDetail'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
+const QueueViewer = lazy(() => import('./pages/QueueViewer'))
 const Login = lazy(() => import('./pages/Login'))
 
 // Loading fallback for page transitions
@@ -77,6 +78,11 @@ function App() {
         <Route path="failed" element={
           <Suspense fallback={<PageLoader />}>
             <FailedTasks />
+          </Suspense>
+        } />
+        <Route path="queue" element={
+          <Suspense fallback={<PageLoader />}>
+            <QueueViewer />
           </Suspense>
         } />
       </Route>

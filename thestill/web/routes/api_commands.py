@@ -513,6 +513,68 @@ class QueueStatusResponse(BaseModel):
     stats: Dict[str, int]
 
 
+class QueuedTaskWithContext(BaseModel):
+    """A queued task with full episode and podcast context."""
+
+    task_id: str
+    episode_id: str
+    episode_title: str
+    episode_slug: str
+    podcast_title: str
+    podcast_slug: str
+    stage: str
+    status: str
+    priority: int
+    # Time tracking
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    # Computed fields
+    time_in_queue_seconds: Optional[int] = None
+    processing_time_seconds: Optional[int] = None
+    wait_time_seconds: Optional[int] = None  # Time from created_at to started_at (for completed)
+    # Episode metadata
+    duration_seconds: Optional[int] = None
+    duration_formatted: Optional[str] = None
+    # Retry info
+    retry_count: int = 0
+    next_retry_at: Optional[str] = None
+
+
+class QueueTasksResponse(BaseModel):
+    """Response for the queue tasks list endpoint."""
+
+    status: str
+    timestamp: str
+    worker_running: bool
+    # Task lists
+    processing_task: Optional[QueuedTaskWithContext] = None
+    pending_tasks: list[QueuedTaskWithContext]
+    retry_scheduled_tasks: list[QueuedTaskWithContext]
+    completed_tasks: list[QueuedTaskWithContext]
+    # Counts
+    pending_count: int
+    processing_count: int
+    retry_scheduled_count: int
+    completed_shown: int
+
+
+class BumpTaskResponse(BaseModel):
+    """Response for the bump task endpoint."""
+
+    status: str
+    task_id: str
+    message: str
+
+
+class CancelTaskResponse(BaseModel):
+    """Response for the cancel task endpoint."""
+
+    status: str
+    task_id: str
+    message: str
+
+
 class RunPipelineRequest(BaseModel):
     """Request body for running the full pipeline."""
 
@@ -939,6 +1001,196 @@ async def get_queue_status(
         worker_running=state.task_worker.is_running(),
         current_task=current_task.to_dict() if current_task else None,
         stats=state.queue_manager.get_queue_stats(),
+    )
+
+
+@router.get("/queue/tasks", response_model=QueueTasksResponse)
+async def get_queue_tasks(
+    completed_limit: int = 10,
+    state: AppState = Depends(get_app_state),
+) -> QueueTasksResponse:
+    """
+    Get detailed queue tasks with episode and podcast context.
+
+    Returns the currently processing task, pending tasks, retry-scheduled tasks,
+    and recently completed tasks. Each task includes full episode and podcast
+    metadata for display in a queue viewer UI.
+
+    Args:
+        completed_limit: Number of completed tasks to include (default 10, max 50)
+
+    Returns:
+        QueueTasksResponse with categorized task lists
+    """
+    from datetime import datetime
+
+    completed_limit = min(completed_limit, 50)  # Cap at 50
+
+    # Get all active tasks
+    tasks_by_status = state.queue_manager.get_active_tasks(include_completed=completed_limit)
+
+    def format_duration(seconds: Optional[int]) -> Optional[str]:
+        """Format duration in seconds to human-readable string."""
+        if seconds is None:
+            return None
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes}:{secs:02d}"
+
+    def enrich_task(task: Task) -> QueuedTaskWithContext:
+        """Add episode and podcast context to a task."""
+        now = datetime.utcnow()
+
+        # Calculate time in queue (for pending tasks - how long waiting so far)
+        time_in_queue = None
+        if task.created_at and task.status.value == "pending":
+            time_in_queue = int((now - task.created_at).total_seconds())
+
+        # Calculate processing time
+        processing_time = None
+        if task.started_at:
+            if task.status.value == "processing":
+                # Currently processing - time since start
+                processing_time = int((now - task.started_at).total_seconds())
+            elif task.status.value == "completed" and task.completed_at:
+                # Completed - time from start to completion
+                processing_time = int((task.completed_at - task.started_at).total_seconds())
+
+        # Calculate wait time (time from created to started - for completed tasks)
+        wait_time = None
+        if task.created_at and task.started_at:
+            wait_time = int((task.started_at - task.created_at).total_seconds())
+
+        # Get episode and podcast info
+        episode_title = "[Episode not found]"
+        episode_slug = ""
+        podcast_title = "[Unknown]"
+        podcast_slug = ""
+        duration_seconds = None
+        duration_formatted = None
+
+        result = state.repository.get_episode(task.episode_id)
+        if result:
+            podcast, episode = result
+            episode_title = episode.title
+            episode_slug = episode.slug
+            podcast_title = podcast.title
+            podcast_slug = podcast.slug
+            duration_seconds = episode.duration
+            duration_formatted = format_duration(duration_seconds)
+
+        return QueuedTaskWithContext(
+            task_id=task.id,
+            episode_id=task.episode_id,
+            episode_title=episode_title,
+            episode_slug=episode_slug,
+            podcast_title=podcast_title,
+            podcast_slug=podcast_slug,
+            stage=task.stage.value,
+            status=task.status.value,
+            priority=task.priority,
+            created_at=task.created_at.isoformat() if task.created_at else None,
+            started_at=task.started_at.isoformat() if task.started_at else None,
+            completed_at=task.completed_at.isoformat() if task.completed_at else None,
+            time_in_queue_seconds=time_in_queue,
+            processing_time_seconds=processing_time,
+            wait_time_seconds=wait_time,
+            duration_seconds=duration_seconds,
+            duration_formatted=duration_formatted,
+            retry_count=task.retry_count,
+            next_retry_at=task.next_retry_at.isoformat() if task.next_retry_at else None,
+        )
+
+    # Enrich all tasks
+    pending = [enrich_task(t) for t in tasks_by_status["pending"]]
+    processing = [enrich_task(t) for t in tasks_by_status["processing"]]
+    retry_scheduled = [enrich_task(t) for t in tasks_by_status["retry_scheduled"]]
+    completed = [enrich_task(t) for t in tasks_by_status["completed"]]
+
+    return QueueTasksResponse(
+        status="ok",
+        timestamp=datetime.utcnow().isoformat(),
+        worker_running=state.task_worker.is_running(),
+        processing_task=processing[0] if processing else None,
+        pending_tasks=pending,
+        retry_scheduled_tasks=retry_scheduled,
+        completed_tasks=completed,
+        pending_count=len(pending),
+        processing_count=len(processing),
+        retry_scheduled_count=len(retry_scheduled),
+        completed_shown=len(completed),
+    )
+
+
+@router.post("/queue/task/{task_id}/bump", response_model=BumpTaskResponse)
+async def bump_queue_task(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> BumpTaskResponse:
+    """
+    Bump a pending task to the front of the queue.
+
+    This sets the task's priority higher than all other pending tasks,
+    so it will be processed next (after any currently processing task).
+
+    Args:
+        task_id: ID of the task to bump
+
+    Returns:
+        BumpTaskResponse with success status
+
+    Raises:
+        HTTPException 404: If task not found or not in pending state
+    """
+    success = state.queue_manager.bump_task(task_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task not found or not in pending state: {task_id}",
+        )
+
+    return BumpTaskResponse(
+        status="ok",
+        task_id=task_id,
+        message="Task bumped to front of queue",
+    )
+
+
+@router.post("/queue/task/{task_id}/cancel", response_model=CancelTaskResponse)
+async def cancel_queue_task(
+    task_id: str,
+    state: AppState = Depends(get_app_state),
+) -> CancelTaskResponse:
+    """
+    Cancel a pending task and remove it from the queue.
+
+    This only works for tasks that are still pending. Tasks that are
+    already processing cannot be cancelled.
+
+    Args:
+        task_id: ID of the task to cancel
+
+    Returns:
+        CancelTaskResponse with success status
+
+    Raises:
+        HTTPException 404: If task not found or not in pending state
+    """
+    success = state.queue_manager.cancel_task(task_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task not found or not in pending state: {task_id}",
+        )
+
+    return CancelTaskResponse(
+        status="ok",
+        task_id=task_id,
+        message="Task cancelled and removed from queue",
     )
 
 

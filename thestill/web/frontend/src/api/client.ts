@@ -23,6 +23,9 @@ import type {
   DLQListResponse,
   DLQActionResponse,
   DLQBulkRetryResponse,
+  QueueTasksResponse,
+  BumpTaskResponse,
+  CancelTaskResponse,
   EpisodeFailure,
   FailedEpisodesResponse,
   EpisodeRetryResponse,
@@ -272,6 +275,48 @@ export async function retryAllDLQTasks(taskIds?: string[]): Promise<DLQBulkRetry
       'Content-Type': 'application/json',
     },
     body: taskIds ? JSON.stringify({ task_ids: taskIds }) : '{}',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+// ============================================================================
+// Queue Viewer API
+// ============================================================================
+
+export async function getQueueTasks(completedLimit: number = 10): Promise<QueueTasksResponse> {
+  return fetchApi<QueueTasksResponse>(`/commands/queue/tasks?completed_limit=${completedLimit}`)
+}
+
+export async function bumpQueueTask(taskId: string): Promise<BumpTaskResponse> {
+  const response = await fetch(`${API_BASE}/commands/queue/task/${taskId}/bump`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function cancelQueueTask(taskId: string): Promise<CancelTaskResponse> {
+  const response = await fetch(`${API_BASE}/commands/queue/task/${taskId}/cancel`, {
+    method: 'POST',
+    credentials: 'include',
   })
 
   if (!response.ok) {

@@ -433,6 +433,61 @@ export interface DLQBulkRetryResponse {
 }
 
 // ============================================================================
+// Queue Viewer Types
+// ============================================================================
+
+export interface QueuedTaskWithContext {
+  task_id: string
+  episode_id: string
+  episode_title: string
+  episode_slug: string
+  podcast_title: string
+  podcast_slug: string
+  stage: PipelineStage
+  status: string // 'pending' | 'processing' | 'completed' | 'retry_scheduled'
+  priority: number
+  // Time tracking
+  created_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  time_in_queue_seconds: number | null
+  processing_time_seconds: number | null
+  wait_time_seconds: number | null // Time from created to started (for completed)
+  // Episode metadata
+  duration_seconds: number | null
+  duration_formatted: string | null
+  // Retry info
+  retry_count: number
+  next_retry_at: string | null
+}
+
+export interface QueueTasksResponse {
+  status: string
+  timestamp: string
+  worker_running: boolean
+  processing_task: QueuedTaskWithContext | null
+  pending_tasks: QueuedTaskWithContext[]
+  retry_scheduled_tasks: QueuedTaskWithContext[]
+  completed_tasks: QueuedTaskWithContext[]
+  pending_count: number
+  processing_count: number
+  retry_scheduled_count: number
+  completed_shown: number
+}
+
+export interface BumpTaskResponse {
+  status: string
+  task_id: string
+  message: string
+}
+
+export interface CancelTaskResponse {
+  status: string
+  task_id: string
+  message: string
+}
+
+// ============================================================================
 // Episode Failure Types
 // ============================================================================
 

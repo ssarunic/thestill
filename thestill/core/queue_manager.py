@@ -922,3 +922,135 @@ class QueueManager:
 
         logger.info(f"Task {task_id} retry cancelled")
         return self.get_task(task_id)
+
+    def bump_task(self, task_id: str) -> bool:
+        """
+        Move a pending task to the front of the queue by setting highest priority.
+
+        Args:
+            task_id: ID of the task to bump
+
+        Returns:
+            True if the task was bumped, False if not found or not pending
+        """
+        now = datetime.utcnow().isoformat()
+
+        with self._get_connection() as conn:
+            # Get max current priority among pending tasks
+            cursor = conn.execute("SELECT MAX(priority) FROM tasks WHERE status = 'pending'")
+            row = cursor.fetchone()
+            max_priority = row[0] if row and row[0] is not None else 0
+
+            # Set this task's priority higher
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET priority = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+            """,
+                (max_priority + 1, now, task_id),
+            )
+
+            if cursor.rowcount == 0:
+                logger.warning(f"Cannot bump task {task_id}: not found or not pending")
+                return False
+
+        logger.info(f"Task {task_id} bumped to priority {max_priority + 1}")
+        return True
+
+    def cancel_task(self, task_id: str) -> bool:
+        """
+        Cancel a pending task by deleting it from the queue.
+
+        This only works for tasks in 'pending' status. Tasks that are
+        already processing cannot be cancelled.
+
+        Args:
+            task_id: ID of the task to cancel
+
+        Returns:
+            True if the task was cancelled, False if not found or not pending
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE id = ? AND status = 'pending'
+            """,
+                (task_id,),
+            )
+
+            if cursor.rowcount == 0:
+                logger.warning(f"Cannot cancel task {task_id}: not found or not pending")
+                return False
+
+        logger.info(f"Task {task_id} cancelled and removed from queue")
+        return True
+
+    def get_active_tasks(self, include_completed: int = 10) -> Dict[str, List[Task]]:
+        """
+        Get all active and recently completed tasks for the queue viewer.
+
+        Args:
+            include_completed: Number of recently completed tasks to include
+
+        Returns:
+            Dictionary with:
+            - pending: List of pending tasks (ordered by priority DESC, created_at ASC)
+            - processing: List of processing tasks (should be 0 or 1)
+            - retry_scheduled: List of tasks waiting for retry
+            - completed: List of recently completed tasks (newest first)
+        """
+        with self._get_connection() as conn:
+            result: Dict[str, List[Task]] = {
+                "pending": [],
+                "processing": [],
+                "retry_scheduled": [],
+                "completed": [],
+            }
+
+            # Pending tasks
+            cursor = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status = 'pending'
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 100
+            """
+            )
+            result["pending"] = [self._row_to_task(row) for row in cursor.fetchall()]
+
+            # Processing tasks
+            cursor = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status = 'processing'
+                ORDER BY started_at ASC
+            """
+            )
+            result["processing"] = [self._row_to_task(row) for row in cursor.fetchall()]
+
+            # Retry scheduled tasks
+            cursor = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status = 'retry_scheduled'
+                ORDER BY next_retry_at ASC
+                LIMIT 50
+            """
+            )
+            result["retry_scheduled"] = [self._row_to_task(row) for row in cursor.fetchall()]
+
+            # Recently completed tasks
+            cursor = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status = 'completed'
+                ORDER BY completed_at DESC
+                LIMIT ?
+            """,
+                (include_completed,),
+            )
+            result["completed"] = [self._row_to_task(row) for row in cursor.fetchall()]
+
+            return result

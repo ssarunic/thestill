@@ -99,6 +99,12 @@ export default function Layout() {
     </svg>
   )
 
+  const queueIcon = (
+    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+    </svg>
+  )
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Mobile: Fixed header + navigation drawer (hidden on sm: and up via CSS) */}
@@ -200,6 +206,12 @@ export default function Layout() {
                 to="/failed"
                 icon={failedIcon}
                 label="Failed Tasks"
+                showLabel={showLabels}
+              />
+              <NavItem
+                to="/queue"
+                icon={queueIcon}
+                label="Task Queue"
                 showLabel={showLabels}
               />
             </nav>
