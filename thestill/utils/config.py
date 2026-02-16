@@ -45,6 +45,11 @@ class Config(BaseModel):
     elevenlabs_async_threshold_mb: int = 0  # Use async mode for files > N MB (0 = always async)
     webhook_server_port: int = 8000  # Port for background webhook server during transcription
 
+    # Dalston Configuration (self-hosted transcription server)
+    dalston_base_url: str = ""  # Dalston server URL (e.g., http://localhost:8000)
+    dalston_api_key: str = ""  # Optional API key for Dalston authentication
+    dalston_model: str = ""  # Transcription model/engine (e.g., whisper-large-v3)
+
     # Storage Paths
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
@@ -195,6 +200,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         == "true",
         "webhook_server_port": int(os.getenv("WEBHOOK_SERVER_PORT", "8000")),
         "elevenlabs_async_threshold_mb": int(os.getenv("ELEVENLABS_ASYNC_THRESHOLD_MB", "0")),
+        # Dalston
+        "dalston_base_url": os.getenv("DALSTON_BASE_URL", ""),
+        "dalston_api_key": os.getenv("DALSTON_API_KEY", ""),
+        "dalston_model": os.getenv("DALSTON_MODEL", ""),
         "storage_path": storage_path,
         "database_path": database_path,
         # Note: Path operations should use config.path_manager methods

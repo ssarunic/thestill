@@ -592,6 +592,17 @@ def _create_transcriber(
             path_manager=path_manager,
             use_async=False,  # Synchronous mode for background tasks
         )
+    elif config.transcription_provider.lower() == "dalston":
+        from .dalston_transcriber import DalstonTranscriber
+
+        return DalstonTranscriber(
+            base_url=config.dalston_base_url or None,
+            api_key=config.dalston_api_key or None,
+            model=config.dalston_model or None,
+            enable_diarization=config.enable_diarization,
+            num_speakers=config.max_speakers,
+            path_manager=path_manager,
+        )
     elif config.enable_diarization:
         from .whisper_transcriber import WhisperXTranscriber
 

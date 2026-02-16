@@ -1420,6 +1420,34 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         )
         # Store webhook mode flag for handling transcription results
         ctx.obj.using_webhook_mode = webhook_available
+    elif config.transcription_provider.lower() == "dalston":
+        click.echo("🎤 Using Dalston Speech-to-Text")
+        if not config.dalston_base_url:
+            click.echo("❌ Dalston server URL not configured", err=True)
+            click.echo("   Set DALSTON_BASE_URL in .env (e.g., http://localhost:8000)", err=True)
+            ctx.exit(1)
+
+        try:
+            from .core.dalston_transcriber import DalstonTranscriber
+
+            transcriber = DalstonTranscriber(
+                base_url=config.dalston_base_url,
+                api_key=config.dalston_api_key or None,
+                model=config.dalston_model or None,
+                enable_diarization=config.enable_diarization,
+                num_speakers=config.max_speakers,
+                path_manager=config.path_manager,
+            )
+            click.echo(f"   Server: {config.dalston_base_url}")
+            if config.dalston_model:
+                click.echo(f"   Model: {config.dalston_model}")
+        except ImportError as e:
+            click.echo(f"❌ {e}", err=True)
+            click.echo(
+                "   Install with: pip install git+https://github.com/ssarunic/dalston.git#subdirectory=sdk",
+                err=True,
+            )
+            ctx.exit(1)
     elif config.transcription_provider.lower() == "parakeet":
         click.echo("🎤 Using NVIDIA Parakeet Speech-to-Text")
         from .core.parakeet_transcriber import ParakeetTranscriber
