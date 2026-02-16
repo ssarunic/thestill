@@ -28,11 +28,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
 
 import requests
 from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
 from structlog import get_logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.models.transcription import TranscribeOptions
@@ -44,8 +45,7 @@ from .transcriber import Transcriber
 logger = get_logger(__name__)
 
 # ElevenLabs API configuration
-ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/speech-to-text"
-ELEVENLABS_TRANSCRIPT_URL = "https://api.elevenlabs.io/v1/speech-to-text/transcripts"
+DEFAULT_BASE_URL = "https://api.elevenlabs.io"
 DEFAULT_MODEL = "scribe_v1"
 
 # Timeout configuration
@@ -62,6 +62,16 @@ ASYNC_THRESHOLD_MB = 50  # Use async for files > 50MB
 # Upload progress reporting interval (percentage points)
 # Log progress every N percent to avoid spamming logs
 UPLOAD_PROGRESS_LOG_INTERVAL = 10  # Log every 10%
+
+
+def _is_retryable_http_error(exception: BaseException) -> bool:
+    """Don't retry on 4xx client errors (except 408 Timeout, 429 Rate Limit)."""
+    if isinstance(exception, requests.exceptions.HTTPError):
+        if exception.response is not None:
+            code = exception.response.status_code
+            if 400 <= code < 500 and code not in (408, 429):
+                return False
+    return True
 
 
 class ElevenLabsTranscriber(Transcriber):
@@ -81,6 +91,7 @@ class ElevenLabsTranscriber(Transcriber):
     def __init__(
         self,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         model: str = DEFAULT_MODEL,
         enable_diarization: bool = True,
         num_speakers: Optional[int] = None,
@@ -96,6 +107,8 @@ class ElevenLabsTranscriber(Transcriber):
 
         Args:
             api_key: ElevenLabs API key. If not provided, reads from ELEVENLABS_API_KEY env var.
+            base_url: Base URL for API. Defaults to https://api.elevenlabs.io.
+                      Override to use ElevenLabs-compatible servers (e.g., Dalston).
             model: Model to use. Options: "scribe_v1", "scribe_v1_experimental"
             enable_diarization: Enable speaker diarization (default: True)
             num_speakers: Expected number of speakers (None = auto-detect)
@@ -116,6 +129,13 @@ class ElevenLabsTranscriber(Transcriber):
                 "Set ELEVENLABS_API_KEY environment variable or pass api_key parameter."
             )
 
+        # Build API URLs from base URL using proper URL joining
+        raw_base = base_url or os.getenv("ELEVENLABS_BASE_URL") or DEFAULT_BASE_URL
+        # Ensure trailing slash for urljoin to work correctly with relative paths
+        self.base_url = raw_base.rstrip("/") + "/"
+        self.api_url = urljoin(self.base_url, "v1/speech-to-text")
+        self.transcript_url = urljoin(self.base_url, "v1/speech-to-text/transcripts")
+
         self.model = model
         self.enable_diarization = enable_diarization
         self.num_speakers = num_speakers
@@ -128,6 +148,7 @@ class ElevenLabsTranscriber(Transcriber):
 
         logger.info(
             "ElevenLabs transcriber initialized",
+            base_url=self.base_url.rstrip("/"),
             model=self.model,
             async_mode=self.use_async,
             async_threshold_mb=self.async_threshold_mb if self.use_async else None,
@@ -208,30 +229,30 @@ class ElevenLabsTranscriber(Transcriber):
         Synchronous transcription - wait for response in single request.
 
         Used for smaller files where the API can respond within timeout.
+        If the server returns an async-style acknowledgment (has transcription_id
+        but no text/words), falls back to polling for the result.
         """
         start_time = time.time()
 
-        try:
-            response_data = self._call_api_sync(audio_path, language, progress_callback)
-            transcript = self._format_response(response_data, audio_path, start_time, language)
+        response_data = self._call_api_sync(audio_path, language, progress_callback)
 
-            if output_path:
-                self._save_transcript(transcript, output_path)
+        # Detect async-style acknowledgment (e.g. Dalston always returns async)
+        transcription_id = response_data.get("transcription_id")
+        if transcription_id and "text" not in response_data and "words" not in response_data:
+            logger.info(
+                "Server returned async acknowledgment in sync mode, falling back to polling",
+                transcription_id=transcription_id,
+            )
+            response_data = self._poll_for_transcript(transcription_id)
+            if response_data is None:
+                raise TimeoutError("Transcription polling failed or timed out")
 
-            return transcript
+        transcript = self._format_response(response_data, audio_path, start_time, language)
 
-        except requests.exceptions.HTTPError as e:
-            logger.error("ElevenLabs API error", error=str(e))
-            if hasattr(e, "response") and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    logger.error("API error details", details=error_detail)
-                except Exception:
-                    logger.error("API response text", response_text=e.response.text)
-            return None
-        except Exception as e:
-            self._log_error(e)
-            return None
+        if output_path:
+            self._save_transcript(transcript, output_path)
+
+        return transcript
 
     def _transcribe_async(
         self,
@@ -268,93 +289,87 @@ class ElevenLabsTranscriber(Transcriber):
                 "submitted_at": datetime.now(timezone.utc).isoformat(),
             }
 
+        # Step 1: Submit transcription request (async mode)
         try:
-            # Step 1: Submit transcription request (async mode)
-            try:
-                submit_response = self._submit_async_transcription(
-                    audio_path, language, webhook_metadata, progress_callback
-                )
-            except requests.exceptions.HTTPError as e:
-                # Check for "no webhooks configured" error - fallback to sync
-                if e.response is not None and e.response.status_code == 400:
-                    try:
-                        error_data = e.response.json()
-                        if error_data.get("detail", {}).get("status") == "no_webhooks_configured":
-                            logger.warning(
-                                "Webhooks not configured in ElevenLabs account. "
-                                "Falling back to sync mode (may timeout for large files). "
-                                "Configure webhooks at https://elevenlabs.io/app/speech-to-text/webhooks"
-                            )
-                            return self._transcribe_sync(audio_path, output_path, language, progress_callback)
-                    except (ValueError, KeyError):
-                        pass
-                raise  # Re-raise if not the specific error we're handling
+            submit_response = self._submit_async_transcription(
+                audio_path, language, webhook_metadata, progress_callback
+            )
+        except requests.exceptions.HTTPError as e:
+            # Check for "no webhooks configured" error - fallback to sync
+            if e.response is not None and e.response.status_code == 400:
+                try:
+                    error_data = e.response.json()
+                    if error_data.get("detail", {}).get("status") == "no_webhooks_configured":
+                        logger.warning(
+                            "Webhooks not configured in ElevenLabs account. "
+                            "Falling back to sync mode (may timeout for large files). "
+                            "Configure webhooks at https://elevenlabs.io/app/speech-to-text/webhooks"
+                        )
+                        return self._transcribe_sync(audio_path, output_path, language, progress_callback)
+                except (ValueError, KeyError):
+                    pass
+            raise  # Re-raise if not the specific error we're handling
 
-            transcription_id = submit_response.get("transcription_id")
-            if not transcription_id:
-                logger.error("No transcription_id in async response. Falling back to sync mode.")
-                return self._transcribe_sync(audio_path, output_path, language, progress_callback)
+        transcription_id = submit_response.get("transcription_id")
+        if not transcription_id:
+            logger.error("No transcription_id in async response. Falling back to sync mode.")
+            return self._transcribe_sync(audio_path, output_path, language, progress_callback)
 
-            logger.info("Transcription submitted", transcription_id=transcription_id)
+        logger.info("Transcription submitted", transcription_id=transcription_id)
 
-            # Step 2: Save pending operation for resume capability
-            if self.path_manager and episode_id:
-                self._save_pending_operation(
+        # Step 2: Save pending operation for resume capability
+        if self.path_manager and episode_id:
+            self._save_pending_operation(
+                transcription_id=transcription_id,
+                audio_path=audio_path,
+                language=language,
+                episode_id=episode_id,
+                podcast_slug=podcast_slug,
+                episode_slug=episode_slug,
+            )
+
+        # Step 3: If waiting for webhook, register with tracker and return None
+        # The webhook handler will save the transcript when the callback arrives
+        if self.wait_for_webhook:
+            # Register this episode as pending so CLI can track completion
+            # Note: We use episode_id (not transcription_id) because ElevenLabs returns
+            # a different request_id in the webhook callback than the transcription_id
+            # from the submission response. episode_id is consistent in both.
+            from thestill.webhook import get_tracker
+
+            tracker = get_tracker()
+            if episode_id:
+                tracker.add_pending(episode_id)
+                logger.info(
+                    "Webhook mode transcription submitted",
                     transcription_id=transcription_id,
-                    audio_path=audio_path,
-                    language=language,
                     episode_id=episode_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    status="waiting_for_webhook",
                 )
-
-            # Step 3: If waiting for webhook, register with tracker and return None
-            # The webhook handler will save the transcript when the callback arrives
-            if self.wait_for_webhook:
-                # Register this episode as pending so CLI can track completion
-                # Note: We use episode_id (not transcription_id) because ElevenLabs returns
-                # a different request_id in the webhook callback than the transcription_id
-                # from the submission response. episode_id is consistent in both.
-                from thestill.webhook import get_tracker
-
-                tracker = get_tracker()
-                if episode_id:
-                    tracker.add_pending(episode_id)
-                    logger.info(
-                        "Webhook mode transcription submitted",
-                        transcription_id=transcription_id,
-                        episode_id=episode_id,
-                        status="waiting_for_webhook",
-                    )
-                else:
-                    logger.warning(
-                        "Webhook mode transcription submitted without episode_id",
-                        transcription_id=transcription_id,
-                        note="Cannot track completion - webhook callback may not trigger auto-exit",
-                    )
-                return None
-
-            # Step 3 (polling mode): Poll for completion
-            response_data = self._poll_for_transcript(transcription_id)
-
-            if response_data is None:
-                logger.error("Transcription polling failed or timed out")
-                return None
-
-            # Step 4: Format response and clean up
-            transcript = self._format_response(response_data, audio_path, start_time, language)
-
-            if self.path_manager:
-                self._remove_pending_operation(transcription_id)
-
-            if output_path:
-                self._save_transcript(transcript, output_path)
-
-            return transcript
-
-        except Exception as e:
-            self._log_error(e)
+            else:
+                logger.warning(
+                    "Webhook mode transcription submitted without episode_id",
+                    transcription_id=transcription_id,
+                    note="Cannot track completion - webhook callback may not trigger auto-exit",
+                )
             return None
+
+        # Step 3 (polling mode): Poll for completion
+        response_data = self._poll_for_transcript(transcription_id)
+
+        if response_data is None:
+            raise TimeoutError("Transcription polling failed or timed out")
+
+        # Step 4: Format response and clean up
+        transcript = self._format_response(response_data, audio_path, start_time, language)
+
+        if self.path_manager:
+            self._remove_pending_operation(transcription_id)
+
+        if output_path:
+            self._save_transcript(transcript, output_path)
+
+        return transcript
 
     def _log_error(self, e: Exception) -> None:
         """Log error with unwrapped cause details."""
@@ -498,6 +513,7 @@ class ElevenLabsTranscriber(Transcriber):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=60),
+        retry=retry_if_exception(_is_retryable_http_error),
         reraise=True,
     )
     def _call_api_sync(
@@ -530,7 +546,7 @@ class ElevenLabsTranscriber(Transcriber):
 
         try:
             response = requests.post(
-                ELEVENLABS_API_URL,
+                self.api_url,
                 headers=headers,
                 data=monitor,
                 timeout=SYNC_REQUEST_TIMEOUT,
@@ -545,8 +561,15 @@ class ElevenLabsTranscriber(Transcriber):
             self._log_http_error(e)
             raise
 
-        logger.info("ElevenLabs API call successful")
-        return response.json()
+        result = response.json()
+        logger.info(
+            "ElevenLabs API call successful",
+            response_size_bytes=len(response.content),
+            has_text=bool(result.get("text")),
+            word_count=len(result.get("words", [])),
+        )
+        logger.debug("Raw API response", response_data=result)
+        return result
 
     def _submit_async_transcription(
         self,
@@ -586,7 +609,7 @@ class ElevenLabsTranscriber(Transcriber):
 
         try:
             response = requests.post(
-                ELEVENLABS_API_URL,
+                self.api_url,
                 headers=headers,
                 data=monitor,
                 timeout=UPLOAD_TIMEOUT,
@@ -600,7 +623,13 @@ class ElevenLabsTranscriber(Transcriber):
             raise
 
         result = response.json()
-        logger.info("Async submission successful", message=result.get("message", "OK"))
+        logger.info(
+            "Async submission successful",
+            message=result.get("message", "OK"),
+            response_size_bytes=len(response.content),
+            response_keys=list(result.keys()),
+        )
+        logger.debug("Raw async submit response", response_data=result)
         return result
 
     def _poll_for_transcript(self, transcription_id: str) -> Optional[Dict[str, Any]]:
@@ -614,7 +643,7 @@ class ElevenLabsTranscriber(Transcriber):
             Transcript data when ready, None if timeout or error
         """
         headers = {"xi-api-key": self.api_key}
-        url = f"{ELEVENLABS_TRANSCRIPT_URL}/{transcription_id}"
+        url = urljoin(self.transcript_url + "/", transcription_id)
 
         start_time = time.time()
         poll_count = 0
@@ -707,6 +736,12 @@ class ElevenLabsTranscriber(Transcriber):
 
         # Extract full text
         full_text = response_data.get("text", "")
+        if not full_text:
+            logger.warning(
+                "API returned empty text",
+                response_keys=list(response_data.keys()),
+                response_size=len(str(response_data)),
+            )
 
         # Build words list from response
         raw_words = response_data.get("words", [])

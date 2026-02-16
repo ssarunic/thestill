@@ -61,7 +61,11 @@ class Transcriber(ABC):
                 and progress callback.
 
         Returns:
-            Transcript object with segments and metadata. None on error.
+            Transcript object with segments and metadata.
+            None only for async/webhook mode (transcript arrives later).
+
+        Raises:
+            Errors propagate to callers for classification via classify_and_raise().
         """
         pass
 

@@ -38,6 +38,7 @@ class Config(BaseModel):
 
     # ElevenLabs Configuration (for ElevenLabs Speech-to-Text)
     elevenlabs_api_key: str = ""
+    elevenlabs_base_url: str = ""  # Override API base URL (for ElevenLabs-compatible servers like Dalston)
     elevenlabs_model: str = "scribe_v1"  # scribe_v1 or scribe_v1_experimental
     elevenlabs_webhook_secret: str = ""  # HMAC secret for webhook signature verification
     elevenlabs_webhook_require_metadata: bool = True  # Require episode_id in webhook callbacks
@@ -187,6 +188,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "google_cloud_project_id": os.getenv("GOOGLE_CLOUD_PROJECT_ID", ""),
         "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
         "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY", ""),
+        "elevenlabs_base_url": os.getenv("ELEVENLABS_BASE_URL", ""),
         "elevenlabs_model": os.getenv("ELEVENLABS_MODEL", "scribe_v1"),
         "elevenlabs_webhook_secret": os.getenv("ELEVENLABS_WEBHOOK_SECRET", ""),
         "elevenlabs_webhook_require_metadata": os.getenv("ELEVENLABS_WEBHOOK_REQUIRE_METADATA", "true").lower()

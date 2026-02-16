@@ -1662,6 +1662,11 @@ def _get_transcriber(config):
     Returns:
         Transcriber instance or None if not configured
     """
+    from ..utils.console import ConsoleOutput
+
+    # Use quiet console for MCP to prevent stdout pollution (MCP uses stdout for JSON-RPC)
+    quiet_console = ConsoleOutput(quiet=True)
+
     try:
         if config.transcription_provider.lower() == "google":
             from ..core.google_transcriber import GoogleCloudTranscriber
@@ -1678,6 +1683,7 @@ def _get_transcriber(config):
                 min_speakers=config.min_speakers,
                 max_speakers=config.max_speakers,
                 parallel_chunks=config.max_workers,
+                console=quiet_console,
             )
         elif config.enable_diarization:
             from ..core.whisper_transcriber import WhisperXTranscriber
@@ -1690,11 +1696,12 @@ def _get_transcriber(config):
                 min_speakers=config.min_speakers,
                 max_speakers=config.max_speakers,
                 diarization_model=config.diarization_model,
+                console=quiet_console,
             )
         else:
             from ..core.whisper_transcriber import WhisperTranscriber
 
-            return WhisperTranscriber(config.whisper_model, config.whisper_device)
+            return WhisperTranscriber(config.whisper_model, config.whisper_device, console=quiet_console)
     except Exception as e:
         logger.error(f"Failed to initialize transcriber: {e}")
         return None

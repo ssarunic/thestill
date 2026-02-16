@@ -585,6 +585,7 @@ def _create_transcriber(
 
         return ElevenLabsTranscriber(
             api_key=config.elevenlabs_api_key,
+            base_url=config.elevenlabs_base_url or None,
             model=config.elevenlabs_model,
             enable_diarization=config.enable_diarization,
             num_speakers=config.max_speakers,
