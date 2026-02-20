@@ -246,7 +246,9 @@ class AuthService:
                     created_at=datetime.now(timezone.utc),
                     last_login_at=datetime.now(timezone.utc),
                 )
-                user = self.user_repository.save(user)
+                self.user_repository.save(user)
+                # Re-fetch to get correct ID (UPSERT may have updated existing user)
+                user = self.user_repository.get_by_email(email)
                 logger.info(f"Created new user: {user.email}")
 
         # Create JWT token
