@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Authentication API routes for thestill.me web server.
+Authentication API routes for Thestill web server.
 
 Supports both single-user and multi-user authentication modes:
 - Single-user (MULTI_USER=false): Auto-creates default user, no login required

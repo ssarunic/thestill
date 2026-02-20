@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Response helpers for thestill.me web API.
+Response helpers for Thestill web API.
 
 Provides standardized response formatting to ensure consistent API responses
 across all endpoints, reducing code duplication (DRY principle).

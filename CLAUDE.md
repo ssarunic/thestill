@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-thestill.me is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using local Whisper or cloud-based transcription (Google, ElevenLabs), and supports multiple LLM providers for analysis.
+Thestill is an automated podcast transcription and summarization pipeline built with Python. It converts audio podcasts into readable, summarized content using local Whisper or cloud-based transcription (Google, ElevenLabs), and supports multiple LLM providers for analysis.
 
 ## Development Commands
 

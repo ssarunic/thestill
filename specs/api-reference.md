@@ -1,6 +1,6 @@
 # API Reference
 
-This document describes the REST API endpoints provided by the thestill.me web server.
+This document describes the REST API endpoints provided by the Thestill web server.
 
 ## Overview
 

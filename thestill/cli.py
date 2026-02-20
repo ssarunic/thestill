@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -124,7 +124,7 @@ def require_config(f):
 @click.option("--quiet", "-q", is_flag=True, help="Suppress non-error output")
 @click.pass_context
 def main(ctx, config, quiet):
-    """thestill.me - Automated podcast transcription and summarization"""
+    """Thestill - Automated podcast transcription and summarization"""
     # Load .env file first so LOG_* environment variables are available
     from dotenv import load_dotenv
 
@@ -1031,7 +1031,7 @@ def status(ctx):
     config = ctx.obj.config
     stats_service = ctx.obj.stats_service
 
-    click.echo(CLIFormatter.format_header("thestill.me Status"))
+    click.echo(CLIFormatter.format_header("Thestill Status"))
 
     # Get statistics from service
     stats = stats_service.get_stats()

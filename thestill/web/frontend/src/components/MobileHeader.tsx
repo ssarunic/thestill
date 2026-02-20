@@ -22,7 +22,7 @@ export default function MobileHeader({ onMenuClick }: MobileHeaderProps) {
           <div className="w-8 h-8 bg-primary-900 rounded-lg flex items-center justify-center flex-shrink-0">
             <span className="text-white font-bold text-sm">ts</span>
           </div>
-          <span className="font-semibold text-primary-900">thestill.me</span>
+          <span className="font-semibold text-primary-900">Thestill</span>
         </div>
       </div>
 

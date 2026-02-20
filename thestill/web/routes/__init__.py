@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Route modules for thestill.me web server.
+Route modules for Thestill web server.
 
 This package contains FastAPI routers for different endpoint groups:
 - health: Health check endpoint (root level, for load balancers)

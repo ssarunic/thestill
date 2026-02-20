@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-MCP Server for thestill.me
+MCP Server for Thestill
 
 Main MCP server implementation using STDIO transport.
 
@@ -41,7 +41,7 @@ logger = structlog.get_logger(__name__)
 
 class ThestillMCPServer:
     """
-    MCP server for thestill.me podcast transcription system.
+    MCP server for Thestill podcast transcription system.
 
     Provides resources and tools for managing podcasts, episodes, and transcripts.
     """

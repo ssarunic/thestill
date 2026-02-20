@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-System status API endpoint for thestill.me web server.
+System status API endpoint for Thestill web server.
 
 Provides detailed system status and statistics, similar to the CLI 'status' command.
 """

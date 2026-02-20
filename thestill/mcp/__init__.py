@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-MCP (Model Context Protocol) server for thestill.me
+MCP (Model Context Protocol) server for Thestill
 
 This package provides an MCP server that exposes podcast management
 and transcription functionality to MCP-compatible clients.

@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -426,7 +426,7 @@ class RSSMediaSource(MediaSource):
         """
         try:
             # Use custom User-Agent to avoid being blocked by some podcast hosts (e.g., Buzzsprout)
-            headers = {"User-Agent": "thestill/1.0 (+https://thestill.me)"}
+            headers = {"User-Agent": "Thestill/1.0 (+https://thestill.me)"}
             response = requests.get(url, timeout=30, headers=headers)
             response.raise_for_status()
             rss_content = response.text

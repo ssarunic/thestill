@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Health check endpoint for thestill.me web server.
+Health check endpoint for Thestill web server.
 
 This endpoint is mounted at the root level (not under /api) because:
 - Load balancers and Kubernetes probes expect /health or /healthz at root

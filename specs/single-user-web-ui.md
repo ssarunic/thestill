@@ -1,4 +1,4 @@
-# thestill.me - Single-User Web UI
+# Thestill - Single-User Web UI
 
 > **Status**: Active Development
 > **Created**: 2025-12-19

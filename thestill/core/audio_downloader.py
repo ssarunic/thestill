@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -164,7 +164,7 @@ class AudioDownloader:
         response = requests.get(
             url,
             stream=True,
-            headers={"User-Agent": "thestill.me/1.0"},
+            headers={"User-Agent": "Thestill/1.0"},
             timeout=self._DEFAULT_TIMEOUT_SECONDS,
         )
         response.raise_for_status()

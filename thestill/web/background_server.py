@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ def is_thestill_server_running(host: str, port: int, timeout: float = 2.0) -> bo
     Check if a thestill server is running on the specified host and port.
 
     Makes an HTTP request to the root endpoint and verifies the response
-    identifies as "thestill.me" service.
+    identifies as "Thestill" service.
 
     Args:
         host: Host to check
@@ -58,7 +58,7 @@ def is_thestill_server_running(host: str, port: int, timeout: float = 2.0) -> bo
         response = requests.get(url, timeout=timeout)
         if response.status_code == 200:
             data = response.json()
-            return data.get("service") == "thestill.me" and data.get("status") == "ok"
+            return data.get("service") == "Thestill" and data.get("status") == "ok"
     except (requests.RequestException, ValueError):
         # Connection failed or invalid JSON
         pass

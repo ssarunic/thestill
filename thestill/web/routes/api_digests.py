@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Digest API endpoints for thestill.me web UI.
+Digest API endpoints for Thestill web UI.
 
 Provides endpoints for listing, viewing, creating, and reading digest documents.
 """

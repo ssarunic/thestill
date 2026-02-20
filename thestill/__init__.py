@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-thestill.me - Automated Podcast Transcription and Summarization Pipeline
+Thestill - Automated Podcast Transcription and Summarization Pipeline
 """
 
 __version__ = "1.0.0"

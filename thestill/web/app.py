@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-FastAPI application factory for thestill.me web server.
+FastAPI application factory for Thestill web server.
 
 This module creates and configures the FastAPI application with:
 - Dependency injection for services (same as CLI)
@@ -219,7 +219,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # Create FastAPI application
     app = FastAPI(
-        title="thestill.me",
+        title="Thestill",
         description="Automated podcast transcription and summarization pipeline",
         version="1.0.0",
         lifespan=lifespan,

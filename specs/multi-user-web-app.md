@@ -1,4 +1,4 @@
-# thestill.me - Multi-User Podcast Tracking Web App
+# Thestill - Multi-User Podcast Tracking Web App
 
 > **Status**: Draft
 > **Created**: 2025-12-18
@@ -668,7 +668,7 @@ JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
 # SendGrid (optional, for newsletters)
 SENDGRID_API_KEY=your-sendgrid-api-key
 EMAIL_FROM_ADDRESS=hello@thestill.me
-EMAIL_FROM_NAME=thestill.me
+EMAIL_FROM_NAME=Thestill
 
 # Workers
 WORKER_COUNT=2

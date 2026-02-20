@@ -1,4 +1,4 @@
-# Copyright 2025 thestill.me
+# Copyright 2025-2026 Thestill
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-FastAPI dependency injection for thestill.me web server.
+FastAPI dependency injection for Thestill web server.
 
 This module provides dependency functions and the AppState class for
 injecting services into route handlers.

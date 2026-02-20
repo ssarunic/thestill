@@ -1,5 +1,5 @@
 /**
- * End-to-end tests for thestill.me web application
+ * End-to-end tests for Thestill web application
  * Tests both single-user and multi-user authentication modes
  *
  * Run with: node tests/e2e/test_web_auth.js
@@ -267,7 +267,7 @@ async function testMultiUserMode() {
  */
 async function main() {
     console.log('============================================');
-    console.log('thestill.me E2E Authentication Tests');
+    console.log('Thestill E2E Authentication Tests');
     console.log('============================================');
     console.log(`Puppeteer version: ${puppeteer.default ? 'ESM' : 'CommonJS'}`);
     console.log(`Target: ${BASE_URL}`);

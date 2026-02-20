@@ -115,7 +115,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
         {/* Header with close button */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div>
-            <h1 className="text-xl font-bold text-primary-900">thestill.me</h1>
+            <h1 className="text-xl font-bold text-primary-900">Thestill</h1>
             <p className="text-sm text-gray-500">Podcast Transcription</p>
           </div>
           <button
