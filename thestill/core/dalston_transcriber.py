@@ -23,8 +23,6 @@ Features:
 - Word-level timestamps
 - Async transcription with polling
 - Local/self-hosted deployment
-- PII detection and redaction
-- Vocabulary boosting
 - Transcript export (SRT, VTT, TXT, JSON)
 """
 
@@ -61,8 +59,6 @@ class DalstonTranscriber(Transcriber):
     - Speaker diarization
     - Word-level timestamps
     - Multiple backend engines (Faster Whisper, WhisperX, Parakeet, NeMo)
-    - PII detection and redaction
-    - Vocabulary boosting
 
     This transcriber uses the Dalston Python SDK (>=0.1.0) for integration.
     """
@@ -79,8 +75,6 @@ class DalstonTranscriber(Transcriber):
         max_speakers: Optional[int] = None,
         language: Optional[str] = None,
         path_manager: Optional[PathManager] = None,
-        vocabulary: Optional[List[str]] = None,
-        pii_detection: bool = False,
         retention: int = 30,
     ):
         """
@@ -98,8 +92,6 @@ class DalstonTranscriber(Transcriber):
             max_speakers: Maximum speakers for diarization auto-detection.
             language: Language code (e.g., "en"). None = auto-detect.
             path_manager: PathManager for storing pending operations.
-            vocabulary: List of terms to boost recognition.
-            pii_detection: Enable PII detection in transcript.
             retention: Retention in days. 0=transient, -1=permanent, N=days.
         """
         import os
@@ -114,8 +106,6 @@ class DalstonTranscriber(Transcriber):
         self.max_speakers = max_speakers
         self.language = language
         self.path_manager = path_manager
-        self.vocabulary = vocabulary
-        self.pii_detection = pii_detection
         self.retention = retention
 
         self._client = None
@@ -126,7 +116,6 @@ class DalstonTranscriber(Transcriber):
             model=self.model,
             diarization_enabled=self.enable_diarization,
             num_speakers=self.num_speakers if self.enable_diarization else None,
-            pii_detection=self.pii_detection,
         )
 
     def load_model(self) -> None:
@@ -218,12 +207,6 @@ class DalstonTranscriber(Transcriber):
                 transcribe_kwargs["min_speakers"] = self.min_speakers
             if self.max_speakers is not None:
                 transcribe_kwargs["max_speakers"] = self.max_speakers
-
-            if self.vocabulary:
-                transcribe_kwargs["vocabulary"] = self.vocabulary
-
-            if self.pii_detection:
-                transcribe_kwargs["pii_detection"] = True
 
             # Submit transcription job - SDK handles file opening
             job = self._client.transcribe(**transcribe_kwargs)

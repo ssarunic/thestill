@@ -49,8 +49,6 @@ class Config(BaseModel):
     dalston_base_url: str = ""  # Dalston server URL (e.g., http://localhost:8000)
     dalston_api_key: str = ""  # Optional API key for Dalston authentication
     dalston_model: str = ""  # Transcription model/engine (e.g., faster-whisper-large-v3) or "auto"
-    dalston_vocabulary: str = ""  # Comma-separated vocabulary terms to boost recognition
-    dalston_pii_detection: bool = False  # Enable PII detection in transcripts
     dalston_retention: int = 30  # Retention in days (0=transient, -1=permanent, N=days)
 
     # Storage Paths
@@ -207,8 +205,6 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "dalston_base_url": os.getenv("DALSTON_BASE_URL", ""),
         "dalston_api_key": os.getenv("DALSTON_API_KEY", ""),
         "dalston_model": os.getenv("DALSTON_MODEL", ""),
-        "dalston_vocabulary": os.getenv("DALSTON_VOCABULARY", ""),
-        "dalston_pii_detection": os.getenv("DALSTON_PII_DETECTION", "false").lower() == "true",
         "dalston_retention": int(os.getenv("DALSTON_RETENTION", "30")),
         "storage_path": storage_path,
         "database_path": database_path,
