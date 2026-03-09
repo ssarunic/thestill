@@ -23,10 +23,12 @@ Features:
 - Word-level timestamps
 - Async transcription with polling
 - Local/self-hosted deployment
+- PII detection and redaction
+- Vocabulary boosting
+- Transcript export (SRT, VTT, TXT, JSON)
 """
 
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,7 +38,7 @@ from thestill.models.transcript import Segment, Transcript, Word
 from thestill.models.transcription import TranscribeOptions
 from thestill.utils.path_manager import PathManager
 
-from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
+from .progress import ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
 
 logger = get_logger(__name__)
@@ -58,9 +60,11 @@ class DalstonTranscriber(Transcriber):
     - Batch and real-time transcription
     - Speaker diarization
     - Word-level timestamps
-    - Multiple backend engines (Faster Whisper, WhisperX, Pyannote)
+    - Multiple backend engines (Faster Whisper, WhisperX, Parakeet, NeMo)
+    - PII detection and redaction
+    - Vocabulary boosting
 
-    This transcriber uses the Dalston Python SDK for integration.
+    This transcriber uses the Dalston Python SDK (>=0.1.0) for integration.
     """
 
     def __init__(
@@ -71,8 +75,13 @@ class DalstonTranscriber(Transcriber):
         timeout: float = DEFAULT_TIMEOUT,
         enable_diarization: bool = True,
         num_speakers: Optional[int] = None,
+        min_speakers: Optional[int] = None,
+        max_speakers: Optional[int] = None,
         language: Optional[str] = None,
         path_manager: Optional[PathManager] = None,
+        vocabulary: Optional[List[str]] = None,
+        pii_detection: bool = False,
+        retention: int = 30,
     ):
         """
         Initialize Dalston transcriber.
@@ -80,12 +89,18 @@ class DalstonTranscriber(Transcriber):
         Args:
             base_url: Dalston server URL. Defaults to http://localhost:8000.
             api_key: Optional API key for authentication.
-            model: Transcription model/engine (e.g., "whisper-large-v3", "faster-whisper-large-v3").
+            model: Transcription model/engine (e.g., "faster-whisper-large-v3")
+                   or "auto" for automatic selection.
             timeout: Request timeout in seconds.
             enable_diarization: Enable speaker diarization (default: True).
-            num_speakers: Expected number of speakers (None = auto-detect).
+            num_speakers: Exact number of speakers (None = auto-detect).
+            min_speakers: Minimum speakers for diarization auto-detection.
+            max_speakers: Maximum speakers for diarization auto-detection.
             language: Language code (e.g., "en"). None = auto-detect.
             path_manager: PathManager for storing pending operations.
+            vocabulary: List of terms to boost recognition.
+            pii_detection: Enable PII detection in transcript.
+            retention: Retention in days. 0=transient, -1=permanent, N=days.
         """
         import os
 
@@ -95,8 +110,13 @@ class DalstonTranscriber(Transcriber):
         self.timeout = timeout
         self.enable_diarization = enable_diarization
         self.num_speakers = num_speakers
+        self.min_speakers = min_speakers
+        self.max_speakers = max_speakers
         self.language = language
         self.path_manager = path_manager
+        self.vocabulary = vocabulary
+        self.pii_detection = pii_detection
+        self.retention = retention
 
         self._client = None
 
@@ -106,6 +126,7 @@ class DalstonTranscriber(Transcriber):
             model=self.model,
             diarization_enabled=self.enable_diarization,
             num_speakers=self.num_speakers if self.enable_diarization else None,
+            pii_detection=self.pii_detection,
         )
 
     def load_model(self) -> None:
@@ -123,7 +144,7 @@ class DalstonTranscriber(Transcriber):
             except ImportError as e:
                 raise ImportError(
                     "Dalston SDK not installed. Install with: "
-                    "pip install git+https://github.com/ssarunic/dalston.git#subdirectory=sdk"
+                    "pip install dalston-sdk@git+https://github.com/ssarunic/dalston.git#subdirectory=sdk"
                 ) from e
 
     def transcribe_audio(
@@ -170,30 +191,44 @@ class DalstonTranscriber(Transcriber):
                 )
             )
 
-        # Determine speaker detection mode
-        speaker_detection = "diarize" if self.enable_diarization else "none"
+        # Use SDK enums for speaker detection
+        from dalston_sdk import SpeakerDetection, TimestampGranularity
+
+        speaker_detection = SpeakerDetection.DIARIZE if self.enable_diarization else SpeakerDetection.NONE
 
         # Use instance language or option language
         effective_language = self.language or options.language or "auto"
 
         try:
-            # Build transcribe kwargs
-            transcribe_kwargs = {
-                "file": None,  # Set below with open()
+            # Build transcribe kwargs using the latest SDK API
+            transcribe_kwargs: Dict[str, Any] = {
+                "file": audio_path,
                 "language": effective_language,
                 "speaker_detection": speaker_detection,
-                "num_speakers": self.num_speakers,
-                "timestamps_granularity": "word",
+                "timestamps_granularity": TimestampGranularity.WORD,
+                "retention": self.retention,
             }
+
             if self.model:
                 transcribe_kwargs["model"] = self.model
 
-            # Submit transcription job
-            with open(audio_path, "rb") as f:
-                transcribe_kwargs["file"] = f
-                job = self._client.transcribe(**transcribe_kwargs)
+            if self.num_speakers is not None:
+                transcribe_kwargs["num_speakers"] = self.num_speakers
+            if self.min_speakers is not None:
+                transcribe_kwargs["min_speakers"] = self.min_speakers
+            if self.max_speakers is not None:
+                transcribe_kwargs["max_speakers"] = self.max_speakers
 
-            logger.info("Transcription job submitted", job_id=job.id)
+            if self.vocabulary:
+                transcribe_kwargs["vocabulary"] = self.vocabulary
+
+            if self.pii_detection:
+                transcribe_kwargs["pii_detection"] = True
+
+            # Submit transcription job - SDK handles file opening
+            job = self._client.transcribe(**transcribe_kwargs)
+
+            logger.info("Transcription job submitted", job_id=str(job.id))
 
             # Report transcription in progress
             if options.progress_callback:
@@ -206,19 +241,22 @@ class DalstonTranscriber(Transcriber):
                 )
 
             # Wait for completion with progress callback
-            def on_progress(status: str, progress: Optional[float] = None):
-                if options.progress_callback and progress is not None:
+            # SDK callback signature: (progress: int, stage: str | None)
+            def on_progress(progress: int, stage: Optional[str] = None):
+                if options.progress_callback:
+                    stage_label = stage or "processing"
                     options.progress_callback(
                         ProgressUpdate(
                             stage=TranscriptionStage.TRANSCRIBING,
-                            progress_pct=int(progress * 100),
-                            message=f"Transcribing: {status}",
+                            progress_pct=progress,
+                            message=f"Transcribing: {stage_label}",
                         )
                     )
 
             completed_job = self._client.wait_for_completion(
                 job.id,
                 poll_interval=POLL_INTERVAL,
+                timeout=MAX_POLL_DURATION,
                 on_progress=on_progress,
             )
 
@@ -235,6 +273,8 @@ class DalstonTranscriber(Transcriber):
 
             return transcript
 
+        except ImportError:
+            raise
         except Exception as e:
             logger.error(
                 "Dalston transcription failed",
@@ -254,8 +294,11 @@ class DalstonTranscriber(Transcriber):
         """
         Convert Dalston job response to Transcript model.
 
+        The SDK returns typed dataclass objects (dalston_sdk.types.Job,
+        dalston_sdk.types.Transcript, etc.) so we access fields directly.
+
         Args:
-            job: Completed Dalston job object.
+            job: Completed Dalston Job object.
             audio_path: Original audio file path.
             start_time: Transcription start time for processing_time calculation.
             requested_language: Explicitly requested language.
@@ -265,24 +308,28 @@ class DalstonTranscriber(Transcriber):
         """
         processing_time = time.time() - start_time
 
-        # Get transcript data
+        # Get transcript data from SDK Job object
         transcript_data = job.transcript
 
-        # Use explicitly requested language if provided, otherwise use auto-detected
+        # Use explicitly requested language if provided, otherwise use SDK's detected language
         if requested_language and requested_language != "auto":
             language = requested_language
         else:
-            language = getattr(transcript_data, "language", "en") or "en"
+            language = getattr(transcript_data, "language_code", "en") or "en"
 
         # Extract full text
-        full_text = transcript_data.text if hasattr(transcript_data, "text") else ""
+        full_text = transcript_data.text if transcript_data else ""
 
-        # Build words and segments from response
+        # Build words and segments from SDK response
         words = self._parse_words(transcript_data)
-        segments = self._build_segments(words, transcript_data)
+        segments = self._build_segments(transcript_data)
 
-        # Count unique speakers
-        speakers_detected = len(set(w.speaker for w in words if w.speaker))
+        # Count unique speakers from SDK's speakers list or from segments
+        speakers_detected = 0
+        if transcript_data and transcript_data.speakers:
+            speakers_detected = len(transcript_data.speakers)
+        elif segments:
+            speakers_detected = len(set(s.speaker for s in segments if s.speaker))
 
         return Transcript(
             audio_file=audio_path,
@@ -296,180 +343,150 @@ class DalstonTranscriber(Transcriber):
             speakers_detected=speakers_detected if speakers_detected > 0 else None,
             provider_metadata={
                 "provider": "dalston",
-                "job_id": job.id,
+                "job_id": str(job.id),
                 "base_url": self.base_url,
+                "current_stage": getattr(job, "current_stage", None),
             },
         )
 
     def _parse_words(self, transcript_data: Any) -> List[Word]:
         """
-        Parse words from Dalston transcript response.
+        Parse words from Dalston SDK Transcript object.
+
+        The SDK returns Word dataclasses with fields:
+        - text: str
+        - start: float
+        - end: float
+        - confidence: float | None
+        - speaker_id: str | None
 
         Args:
-            transcript_data: Transcript data from Dalston job.
+            transcript_data: SDK Transcript dataclass.
 
         Returns:
-            List of Word objects.
+            List of thestill Word objects.
         """
+        if not transcript_data or not transcript_data.words:
+            return []
+
         words = []
         speaker_mapping: Dict[str, str] = {}
 
-        # Get segments from transcript
-        segments = getattr(transcript_data, "segments", []) or []
-
-        for segment in segments:
-            segment_speaker = getattr(segment, "speaker", None) or getattr(segment, "speaker_id", None)
-
-            # Map speaker to standard format
+        for sdk_word in transcript_data.words:
+            # Map speaker_id to standard SPEAKER_NN format
             speaker = None
-            if segment_speaker:
-                if segment_speaker not in speaker_mapping:
+            if sdk_word.speaker_id:
+                if sdk_word.speaker_id not in speaker_mapping:
                     speaker_num = len(speaker_mapping) + 1
-                    speaker_mapping[segment_speaker] = f"SPEAKER_{speaker_num:02d}"
-                speaker = speaker_mapping[segment_speaker]
+                    speaker_mapping[sdk_word.speaker_id] = f"SPEAKER_{speaker_num:02d}"
+                speaker = speaker_mapping[sdk_word.speaker_id]
 
-            # Check if segment has word-level data
-            segment_words = getattr(segment, "words", None)
-            if segment_words:
-                for word_data in segment_words:
-                    words.append(
-                        Word(
-                            word=getattr(word_data, "text", "") or getattr(word_data, "word", ""),
-                            start=getattr(word_data, "start_time", None) or getattr(word_data, "start", None),
-                            end=getattr(word_data, "end_time", None) or getattr(word_data, "end", None),
-                            probability=getattr(word_data, "confidence", None),
-                            speaker=speaker,
-                        )
-                    )
-            else:
-                # No word-level data, create a single word from segment text
-                segment_text = getattr(segment, "text", "")
-                if segment_text:
-                    words.append(
-                        Word(
-                            word=segment_text,
-                            start=getattr(segment, "start_time", None) or getattr(segment, "start", None),
-                            end=getattr(segment, "end_time", None) or getattr(segment, "end", None),
-                            probability=None,
-                            speaker=speaker,
-                        )
-                    )
+            words.append(
+                Word(
+                    word=sdk_word.text,
+                    start=sdk_word.start,
+                    end=sdk_word.end,
+                    probability=sdk_word.confidence,
+                    speaker=speaker,
+                )
+            )
 
         return words
 
-    def _build_segments(self, words: List[Word], transcript_data: Any) -> List[Segment]:
+    def _build_segments(self, transcript_data: Any) -> List[Segment]:
         """
-        Build segments from words or directly from transcript segments.
+        Build segments from Dalston SDK Transcript object.
+
+        The SDK returns Segment dataclasses with fields:
+        - id: int
+        - text: str
+        - start: float
+        - end: float
+        - speaker_id: str | None
+        - words: list[Word] | None
 
         Args:
-            words: List of Word objects with timestamps and speakers.
-            transcript_data: Original transcript data for segment boundaries.
+            transcript_data: SDK Transcript dataclass.
 
         Returns:
-            List of Segment objects.
+            List of thestill Segment objects.
         """
-        # If transcript has explicit segments, use those
-        raw_segments = getattr(transcript_data, "segments", []) or []
-
-        if raw_segments:
-            segments = []
-            speaker_mapping: Dict[str, str] = {}
-            word_idx = 0
-
-            for seg_idx, raw_seg in enumerate(raw_segments):
-                seg_speaker = getattr(raw_seg, "speaker", None) or getattr(raw_seg, "speaker_id", None)
-
-                # Map speaker to standard format
-                speaker = None
-                if seg_speaker:
-                    if seg_speaker not in speaker_mapping:
-                        speaker_num = len(speaker_mapping) + 1
-                        speaker_mapping[seg_speaker] = f"SPEAKER_{speaker_num:02d}"
-                    speaker = speaker_mapping[seg_speaker]
-
-                seg_text = getattr(raw_seg, "text", "")
-                seg_start = getattr(raw_seg, "start_time", None) or getattr(raw_seg, "start", 0.0)
-                seg_end = getattr(raw_seg, "end_time", None) or getattr(raw_seg, "end", seg_start)
-
-                # Collect words for this segment
-                seg_words = []
-                raw_words = getattr(raw_seg, "words", None)
-                if raw_words:
-                    # Use words from segment
-                    for _ in raw_words:
-                        if word_idx < len(words):
-                            seg_words.append(words[word_idx])
-                            word_idx += 1
-                elif word_idx < len(words):
-                    # Assign next word to this segment
-                    seg_words.append(words[word_idx])
-                    word_idx += 1
-
-                segments.append(
-                    Segment(
-                        id=seg_idx,
-                        start=seg_start,
-                        end=seg_end,
-                        text=seg_text.strip(),
-                        speaker=speaker,
-                        words=seg_words if seg_words else None,
-                    )
-                )
-
-            return segments
-
-        # Fallback: build segments from words by speaker changes
-        if not words:
+        if not transcript_data or not transcript_data.segments:
             return []
 
         segments = []
-        segment_id = 0
-        current_speaker = words[0].speaker
-        current_words: List[Word] = []
-        segment_start = words[0].start or 0.0
+        speaker_mapping: Dict[str, str] = {}
 
-        for word in words:
-            if word.speaker != current_speaker and current_words:
-                # Save current segment
-                segment_text = " ".join(w.word for w in current_words if w.word)
-                segment_end = current_words[-1].end or current_words[-1].start or segment_start
+        for sdk_seg in transcript_data.segments:
+            # Map speaker_id to standard SPEAKER_NN format
+            speaker = None
+            if sdk_seg.speaker_id:
+                if sdk_seg.speaker_id not in speaker_mapping:
+                    speaker_num = len(speaker_mapping) + 1
+                    speaker_mapping[sdk_seg.speaker_id] = f"SPEAKER_{speaker_num:02d}"
+                speaker = speaker_mapping[sdk_seg.speaker_id]
 
-                segments.append(
-                    Segment(
-                        id=segment_id,
-                        start=segment_start,
-                        end=segment_end,
-                        text=segment_text.strip(),
-                        speaker=current_speaker,
-                        words=current_words,
+            # Convert SDK words to thestill Words
+            seg_words = None
+            if sdk_seg.words:
+                seg_words = [
+                    Word(
+                        word=w.text,
+                        start=w.start,
+                        end=w.end,
+                        probability=w.confidence,
+                        speaker=speaker,
                     )
-                )
-                segment_id += 1
-
-                # Start new segment
-                current_speaker = word.speaker
-                current_words = []
-                segment_start = word.start or segment_end
-
-            current_words.append(word)
-
-        # Save final segment
-        if current_words:
-            segment_text = " ".join(w.word for w in current_words if w.word)
-            segment_end = current_words[-1].end or current_words[-1].start or segment_start
+                    for w in sdk_seg.words
+                ]
 
             segments.append(
                 Segment(
-                    id=segment_id,
-                    start=segment_start,
-                    end=segment_end,
-                    text=segment_text.strip(),
-                    speaker=current_speaker,
-                    words=current_words,
+                    id=sdk_seg.id,
+                    start=sdk_seg.start,
+                    end=sdk_seg.end,
+                    text=sdk_seg.text.strip(),
+                    speaker=speaker,
+                    words=seg_words,
                 )
             )
 
         return segments
+
+    def export_transcript(self, job_id: str, format: str = "srt") -> str:
+        """
+        Export a completed transcript in the specified format.
+
+        Args:
+            job_id: The Dalston job ID.
+            format: Export format - "srt", "vtt", "txt", or "json".
+
+        Returns:
+            Exported transcript as string.
+        """
+        self.load_model()
+
+        from dalston_sdk import ExportFormat
+
+        format_map = {
+            "srt": ExportFormat.SRT,
+            "vtt": ExportFormat.VTT,
+            "txt": ExportFormat.TXT,
+            "json": ExportFormat.JSON,
+        }
+        export_format = format_map.get(format.lower(), ExportFormat.SRT)
+
+        return self._client.export(job_id, format=export_format)
+
+    def health_check(self) -> bool:
+        """Check if the Dalston server is healthy."""
+        self.load_model()
+        try:
+            status = self._client.health()
+            return status.status == "ok"
+        except Exception as e:
+            logger.warning("Dalston health check failed", error=str(e))
+            return False
 
     def _save_transcript(self, transcript: Transcript, output_path: str) -> None:
         """Save transcript to JSON file."""

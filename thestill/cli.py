@@ -1430,21 +1430,32 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         try:
             from .core.dalston_transcriber import DalstonTranscriber
 
+            vocabulary = None
+            if config.dalston_vocabulary:
+                vocabulary = [v.strip() for v in config.dalston_vocabulary.split(",") if v.strip()]
+
             transcriber = DalstonTranscriber(
                 base_url=config.dalston_base_url,
                 api_key=config.dalston_api_key or None,
                 model=config.dalston_model or None,
                 enable_diarization=config.enable_diarization,
                 num_speakers=config.max_speakers,
+                min_speakers=config.min_speakers,
+                max_speakers=config.max_speakers,
                 path_manager=config.path_manager,
+                vocabulary=vocabulary,
+                pii_detection=config.dalston_pii_detection,
+                retention=config.dalston_retention,
             )
             click.echo(f"   Server: {config.dalston_base_url}")
             if config.dalston_model:
                 click.echo(f"   Model: {config.dalston_model}")
+            if config.dalston_pii_detection:
+                click.echo("   PII detection: enabled")
         except ImportError as e:
             click.echo(f"❌ {e}", err=True)
             click.echo(
-                "   Install with: pip install git+https://github.com/ssarunic/dalston.git#subdirectory=sdk",
+                "   Install with: pip install dalston-sdk@git+https://github.com/ssarunic/dalston.git#subdirectory=sdk",
                 err=True,
             )
             ctx.exit(1)

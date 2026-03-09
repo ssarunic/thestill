@@ -595,13 +595,22 @@ def _create_transcriber(
     elif config.transcription_provider.lower() == "dalston":
         from .dalston_transcriber import DalstonTranscriber
 
+        vocabulary = None
+        if config.dalston_vocabulary:
+            vocabulary = [v.strip() for v in config.dalston_vocabulary.split(",") if v.strip()]
+
         return DalstonTranscriber(
             base_url=config.dalston_base_url or None,
             api_key=config.dalston_api_key or None,
             model=config.dalston_model or None,
             enable_diarization=config.enable_diarization,
             num_speakers=config.max_speakers,
+            min_speakers=config.min_speakers,
+            max_speakers=config.max_speakers,
             path_manager=path_manager,
+            vocabulary=vocabulary,
+            pii_detection=config.dalston_pii_detection,
+            retention=config.dalston_retention,
         )
     elif config.enable_diarization:
         from .whisper_transcriber import WhisperXTranscriber
