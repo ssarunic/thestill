@@ -70,6 +70,7 @@ dev = [
     "mypy>=1.7.0",
     "pylint>=3.0.0",
     "ruff>=0.1.0",
+    "jiwer>=3.0.0",
 ]
 web = [
     # Web server dependencies (FastAPI and uvicorn are in main deps)
