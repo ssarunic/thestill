@@ -465,7 +465,7 @@ export interface QueueTasksResponse {
   status: string
   timestamp: string
   worker_running: boolean
-  processing_task: QueuedTaskWithContext | null
+  processing_tasks: QueuedTaskWithContext[]
   pending_tasks: QueuedTaskWithContext[]
   retry_scheduled_tasks: QueuedTaskWithContext[]
   completed_tasks: QueuedTaskWithContext[]

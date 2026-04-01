@@ -60,6 +60,7 @@ class Config(BaseModel):
 
     # Processing Configuration
     max_workers: int = 3
+    parallel_jobs: int = 1  # Number of episodes to process in parallel (1 = sequential)
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
@@ -210,6 +211,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
         # clean_transcripts_path, summaries_path, evaluations_path
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
+        "parallel_jobs": int(os.getenv("PARALLEL_JOBS", "1")),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None

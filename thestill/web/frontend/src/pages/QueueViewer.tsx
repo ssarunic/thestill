@@ -222,7 +222,7 @@ export default function QueueViewer() {
 
   const {
     worker_running,
-    processing_task,
+    processing_tasks,
     pending_tasks,
     retry_scheduled_tasks,
     completed_tasks,
@@ -232,7 +232,7 @@ export default function QueueViewer() {
     completed_shown,
   } = data || {
     worker_running: false,
-    processing_task: null,
+    processing_tasks: [],
     pending_tasks: [],
     retry_scheduled_tasks: [],
     completed_tasks: [],
@@ -243,7 +243,7 @@ export default function QueueViewer() {
   }
 
   const isQueueIdle =
-    !processing_task && pending_count === 0 && retry_scheduled_count === 0
+    processing_tasks.length === 0 && pending_count === 0 && retry_scheduled_count === 0
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -300,13 +300,17 @@ export default function QueueViewer() {
       ) : (
         <>
           {/* Currently Processing */}
-          {processing_task && (
+          {processing_tasks.length > 0 && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                Currently Processing
+                Currently Processing ({processing_tasks.length})
               </h2>
-              <TaskCard task={processing_task} />
+              <div className="space-y-3">
+                {processing_tasks.map((task) => (
+                  <TaskCard key={task.task_id} task={task} />
+                ))}
+              </div>
             </div>
           )}
 

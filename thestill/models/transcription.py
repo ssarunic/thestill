@@ -38,5 +38,8 @@ class TranscribeOptions:
     podcast_slug: str | None = None
     episode_slug: str | None = None
 
+    # Remote audio URL (allows providers like Dalston to fetch audio directly)
+    audio_url: str | None = None
+
     # Progress reporting
     progress_callback: Callable[[float], None] | None = None

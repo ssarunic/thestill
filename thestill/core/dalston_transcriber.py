@@ -134,39 +134,52 @@ class DalstonTranscriber(Transcriber):
         options: TranscribeOptions,
     ) -> Optional[Transcript]:
         """
-        Transcribe audio file using Dalston server.
+        Transcribe audio using Dalston server.
+
+        Supports two modes:
+        - File upload: sends local audio file to the server
+        - URL fetch: server downloads audio directly via options.audio_url
+          (skips local download/downsample steps)
 
         Args:
-            audio_path: Path to audio file.
+            audio_path: Path to audio file (used for metadata even in URL mode).
             output_path: Optional path to save transcript JSON.
-            options: Transcription options including language and episode context.
+            options: Transcription options including language and audio_url.
 
         Returns:
             Transcript object with segments and metadata.
         """
         self.load_model()
 
-        audio_file = Path(audio_path)
-        if not audio_file.exists():
-            logger.error("Audio file not found", audio_path=audio_path)
-            return None
+        use_url = bool(options.audio_url)
 
-        file_size_mb = audio_file.stat().st_size / (1024 * 1024)
-        logger.info(
-            "Starting Dalston transcription",
-            file_name=audio_file.name,
-            file_size_mb=round(file_size_mb, 1),
-        )
+        if not use_url:
+            audio_file = Path(audio_path)
+            if not audio_file.exists():
+                logger.error("Audio file not found", audio_path=audio_path)
+                return None
+            file_size_mb = audio_file.stat().st_size / (1024 * 1024)
+            logger.info(
+                "Starting Dalston transcription (file upload)",
+                file_name=audio_file.name,
+                file_size_mb=round(file_size_mb, 1),
+            )
+        else:
+            logger.info(
+                "Starting Dalston transcription (URL fetch)",
+                audio_url=options.audio_url,
+            )
 
         start_time = time.time()
 
-        # Report upload progress
+        # Report progress
         if options.progress_callback:
+            msg = "Dalston fetching audio from URL..." if use_url else "Uploading to Dalston server..."
             options.progress_callback(
                 ProgressUpdate(
                     stage=TranscriptionStage.UPLOADING,
                     progress_pct=0,
-                    message="Uploading to Dalston server...",
+                    message=msg,
                 )
             )
 
@@ -179,7 +192,6 @@ class DalstonTranscriber(Transcriber):
         try:
             # Build transcribe kwargs
             transcribe_kwargs = {
-                "file": None,  # Set below with open()
                 "language": effective_language,
                 "speaker_detection": speaker_detection,
                 "num_speakers": self.num_speakers,
@@ -188,10 +200,14 @@ class DalstonTranscriber(Transcriber):
             if self.model:
                 transcribe_kwargs["model"] = self.model
 
-            # Submit transcription job
-            with open(audio_path, "rb") as f:
-                transcribe_kwargs["file"] = f
+            # Submit transcription job via URL or file upload
+            if use_url:
+                transcribe_kwargs["audio_url"] = options.audio_url
                 job = self._client.transcribe(**transcribe_kwargs)
+            else:
+                with open(audio_path, "rb") as f:
+                    transcribe_kwargs["file"] = f
+                    job = self._client.transcribe(**transcribe_kwargs)
 
             logger.info("Transcription job submitted", job_id=job.id)
 

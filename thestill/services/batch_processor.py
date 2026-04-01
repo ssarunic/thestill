@@ -143,6 +143,7 @@ class BatchQueueService:
         queue_manager: QueueManager,
         poll_interval: float = 2.0,
         timeout: Optional[float] = None,
+        transcription_provider: Optional[str] = None,
     ):
         """
         Initialize batch queue service.
@@ -151,10 +152,14 @@ class BatchQueueService:
             queue_manager: QueueManager instance for task operations
             poll_interval: Seconds between status polls when waiting (default: 2.0)
             timeout: Maximum seconds to wait for completion (default: None = no timeout)
+            transcription_provider: Transcription provider name (e.g. "dalston").
+                When "dalston", DISCOVERED episodes skip download/downsample
+                and go straight to TRANSCRIBE (Dalston fetches audio via URL).
         """
         self.queue_manager = queue_manager
         self.poll_interval = poll_interval
         self.timeout = timeout
+        self.transcription_provider = transcription_provider
 
         # Shutdown flag for graceful Ctrl+C handling
         self._shutdown_requested = False
@@ -227,6 +232,15 @@ class BatchQueueService:
         """Queue a single episode, returning QueuedEpisode or None if skipped."""
         # Determine next stage based on current state
         next_stage = STATE_TO_NEXT_STAGE.get(episode.state)
+
+        # Dalston can fetch audio via URL — skip download/downsample for DISCOVERED episodes
+        if (
+            self.transcription_provider == "dalston"
+            and episode.state == EpisodeState.DISCOVERED
+            and episode.audio_url
+            and not episode.downsampled_audio_path
+        ):
+            next_stage = TaskStage.TRANSCRIBE
 
         if next_stage is None:
             reason = (

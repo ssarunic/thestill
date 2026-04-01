@@ -548,7 +548,7 @@ class QueueTasksResponse(BaseModel):
     timestamp: str
     worker_running: bool
     # Task lists
-    processing_task: Optional[QueuedTaskWithContext] = None
+    processing_tasks: list[QueuedTaskWithContext]
     pending_tasks: list[QueuedTaskWithContext]
     retry_scheduled_tasks: list[QueuedTaskWithContext]
     completed_tasks: list[QueuedTaskWithContext]
@@ -595,16 +595,37 @@ class RunPipelineResponse(BaseModel):
     episode_title: str
 
 
-def _get_starting_stage(episode_state: EpisodeState) -> Optional[TaskStage]:
+def _get_starting_stage(
+    episode_state: EpisodeState,
+    *,
+    transcription_provider: Optional[str] = None,
+    has_audio_url: bool = False,
+    has_downsampled_audio: bool = False,
+) -> Optional[TaskStage]:
     """
     Get the next pipeline stage for an episode based on its current state.
 
+    When using Dalston as transcription provider, DISCOVERED episodes with an
+    audio URL skip download/downsample — Dalston fetches audio directly.
+
     Args:
         episode_state: Current episode state
+        transcription_provider: Active transcription provider name
+        has_audio_url: Whether the episode has an audio URL
+        has_downsampled_audio: Whether the episode already has downsampled audio
 
     Returns:
         Next TaskStage to execute, or None if episode is already summarized
     """
+    # Dalston can fetch audio via URL — skip download/downsample for DISCOVERED episodes
+    if (
+        transcription_provider == "dalston"
+        and episode_state == EpisodeState.DISCOVERED
+        and has_audio_url
+        and not has_downsampled_audio
+    ):
+        return TaskStage.TRANSCRIBE
+
     state_to_stage = {
         EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
         EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
@@ -846,7 +867,12 @@ async def run_pipeline(
     podcast, episode = result
 
     # Determine starting stage based on current episode state
-    starting_stage = _get_starting_stage(episode.state)
+    starting_stage = _get_starting_stage(
+        episode.state,
+        transcription_provider=state.config.transcription_provider,
+        has_audio_url=bool(episode.audio_url),
+        has_downsampled_audio=bool(episode.downsampled_audio_path),
+    )
 
     if starting_stage is None:
         raise HTTPException(
@@ -1113,7 +1139,7 @@ async def get_queue_tasks(
         status="ok",
         timestamp=datetime.utcnow().isoformat(),
         worker_running=state.task_worker.is_running(),
-        processing_task=processing[0] if processing else None,
+        processing_tasks=processing,
         pending_tasks=pending,
         retry_scheduled_tasks=retry_scheduled,
         completed_tasks=completed,

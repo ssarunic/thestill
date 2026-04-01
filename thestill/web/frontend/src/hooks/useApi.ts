@@ -347,7 +347,7 @@ export function useQueueTasks(completedLimit = 10) {
       const data = query.state.data
       if (!data) return 5000 // Poll while loading
       const hasActiveTasks =
-        data.processing_task || data.pending_count > 0 || data.retry_scheduled_count > 0
+        data.processing_tasks.length > 0 || data.pending_count > 0 || data.retry_scheduled_count > 0
       return hasActiveTasks ? 5000 : 15000
     },
   })

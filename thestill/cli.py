@@ -2237,7 +2237,10 @@ def digest(
 
         # Step 3: Process episodes through the pipeline
         queue_manager = QueueManager(str(config.database_path))
-        batch_service = BatchQueueService(queue_manager)
+        batch_service = BatchQueueService(
+            queue_manager,
+            transcription_provider=config.transcription_provider,
+        )
 
         # Async mode: queue and return immediately
         if async_mode:

@@ -376,7 +376,11 @@ class QueueManager:
             updated_at=datetime.fromisoformat(now),
         )
 
-    def get_next_task(self, stage: Optional[TaskStage] = None) -> Optional[Task]:
+    def get_next_task(
+        self,
+        stage: Optional[TaskStage] = None,
+        exclude_episode_ids: Optional[set[str]] = None,
+    ) -> Optional[Task]:
         """
         Get the next pending or ready-to-retry task, atomically marking it as 'processing'.
 
@@ -386,6 +390,7 @@ class QueueManager:
 
         Args:
             stage: Optionally filter to a specific stage
+            exclude_episode_ids: Episode IDs to skip (already being processed)
 
         Returns:
             Task if one is available, None otherwise
@@ -398,32 +403,29 @@ class QueueManager:
             conn.execute("BEGIN IMMEDIATE")
 
             try:
-                # Find next task that's either pending OR retry_scheduled and ready
-                # Order: priority DESC, then created_at ASC
+                # Build query with optional filters
+                conditions = ["(status = 'pending' OR (status = 'retry_scheduled' AND next_retry_at <= ?))"]
+                params: list = [now]
+
                 if stage:
-                    cursor = conn.execute(
-                        """
-                        SELECT * FROM tasks
-                        WHERE stage = ? AND (
-                            status = 'pending'
-                            OR (status = 'retry_scheduled' AND next_retry_at <= ?)
-                        )
-                        ORDER BY priority DESC, created_at ASC
-                        LIMIT 1
+                    conditions.append("stage = ?")
+                    params.append(stage.value)
+
+                if exclude_episode_ids:
+                    placeholders = ",".join("?" for _ in exclude_episode_ids)
+                    conditions.append(f"episode_id NOT IN ({placeholders})")
+                    params.extend(exclude_episode_ids)
+
+                where = " AND ".join(conditions)
+                cursor = conn.execute(
+                    f"""
+                    SELECT * FROM tasks
+                    WHERE {where}
+                    ORDER BY priority DESC, created_at ASC
+                    LIMIT 1
                     """,
-                        (stage.value, now),
-                    )
-                else:
-                    cursor = conn.execute(
-                        """
-                        SELECT * FROM tasks
-                        WHERE status = 'pending'
-                           OR (status = 'retry_scheduled' AND next_retry_at <= ?)
-                        ORDER BY priority DESC, created_at ASC
-                        LIMIT 1
-                    """,
-                        (now,),
-                    )
+                    params,
+                )
 
                 row = cursor.fetchone()
                 if not row:

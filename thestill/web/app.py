@@ -153,7 +153,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # Create task worker with handlers that have access to app_state
     task_handlers = create_task_handlers(app_state)
-    task_worker = TaskWorker(queue_manager, task_handlers, progress_store=progress_store, repository=repository)
+    task_worker = TaskWorker(
+        queue_manager,
+        task_handlers,
+        progress_store=progress_store,
+        repository=repository,
+        parallel_jobs=config.parallel_jobs,
+    )
     app_state.task_worker = task_worker
 
     @asynccontextmanager

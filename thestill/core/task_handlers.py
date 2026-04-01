@@ -294,15 +294,21 @@ def handle_transcribe(
 
     podcast, episode = _get_episode_or_fail(task, state)
 
-    if not episode.downsampled_audio_path:
-        raise FatalError(f"No downsampled audio path for episode: {task.episode_id}")
-
     config = state.config
 
-    # Verify audio file exists
-    audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
-    if not audio_file.exists():
-        raise FatalError(f"Downsampled audio file not found: {audio_file}")
+    # Dalston can fetch audio directly via URL, skipping download/downsample
+    use_dalston_url = (
+        config.transcription_provider == "dalston" and episode.audio_url and not episode.downsampled_audio_path
+    )
+
+    if not use_dalston_url:
+        if not episode.downsampled_audio_path:
+            raise FatalError(f"No downsampled audio path for episode: {task.episode_id}")
+
+        # Verify audio file exists
+        audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
+        if not audio_file.exists():
+            raise FatalError(f"Downsampled audio file not found: {audio_file}")
 
     # Transcription errors are usually transient (API issues, rate limits)
     with _handler_error_context(f"transcribing {episode.title}"):
@@ -312,16 +318,20 @@ def handle_transcribe(
         logger.debug(f"Transcriber created: {type(transcriber).__name__}")
 
         # Determine output path
-        path_parts = Path(episode.downsampled_audio_path).parts
-        if len(path_parts) >= 2:
-            podcast_subdir = path_parts[0]
-        else:
+        if use_dalston_url:
             podcast_subdir = podcast.slug
+            # Build a stable filename from episode slug
+            transcript_filename = f"{episode.slug}_transcript.json"
+            audio_path_for_transcriber = f"{podcast_subdir}/{episode.slug}"
+        else:
+            path_parts = Path(episode.downsampled_audio_path).parts
+            podcast_subdir = path_parts[0] if len(path_parts) >= 2 else podcast.slug
+            transcript_filename = f"{audio_file.stem}_transcript.json"
+            audio_path_for_transcriber = str(audio_file)
 
         transcript_dir = config.path_manager.raw_transcripts_dir() / podcast_subdir
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
-        transcript_filename = f"{audio_file.stem}_transcript.json"
         output = str(transcript_dir / transcript_filename)
         output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
@@ -330,16 +340,21 @@ def handle_transcribe(
         logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
 
         # Transcribe
-        file_size_mb = audio_file.stat().st_size / 1024 / 1024
-        logger.info(f"Starting transcription: {audio_file.name} ({file_size_mb:.1f}MB)")
+        if use_dalston_url:
+            logger.info(f"Starting transcription via URL: {episode.audio_url}")
+        else:
+            file_size_mb = audio_file.stat().st_size / 1024 / 1024
+            logger.info(f"Starting transcription: {audio_file.name} ({file_size_mb:.1f}MB)")
+
         transcript_data = transcriber.transcribe_audio(
-            str(audio_file),
+            audio_path_for_transcriber,
             output,
             options=TranscribeOptions(
                 language=language,
                 episode_id=episode.id,
                 podcast_slug=podcast.slug,
                 episode_slug=episode.slug,
+                audio_url=str(episode.audio_url) if use_dalston_url else None,
                 progress_callback=progress_callback,
             ),
         )

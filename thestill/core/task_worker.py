@@ -15,9 +15,10 @@
 """
 Background task worker for processing queued tasks.
 
-The TaskWorker runs in a background thread, polling the queue for pending
-tasks and executing them using the appropriate handlers. It handles graceful
-shutdown and tracks the currently processing task.
+The TaskWorker runs in a background thread with an internal asyncio event loop,
+polling the queue for pending tasks and executing them using the appropriate
+handlers. It supports parallel job processing controlled by the parallel_jobs
+parameter — when set to 1 (default), tasks execute sequentially as before.
 
 Usage:
     from thestill.core.task_worker import TaskWorker
@@ -27,7 +28,7 @@ Usage:
     queue_manager = QueueManager(db_path)
     handlers = create_task_handlers(app_state)
 
-    worker = TaskWorker(queue_manager, handlers)
+    worker = TaskWorker(queue_manager, handlers, parallel_jobs=2)
     worker.start()
 
     # ... application runs ...
@@ -35,6 +36,7 @@ Usage:
     worker.stop()  # Graceful shutdown
 """
 
+import asyncio
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
@@ -57,8 +59,12 @@ class TaskWorker:
     """
     Background worker that polls the queue and processes tasks.
 
-    Thread-safety: Uses a daemon thread that can be gracefully stopped.
-    Handles task execution errors and updates task status accordingly.
+    Supports concurrent processing of multiple episodes via parallel_jobs.
+    Each job processes one episode through its pipeline stages sequentially,
+    but multiple jobs can run in parallel (e.g., one episode transcribing on
+    Dalston while another is cleaning on Gemini).
+
+    When parallel_jobs=1, behavior is identical to sequential processing.
     """
 
     # Default configuration
@@ -73,6 +79,7 @@ class TaskWorker:
         stale_timeout_minutes: int = DEFAULT_STALE_TIMEOUT,
         progress_store: Optional["ProgressStore"] = None,
         repository: Optional["SqlitePodcastRepository"] = None,
+        parallel_jobs: int = 1,
     ):
         """
         Initialize task worker.
@@ -84,6 +91,7 @@ class TaskWorker:
             stale_timeout_minutes: Minutes before resetting stale tasks
             progress_store: Optional progress store for real-time progress updates
             repository: Optional repository for episode failure tracking
+            parallel_jobs: Max episodes to process in parallel (1 = sequential)
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
@@ -91,11 +99,13 @@ class TaskWorker:
         self.stale_timeout_minutes = stale_timeout_minutes
         self.progress_store = progress_store
         self.repository = repository
+        self.parallel_jobs = max(1, parallel_jobs)
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._current_task: Optional[Task] = None
-        self._lock = threading.Lock()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._active_tasks: dict[str, Task] = {}  # episode_id → Task being processed
+        self._active_lock = threading.Lock()
 
     def start(self) -> None:
         """
@@ -103,32 +113,34 @@ class TaskWorker:
 
         If the worker is already running, this is a no-op.
         """
-        with self._lock:
-            if self._running:
-                logger.warning("task_worker_already_running")
-                return
+        if self._running:
+            logger.warning("task_worker_already_running")
+            return
 
-            self._running = True
-            self._thread = threading.Thread(target=self._worker_loop, daemon=True, name="TaskWorker")
-            self._thread.start()
-            logger.info("task_worker_started")
+        self._running = True
+        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="TaskWorker")
+        self._thread.start()
+        logger.info("task_worker_started", parallel_jobs=self.parallel_jobs)
 
     def stop(self, timeout: float = 10.0) -> None:
         """
         Stop the worker thread gracefully.
 
         Args:
-            timeout: Maximum seconds to wait for current task to complete
+            timeout: Maximum seconds to wait for current tasks to complete
         """
-        with self._lock:
-            if not self._running:
-                logger.debug("task_worker_already_stopped")
-                return
+        if not self._running:
+            logger.debug("task_worker_already_stopped")
+            return
 
-            self._running = False
+        self._running = False
+
+        # Signal the event loop to stop
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
         if self._thread and self._thread.is_alive():
-            logger.info("waiting_for_task_worker", action="finishing_current_task")
+            logger.info("waiting_for_task_worker", action="finishing_current_tasks")
             self._thread.join(timeout=timeout)
 
             if self._thread.is_alive():
@@ -141,46 +153,84 @@ class TaskWorker:
         return self._running and (self._thread is not None and self._thread.is_alive())
 
     def get_current_task(self) -> Optional[Task]:
-        """Get the task currently being processed."""
-        return self._current_task
+        """Get a task currently being processed (first active, for backward compat)."""
+        with self._active_lock:
+            if self._active_tasks:
+                return next(iter(self._active_tasks.values()))
+        return None
 
     def get_status(self) -> dict:
-        """
-        Get worker status information.
-
-        Returns:
-            Dictionary with worker status
-        """
+        """Get worker status information."""
+        with self._active_lock:
+            active_count = len(self._active_tasks)
         return {
             "running": self.is_running(),
-            "current_task": self._current_task.to_dict() if self._current_task else None,
+            "parallel_jobs": self.parallel_jobs,
+            "active_episodes": active_count,
             "poll_interval": self.poll_interval,
         }
 
-    def _worker_loop(self) -> None:
-        """Main worker loop that polls and processes tasks."""
-        logger.info("task_worker_loop_started")
+    def _run_loop(self) -> None:
+        """Run the async event loop in the worker thread."""
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._async_worker_loop())
+        finally:
+            # Cancel remaining tasks
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
+            self._loop = None
+
+    async def _async_worker_loop(self) -> None:
+        """Main async worker loop that polls and dispatches tasks."""
+        logger.info("task_worker_loop_started", parallel_jobs=self.parallel_jobs)
 
         # Reset any stale tasks from previous runs on startup
         self._reset_stale_tasks()
 
+        sem = asyncio.Semaphore(self.parallel_jobs)
+
         while self._running:
             try:
-                # Try to get next task
-                task = self.queue_manager.get_next_task()
+                with self._active_lock:
+                    slots = self.parallel_jobs - len(self._active_tasks)
+                    exclude = set(self._active_tasks.keys()) if self._active_tasks else None
 
-                if task:
-                    self._process_task(task)
-                else:
-                    # No tasks available, sleep before polling again
-                    time.sleep(self.poll_interval)
+                if slots > 0:
+                    for _ in range(slots):
+                        task = self.queue_manager.get_next_task(exclude_episode_ids=exclude)
+                        if task is None:
+                            break
+
+                        with self._active_lock:
+                            if task.episode_id in self._active_tasks:
+                                continue
+                            self._active_tasks[task.episode_id] = task
+                            exclude = set(self._active_tasks.keys())
+
+                        asyncio.create_task(self._process_task_async(task, sem))
+
+                await asyncio.sleep(self.poll_interval)
 
             except Exception as e:
-                # Unexpected error in worker loop - log and continue
                 logger.exception("unexpected_error_in_worker_loop", error=str(e), exc_info=True)
-                time.sleep(self.poll_interval)
+                await asyncio.sleep(self.poll_interval)
 
         logger.info("task_worker_loop_ended")
+
+    async def _process_task_async(self, task: Task, sem: asyncio.Semaphore) -> None:
+        """Process a task in a thread, bounded by the semaphore."""
+        async with sem:
+            try:
+                await asyncio.to_thread(self._process_task, task)
+            finally:
+                with self._active_lock:
+                    self._active_tasks.pop(task.episode_id, None)
 
     def _process_task(self, task: Task) -> None:
         """
@@ -196,8 +246,6 @@ class TaskWorker:
         Args:
             task: Task to process
         """
-        self._current_task = task
-
         # Bind correlation ID for task processing
         import uuid
 
@@ -217,7 +265,6 @@ class TaskWorker:
                 error_msg = f"No handler registered for stage: {task.stage.value}"
                 logger.error("no_handler_for_stage", stage=task.stage.value)
                 self.queue_manager.mark_dead(task.id, error_msg)
-                self._current_task = None
                 return
 
             logger.info("task_processing_started")
@@ -269,7 +316,6 @@ class TaskWorker:
                 self._report_failure(task.id, error_msg)
 
             finally:
-                self._current_task = None
                 # Clean up progress store after a delay to allow final updates to be delivered
                 if self.progress_store:
                     # Schedule cleanup in a separate thread to avoid blocking
@@ -339,10 +385,6 @@ class TaskWorker:
     def _mark_episode_failed(self, task: Task, error_msg: str, failure_type: str) -> None:
         """
         Mark the episode as failed when a task reaches final failure.
-
-        This is called when:
-        - A task encounters a fatal error (immediately marked dead)
-        - A task exhausts all retries (transient errors)
 
         Args:
             task: The failed task
