@@ -254,6 +254,18 @@ class PodcastFeedManager:
                             podcast.language = metadata["language"]
                             metadata_changed = True
 
+                        # Transistor and similar CDNs rotate signed URLs, so stored
+                        # image_url values go stale and 404. Overwrite unconditionally.
+                        if podcast.image_url != metadata.get("image_url"):
+                            logger.info(
+                                "Updating podcast image URL",
+                                podcast_slug=podcast.slug,
+                                old_image_url=podcast.image_url,
+                                new_image_url=metadata.get("image_url"),
+                            )
+                            podcast.image_url = metadata.get("image_url")
+                            metadata_changed = True
+
                         # Update categories (overwrite with current values from RSS)
                         if podcast.primary_category != metadata.get("primary_category"):
                             podcast.primary_category = metadata.get("primary_category")
