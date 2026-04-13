@@ -421,6 +421,18 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=True,
     ),
+    # Ollama/Gemma 4 models - no native structured output (uses JSON mode + Pydantic fallback)
+    # Using very high tpm/rpm/tpd since there are no actual limits
+    # E4B = 4.5B effective parameters (8B total), 128K context, multimodal (text/image/audio)
+    "gemma4:e4b": ModelLimits(
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=128000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
+    ),
     # Ollama/Gemma 3 models - no native structured output (uses JSON mode + Pydantic fallback)
     # Using very high tpm/rpm/tpd since there are no actual limits
     "gemma3:270m": ModelLimits(
