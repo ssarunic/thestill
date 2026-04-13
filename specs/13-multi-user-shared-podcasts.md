@@ -165,7 +165,7 @@ CREATE INDEX idx_user_episodes_saved ON user_episodes(user_id, interest_level)
 
 ### Table: `users` (from auth spec)
 
-Already defined in [authentication.md](authentication.md). Key fields:
+Already defined in [06-authentication.md](06-authentication.md). Key fields:
 
 ```sql
 CREATE TABLE users (
@@ -676,8 +676,8 @@ def get_current_user_cli() -> User:
 
 This specification depends on:
 
-- [Authentication Specification](authentication.md) - User model, auth providers, JWT
-- [Multi-User Web App Specification](multi-user-web-app.md) - Overall architecture context
+- [Authentication Specification](06-authentication.md) - User model, auth providers, JWT
+- [Multi-User Web App Specification](07-multi-user-web-app.md) - Overall architecture context
 
 ---
 

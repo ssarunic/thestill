@@ -167,9 +167,13 @@ These IDs enable tracing requests across all layers of the application.
 
 ### Technical Specs (`specs/`)
 
-- [architecture.md](specs/architecture.md) - Layered architecture, design patterns, data flow
-- [api-reference.md](specs/api-reference.md) - REST API endpoints, request/response formats
-- [error-handling.md](specs/error-handling.md) - Exception hierarchy, retry logic
-- [testing.md](specs/testing.md) - Test strategy, coverage targets, type hints
+See [specs/README.md](specs/README.md) for the full index of reference docs, active plans, and completed work.
+
+Key reference specs:
+
+- [01-architecture.md](specs/01-architecture.md) - Layered architecture, design patterns, data flow
+- [02-api-reference.md](specs/02-api-reference.md) - REST API endpoints, request/response formats
+- [03-error-handling.md](specs/03-error-handling.md) - Exception hierarchy, retry logic
+- [04-testing.md](specs/04-testing.md) - Test strategy, coverage targets, type hints
 
 @AGENTS.md

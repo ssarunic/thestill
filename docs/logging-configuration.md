@@ -601,7 +601,7 @@ logger.info("Downloading episode", episode_id=episode.guid, title=episode.title)
 
 ## Related Documentation
 
-- [Error Handling](../specs/error-handling.md) - Exception patterns and logging guidelines
+- [Error Handling](../specs/03-error-handling.md) - Exception patterns and logging guidelines
 - [Code Guidelines](code-guidelines.md) - Logging best practices and examples
 - [Cloud Deployment](logging-cloud-deployment.md) - AWS and GCP deployment guides
 - [CloudWatch Queries](logging-cloudwatch-queries.md) - CloudWatch Logs Insights query examples
