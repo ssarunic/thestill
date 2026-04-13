@@ -31,6 +31,7 @@ from ...services.podcast_service import extract_summary_preview
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 from ..responses import bad_request, conflict, not_found, paginated_response
+from .api_commands import _get_starting_stage
 
 logger = get_logger(__name__)
 
@@ -61,17 +62,6 @@ class BulkProcessResponse(BaseModel):
     queued: int
     skipped: int
     tasks: List[BulkProcessTaskInfo]
-
-
-# Helper to map episode state to next pipeline stage
-STATE_TO_NEXT_STAGE = {
-    EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
-    EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
-    EpisodeState.DOWNSAMPLED: TaskStage.TRANSCRIBE,
-    EpisodeState.TRANSCRIBED: TaskStage.CLEAN,
-    EpisodeState.CLEANED: TaskStage.SUMMARIZE,
-    # SUMMARIZED has no next stage
-}
 
 
 @router.get("")
@@ -221,8 +211,13 @@ async def bulk_process_episodes(
 
         podcast, episode = result
 
-        # Determine next stage
-        next_stage = STATE_TO_NEXT_STAGE.get(episode.state)
+        # Determine next stage (Dalston-aware: skips download/downsample when possible)
+        next_stage = _get_starting_stage(
+            episode.state,
+            transcription_provider=app_state.config.transcription_provider,
+            has_audio_url=bool(episode.audio_url),
+            has_downsampled_audio=bool(episode.downsampled_audio_path),
+        )
         if not next_stage:
             # Already summarized or unknown state
             skipped += 1
