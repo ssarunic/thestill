@@ -390,10 +390,13 @@ services:
   laptop-relative `./data`. Matches the "don't bind-mount my laptop disk" constraint.
 - `UID` / `GID` are taken from the operator's shell env at build time so the
   in-container user owns the host directory cleanly.
-- `DALSTON_BASE_URL` is plumbed through from `.env` with an empty default, meaning
-  "use hosted Dalston" when unset. When a sibling `dalston` service is added to
-  this compose file on the shared `thestill-net` network, the operator sets it to
-  `http://dalston:<port>` in `.env`. Docker's embedded DNS resolves the name.
+- `DALSTON_BASE_URL` is plumbed through from `.env`. **This variable has no
+  working default** — `DalstonTranscriber` falls through to
+  `http://localhost:8000` when unset, which in-container resolves to
+  thestill's own web server and fails at the first API call. The operator
+  must set it explicitly, either to `http://dalston:<port>` (for a sibling
+  container on the shared `thestill-net` network, resolved via Docker's
+  embedded DNS) or to a reachable URL for a Dalston server on another host.
 - `thestill-net` is declared even though only one service uses it today; this
   avoids a disruptive recreate later when a Dalston sibling is added.
 
@@ -472,27 +475,35 @@ prerequisite in `docs/docker.md`.
 
 #### E1 — `.env.example` additions
 
-Add a documented "Docker deployment" section:
+Add a documented "Docker deployment" section at the end of the file.
+`STORAGE_PATH`, `DATABASE_PATH`, and `TRANSCRIPTION_PROVIDER` are **not**
+settable from `.env` in the Docker path — `docker-compose.yml` hard-overrides
+them in its `environment:` block so they always point at `/data` and
+`dalston` regardless of what the user has in `.env`. This immunizes Docker
+deployments against `.env.example`'s laptop-friendly defaults
+(`STORAGE_PATH=./data`, `TRANSCRIPTION_PROVIDER=whisper`) which would
+otherwise silently break state persistence and runtime transcription.
 
 ```env
-# ---------- Docker deployment ----------
-# Override these only if you need non-default behaviour
-# STORAGE_PATH=/data        # set by the container
-# DATABASE_PATH=/data/podcasts.db   # set by the container
-# LOG_FORMAT=json           # set by the container
-
-# Dalston transcription provider
-# Leave unset to use hosted Dalston; set to http://dalston:<port>
-# when running a sibling container on the thestill-net Docker network
-DALSTON_BASE_URL=
+# ---------- Docker Deployment ----------
+# REQUIRED for the slim Docker image: DALSTON_BASE_URL must point at a
+# reachable Dalston server. Unset falls through to http://localhost:8000
+# inside DalstonTranscriber, which in-container resolves to thestill itself.
+#
+#   DALSTON_BASE_URL=http://dalston:8080       # sibling on thestill-net
+#   DALSTON_BASE_URL=http://192.168.1.50:8080  # Dalston on another host
+# DALSTON_BASE_URL=
 
 # Host UID/GID for data directory ownership (used at build time)
-# UID=1000
-# GID=1000
+# THESTILL_UID=1000
+# THESTILL_GID=1000
 ```
 
-The compose file reads `DALSTON_BASE_URL` via the `environment:` block; the Pi
-operator sets it in `.env` if and when they stand up a sibling Dalston container.
+`DALSTON_BASE_URL` has no working default. The `DalstonTranscriber`
+constructor at `thestill/core/dalston_transcriber.py:92` falls through to
+`DEFAULT_BASE_URL = "http://localhost:8000"` when the env var is unset,
+which in a Docker container points back at thestill's own web server. The
+Pi operator **must** set this explicitly before first run.
 
 ### Phase F — Verification
 

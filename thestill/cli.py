@@ -34,7 +34,6 @@ from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
-from .core.whisper_transcriber import WhisperTranscriber, WhisperXTranscriber
 from .logging import configure_structlog
 from .models.digest import Digest, DigestStatus
 from .models.podcast import EpisodeState
@@ -1455,6 +1454,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         transcriber = ParakeetTranscriber(config.whisper_device, console=ctx.obj.console)
     elif config.enable_diarization:
         click.echo("🎤 Using WhisperX with speaker diarization enabled")
+        from .core.whisper_transcriber import WhisperXTranscriber
+
         transcriber = WhisperXTranscriber(
             model_name=config.whisper_model,
             device=config.whisper_device,
@@ -1467,6 +1468,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         )
     else:
         click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
+        from .core.whisper_transcriber import WhisperTranscriber
+
         transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device, console=ctx.obj.console)
 
     # Mode 1: Standalone file transcription

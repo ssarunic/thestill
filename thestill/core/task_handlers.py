@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Generator, Tuple
 
 from structlog import get_logger
 
-from thestill.utils.exceptions import FatalError, TransientError
+from thestill.utils.exceptions import FatalError, ThestillError, TransientError
 
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
@@ -564,6 +564,92 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         logger.info(f"Summarization completed for episode: {episode.title}")
 
 
+def validate_transcription_provider(config) -> None:
+    """
+    Fail fast if the configured transcription provider cannot be used.
+
+    This check runs at startup so misconfigured deployments surface the
+    problem before any episode is processed. It verifies two things per
+    provider:
+
+    1. The Python module(s) backing the provider are importable. This
+       catches the slim-Docker-image case where `TRANSCRIPTION_PROVIDER`
+       points at a local-transcription provider (whisper / whisperx /
+       parakeet) but the `local-transcription` optional-dependencies
+       extra is not installed.
+    2. Required runtime config is present. This catches the "module is
+       installed but the user forgot to set DALSTON_BASE_URL /
+       ELEVENLABS_API_KEY / GOOGLE_APP_CREDENTIALS" case that otherwise
+       only surfaces at first-transcribe.
+
+    The check uses importlib.util.find_spec rather than a real import
+    so it is cheap, has no side effects, and does not defeat Phase A's
+    lazy-import refactor. It never connects to external services.
+
+    Args:
+        config: Application configuration (thestill.utils.config.Config).
+
+    Raises:
+        ThestillError: With a specific remediation message when the
+            configured provider cannot be used.
+    """
+    import importlib.util
+
+    provider = (config.transcription_provider or "").lower()
+
+    def _require_modules(modules: list[str], extra: str) -> None:
+        missing = [m for m in modules if importlib.util.find_spec(m) is None]
+        if missing:
+            raise ThestillError(
+                f"TRANSCRIPTION_PROVIDER={provider!r} requires {', '.join(missing)} "
+                f"which is not installed. Install with: pip install '.[{extra}]' "
+                f"— or switch TRANSCRIPTION_PROVIDER to a cloud provider "
+                f"(dalston, google, elevenlabs).",
+                provider=provider,
+                missing_modules=missing,
+                remediation_extra=extra,
+            )
+
+    def _require_config(field: str, env_var: str, provider_label: str) -> None:
+        if not getattr(config, field, None):
+            raise ThestillError(
+                f"TRANSCRIPTION_PROVIDER={provider!r} requires {env_var} to be set. "
+                f"Add {env_var}=... to your .env file.",
+                provider=provider,
+                missing_config=env_var,
+                provider_label=provider_label,
+            )
+
+    if provider == "dalston":
+        _require_config("dalston_base_url", "DALSTON_BASE_URL", "Dalston")
+    elif provider == "google":
+        _require_config("google_app_credentials", "GOOGLE_APP_CREDENTIALS", "Google Cloud Speech")
+        _require_config("google_cloud_project_id", "GOOGLE_CLOUD_PROJECT_ID", "Google Cloud Speech")
+    elif provider == "elevenlabs":
+        _require_config("elevenlabs_api_key", "ELEVENLABS_API_KEY", "ElevenLabs")
+    elif provider == "parakeet":
+        _require_modules(["torch", "transformers", "librosa"], "local-transcription")
+    elif provider in ("whisper", "whisperx", ""):
+        # Empty string is the fallback branch in _create_transcriber, which
+        # uses WhisperTranscriber / WhisperXTranscriber.
+        required = ["torch", "whisper"]
+        if config.enable_diarization:
+            required.append("whisperx")
+        _require_modules(required, "local-transcription")
+    else:
+        raise ThestillError(
+            f"Unknown TRANSCRIPTION_PROVIDER={provider!r}. "
+            f"Valid values: dalston, google, elevenlabs, whisper, whisperx, parakeet.",
+            provider=provider,
+        )
+
+    logger.info(
+        "transcription_provider_validated",
+        provider=provider,
+        diarization=config.enable_diarization,
+    )
+
+
 def _create_transcriber(
     config,
     path_manager,
@@ -580,6 +666,8 @@ def _create_transcriber(
     Returns:
         Configured transcriber instance
     """
+    validate_transcription_provider(config)
+
     if config.transcription_provider.lower() == "google":
         from .google_transcriber import GoogleCloudTranscriber
 

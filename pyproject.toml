@@ -5,6 +5,16 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build.targets.wheel]
+# Package the Vite-built SPA into the wheel even though thestill/web/static/
+# is gitignored. Hatchling's VCS filter runs before force-include, so a plain
+# force-include would not work — artifacts whitelists paths unconditionally.
+packages = ["thestill"]
+artifacts = ["thestill/web/static/**"]
+exclude = [
+    "thestill/web/frontend",  # source tree; only the built output in web/static/ ships
+]
+
 [project]
 name = "thestill"
 version = "1.0.0"
@@ -29,9 +39,6 @@ dependencies = [
     "requests>=2.31.0",
     "feedparser>=6.0.10",
     "openai>=1.3.0",
-    "openai-whisper>=20250625",
-    "whisperx>=3.7.0,<4.0.0",  # Pin to 3.7.x for VAD fixes
-    "pyannote.audio>=3.1.1",
     "pydub>=0.25.1",
     "click>=8.1.7",
     "python-dotenv>=1.0.0",
@@ -43,15 +50,13 @@ dependencies = [
     "google-cloud-speech>=2.27.0",
     "google-cloud-storage>=2.10.0",
     "anthropic>=0.39.0",
-    "mistralai>=1.0.0",
+    "mistralai>=1.0.0,<2.0.0",  # 2.x dropped the top-level `Mistral` export used in core/llm_provider.py
     "mcp>=1.0.0",
-    "matplotlib>=3.7.0",
     "tenacity>=8.2.0",
     "python-slugify>=8.0.0",
     "requests-toolbelt>=1.0.0",
     # Logging
     "structlog>=24.1.0",
-    "orjson>=3.9.0",
     "ecs-logging>=2.1.0",
     "structlog-gcp>=0.5.0",
     # Authentication
@@ -77,6 +82,15 @@ web = [
     # Add future web-specific deps here (Jinja2, python-multipart, etc.)
     "jinja2>=3.1.0",
     "python-multipart>=0.0.6",
+]
+local-transcription = [
+    # Local Whisper / WhisperX / Parakeet stack. Not required for cloud
+    # providers (Dalston, Google, ElevenLabs). Pulls torch transitively.
+    "openai-whisper>=20250625",
+    "whisperx>=3.7.0,<4.0.0",  # Pin to 3.7.x for VAD fixes
+    "pyannote.audio>=3.1.1",
+    "transformers>=4.30.0",
+    "librosa>=0.10.0",
 ]
 
 [project.scripts]

@@ -21,18 +21,24 @@ Provides functions to detect and select appropriate compute devices
 
 from typing import Optional, Tuple
 
-import torch
-
 from thestill.utils.console import ConsoleOutput
 
 
 def is_cuda_available() -> bool:
     """Check if CUDA (NVIDIA GPU) is available."""
+    try:
+        import torch  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return False
     return torch.cuda.is_available()
 
 
 def is_mps_available() -> bool:
     """Check if MPS (Apple Metal) is available."""
+    try:
+        import torch  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return False
     return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
 
 

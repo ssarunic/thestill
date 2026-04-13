@@ -170,6 +170,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         logger.info("starting_web_server")
         logger.info("server_configuration", storage_path=str(config.storage_path), database=str(config.database_path))
 
+        # Fail fast on misconfigured transcription provider. In slim Docker
+        # deployments this catches the .env.example default
+        # (TRANSCRIPTION_PROVIDER=whisper) before any episode is processed.
+        from ..core.task_handlers import validate_transcription_provider
+
+        validate_transcription_provider(config)
+
         # Recover any tasks that were interrupted by a previous server restart
         # Exclude transcribe tasks if using cloud providers (they may still be running)
         from ..core.queue_manager import TaskStage

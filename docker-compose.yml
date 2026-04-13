@@ -1,0 +1,54 @@
+networks:
+  thestill-net:
+    driver: bridge
+
+services:
+  thestill:
+    build:
+      context: .
+      target: slim          # change to "full" when Google / ElevenLabs are needed
+      args:
+        THESTILL_UID: "${THESTILL_UID:-1000}"
+        THESTILL_GID: "${THESTILL_GID:-1000}"
+    image: thestill:slim
+    container_name: thestill
+    restart: unless-stopped
+    ports:
+      # Host port 8001 because local dalston-gateway already binds 8000.
+      - "8001:8000"
+    env_file:
+      # LLM API keys and user-specific config are loaded from .env.
+      # DALSTON_BASE_URL must be set in .env — the slim image requires
+      # Dalston transcription and there is no working default.
+      - .env
+    environment:
+      # Hard overrides that must not be overridden by .env. Compose applies
+      # `environment:` after `env_file:`, so these always win. STORAGE_PATH
+      # and DATABASE_PATH must point at the mounted /data volume, not the
+      # `./data` default .env.example ships (which would write to the
+      # container's ephemeral layer and lose all state on restart).
+      # TRANSCRIPTION_PROVIDER is pinned to dalston because this image does
+      # not ship whisper/whisperx/parakeet — those live in the
+      # `local-transcription` optional-dependencies extra.
+      STORAGE_PATH: /data
+      DATABASE_PATH: /data/podcasts.db
+      TRANSCRIPTION_PROVIDER: dalston
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      # dalston-control-plane is reachable over Tailscale on the host, but
+      # Docker Desktop containers don't inherit the host's Tailscale DNS.
+      # Map it to the Tailscale IP so DALSTON_BASE_URL resolves inside.
+      - "dalston-control-plane:100.64.162.62"
+    networks:
+      - thestill-net
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

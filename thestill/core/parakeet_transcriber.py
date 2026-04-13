@@ -23,8 +23,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import torch
-
 from thestill.models.transcript import Segment, Transcript
 from thestill.models.transcription import TranscribeOptions
 from thestill.utils.console import ConsoleOutput
@@ -53,6 +51,7 @@ class ParakeetTranscriber(Transcriber):
             return
 
         try:
+            import torch  # pylint: disable=import-outside-toplevel
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
             self.console.info(f"Loading Parakeet model: {self.model_name}")
@@ -143,6 +142,8 @@ class ParakeetTranscriber(Transcriber):
 
     def _transcribe_chunk(self, audio_array, sample_rate: int) -> str:
         """Transcribe a single audio chunk"""
+        import torch  # pylint: disable=import-outside-toplevel
+
         inputs = self._processor(audio_array, sampling_rate=sample_rate, return_tensors="pt").to(self.device)
 
         with torch.no_grad():

@@ -25,8 +25,6 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import torch
-import whisper
 from pydub import AudioSegment
 from pydub.effects import normalize
 
@@ -222,6 +220,8 @@ class WhisperTranscriber(Transcriber):
         """Lazy load the Whisper model"""
         if self._model is not None:
             return
+
+        import whisper  # pylint: disable=import-outside-toplevel
 
         self.console.info(f"Loading Whisper model: {self.model_name}")
         try:
@@ -833,6 +833,8 @@ class WhisperXTranscriber(Transcriber):
 
             if not PYANNOTE_AVAILABLE:
                 raise ImportError("pyannote.audio is required for speaker diarization")
+
+            import torch  # pylint: disable=import-outside-toplevel
 
             diarize_model = Pipeline.from_pretrained(self.diarization_model, use_auth_token=self.hf_token)
 

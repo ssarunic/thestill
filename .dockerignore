@@ -1,0 +1,46 @@
+# VCS
+.git
+.github
+
+# Python artifacts
+venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+reports
+dist
+build
+*.egg-info
+
+# Host-side data (never ship into the image)
+data/
+evaluation/
+
+# Docs and tests (not needed in the image)
+docs/
+specs/
+tests/
+*.md
+!README.md
+
+# Frontend build inputs and artifacts — the frontend-builder stage runs
+# its own `npm ci`, so node_modules must stay out of the build context.
+thestill/web/frontend/node_modules
+thestill/web/frontend/dist
+# thestill/web/static/ is excluded from the build context because it flows
+# in from the frontend-builder stage via COPY --from, not from the host.
+thestill/web/static/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editor/OS
+.DS_Store
+.vscode
+.idea

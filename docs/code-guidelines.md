@@ -646,8 +646,8 @@ Track these metrics to measure code health:
 1. Justify the need (avoid dependency bloat)
 2. Check license compatibility (Apache 2.0)
 3. Verify maintenance status (recent commits, active issues)
-4. Add to `pyproject.toml` under `dependencies`
-5. Update `requirements.txt` if present
+4. Add to `pyproject.toml` under `dependencies` (or the appropriate
+   `[project.optional-dependencies]` group for optional stacks)
 
 ### Pinning Versions
 
