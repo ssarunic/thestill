@@ -213,7 +213,8 @@ def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:
                 str(audio_path),
             ],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
 
