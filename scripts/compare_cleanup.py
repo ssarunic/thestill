@@ -51,7 +51,9 @@ import shutil
 import sqlite3
 import statistics
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -270,6 +272,53 @@ def shadow_legacy_path(path_manager: PathManager, target: EpisodeTarget) -> Path
     )
 
 
+_PRINT_LOCK = threading.Lock()
+
+
+def _run_cleanups(
+    *,
+    processor: TranscriptCleaningProcessor,
+    path_manager: PathManager,
+    targets: List[EpisodeTarget],
+    concurrency: int,
+) -> None:
+    """Drive the per-episode cleanup in parallel.
+
+    Each episode's cleanup is a self-contained sequence of LLM calls
+    writing to episode-scoped paths — no shared state between them
+    beyond the single ``processor`` (which is itself stateless across
+    calls) and the LLM provider (which is I/O-bound and safe to share
+    across threads for HTTP-backed providers). Setting the routing env
+    vars once up-front keeps them race-free.
+
+    Stays at ``concurrency=1`` by default; callers opt in to parallel
+    execution explicitly because the provider-side rate limit shapes
+    the practical ceiling.
+    """
+    completed = 0
+    total = len(targets)
+
+    def _run_one(index: int, target: EpisodeTarget) -> Tuple[int, EpisodeTarget, Optional[Exception], float]:
+        start = time.time()
+        try:
+            run_dual_cleanup(processor, path_manager, target)
+            return index, target, None, time.time() - start
+        except Exception as exc:  # pylint: disable=broad-except
+            return index, target, exc, time.time() - start
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(_run_one, idx, target) for idx, target in enumerate(targets, start=1)]
+        for future in as_completed(futures):
+            index, target, error, elapsed = future.result()
+            with _PRINT_LOCK:
+                completed += 1
+                label = f"[{completed:>2}/{total}] ep{index:>2}"
+                if error is None:
+                    print(f"{label} ✓ {target.podcast_slug} / {target.episode_slug} ({elapsed:.1f}s)")
+                else:
+                    print(f"{label} ✗ {target.podcast_slug} / {target.episode_slug} ({elapsed:.1f}s) — {error}")
+
+
 def run_dual_cleanup(
     processor: TranscriptCleaningProcessor,
     path_manager: PathManager,
@@ -277,12 +326,12 @@ def run_dual_cleanup(
 ) -> None:
     """Execute the cleaning processor with segmented primary + legacy shadow.
 
-    Env vars are set for the duration of this call. The processor reads
-    them inside ``clean_transcript`` and both pipelines run side by side.
+    The caller is responsible for setting ``THESTILL_CLEANUP_PIPELINE``
+    and ``THESTILL_LEGACY_CLEANUP_SHADOW`` env vars before invoking —
+    the processor reads them during ``clean_transcript``. Setting them
+    here would be redundant and thread-unsafe (same-value writes are
+    benign, but noisy when running in parallel).
     """
-    os.environ["THESTILL_CLEANUP_PIPELINE"] = "segmented"
-    os.environ["THESTILL_LEGACY_CLEANUP_SHADOW"] = "1"
-
     raw_path = path_manager.raw_transcript_file(target.raw_transcript_path)
     with raw_path.open("r", encoding="utf-8") as fh:
         transcript_data = json.load(fh)
@@ -619,7 +668,22 @@ def main() -> int:
         default=None,
         help="Optional path to save the metrics as JSON (in addition to stdout)",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Number of episodes to clean in parallel (default 1). Each episode's "
+            "cleanup is an independent sequence of LLM calls, so this scales "
+            "nearly linearly up to the provider's per-minute rate limit. Mind "
+            "your API bill at high values."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.concurrency < 1:
+        print("❌ --concurrency must be >= 1", file=sys.stderr)
+        return 1
 
     config = load_config()
     path_manager = PathManager(storage_path=args.storage_path)
@@ -667,18 +731,22 @@ def main() -> int:
         print(f"\nLLM: {config.llm_provider.upper()} / {llm_provider.get_model_name()}")
         processor = TranscriptCleaningProcessor(llm_provider)
 
+        # Env vars are process-wide. Set once before any worker kicks off
+        # so no thread races on them. The processor re-reads them on each
+        # call, but they never change within this run.
         os.environ["THESTILL_CLEANUP_PIPELINE"] = "segmented"
         os.environ["THESTILL_LEGACY_CLEANUP_SHADOW"] = "1"
-        print("Env: THESTILL_CLEANUP_PIPELINE=segmented THESTILL_LEGACY_CLEANUP_SHADOW=1")
+        print(
+            "Env: THESTILL_CLEANUP_PIPELINE=segmented "
+            f"THESTILL_LEGACY_CLEANUP_SHADOW=1  concurrency={args.concurrency}"
+        )
 
-        for idx, target in enumerate(targets, start=1):
-            print(f"\n[{idx}/{len(targets)}] Re-running cleanup: " f"{target.podcast_slug} / {target.episode_slug}")
-            start = time.time()
-            try:
-                run_dual_cleanup(processor, path_manager, target)
-                print(f"    done in {time.time() - start:.1f}s")
-            except Exception as exc:  # pylint: disable=broad-except
-                print(f"    ❌ failed: {exc}")
+        _run_cleanups(
+            processor=processor,
+            path_manager=path_manager,
+            targets=targets,
+            concurrency=args.concurrency,
+        )
 
     facts_manager = FactsManager(path_manager)
     reports: List[EpisodeReport] = []
