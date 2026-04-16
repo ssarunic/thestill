@@ -162,6 +162,17 @@ class SegmentedTranscriptCleaner:
         are preserved unchanged — the patch schema forbids the LLM from
         touching them.
         """
+        # Apply speaker-name substitution up-front. This mirrors the
+        # legacy cleaner's Stage 2a (deterministic, no LLM, applied
+        # before the text-cleanup pass) but operates on the structured
+        # ``speaker`` field instead of doing a regex over Markdown. The
+        # LLM then sees real names in every batch's payload, which makes
+        # entity repair more effective — it can cross-reference
+        # mis-transcribed name mentions against the speaker labels.
+        # Unmapped speakers pass through as ``SPEAKER_NN`` so missing
+        # facts surface as a visible signal rather than silent drift.
+        source = _apply_speaker_mapping(annotated.segments, episode_facts.speaker_mapping)
+
         system_prompt = self._build_system_prompt(
             language=language,
             podcast_facts=podcast_facts,
@@ -169,7 +180,6 @@ class SegmentedTranscriptCleaner:
         )
 
         cleaned: List[AnnotatedSegment] = []
-        source = annotated.segments
         total = len(source)
         index = 0
         while index < total:
@@ -439,3 +449,54 @@ def _segment_to_prompt_dict(segment: AnnotatedSegment) -> Dict[str, object]:
         "text": segment.text,
         "kind": segment.kind,
     }
+
+
+def _apply_speaker_mapping(
+    segments: List[AnnotatedSegment],
+    mapping: Dict[str, str],
+) -> List[AnnotatedSegment]:
+    """Return a new segment list with speaker ids substituted by real names.
+
+    Mirrors the deterministic substitution the legacy
+    :meth:`thestill.core.transcript_cleaner.TranscriptCleaner._apply_speaker_mapping`
+    did as Stage 2a, but operates on the structured ``speaker`` field of
+    each :class:`AnnotatedSegment` rather than doing a regex over
+    Markdown text.
+
+    - An empty or ``None`` ``mapping`` passes through unchanged.
+    - Entries with an empty name in the mapping are skipped (ids left
+      unchanged) — same semantics as the legacy stage.
+    - Trailing ``" (Role)"`` annotations are stripped so
+      ``"Scott Galloway (Host)"`` renders as ``"Scott Galloway"``.
+      Only the *last* parenthesised block is stripped, so a name like
+      ``"A (B) (Host)"`` becomes ``"A (B)"``.
+    - Unmapped speakers (and ``speaker=None`` segments) pass through
+      unchanged. ``SPEAKER_NN`` labels that survive to output are a
+      visible canary: facts extraction missed that speaker and the
+      facts file needs editing + a re-clean.
+    """
+    if not mapping:
+        return segments
+
+    normalised: Dict[str, str] = {}
+    for speaker_id, name in mapping.items():
+        if not name:
+            continue
+        clean = name
+        if " (" in clean and clean.endswith(")"):
+            clean = clean.rsplit(" (", 1)[0]
+        clean = clean.strip()
+        if clean:
+            normalised[speaker_id] = clean
+
+    if not normalised:
+        return segments
+
+    return [
+        (
+            segment.model_copy(update={"speaker": normalised[segment.speaker]})
+            if segment.speaker is not None and segment.speaker in normalised
+            else segment
+        )
+        for segment in segments
+    ]
