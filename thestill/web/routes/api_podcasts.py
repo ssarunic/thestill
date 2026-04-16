@@ -266,15 +266,39 @@ async def get_episode_transcript_by_slugs(
     if transcript_result is None:
         not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
-    return api_response(
-        {
-            "episode_id": episode.id,
-            "episode_title": episode.title,
-            "content": transcript_result.content,
-            "available": transcript_result.transcript_type is not None,
-            "transcript_type": transcript_result.transcript_type,
+    # Spec #18 Phase D: the response envelope stays backwards-compatible —
+    # ``content``/``transcript_type``/``available`` are always present with
+    # the same meaning. Two optional fields are added when the relevant
+    # artefacts exist on disk:
+    #
+    # - ``segments``: the ``AnnotatedTranscript`` JSON sidecar contents,
+    #   populated iff ``episode.clean_transcript_json_path`` resolves to
+    #   a readable file.
+    # - ``shadow``: the dual-pipeline debug file ``{pipeline, content}``,
+    #   populated iff a ``debug/*.shadow_*.md`` file exists next to the
+    #   primary cleaned MD.
+    #
+    # Both keys are omitted entirely when absent — absence is the signal.
+    response_payload: dict = {
+        "episode_id": episode.id,
+        "episode_title": episode.title,
+        "content": transcript_result.content,
+        "available": transcript_result.transcript_type is not None,
+        "transcript_type": transcript_result.transcript_type,
+    }
+
+    segmented = state.podcast_service.get_segmented_transcript(podcast.id, episode.id)
+    if segmented is not None:
+        response_payload["segments"] = segmented.annotated.model_dump()
+
+    shadow = state.podcast_service.get_shadow_transcript(podcast.id, episode.id)
+    if shadow is not None:
+        response_payload["shadow"] = {
+            "pipeline": shadow.pipeline,
+            "content": shadow.content,
         }
-    )
+
+    return api_response(response_payload)
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")

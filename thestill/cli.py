@@ -18,6 +18,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -688,14 +689,24 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
                 click.echo("")  # End the streamed output with newline
 
             if result:
+                # Derive the DB-relative JSON sidecar path from the MD
+                # filename — the processor writes it alongside the MD
+                # when the segmented pipeline is the primary producer.
+                # Only set it on the DB row when that pipeline actually
+                # ran; otherwise we'd point at a non-existent file.
+                clean_transcript_json_db_path: Optional[str] = None
+                if result.get("cleaned_json_path"):
+                    json_filename = f"{cleaned_filename[:-3]}.json"
+                    clean_transcript_json_db_path = f"{podcast.slug}/{json_filename}"
+
                 # Update feed manager
                 # Note: raw_transcript_path is preserved (episode.raw_transcript_path)
-                # Only clean_transcript_path is updated
                 feed_manager.mark_episode_processed(
                     str(podcast.rss_url),
                     episode.external_id,
                     raw_transcript_path=episode.raw_transcript_path,
                     clean_transcript_path=clean_transcript_db_path,
+                    clean_transcript_json_path=clean_transcript_json_db_path,
                 )
 
                 total_processed += 1

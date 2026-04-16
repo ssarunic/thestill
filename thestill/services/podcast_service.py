@@ -24,6 +24,7 @@ from pydantic import BaseModel, computed_field
 from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
+from ..models.annotated_transcript import AnnotatedTranscript
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
@@ -90,6 +91,31 @@ class TranscriptResult(NamedTuple):
 
     content: str
     transcript_type: Optional[TranscriptType]  # None if N/A message
+
+
+class SegmentedTranscriptResult(NamedTuple):
+    """Loaded ``AnnotatedTranscript`` JSON sidecar (spec #18 Phase D).
+
+    The service layer reads the sidecar from disk and overwrites its
+    cached ``playback_time_offset_seconds`` with the DB-authoritative
+    value before returning, so API responses are always consistent
+    regardless of when the JSON was last written.
+    """
+
+    annotated: AnnotatedTranscript
+
+
+class ShadowTranscriptResult(NamedTuple):
+    """Shadow pipeline's blended-Markdown output for the side-by-side view.
+
+    Returned when a shadow debug file exists on disk for this episode
+    (produced when the cleanup processor ran with
+    ``THESTILL_LEGACY_CLEANUP_SHADOW=1``). ``pipeline`` names which
+    pipeline shadowed — either ``"legacy"`` or ``"segmented"``.
+    """
+
+    pipeline: str
+    content: str
 
 
 class PodcastWithIndex(BaseModel):
@@ -566,14 +592,20 @@ class PodcastService:
             try:
                 import json
 
-                from ..core.transcript_formatter import TranscriptFormatter
+                from ..models.transcript import Transcript
 
                 self.path_manager.require_file_exists(json_path, "Raw transcript file not found")
                 with open(json_path, "r", encoding="utf-8") as f:
                     transcript_data = json.load(f)
-                # Convert raw JSON to Markdown for display
-                formatter = TranscriptFormatter()
-                content = formatter.format_transcript(transcript_data)
+                # Render raw JSON via the spec #18 ``AnnotatedTranscript`` path
+                # rather than the legacy ``TranscriptFormatter``. The former
+                # is byte-identical to the latter for ``from_raw`` input
+                # (verified across 20 real transcripts), so the summariser
+                # and the frontend's regex parser keep working unchanged.
+                transcript = Transcript.model_validate(transcript_data)
+                annotated = AnnotatedTranscript.from_raw(transcript, episode_id=str(episode.id))
+                annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
+                content = annotated.to_blended_markdown()
                 logger.info(f"Retrieved raw transcript for: {episode.title}")
                 return TranscriptResult(content=content, transcript_type="raw")
             except FileNotFoundError:
@@ -584,6 +616,76 @@ class PodcastService:
         # No transcript available
         logger.info(f"No transcript available for: {episode.title}")
         return TranscriptResult(content="N/A - No transcript available", transcript_type=None)
+
+    def get_segmented_transcript(
+        self, podcast_id: Union[str, int], episode_id: Union[str, int]
+    ) -> Optional[SegmentedTranscriptResult]:
+        """Load the ``AnnotatedTranscript`` JSON sidecar for an episode (spec #18).
+
+        Returns ``None`` when the episode row carries no
+        ``clean_transcript_json_path`` (the segmented cleanup never ran,
+        or the file has since been deleted). Before returning, the
+        ``playback_time_offset_seconds`` cached in the JSON is
+        overwritten with the DB value — the DB is the source of truth
+        and the sidecar is a write-through cache.
+        """
+        episode = self.get_episode(podcast_id, episode_id)
+        if episode is None:
+            logger.warning(f"Episode not found for segmented transcript: {podcast_id}/{episode_id}")
+            return None
+
+        if not episode.clean_transcript_json_path:
+            return None
+
+        json_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+        try:
+            self.path_manager.require_file_exists(json_path, "Segmented transcript JSON not found")
+            with open(json_path, "r", encoding="utf-8") as fh:
+                payload = fh.read()
+            annotated = AnnotatedTranscript.model_validate_json(payload)
+        except FileNotFoundError:
+            logger.warning(f"Segmented transcript JSON missing on disk: {json_path}")
+            return None
+        except Exception as error:  # pylint: disable=broad-except
+            logger.error(f"Error reading segmented transcript JSON: {error}")
+            return None
+
+        # DB is authoritative for the playback offset; overwrite any
+        # stale value cached in the JSON so downstream consumers don't
+        # need to consult the DB separately.
+        annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
+        return SegmentedTranscriptResult(annotated=annotated)
+
+    def get_shadow_transcript(
+        self, podcast_id: Union[str, int], episode_id: Union[str, int]
+    ) -> Optional[ShadowTranscriptResult]:
+        """Load the shadow-pipeline debug file for an episode, if present.
+
+        The cleanup processor writes the shadow's blended Markdown to a
+        file named ``{stem}.shadow_{pipeline}.md`` inside a ``debug/``
+        subdirectory next to the primary cleaned MD. We probe for both
+        ``shadow_legacy.md`` and ``shadow_segmented.md`` and return the
+        first one that exists. Returns ``None`` when no shadow ran or
+        the file has been cleaned up.
+        """
+        episode = self.get_episode(podcast_id, episode_id)
+        if episode is None or not episode.clean_transcript_path:
+            return None
+
+        clean_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
+        debug_dir = clean_path.parent / "debug"
+        for pipeline in ("legacy", "segmented"):
+            candidate = debug_dir / f"{clean_path.stem}.shadow_{pipeline}.md"
+            if candidate.exists():
+                try:
+                    return ShadowTranscriptResult(
+                        pipeline=pipeline,
+                        content=candidate.read_text(encoding="utf-8"),
+                    )
+                except Exception as error:  # pylint: disable=broad-except
+                    logger.error(f"Error reading shadow transcript: {error}")
+                    return None
+        return None
 
     def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
