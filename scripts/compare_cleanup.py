@@ -281,6 +281,7 @@ def _run_cleanups(
     path_manager: PathManager,
     targets: List[EpisodeTarget],
     concurrency: int,
+    db_path: Optional[Path] = None,
 ) -> None:
     """Drive the per-episode cleanup in parallel.
 
@@ -301,7 +302,7 @@ def _run_cleanups(
     def _run_one(index: int, target: EpisodeTarget) -> Tuple[int, EpisodeTarget, Optional[Exception], float]:
         start = time.time()
         try:
-            run_dual_cleanup(processor, path_manager, target)
+            run_dual_cleanup(processor, path_manager, target, db_path=db_path)
             return index, target, None, time.time() - start
         except Exception as exc:  # pylint: disable=broad-except
             return index, target, exc, time.time() - start
@@ -319,10 +320,14 @@ def _run_cleanups(
                     print(f"{label} ✗ {target.podcast_slug} / {target.episode_slug} ({elapsed:.1f}s) — {error}")
 
 
+_DB_WRITE_LOCK = threading.Lock()
+
+
 def run_dual_cleanup(
     processor: TranscriptCleaningProcessor,
     path_manager: PathManager,
     target: EpisodeTarget,
+    db_path: Optional[Path] = None,
 ) -> None:
     """Execute the cleaning processor with segmented primary + legacy shadow.
 
@@ -331,6 +336,15 @@ def run_dual_cleanup(
     the processor reads them during ``clean_transcript``. Setting them
     here would be redundant and thread-unsafe (same-value writes are
     benign, but noisy when running in parallel).
+
+    When ``db_path`` is provided and the processor produced a
+    segmented JSON sidecar, this function also writes
+    ``clean_transcript_json_path`` back to the episode row. The CLI
+    command ``thestill clean-transcript`` does this through its
+    ``feed_manager.mark_episode_processed`` call — script consumers
+    that bypass the CLI would otherwise leave the DB row stale, and
+    the web UI would never see the ``segments`` payload even though
+    the JSON file is on disk.
     """
     raw_path = path_manager.raw_transcript_file(target.raw_transcript_path)
     with raw_path.open("r", encoding="utf-8") as fh:
@@ -339,7 +353,7 @@ def run_dual_cleanup(
     clean_path = path_manager.clean_transcript_file(target.clean_transcript_path)
     clean_path.parent.mkdir(parents=True, exist_ok=True)
 
-    processor.clean_transcript(
+    result = processor.clean_transcript(
         transcript_data=transcript_data,
         podcast_title=target.podcast_title,
         podcast_description=target.podcast_description,
@@ -352,6 +366,25 @@ def run_dual_cleanup(
         save_prompts=False,
         language=target.podcast_language,
     )
+
+    if db_path is not None and result and result.get("cleaned_json_path"):
+        # Derive the DB-relative path from the cleaned-MD's DB-relative
+        # path (same parent directory, ``.json`` extension).
+        json_db_path = target.clean_transcript_path
+        if json_db_path.endswith(".md"):
+            json_db_path = json_db_path[:-3] + ".json"
+        else:
+            json_db_path = json_db_path + ".json"
+        with _DB_WRITE_LOCK:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute(
+                    "UPDATE episodes SET clean_transcript_json_path = ? WHERE id = ?",
+                    (json_db_path, target.episode_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -746,6 +779,7 @@ def main() -> int:
             path_manager=path_manager,
             targets=targets,
             concurrency=args.concurrency,
+            db_path=db_path,
         )
 
     facts_manager = FactsManager(path_manager)
