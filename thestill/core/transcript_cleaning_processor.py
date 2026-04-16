@@ -140,7 +140,9 @@ class TranscriptCleaningProcessor:
         from thestill.core.facts_extractor import FactsExtractor
         from thestill.core.facts_manager import FactsManager
         from thestill.core.transcript_cleaner import TranscriptCleaner
+        from thestill.models.transcript import Transcript
         from thestill.utils.slug import generate_slug
+        from thestill.utils.transcript_capabilities import classify_transcript_degeneracy
 
         if path_manager is None:
             raise ValueError("path_manager is required for clean_transcript")
@@ -164,6 +166,30 @@ class TranscriptCleaningProcessor:
         # Get podcast slug for facts lookup (use provided or generate from title)
         effective_podcast_slug = podcast_slug or (generate_slug(podcast_title) if podcast_title else "unknown-podcast")
         effective_episode_slug = episode_slug or (generate_slug(episode_title) if episode_title else "unknown-episode")
+
+        # Observability hook for the segmented-cleanup path (spec #18, Phase A).
+        # No routing yet — Phase C will consume this predicate to choose between
+        # the segmented and legacy cleaners. Parse failures are swallowed: the
+        # legacy cleanup path must never be blocked by this diagnostic.
+        try:
+            _transcript_model = Transcript.model_validate(transcript_data)
+        except Exception as parse_error:  # pylint: disable=broad-except
+            logger.debug(
+                "transcript_capability_check_skipped",
+                podcast_slug=effective_podcast_slug,
+                episode_slug=effective_episode_slug,
+                error=str(parse_error),
+            )
+        else:
+            _degeneracy_reason = classify_transcript_degeneracy(_transcript_model)
+            if _degeneracy_reason is not None:
+                logger.warning(
+                    "segmented_cleanup_unavailable",
+                    reason=_degeneracy_reason,
+                    podcast_slug=effective_podcast_slug,
+                    episode_slug=effective_episode_slug,
+                    segment_count=len(_transcript_model.segments),
+                )
 
         # Load existing facts
         podcast_facts = facts_manager.load_podcast_facts(effective_podcast_slug)
