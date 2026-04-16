@@ -110,13 +110,33 @@ class EpisodeReport:
     errors: List[str] = field(default_factory=list)
 
 
+_SELECT_COLUMNS = """
+    p.id, p.slug, p.title, p.language, p.description,
+    e.id, e.slug, e.title, e.description,
+    e.raw_transcript_path, e.clean_transcript_path
+"""
+
+
+def _row_to_target(row: Tuple) -> EpisodeTarget:
+    return EpisodeTarget(
+        podcast_id=row[0],
+        podcast_slug=row[1],
+        podcast_title=row[2],
+        podcast_language=row[3] or "en",
+        podcast_description=row[4] or "",
+        episode_id=row[5],
+        episode_slug=row[6],
+        episode_title=row[7],
+        episode_description=row[8] or "",
+        raw_transcript_path=row[9],
+        clean_transcript_path=row[10],
+    )
+
+
 def discover_recent_episodes(db_path: Path, limit: int) -> List[EpisodeTarget]:
     """Return the N most-recent episodes with both clean and summary paths set."""
-    query = """
-        SELECT
-            p.id, p.slug, p.title, p.language, p.description,
-            e.id, e.slug, e.title, e.description,
-            e.raw_transcript_path, e.clean_transcript_path
+    query = f"""
+        SELECT {_SELECT_COLUMNS}
         FROM episodes e
         JOIN podcasts p ON p.id = e.podcast_id
         WHERE e.clean_transcript_path IS NOT NULL
@@ -130,25 +150,122 @@ def discover_recent_episodes(db_path: Path, limit: int) -> List[EpisodeTarget]:
         rows = conn.execute(query, (limit,)).fetchall()
     finally:
         conn.close()
+    return [_row_to_target(row) for row in rows]
 
-    targets: List[EpisodeTarget] = []
-    for row in rows:
-        targets.append(
-            EpisodeTarget(
-                podcast_id=row[0],
-                podcast_slug=row[1],
-                podcast_title=row[2],
-                podcast_language=row[3] or "en",
-                podcast_description=row[4] or "",
-                episode_id=row[5],
-                episode_slug=row[6],
-                episode_title=row[7],
-                episode_description=row[8] or "",
-                raw_transcript_path=row[9],
-                clean_transcript_path=row[10],
-            )
-        )
-    return targets
+
+def discover_episodes_by_id(db_path: Path, episode_ids: List[str]) -> List[EpisodeTarget]:
+    """Return episode targets for the given DB ids, preserving argument order.
+
+    Missing ids are silently dropped — the caller reports which ids
+    didn't resolve against the overall selection count.
+    """
+    if not episode_ids:
+        return []
+    placeholders = ", ".join("?" for _ in episode_ids)
+    query = f"""
+        SELECT {_SELECT_COLUMNS}
+        FROM episodes e
+        JOIN podcasts p ON p.id = e.podcast_id
+        WHERE e.id IN ({placeholders})
+          AND e.raw_transcript_path IS NOT NULL
+          AND e.clean_transcript_path IS NOT NULL
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(query, episode_ids).fetchall()
+    finally:
+        conn.close()
+
+    # Preserve the order the caller gave us.
+    by_id = {row[5]: _row_to_target(row) for row in rows}
+    return [by_id[eid] for eid in episode_ids if eid in by_id]
+
+
+def discover_gap_candidates(
+    db_path: Path,
+    path_manager: PathManager,
+    *,
+    max_scan: int,
+    first_ts_threshold_seconds: float = 60.0,
+    coverage_threshold_pct: float = 70.0,
+) -> List[EpisodeTarget]:
+    """Auto-discover episodes whose existing cleaned MD shows the gap-bug signature.
+
+    Pre-filter logic (each check cheap on its own, executed in order so
+    the expensive one — parsing the raw JSON for word count — only runs
+    when the fast check hasn't already flagged the episode):
+
+    1. Fast path: peek the first ~200 bytes of the cleaned MD and extract
+       the earliest ``[HH:MM:SS]`` / ``[MM:SS]`` marker. When the marker
+       is beyond ``first_ts_threshold_seconds`` the episode is an
+       obvious gap-bug suspect and is reported without computing
+       coverage.
+    2. Slow path: parse the raw JSON to compute the word-coverage
+       ratio. When the cleaned MD contains less than
+       ``coverage_threshold_pct`` of the raw transcript's words, the
+       episode is reported.
+
+    ``max_scan`` caps the total number of episodes checked — the DB
+    query returns the most-recent episodes first, so a cap acts as a
+    "check the last N" window.
+    """
+    candidates = discover_recent_episodes(db_path, max_scan)
+    print(
+        f"Scanning {len(candidates)} recent cleaned+summarised episodes for "
+        f"gap-bug signatures (first_ts > {int(first_ts_threshold_seconds)}s "
+        f"or coverage < {coverage_threshold_pct:.0f}%)..."
+    )
+
+    suspects: List[EpisodeTarget] = []
+    for target in candidates:
+        clean_path = path_manager.clean_transcript_file(target.clean_transcript_path)
+        if not clean_path.exists():
+            continue
+
+        # Fast path: first-timestamp check (bounded read).
+        head = clean_path.read_text(encoding="utf-8", errors="ignore")[:4096]
+        first_ts = _first_timestamp_seconds(head)
+        if first_ts is not None and first_ts > first_ts_threshold_seconds:
+            suspects.append(target)
+            _log_suspect(target, first_ts=first_ts, coverage=None)
+            continue
+
+        # Slow path: coverage check. Needs the raw JSON and the cleaned
+        # MD's full text. Skipped on any I/O error — a broken episode
+        # can't be a gap-bug candidate we can fix.
+        try:
+            raw_path = path_manager.raw_transcript_file(target.raw_transcript_path)
+            with raw_path.open("r", encoding="utf-8") as fh:
+                raw_data = json.load(fh)
+            transcript = Transcript.model_validate(raw_data)
+            raw_word_total = _raw_word_total(transcript)
+            cleaned_word_count = len(clean_path.read_text(encoding="utf-8").split())
+        except Exception:  # pylint: disable=broad-except
+            continue
+
+        if raw_word_total == 0:
+            continue
+        coverage = 100.0 * cleaned_word_count / raw_word_total
+        if coverage < coverage_threshold_pct:
+            suspects.append(target)
+            _log_suspect(target, first_ts=first_ts, coverage=coverage)
+
+    print(f"Found {len(suspects)} gap-bug candidate(s) out of {len(candidates)} scanned.")
+    return suspects
+
+
+def _log_suspect(
+    target: EpisodeTarget,
+    *,
+    first_ts: Optional[float],
+    coverage: Optional[float],
+) -> None:
+    ts_str = _fmt_ts(first_ts) if first_ts is not None else "   —"
+    cov_str = f"{coverage:5.1f}%" if coverage is not None else "   —"
+    print(
+        f"  suspect: {target.podcast_slug[:30]:<30}  first_ts {ts_str}  "
+        f"cov {cov_str}  •  {target.episode_title[:55]}"
+    )
 
 
 def snapshot_baseline(path_manager: PathManager, target: EpisodeTarget) -> Optional[Path]:
@@ -470,12 +587,36 @@ def render_report(reports: List[EpisodeReport]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
+    selector = parser.add_argument_group("target selection (at most one)")
+    selector.add_argument(
         "--last",
         type=int,
         default=10,
-        help="Number of most-recent cleaned+summarised episodes to include",
+        help="Number of most-recent cleaned+summarised episodes to include (default 10)",
     )
+    selector.add_argument(
+        "--episode-id",
+        action="append",
+        dest="episode_ids",
+        default=None,
+        help="Target specific episode row(s) by DB id. Repeatable. Overrides --last.",
+    )
+    selector.add_argument(
+        "--gap-candidates",
+        action="store_true",
+        help=(
+            "Auto-discover episodes whose existing cleaned MD exhibits the "
+            "gap bug (first_ts > 60s OR coverage < 70%%). Scans the most-"
+            "recent --max-scan episodes. Overrides --last."
+        ),
+    )
+    selector.add_argument(
+        "--max-scan",
+        type=int,
+        default=200,
+        help="Window size for --gap-candidates discovery (default 200)",
+    )
+
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -506,9 +647,19 @@ def main() -> int:
         print(f"❌ Database not found at {db_path}", file=sys.stderr)
         return 1
 
-    targets = discover_recent_episodes(db_path, args.last)
+    # Resolve target selection. Priority: explicit ids > gap-candidates > last-N.
+    if args.episode_ids:
+        targets = discover_episodes_by_id(db_path, args.episode_ids)
+        missing = set(args.episode_ids) - {t.episode_id for t in targets}
+        if missing:
+            print(f"  ⚠️  {len(missing)} episode-id(s) did not resolve: " f"{', '.join(sorted(missing))}")
+    elif args.gap_candidates:
+        targets = discover_gap_candidates(db_path, path_manager, max_scan=args.max_scan)
+    else:
+        targets = discover_recent_episodes(db_path, args.last)
+
     if not targets:
-        print("❌ No episodes found with clean_transcript_path + summary_path", file=sys.stderr)
+        print("❌ No episodes selected.", file=sys.stderr)
         return 1
 
     print(f"Selected {len(targets)} episode(s):")
