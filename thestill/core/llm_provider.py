@@ -530,6 +530,51 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
 }
 
 
+# Models that support prompt caching. Kept as a separate set rather than a
+# per-entry flag on ``ModelLimits`` because the signal is orthogonal to rate
+# limits and context windows, and the membership pattern (Claude 3.5+,
+# OpenAI gpt-4o+, Gemini 2.0+) is easier to audit as one list. Looked up
+# directly by :meth:`LLMProvider.supports_prompt_caching`.
+_PROMPT_CACHING_MODELS = frozenset(
+    {
+        # Anthropic — explicit cache_control markers.
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-1-20250925",
+        "claude-haiku-4-5-20251015",
+        # OpenAI — automatic prefix caching on gpt-4o+ / gpt-4.1+ / reasoning.
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex-max",
+        "gpt-5.2",
+        "gpt-5.2-pro",
+        "o3",
+        "o4-mini",
+        # Gemini — implicit context caching on 2.0+.
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-preview",
+    }
+)
+
+
 def get_max_output_tokens(model_name: str) -> int:
     """
     Get the maximum output tokens for a model from MODEL_CONFIGS.
@@ -664,6 +709,54 @@ class LLMProvider(ABC):
             json.JSONDecodeError: If response cannot be parsed as JSON (fallback mode)
         """
         pass
+
+    def supports_prompt_caching(self) -> bool:
+        """Return True iff this provider's current model benefits from prompt caching.
+
+        Membership is declared in :data:`_PROMPT_CACHING_MODELS`. Consumed
+        by callers that want to decide batch sizing: cache-capable models
+        pay the cached prefix once and tolerate small batches, while
+        non-cache providers benefit from widened batches that amortise
+        the repeated prefix.
+        """
+        return self.get_model_name() in _PROMPT_CACHING_MODELS
+
+    def generate_structured_cached(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        *,
+        cache_system_message: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """Generate a structured response, optionally hinting that the system
+        message should be cached.
+
+        Default implementation ignores the hint and delegates to
+        :meth:`generate_structured`. This is correct for providers whose
+        caching is either automatic (OpenAI prefix cache, Gemini implicit
+        cache) or absent (Ollama, Mistral) — the hint is advisory.
+        :class:`AnthropicProvider` overrides this method to inject the
+        ``cache_control`` markers the Anthropic API requires on the
+        system content block.
+
+        Args:
+            messages: ``role``/``content`` message dicts.
+            response_model: Pydantic model for schema-validated output.
+            cache_system_message: When True, providers that honour explicit
+                cache-control markers mark the system message as cacheable.
+                Other providers accept and ignore the hint.
+            temperature: Optional sampling temperature.
+            max_tokens: Optional max output tokens.
+        """
+        del cache_system_message  # no-op in the default path
+        return self.generate_structured(
+            messages=messages,
+            response_model=response_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
 
 class OpenAIProvider(LLMProvider):
@@ -1596,6 +1689,60 @@ class AnthropicProvider(LLMProvider):
         Uses client.beta.messages.create() with output_format for schema-validated JSON.
         Falls back to JSON mode + Pydantic validation for unsupported models.
         """
+        return self._generate_structured_impl(
+            messages=messages,
+            response_model=response_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            cache_system_message=False,
+        )
+
+    def generate_structured_cached(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        *,
+        cache_system_message: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> T:
+        """Anthropic-specific override that honours the cache hint.
+
+        When ``cache_system_message`` is True and the model supports prompt
+        caching, the system message is marshalled as a list of content
+        blocks with a ``cache_control: {"type": "ephemeral"}`` marker —
+        the form the Anthropic beta API requires to seed the ephemeral
+        cache. Every subsequent call with the same system prefix within
+        the 5-minute TTL reuses the cached tokens at a discounted rate.
+
+        When the hint is False (or the model doesn't support caching),
+        this delegates to the standard :meth:`generate_structured` path
+        with no overhead.
+        """
+        return self._generate_structured_impl(
+            messages=messages,
+            response_model=response_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            cache_system_message=cache_system_message and self.supports_prompt_caching(),
+        )
+
+    def _generate_structured_impl(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        response_model: Type[T],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        cache_system_message: bool,
+    ) -> T:
+        """Shared implementation for cached and uncached structured generation.
+
+        ``cache_system_message`` is the only difference between the two
+        public entry points: when True, the system prompt is wrapped in
+        a content-block list that carries an ephemeral cache marker;
+        otherwise it is sent as a plain string.
+        """
         beta_header = self._get_structured_output_beta()
 
         if not self.supports_structured_output() or not beta_header:
@@ -1635,7 +1782,20 @@ class AnthropicProvider(LLMProvider):
         }
 
         if system_message:
-            params["system"] = system_message
+            if cache_system_message:
+                # Marshal the system prompt as a list of content blocks
+                # with an ephemeral cache marker. This seeds Anthropic's
+                # prompt cache; subsequent calls sharing the same prefix
+                # within the TTL reuse cached tokens at a lower cost.
+                params["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_message,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                params["system"] = system_message
         if temperature is not None:
             params["temperature"] = temperature
 

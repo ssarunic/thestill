@@ -167,6 +167,15 @@ class AnnotatedTranscript(BaseModel):
         current_text: List[str] = []
         block_start_time: float = 0.0
         last_timecode: float = 0.0
+        # True once anything has been emitted (flushed block, skipped
+        # filler, or emitted ad_break). The very first content block of
+        # a transcript that begins with pure content is anchored to 0.0
+        # regardless of the segment's real start time — that reproduces
+        # a quirk of ``TranscriptFormatter`` (it leaves ``block_start_time``
+        # at its init value until the first flush). Without this flag we
+        # drift byte-for-byte on every real podcast that trims leading
+        # silence or music (i.e. most of them).
+        have_emitted = False
 
         def flush_block() -> None:
             nonlocal current_text
@@ -187,6 +196,11 @@ class AnnotatedTranscript(BaseModel):
 
         for segment in self.segments:
             if segment.kind == "filler":
+                # Skipping filler still counts as "something happened
+                # before the next content block" — a content segment
+                # that follows a leading filler must stamp at its own
+                # start, not 0.0.
+                have_emitted = True
                 continue
 
             if segment.kind == "ad_break":
@@ -197,6 +211,7 @@ class AnnotatedTranscript(BaseModel):
                 lines.append(f"**{timecode} [AD BREAK]**{sponsor_suffix}")
                 lines.append("")
                 current_speaker = None
+                have_emitted = True
                 continue
 
             speaker = segment.speaker
@@ -209,20 +224,16 @@ class AnnotatedTranscript(BaseModel):
 
             if should_add_timecode and current_text:
                 flush_block()
+                have_emitted = True
 
-            # Anchor the start of any fresh block to the current segment's
-            # real start. The legacy ``TranscriptFormatter`` left
-            # ``block_start_time`` at its 0.0 initial value until a flush,
-            # which meant the first-ever block always stamped at
-            # ``[00:00]`` regardless of where speech actually began. That
-            # quirk was invisible on real transcripts (first segment
-            # normally starts at t=0), but becomes reachable here when a
-            # leading filler or ad_break pushes the first content segment
-            # forward. Anchoring on every fresh block fixes both cases
-            # and keeps byte-identical parity for ``from_raw`` whenever
-            # the raw transcript's first segment starts at 0.0 (the
-            # universal case in practice).
-            if not current_text:
+            # Anchor a fresh block only when something has already
+            # happened (a flush, a filler skip, or an ad_break). On the
+            # very first content block of a transcript that opens with
+            # pure content, leave ``block_start_time`` / ``last_timecode``
+            # at their 0.0 init values — that is how the legacy
+            # ``TranscriptFormatter`` behaves and the summariser still
+            # depends on byte-for-byte parity with it.
+            if not current_text and have_emitted:
                 block_start_time = start_time
                 last_timecode = start_time
 

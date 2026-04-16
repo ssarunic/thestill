@@ -170,6 +170,53 @@ class TestByteIdenticalRenderParity:
         )
         _assert_byte_identical(transcript)
 
+    def test_first_segment_starts_after_t_zero(self) -> None:
+        """Leading silence / trimmed-intro case: first segment at ``t >= 1s``.
+
+        Representative of most real-world podcasts (Whisper VAD trims
+        leading silence; intro music strips the first few seconds). The
+        legacy formatter stamps the first block at ``[00:00]`` regardless
+        of real start — a quirk, but one the summariser's citations
+        already depend on. Byte parity must hold here or cleaned output
+        silently drifts from every legacy consumer on every real episode.
+        """
+        transcript = _transcript(
+            [
+                _segment(seg_id=0, start=2.0, end=5.0, text="Welcome.", speaker="HOST"),
+                _segment(seg_id=1, start=5.5, end=10.0, text="Thanks.", speaker="GUEST"),
+            ]
+        )
+        _assert_byte_identical(transcript)
+
+    def test_first_segment_starts_well_into_episode(self) -> None:
+        """Longer leading trim — first segment at ``t = 30s``."""
+        transcript = _transcript(
+            [
+                _segment(seg_id=0, start=30.0, end=40.0, text="First words.", speaker="HOST"),
+                _segment(seg_id=1, start=40.5, end=50.0, text="More.", speaker="HOST"),
+                _segment(seg_id=2, start=50.5, end=60.0, text="Guest turn.", speaker="GUEST"),
+            ]
+        )
+        _assert_byte_identical(transcript)
+
+    def test_first_segment_long_enough_to_force_timecode_rollover(self) -> None:
+        """First segment at ``t = 10s``, same-speaker chain past 300s.
+
+        Tests that the 300s interval check fires at the same segment as
+        legacy — legacy leaves ``last_timecode`` at 0 on the first run
+        so its check is ``start_time - 0 >= 300``, not
+        ``start_time - 10 >= 300``. A subtle drift here would silently
+        shift every downstream speaker block.
+        """
+        transcript = _transcript(
+            [
+                _segment(seg_id=0, start=10.0, end=20.0, text="early", speaker="HOST"),
+                _segment(seg_id=1, start=100.0, end=110.0, text="middle", speaker="HOST"),
+                _segment(seg_id=2, start=310.0, end=320.0, text="after rollover", speaker="HOST"),
+            ]
+        )
+        _assert_byte_identical(transcript)
+
 
 class TestFromRawShape:
     """``from_raw`` faithfully wraps every raw segment 1:1."""

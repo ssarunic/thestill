@@ -43,7 +43,7 @@ to make it loud.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, WordSpan
 from thestill.models.transcript import Segment, Transcript, Word
@@ -192,20 +192,20 @@ class TranscriptSegmenter:
         if not words:
             return [self._annotate_from_segment_only(run, speaker)]
 
-        # Fallback bounds for chunks whose edge words lack timestamps.
-        # The capability gate only guarantees that *some* word has a
-        # ``start``, so edge words of any individual chunk may be missing
-        # timing. Use the run's raw segment-level bounds as a safety net.
-        run_start = run[0].start
-        run_end = run[-1].end
+        # For fallback bounds we look up raw segment start/end by id. A
+        # chunk's fallback narrows to exactly the segments that
+        # contributed words *to that chunk* rather than the whole run,
+        # so an untimed chunk can't inflate its anchor to span the
+        # entire run.
+        segment_by_id: Dict[int, Segment] = {s.id: s for s in run}
 
         word_count = len(words)
         if word_count <= self.max_words_per_segment:
-            return [self._annotate_from_words(words, speaker, run_start, run_end)]
+            return [self._annotate_from_words(words, speaker, segment_by_id)]
 
         split_points = self._find_split_points(words)
         chunks = _slice_words_at(words, split_points)
-        return [self._annotate_from_words(chunk, speaker, run_start, run_end) for chunk in chunks]
+        return [self._annotate_from_words(chunk, speaker, segment_by_id) for chunk in chunks]
 
     def _find_split_points(self, words: List[_WordRef]) -> List[int]:
         """Return zero-based indices at which to cut ``words`` into chunks.
@@ -241,19 +241,18 @@ class TranscriptSegmenter:
         self,
         words: List[_WordRef],
         speaker: Optional[str],
-        fallback_start: float,
-        fallback_end: float,
+        segment_by_id: Dict[int, Segment],
     ) -> AnnotatedSegment:
         """Build an ``AnnotatedSegment`` for a contiguous slice of word refs.
 
-        Chunk bounds prefer word-level timing, walk inward when edge words
-        lack timestamps, and fall back to the caller-supplied run-level
-        bounds as a last resort. The capability gate in
-        :mod:`thestill.utils.transcript_capabilities` only guarantees that
-        *some* word in the transcript has a ``start`` timestamp — any
-        given chunk's edge words may still be missing their timing. This
-        fallback keeps the segment-anchor contract sound for player
-        seeking and highlighting.
+        Chunk bounds prefer word-level timing, walk inward when edge
+        words lack timestamps, and fall back to the bounds of the raw
+        segments that actually *contributed words to this chunk* as a
+        last resort. Narrowing the fallback like this — rather than
+        using run-wide bounds — prevents a split chunk with no usable
+        edge timing from inheriting the entire run's time range, which
+        would inflate the segment anchor and break the player's seek
+        contract.
         """
         first = words[0]
         last = words[-1]
@@ -264,16 +263,20 @@ class TranscriptSegmenter:
         start_candidate = next((w.start for w in words if w.start is not None), None)
         end_candidate = next((w.end for w in reversed(words) if w.end is not None), None)
 
-        start = start_candidate if start_candidate is not None else fallback_start
-        end = end_candidate if end_candidate is not None else fallback_end
-        text = " ".join(w.word for w in words).strip()
-
         source_ids: List[int] = []
         seen = set()
         for w in words:
             if w.raw_segment_id not in seen:
                 seen.add(w.raw_segment_id)
                 source_ids.append(w.raw_segment_id)
+
+        contributing_segs = [segment_by_id[sid] for sid in source_ids if sid in segment_by_id]
+        fallback_start = min(s.start for s in contributing_segs) if contributing_segs else 0.0
+        fallback_end = max(s.end for s in contributing_segs) if contributing_segs else fallback_start
+
+        start = start_candidate if start_candidate is not None else fallback_start
+        end = end_candidate if end_candidate is not None else fallback_end
+        text = " ".join(w.word for w in words).strip()
 
         return AnnotatedSegment(
             id=0,  # positional id assigned later in repair()

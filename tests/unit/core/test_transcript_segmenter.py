@@ -418,6 +418,73 @@ class TestEdgeWordsMissingTimestamps:
         assert second.start == 10.0
         assert second.end == 15.0
 
+    def test_split_chunk_fallback_narrows_to_contributing_segments(self) -> None:
+        """A split run's untimed-edge chunk must not inherit run-wide bounds.
+
+        Regression for the anchor-inflation bug — previously the
+        fallback used ``(run[0].start, run[-1].end)`` so a chunk whose
+        edge words had ``None`` timestamps could report a time range
+        spanning the *entire* merged run. The fallback now narrows to
+        the bounds of the raw segments that actually contributed words
+        to each chunk, so chunk N's fallback is at worst
+        ``min/max`` over segment N's own bounds.
+        """
+
+        # Three same-speaker raw segments, each covering 3s of audio.
+        # Merged run spans t=0..9s. Split forced at 30 words/chunk.
+        def _word_stream(start_t: float, count: int, step: float = 0.1) -> List[Word]:
+            return [Word(word="w", start=start_t + i * step, end=start_t + (i + 1) * step - 0.01) for i in range(count)]
+
+        seg_0_words = _word_stream(start_t=0.0, count=30)
+        # Drop timing on the first three words of segment 0 so the first
+        # chunk's edge-inward walk fails and has to use the fallback.
+        for i in range(3):
+            seg_0_words[i] = Word(word="w", start=None, end=None)
+
+        transcript = _transcript(
+            [
+                _segment(
+                    seg_id=0,
+                    start=0.0,
+                    end=3.0,
+                    text=" ".join(["w"] * 30),
+                    speaker="A",
+                    words=seg_0_words,
+                ),
+                _segment(
+                    seg_id=1,
+                    start=3.0,
+                    end=6.0,
+                    text=" ".join(["w"] * 30),
+                    speaker="A",
+                    words=_word_stream(start_t=3.0, count=30),
+                ),
+                _segment(
+                    seg_id=2,
+                    start=6.0,
+                    end=9.0,
+                    text=" ".join(["w"] * 30),
+                    speaker="A",
+                    words=_word_stream(start_t=6.0, count=30),
+                ),
+            ]
+        )
+
+        result = TranscriptSegmenter(max_words_per_segment=30).repair(transcript)
+
+        # Three chunks, one per raw segment. The first chunk's start
+        # walks inward to word 3 (t=0.3s), not the run-wide fallback of
+        # 0.0 — but critically, its end must come from segment 0's
+        # contribution only (end ≤ 3.0), not the full run's end (9.0)
+        # which the pre-fix run-wide fallback would have produced.
+        assert len(result.segments) == 3
+        first_chunk = result.segments[0]
+        assert first_chunk.source_segment_ids == [0]
+        assert first_chunk.end <= 3.0, (
+            f"first chunk end {first_chunk.end} leaked outside its contributing segment's "
+            f"bounds (pre-fix bug would have produced 9.0)"
+        )
+
 
 class TestConstructorValidation:
     """Regression: invalid parameters must fail fast with a clear error."""

@@ -21,7 +21,12 @@ errors when directory structures change.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
+
+# Declared here (rather than imported from the processor) to keep
+# ``PathManager`` free of upward dependencies on ``core``. The processor
+# validates its own env-flag input against the same names.
+CleanupPipelineName = Literal["segmented", "legacy"]
 
 
 class PathManager:
@@ -210,6 +215,64 @@ class PathManager:
             Full path: clean_transcripts/{podcast_slug}/{episode_filename}
         """
         return self.clean_transcripts_dir() / podcast_slug / episode_filename
+
+    def clean_transcript_json_file(self, podcast_slug: str, episode_filename: str) -> Path:
+        """Full path to the structured ``AnnotatedTranscript`` JSON sidecar.
+
+        Sits alongside the blended Markdown produced by the segmented
+        cleanup path (spec #18). ``episode_filename`` is the Markdown
+        filename (e.g. ``episode-slug_hash_cleaned.md``) — the ``.md``
+        suffix is swapped for ``.json`` so the two files pair up by name.
+
+        Args:
+            podcast_slug: Slugified podcast title.
+            episode_filename: The cleaned-transcript Markdown filename.
+
+        Returns:
+            Full path: clean_transcripts/{podcast_slug}/{base}.json
+        """
+        base = episode_filename
+        if base.endswith(".md"):
+            base = base[:-3]
+        return self.clean_transcripts_dir() / podcast_slug / f"{base}.json"
+
+    def clean_transcript_shadow_file(
+        self,
+        podcast_slug: str,
+        episode_filename: str,
+        pipeline: CleanupPipelineName,
+    ) -> Path:
+        """Full path to a shadow cleanup debug artefact.
+
+        When the cleanup processor runs one pipeline as the primary and
+        the other as a shadow (spec #18 §"Dual output during debugging"),
+        the shadow's blended Markdown lives here. The filename carries
+        the shadow pipeline's name so either variant is self-describing:
+
+        - ``.../debug/{base}.shadow_legacy.md`` when the segmented path
+          is primary and the legacy cleaner shadowed.
+        - ``.../debug/{base}.shadow_segmented.md`` when the legacy path
+          is primary and the segmented cleaner shadowed.
+
+        Args:
+            podcast_slug: Slugified podcast title.
+            episode_filename: The cleaned-transcript Markdown filename.
+            pipeline: Either ``"legacy"`` or ``"segmented"`` — identifies
+                which pipeline produced this shadow artefact.
+
+        Returns:
+            Full path to the shadow debug file.
+
+        Raises:
+            ValueError: When ``pipeline`` is neither ``"legacy"`` nor
+                ``"segmented"``.
+        """
+        if pipeline not in ("legacy", "segmented"):
+            raise ValueError(f"pipeline must be 'legacy' or 'segmented', got {pipeline!r}")
+        base = episode_filename
+        if base.endswith(".md"):
+            base = base[:-3]
+        return self.clean_transcripts_dir() / podcast_slug / "debug" / f"{base}.shadow_{pipeline}.md"
 
     def summary_file(self, filename: str) -> Path:
         """
