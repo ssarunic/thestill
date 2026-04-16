@@ -135,8 +135,20 @@ def _row_to_target(row: Tuple) -> EpisodeTarget:
     )
 
 
-def discover_recent_episodes(db_path: Path, limit: int) -> List[EpisodeTarget]:
-    """Return the N most-recent episodes with both clean and summary paths set."""
+def discover_recent_episodes(
+    db_path: Path,
+    limit: int,
+    *,
+    skip_segmented_done: bool = False,
+) -> List[EpisodeTarget]:
+    """Return the N most-recent episodes with both clean and summary paths set.
+
+    When ``skip_segmented_done`` is True, episodes whose row already
+    carries a ``clean_transcript_json_path`` are excluded — useful when
+    extending coverage to "the next 20" without re-cleaning work that
+    is already on disk.
+    """
+    json_path_filter = "AND e.clean_transcript_json_path IS NULL" if skip_segmented_done else ""
     query = f"""
         SELECT {_SELECT_COLUMNS}
         FROM episodes e
@@ -144,6 +156,7 @@ def discover_recent_episodes(db_path: Path, limit: int) -> List[EpisodeTarget]:
         WHERE e.clean_transcript_path IS NOT NULL
           AND e.summary_path IS NOT NULL
           AND e.raw_transcript_path IS NOT NULL
+          {json_path_filter}
         ORDER BY e.pub_date DESC
         LIMIT ?
     """
@@ -679,6 +692,15 @@ def main() -> int:
         default=200,
         help="Window size for --gap-candidates discovery (default 200)",
     )
+    selector.add_argument(
+        "--skip-segmented-done",
+        action="store_true",
+        help=(
+            "Skip episodes whose row already has ``clean_transcript_json_path`` "
+            "set. Combined with --last N, picks the next N episodes that "
+            "haven't yet been re-cleaned with the segmented pipeline."
+        ),
+    )
 
     parser.add_argument(
         "--dry-run",
@@ -736,7 +758,7 @@ def main() -> int:
         targets = discover_gap_candidates(db_path, path_manager, max_scan=args.max_scan)
         print(f"Found {len(targets)} gap-bug candidate(s).")
     else:
-        targets = discover_recent_episodes(db_path, args.last)
+        targets = discover_recent_episodes(db_path, args.last, skip_segmented_done=args.skip_segmented_done)
 
     if not targets:
         print("❌ No episodes selected.", file=sys.stderr)
