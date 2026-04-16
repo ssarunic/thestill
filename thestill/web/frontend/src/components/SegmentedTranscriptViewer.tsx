@@ -1,34 +1,9 @@
-import { Fragment } from 'react'
+import { useMemo } from 'react'
 import type { AnnotatedSegment, AnnotatedTranscriptDump } from '../api/types'
+import { getSpeakerColor } from '../utils/speakerColors'
 
 interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
-}
-
-// Speaker-colour mapping mirrors ``TranscriptViewer.tsx``. Both
-// components will render side-by-side during the transition and we want
-// a given speaker to stay the same colour across them.
-const speakerColors: Record<string, string> = {
-  SPEAKER_00: 'text-blue-700',
-  SPEAKER_01: 'text-purple-700',
-  SPEAKER_02: 'text-green-700',
-  SPEAKER_03: 'text-orange-700',
-  SPEAKER_04: 'text-pink-700',
-}
-
-function getSpeakerColor(speaker: string): string {
-  if (speakerColors[speaker]) return speakerColors[speaker]
-  const hash = speaker.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
-  const colors = [
-    'text-blue-700',
-    'text-purple-700',
-    'text-green-700',
-    'text-orange-700',
-    'text-pink-700',
-    'text-indigo-700',
-    'text-red-700',
-  ]
-  return colors[hash % colors.length]
 }
 
 function formatTimestamp(seconds: number): string {
@@ -40,13 +15,10 @@ function formatTimestamp(seconds: number): string {
   return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`
 }
 
-function renderAdBreak(segment: AnnotatedSegment, key: string | number, offset: number) {
+function AdBreak({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   return (
-    <div
-      key={key}
-      className="my-4 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r"
-    >
+    <div className="my-4 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r">
       <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
         <span className="font-mono text-xs">[{formatTimestamp(segment.start + offset)}]</span>
         <span>Ad break{sponsor}</span>
@@ -55,10 +27,10 @@ function renderAdBreak(segment: AnnotatedSegment, key: string | number, offset: 
   )
 }
 
-function renderContent(segment: AnnotatedSegment, key: string | number, offset: number) {
+function ContentSegment({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
   const speaker = segment.speaker ?? 'Unknown'
   return (
-    <div key={key} className="mb-4">
+    <div className="mb-4">
       <div className="flex items-center gap-2 mb-1">
         <span className="font-mono text-xs text-gray-400">
           [{formatTimestamp(segment.start + offset)}]
@@ -74,7 +46,10 @@ function renderContent(segment: AnnotatedSegment, key: string | number, offset: 
 
 export default function SegmentedTranscriptViewer({ transcript }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
-  const visibleSegments = transcript.segments.filter((seg) => seg.kind !== 'filler')
+  const visibleSegments = useMemo(
+    () => transcript.segments.filter((seg) => seg.kind !== 'filler'),
+    [transcript.segments],
+  )
 
   if (visibleSegments.length === 0) {
     return (
@@ -89,13 +64,13 @@ export default function SegmentedTranscriptViewer({ transcript }: SegmentedTrans
 
   return (
     <div className="transcript-content leading-relaxed space-y-1">
-      {visibleSegments.map((segment) => (
-        <Fragment key={segment.id}>
-          {segment.kind === 'ad_break'
-            ? renderAdBreak(segment, segment.id, offset)
-            : renderContent(segment, segment.id, offset)}
-        </Fragment>
-      ))}
+      {visibleSegments.map((segment) =>
+        segment.kind === 'ad_break' ? (
+          <AdBreak key={segment.id} segment={segment} offset={offset} />
+        ) : (
+          <ContentSegment key={segment.id} segment={segment} offset={offset} />
+        ),
+      )}
     </div>
   )
 }

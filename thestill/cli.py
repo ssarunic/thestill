@@ -696,7 +696,7 @@ def clean_transcript(ctx, dry_run, max_episodes, force, stream):
                 # ran; otherwise we'd point at a non-existent file.
                 clean_transcript_json_db_path: Optional[str] = None
                 if result.get("cleaned_json_path"):
-                    json_filename = f"{cleaned_filename[:-3]}.json"
+                    json_filename = f"{Path(cleaned_filename).stem}.json"
                     clean_transcript_json_db_path = f"{podcast.slug}/{json_filename}"
 
                 # Update feed manager

@@ -28,12 +28,16 @@ from ..models.annotated_transcript import AnnotatedTranscript
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
-from ..utils.path_manager import PathManager
+from ..utils.path_manager import CleanupPipelineName, PathManager
 
 logger = get_logger(__name__)
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]
+
+# Both pipeline names the shadow probe walks (spec #18 Phase D). Tuple
+# typed with the Literal so mypy can flag typos at call sites.
+_SHADOW_PIPELINES: tuple[CleanupPipelineName, ...] = ("legacy", "segmented")
 
 
 def extract_summary_preview(summary_path: Path, max_length: int = 200) -> Optional[str]:
@@ -111,10 +115,10 @@ class ShadowTranscriptResult(NamedTuple):
     Returned when a shadow debug file exists on disk for this episode
     (produced when the cleanup processor ran with
     ``THESTILL_LEGACY_CLEANUP_SHADOW=1``). ``pipeline`` names which
-    pipeline shadowed — either ``"legacy"`` or ``"segmented"``.
+    pipeline shadowed.
     """
 
-    pipeline: str
+    pipeline: CleanupPipelineName
     content: str
 
 
@@ -569,9 +573,15 @@ class PodcastService:
         if not episode:
             logger.warning(f"Episode not found for transcript: {podcast_id}/{episode_id}")
             return None
+        return self.get_transcript_for_episode(episode)
 
-        from ..models.podcast import EpisodeState
+    def get_transcript_for_episode(self, episode: Episode) -> TranscriptResult:
+        """Get the transcript for an already-resolved episode.
 
+        Preferred entry point for callers that already hold an
+        ``Episode`` (the web route is one) — skips the podcast/episode
+        re-lookup the id-based variant pays.
+        """
         # Try cleaned transcript first (preferred)
         if episode.clean_transcript_path:
             md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
@@ -622,6 +632,22 @@ class PodcastService:
     ) -> Optional[SegmentedTranscriptResult]:
         """Load the ``AnnotatedTranscript`` JSON sidecar for an episode (spec #18).
 
+        Convenience wrapper around
+        :meth:`get_segmented_transcript_for_episode` that resolves the
+        episode from its ids first. Prefer calling the ``_for_episode``
+        variant when the caller already has an ``Episode`` in scope —
+        it avoids a redundant podcast/episode lookup (and on the web
+        route, three such lookups per request).
+        """
+        episode = self.get_episode(podcast_id, episode_id)
+        if episode is None:
+            logger.warning(f"Episode not found for segmented transcript: {podcast_id}/{episode_id}")
+            return None
+        return self.get_segmented_transcript_for_episode(episode)
+
+    def get_segmented_transcript_for_episode(self, episode: Episode) -> Optional[SegmentedTranscriptResult]:
+        """Load the ``AnnotatedTranscript`` JSON sidecar for an already-resolved episode.
+
         Returns ``None`` when the episode row carries no
         ``clean_transcript_json_path`` (the segmented cleanup never ran,
         or the file has since been deleted). Before returning, the
@@ -629,11 +655,6 @@ class PodcastService:
         overwritten with the DB value — the DB is the source of truth
         and the sidecar is a write-through cache.
         """
-        episode = self.get_episode(podcast_id, episode_id)
-        if episode is None:
-            logger.warning(f"Episode not found for segmented transcript: {podcast_id}/{episode_id}")
-            return None
-
         if not episode.clean_transcript_json_path:
             return None
 
@@ -650,9 +671,6 @@ class PodcastService:
             logger.error(f"Error reading segmented transcript JSON: {error}")
             return None
 
-        # DB is authoritative for the playback offset; overwrite any
-        # stale value cached in the JSON so downstream consumers don't
-        # need to consult the DB separately.
         annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
         return SegmentedTranscriptResult(annotated=annotated)
 
@@ -661,6 +679,16 @@ class PodcastService:
     ) -> Optional[ShadowTranscriptResult]:
         """Load the shadow-pipeline debug file for an episode, if present.
 
+        Convenience wrapper; see :meth:`get_shadow_transcript_for_episode`.
+        """
+        episode = self.get_episode(podcast_id, episode_id)
+        if episode is None:
+            return None
+        return self.get_shadow_transcript_for_episode(episode)
+
+    def get_shadow_transcript_for_episode(self, episode: Episode) -> Optional[ShadowTranscriptResult]:
+        """Load the shadow-pipeline debug file for an already-resolved episode.
+
         The cleanup processor writes the shadow's blended Markdown to a
         file named ``{stem}.shadow_{pipeline}.md`` inside a ``debug/``
         subdirectory next to the primary cleaned MD. We probe for both
@@ -668,13 +696,12 @@ class PodcastService:
         first one that exists. Returns ``None`` when no shadow ran or
         the file has been cleaned up.
         """
-        episode = self.get_episode(podcast_id, episode_id)
-        if episode is None or not episode.clean_transcript_path:
+        if not episode.clean_transcript_path:
             return None
 
         clean_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
         debug_dir = clean_path.parent / "debug"
-        for pipeline in ("legacy", "segmented"):
+        for pipeline in _SHADOW_PIPELINES:
             candidate = debug_dir / f"{clean_path.stem}.shadow_{pipeline}.md"
             if candidate.exists():
                 try:

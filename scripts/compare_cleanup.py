@@ -207,27 +207,21 @@ def discover_gap_candidates(
 
     ``max_scan`` caps the total number of episodes checked — the DB
     query returns the most-recent episodes first, so a cap acts as a
-    "check the last N" window.
+    "check the last N" window. Progress output is the caller's
+    responsibility; this function is silent so it can be imported and
+    reused without side-effects.
     """
     candidates = discover_recent_episodes(db_path, max_scan)
-    print(
-        f"Scanning {len(candidates)} recent cleaned+summarised episodes for "
-        f"gap-bug signatures (first_ts > {int(first_ts_threshold_seconds)}s "
-        f"or coverage < {coverage_threshold_pct:.0f}%)..."
-    )
-
     suspects: List[EpisodeTarget] = []
     for target in candidates:
         clean_path = path_manager.clean_transcript_file(target.clean_transcript_path)
         if not clean_path.exists():
             continue
 
-        # Fast path: first-timestamp check (bounded read).
         head = clean_path.read_text(encoding="utf-8", errors="ignore")[:4096]
         first_ts = _first_timestamp_seconds(head)
         if first_ts is not None and first_ts > first_ts_threshold_seconds:
             suspects.append(target)
-            _log_suspect(target, first_ts=first_ts, coverage=None)
             continue
 
         # Slow path: coverage check. Needs the raw JSON and the cleaned
@@ -248,24 +242,8 @@ def discover_gap_candidates(
         coverage = 100.0 * cleaned_word_count / raw_word_total
         if coverage < coverage_threshold_pct:
             suspects.append(target)
-            _log_suspect(target, first_ts=first_ts, coverage=coverage)
 
-    print(f"Found {len(suspects)} gap-bug candidate(s) out of {len(candidates)} scanned.")
     return suspects
-
-
-def _log_suspect(
-    target: EpisodeTarget,
-    *,
-    first_ts: Optional[float],
-    coverage: Optional[float],
-) -> None:
-    ts_str = _fmt_ts(first_ts) if first_ts is not None else "   —"
-    cov_str = f"{coverage:5.1f}%" if coverage is not None else "   —"
-    print(
-        f"  suspect: {target.podcast_slug[:30]:<30}  first_ts {ts_str}  "
-        f"cov {cov_str}  •  {target.episode_title[:55]}"
-    )
 
 
 def snapshot_baseline(path_manager: PathManager, target: EpisodeTarget) -> Optional[Path]:
@@ -285,8 +263,11 @@ def snapshot_baseline(path_manager: PathManager, target: EpisodeTarget) -> Optio
 
 def shadow_legacy_path(path_manager: PathManager, target: EpisodeTarget) -> Path:
     """Expected debug file for the legacy shadow produced during re-run."""
-    clean_path = path_manager.clean_transcript_file(target.clean_transcript_path)
-    return clean_path.parent / "debug" / f"{clean_path.stem}.shadow_legacy.md"
+    return path_manager.clean_transcript_shadow_file(
+        target.podcast_slug,
+        Path(target.clean_transcript_path).name,
+        "legacy",
+    )
 
 
 def run_dual_cleanup(
@@ -654,7 +635,9 @@ def main() -> int:
         if missing:
             print(f"  ⚠️  {len(missing)} episode-id(s) did not resolve: " f"{', '.join(sorted(missing))}")
     elif args.gap_candidates:
+        print(f"Scanning up to {args.max_scan} recent cleaned+summarised episodes for " f"gap-bug signatures...")
         targets = discover_gap_candidates(db_path, path_manager, max_scan=args.max_scan)
+        print(f"Found {len(targets)} gap-bug candidate(s).")
     else:
         targets = discover_recent_episodes(db_path, args.last)
 

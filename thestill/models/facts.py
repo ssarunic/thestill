@@ -56,3 +56,17 @@ class EpisodeFacts(BaseModel):
     guests: List[str] = Field(default_factory=list)  # "Name - Role/Description"
     topics_keywords: List[str] = Field(default_factory=list)  # Episode-specific topics
     ad_sponsors: List[str] = Field(default_factory=list)  # Sponsors mentioned in this episode
+
+
+def strip_role_annotation(name: str) -> str:
+    """Strip a trailing ``" (Role)"`` annotation from a speaker name.
+
+    The facts file convention stores speaker names with an inline role
+    — ``"Scott Galloway (Host)"`` — for editorial clarity. When the name
+    is rendered into cleaned transcript output we want just ``"Scott
+    Galloway"``. Only the *last* parenthesised block is stripped so a
+    name like ``"A (B) (Host)"`` becomes ``"A (B)"``.
+    """
+    if " (" in name and name.endswith(")"):
+        return name.rsplit(" (", 1)[0]
+    return name

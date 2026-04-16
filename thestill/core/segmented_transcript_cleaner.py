@@ -47,7 +47,7 @@ from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, SegmentKind
-from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.language_config import resolve_language_spec
 
 logger = get_logger(__name__)
@@ -162,15 +162,6 @@ class SegmentedTranscriptCleaner:
         are preserved unchanged — the patch schema forbids the LLM from
         touching them.
         """
-        # Apply speaker-name substitution up-front. This mirrors the
-        # legacy cleaner's Stage 2a (deterministic, no LLM, applied
-        # before the text-cleanup pass) but operates on the structured
-        # ``speaker`` field instead of doing a regex over Markdown. The
-        # LLM then sees real names in every batch's payload, which makes
-        # entity repair more effective — it can cross-reference
-        # mis-transcribed name mentions against the speaker labels.
-        # Unmapped speakers pass through as ``SPEAKER_NN`` so missing
-        # facts surface as a visible signal rather than silent drift.
         source = _apply_speaker_mapping(annotated.segments, episode_facts.speaker_mapping)
 
         system_prompt = self._build_system_prompt(
@@ -482,10 +473,7 @@ def _apply_speaker_mapping(
     for speaker_id, name in mapping.items():
         if not name:
             continue
-        clean = name
-        if " (" in clean and clean.endswith(")"):
-            clean = clean.rsplit(" (", 1)[0]
-        clean = clean.strip()
+        clean = strip_role_annotation(name).strip()
         if clean:
             normalised[speaker_id] = clean
 

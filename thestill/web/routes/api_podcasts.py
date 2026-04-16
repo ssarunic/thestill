@@ -261,24 +261,11 @@ async def get_episode_transcript_by_slugs(
 
     podcast, episode = result
 
-    transcript_result = state.podcast_service.get_transcript(podcast.id, episode.id)
+    # ``episode`` is already resolved above via repository.get_episode_by_slug.
+    # Use the ``_for_episode`` service methods so the three transcript
+    # fetches don't each re-walk the podcast/episode lookup.
+    transcript_result = state.podcast_service.get_transcript_for_episode(episode)
 
-    if transcript_result is None:
-        not_found("Episode", f"{podcast_slug}/{episode_slug}")
-
-    # Spec #18 Phase D: the response envelope stays backwards-compatible —
-    # ``content``/``transcript_type``/``available`` are always present with
-    # the same meaning. Two optional fields are added when the relevant
-    # artefacts exist on disk:
-    #
-    # - ``segments``: the ``AnnotatedTranscript`` JSON sidecar contents,
-    #   populated iff ``episode.clean_transcript_json_path`` resolves to
-    #   a readable file.
-    # - ``shadow``: the dual-pipeline debug file ``{pipeline, content}``,
-    #   populated iff a ``debug/*.shadow_*.md`` file exists next to the
-    #   primary cleaned MD.
-    #
-    # Both keys are omitted entirely when absent — absence is the signal.
     response_payload: dict = {
         "episode_id": episode.id,
         "episode_title": episode.title,
@@ -287,11 +274,11 @@ async def get_episode_transcript_by_slugs(
         "transcript_type": transcript_result.transcript_type,
     }
 
-    segmented = state.podcast_service.get_segmented_transcript(podcast.id, episode.id)
+    segmented = state.podcast_service.get_segmented_transcript_for_episode(episode)
     if segmented is not None:
         response_payload["segments"] = segmented.annotated.model_dump()
 
-    shadow = state.podcast_service.get_shadow_transcript(podcast.id, episode.id)
+    shadow = state.podcast_service.get_shadow_transcript_for_episode(episode)
     if shadow is not None:
         response_payload["shadow"] = {
             "pipeline": shadow.pipeline,

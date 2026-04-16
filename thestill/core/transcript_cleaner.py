@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional
 from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
-from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.language_config import resolve_language_spec
 
 logger = get_logger(__name__)
@@ -136,18 +136,9 @@ class TranscriptCleaner:
         for speaker_id, speaker_name in mapping.items():
             if not speaker_name:
                 continue
-
-            # Remove role suffix for cleaner output (e.g., "Scott Galloway (Host)" -> "Scott Galloway")
-            # Keep role in facts file, but not in transcript
-            clean_name = speaker_name
-            if " (" in clean_name and clean_name.endswith(")"):
-                clean_name = clean_name.rsplit(" (", 1)[0]
-
-            # Replace **SPEAKER_XX:** with **Name:**
-            # Pattern matches the format from TranscriptFormatter: `[HH:MM:SS]` **SPEAKER_XX:** text
+            clean_name = strip_role_annotation(speaker_name)
             pattern = rf"\*\*{re.escape(speaker_id)}:\*\*"
-            replacement = f"**{clean_name}:**"
-            result = re.sub(pattern, replacement, result)
+            result = re.sub(pattern, f"**{clean_name}:**", result)
 
         return result
 
