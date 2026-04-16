@@ -94,7 +94,11 @@ def _extract_blended_speakers(path: Path) -> Set[str]:
     """Return the distinct speaker labels in a blended-Markdown file.
 
     Skips ``[AD BREAK]`` markers — those use the same ``**...**``
-    format but name a sponsor, not a speaker.
+    format but name a sponsor, not a speaker. Also skips the literal
+    string ``"None"``, which is how segments with ``speaker=None``
+    render (a legacy byte-identical quirk in ``to_blended_markdown``);
+    the segmented JSON filters those same segments out of its speaker
+    set, so the two views are actually consistent.
     """
     speakers: Set[str] = set()
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -104,7 +108,7 @@ def _extract_blended_speakers(path: Path) -> Set[str]:
         match = _BLENDED_SPEAKER_RE.match(stripped)
         if match:
             name = match.group(1).strip()
-            if name:
+            if name and name != "None":
                 speakers.add(name)
     return speakers
 
