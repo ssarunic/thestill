@@ -1013,11 +1013,18 @@ def setup_tools(server: Server, storage_path: str):
                         )
 
                         if result_data:
+                            # Segmented pipeline writes a JSON sidecar; persist
+                            # its path so the UI can find structured segments.
+                            clean_transcript_json_db_path = None
+                            if result_data.get("cleaned_json_path"):
+                                json_filename = f"{Path(cleaned_filename).stem}.json"
+                                clean_transcript_json_db_path = f"{podcast.slug}/{json_filename}"
                             feed_manager.mark_episode_processed(
                                 str(podcast.rss_url),
                                 episode.external_id,
                                 raw_transcript_path=transcript_path.name,
                                 clean_transcript_path=clean_transcript_db_path,
+                                clean_transcript_json_path=clean_transcript_json_db_path,
                             )
                             cleaned.append(
                                 {
@@ -1267,11 +1274,18 @@ def setup_tools(server: Server, storage_path: str):
                         )
 
                         if result_data:
+                            # Persist the segmented-JSON sidecar path when the
+                            # segmented pipeline wrote one.
+                            clean_transcript_json_db_path = None
+                            if result_data.get("cleaned_json_path"):
+                                json_filename = f"{Path(cleaned_filename).stem}.json"
+                                clean_transcript_json_db_path = f"{podcast.slug}/{json_filename}"
                             feed_manager.mark_episode_processed(
                                 str(podcast.rss_url),
                                 episode.external_id,
                                 raw_transcript_path=episode.raw_transcript_path,
                                 clean_transcript_path=clean_transcript_db_path,
+                                clean_transcript_json_path=clean_transcript_json_db_path,
                             )
                             steps_completed.append("clean")
                         else:

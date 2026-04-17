@@ -64,7 +64,7 @@ class Config(BaseModel):
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
-    # Refresh Configuration (spec #18)
+    # Refresh Configuration (spec #19)
     # 1 = serial (historical behavior); raise to enable ThreadPoolExecutor over feeds.
     refresh_max_workers: int = 1
     # Per-host concurrency cap so bursts don't hammer Megaphone/Libsyn/Transistor.

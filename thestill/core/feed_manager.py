@@ -64,7 +64,7 @@ class PodcastFeedManager:
             path_manager: Path manager for file operations
             max_workers: Number of parallel workers for refresh. 1 (default) keeps
                 the historical serial behavior. Values >1 enable a ThreadPoolExecutor
-                over podcasts; see spec #18 for rationale.
+                over podcasts; see spec #19 for rationale.
             max_per_host: Cap on concurrent HTTP fetches per origin host. Prevents
                 hammering shared podcast hosts (Megaphone, Libsyn, Transistor) when
                 many feeds live on the same CDN. Only consulted when max_workers>1.
@@ -239,7 +239,7 @@ class PodcastFeedManager:
 
             if isinstance(source, RSSMediaSource):
                 # Parse-once: fetch + parse the RSS body a single time, then feed
-                # the result to both extract_metadata and fetch_episodes. Spec #18.
+                # the result to both extract_metadata and fetch_episodes. Spec #19.
                 host = urlparse(rss_url_str).hostname or ""
                 if self.max_workers > 1 and host:
                     with self._host_semaphore(host):
@@ -689,6 +689,7 @@ class PodcastFeedManager:
         episode_external_id: str,
         raw_transcript_path: Optional[str] = None,
         clean_transcript_path: Optional[str] = None,
+        clean_transcript_json_path: Optional[str] = None,
         summary_path: Optional[str] = None,
     ) -> None:
         """
@@ -699,6 +700,10 @@ class PodcastFeedManager:
             episode_external_id: External ID (from RSS feed) of the episode
             raw_transcript_path: Optional path to raw transcript file
             clean_transcript_path: Optional path to cleaned transcript file
+            clean_transcript_json_path: Optional path to the segmented
+                ``AnnotatedTranscript`` JSON sidecar (spec #18 Phase D).
+                Populated only when the segmented cleanup pipeline was
+                the primary producer; ``None`` for legacy-primary runs.
             summary_path: Optional path to summary file
         """
         if self._in_transaction:
@@ -714,6 +719,10 @@ class PodcastFeedManager:
                             episode.raw_transcript_path = raw_transcript_path if raw_transcript_path else None
                         if clean_transcript_path is not None:
                             episode.clean_transcript_path = clean_transcript_path if clean_transcript_path else None
+                        if clean_transcript_json_path is not None:
+                            episode.clean_transcript_json_path = (
+                                clean_transcript_json_path if clean_transcript_json_path else None
+                            )
                         if summary_path is not None:
                             episode.summary_path = summary_path if summary_path else None
                         podcast.last_processed = datetime.now()
@@ -736,6 +745,10 @@ class PodcastFeedManager:
                 updates["raw_transcript_path"] = raw_transcript_path if raw_transcript_path else None
             if clean_transcript_path is not None:
                 updates["clean_transcript_path"] = clean_transcript_path if clean_transcript_path else None
+            if clean_transcript_json_path is not None:
+                updates["clean_transcript_json_path"] = (
+                    clean_transcript_json_path if clean_transcript_json_path else None
+                )
             if summary_path is not None:
                 updates["summary_path"] = summary_path if summary_path else None
 

@@ -34,12 +34,13 @@ describing current phase and gates.
 | 05 | [docker-deployment](05-docker-deployment.md) | 📋 Planned (2026-04-13) | Slim cloud-only Docker image for RPi5, multi-stage `:slim`/`:full` targets, Dalston-only default |
 | 06 | [authentication](06-authentication.md) | 📝 Draft | Opt-in auth system: zero-friction self-hosted, multi-tenant-ready for hosted |
 | 07 | [multi-user-web-app](07-multi-user-web-app.md) | 📝 Draft | Multi-user podcast tracking web app, "process once, deliver to many" |
-| 08 | [multi-phase-transcript-cleaning](08-multi-phase-transcript-cleaning.md) | 💡 Proposal | Multi-phase cleaning to fix LLM hallucination and skipped content in transcripts |
+| 08 | [multi-phase-transcript-cleaning](08-multi-phase-transcript-cleaning.md) | 🗄 Archived | Superseded by #18 |
 | 09 | [single-user-web-ui](09-single-user-web-ui.md) | 🚧 Active development | Single-user web UI: dashboard, podcast management, pipeline visibility |
 | 10 | [queue-viewer](10-queue-viewer.md) | 🚧 Active development | Task queue viewer page: pending/processing/retry tasks with bump-to-front |
 | 11 | [task-queue-monitor](11-task-queue-monitor.md) | 🚧 Active development | Unified task queue monitor replacing the Failed Tasks page |
 | 12 | [whisperx-chunk-progress-tracking](12-whisperx-chunk-progress-tracking.md) | 🚧 Active development | Capture WhisperX stdout progress output and convert to real-time callbacks |
-| 18 | [refresh-performance](18-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
+| 18 | [segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) | 🚧 Active development | Per-segment cleanup with word timestamps preserved; prerequisite for richer media player |
+| 19 | [refresh-performance](19-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
 
 ## Completed
 

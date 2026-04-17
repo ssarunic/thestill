@@ -208,7 +208,7 @@ class RSSMediaSource(MediaSource):
         feedparser parse are skipped — the caller is expected to have already
         fetched and parsed the feed (see `fetch_and_parse`). This is how
         `PodcastFeedManager.get_new_episodes` avoids the historical
-        double-fetch of each RSS body per refresh (spec #18).
+        double-fetch of each RSS body per refresh (spec #19).
 
         Args:
             url: RSS feed URL or Apple Podcasts URL
@@ -346,7 +346,7 @@ class RSSMediaSource(MediaSource):
 
         If `parsed_feed` is supplied, the HTTP fetch and feedparser parse are
         skipped. The feed_manager uses this to avoid double-fetching each RSS
-        body per refresh (spec #18).
+        body per refresh (spec #19).
 
         Args:
             url: RSS feed URL
@@ -514,13 +514,11 @@ class RSSMediaSource(MediaSource):
             return None
         return parsed_feed
 
-    def fetch_and_parse(
-        self, url: str, podcast_slug: Optional[str] = None
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    def fetch_and_parse(self, url: str, podcast_slug: Optional[str] = None) -> Tuple[Optional[str], Optional[Any]]:
         """
         One-shot fetch + parse. Replaces the historical pattern of fetching
         and parsing once for metadata extraction and again for episode
-        extraction — see spec #18.
+        extraction — see spec #19.
 
         Args:
             url: RSS feed URL.

@@ -1,8 +1,11 @@
 # Multi-Phase Transcript Cleaning Architecture
 
-**Status:** Proposal
+**Status:** 🗄 Archived — superseded by [spec #18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md)
 **Created:** 2026-01-13
+**Archived:** 2026-04-15
 **Context:** LLM hallucination issues during transcript cleaning - model skips content and synthesizes instead of editing verbatim.
+
+> **Superseded by [#18](18-segment-preserving-transcript-cleaning.md).** Spec #18 absorbs this proposal's data model and prompt-caching ideas, narrows the scope to what unblocks the richer media player (segment preservation end-to-end), and defers multi-phase hierarchical cleanup as a possible follow-up on top of the segment store. The cost analysis in §1 and the `AnnotatedSegment` sketch in §2 of this document are still the clearest statement of the motivation and are retained for historical context.
 
 ---
 

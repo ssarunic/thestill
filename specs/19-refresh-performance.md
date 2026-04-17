@@ -149,29 +149,29 @@ others. Phases 1 and 2 are independent and can land in any order.
 
 ### Phase 2 — Structural
 
-6. **Batch DB writes.** Collect results, commit once at the end of the
+1. **Batch DB writes.** Collect results, commit once at the end of the
    refresh in a single transaction. Eliminate the `get_all()` N+1 by loading
    `(podcast_id, external_id)` pairs upfront into a set for dedup.
-7. **In-process scheduler (`APScheduler`).** Before reaching for Redis, a
+2. **In-process scheduler (`APScheduler`).** Before reaching for Redis, a
    single-process scheduler with per-feed `next_refresh_at` is enough for
    one user and a few hundred feeds. Scheduler wakes every minute, picks
    ready feeds, enqueues them into the same thread pool.
-8. **Adaptive cadence per feed.** Track observed publish interval; poll
+3. **Adaptive cadence per feed.** Track observed publish interval; poll
    daily feeds every 15–30 min, weekly every 6 h, dormant ones once a day.
    Makes refresh cost scale with publish velocity, not feed count.
-9. **Stagger starts.** Hash podcast ID into the refresh window so feeds
+4. **Stagger starts.** Hash podcast ID into the refresh window so feeds
    don't all fire at `:00`. Protects hosts and egress.
 
 ### Phase 3 — Scaling infra (defer until needed)
 
-10. **Async with `httpx.AsyncClient`.** Cleaner than threads past a few
+1. **Async with `httpx.AsyncClient`.** Cleaner than threads past a few
     hundred feeds; per-host connection limits and timeouts are easier to
     express. Requires `feedparser`/repository calls to run via
     `asyncio.to_thread`.
-11. **Redis + RQ (or Arq).** Per-podcast jobs on a shared queue, N worker
+2. **Redis + RQ (or Arq).** Per-podcast jobs on a shared queue, N worker
     processes. Isolation, horizontal scale. The operational cost of Redis
     is real for a single-user tool; earn it with data before adopting.
-12. **WebSub / PubSubHubbub detection.** Subscribe to push where feeds
+3. **WebSub / PubSubHubbub detection.** Subscribe to push where feeds
     advertise a hub. Fewer feeds honor this than expected, but free when
     they do.
 

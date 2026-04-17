@@ -199,6 +199,45 @@ export interface EpisodeDetailResponse {
 
 export type TranscriptType = 'cleaned' | 'raw'
 
+// Segmented-cleanup types (spec #18 Phase D). Mirror the Pydantic
+// models in thestill/models/annotated_transcript.py. Keep the field
+// list in lock-step with the Python side — they are the contract the
+// SegmentedTranscriptViewer renders from.
+export type SegmentKind = 'content' | 'filler' | 'ad_break'
+
+export interface WordSpan {
+  start_segment_id: number
+  start_word_index: number
+  end_segment_id: number
+  end_word_index: number
+}
+
+export interface AnnotatedSegment {
+  id: number
+  start: number
+  end: number
+  speaker: string | null
+  text: string
+  kind: SegmentKind
+  sponsor: string | null
+  source_segment_ids: number[]
+  source_word_span: WordSpan | null
+  user_segment_id: string | null
+  metadata: Record<string, unknown>
+}
+
+export interface AnnotatedTranscriptDump {
+  episode_id: string
+  segments: AnnotatedSegment[]
+  playback_time_offset_seconds: number
+  algorithm_version: string
+}
+
+export interface ShadowTranscript {
+  pipeline: 'segmented' | 'legacy'
+  content: string
+}
+
 export interface ContentResponse {
   status: string
   timestamp: string
@@ -207,6 +246,14 @@ export interface ContentResponse {
   content: string
   available: boolean
   transcript_type?: TranscriptType  // 'cleaned' or 'raw', undefined if not available
+  // Present iff the segmented-cleanup JSON sidecar exists for this
+  // episode. Absence means "no segmented output to render" — the
+  // frontend falls back to the classic ``content`` Markdown.
+  segments?: AnnotatedTranscriptDump
+  // Present iff a dual-pipeline shadow debug file exists. Its
+  // ``pipeline`` names which pipeline was the shadow (the primary
+  // is reflected in ``content`` / ``transcript_type`` above).
+  shadow?: ShadowTranscript
 }
 
 // Commands API Types

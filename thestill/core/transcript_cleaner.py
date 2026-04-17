@@ -29,7 +29,8 @@ from typing import Any, Callable, Dict, List, Optional
 from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
-from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
+from thestill.utils.language_config import resolve_language_spec
 
 logger = get_logger(__name__)
 
@@ -135,18 +136,9 @@ class TranscriptCleaner:
         for speaker_id, speaker_name in mapping.items():
             if not speaker_name:
                 continue
-
-            # Remove role suffix for cleaner output (e.g., "Scott Galloway (Host)" -> "Scott Galloway")
-            # Keep role in facts file, but not in transcript
-            clean_name = speaker_name
-            if " (" in clean_name and clean_name.endswith(")"):
-                clean_name = clean_name.rsplit(" (", 1)[0]
-
-            # Replace **SPEAKER_XX:** with **Name:**
-            # Pattern matches the format from TranscriptFormatter: `[HH:MM:SS]` **SPEAKER_XX:** text
+            clean_name = strip_role_annotation(speaker_name)
             pattern = rf"\*\*{re.escape(speaker_id)}:\*\*"
-            replacement = f"**{clean_name}:**"
-            result = re.sub(pattern, replacement, result)
+            result = re.sub(pattern, f"**{clean_name}:**", result)
 
         return result
 
@@ -375,42 +367,7 @@ class TranscriptCleaner:
 
     def _build_cleanup_system_prompt(self, *, language: str) -> str:
         """Build system prompt for transcript cleanup."""
-        # Map ISO 639-1 codes to language names and spelling rules
-        language_config = {
-            "en": {"name": "English", "spelling": "British English (e.g., 'labour', 'programme', 'realise', 'colour')"},
-            "hr": {"name": "Croatian", "spelling": "standard Croatian spelling rules"},
-            "de": {"name": "German", "spelling": "standard German orthography (Rechtschreibung)"},
-            "es": {"name": "Spanish", "spelling": "standard Spanish spelling rules"},
-            "fr": {"name": "French", "spelling": "standard French spelling rules"},
-            "it": {"name": "Italian", "spelling": "standard Italian spelling rules"},
-            "pt": {"name": "Portuguese", "spelling": "standard Portuguese spelling rules"},
-            "nl": {"name": "Dutch", "spelling": "standard Dutch spelling rules"},
-            "pl": {"name": "Polish", "spelling": "standard Polish spelling rules"},
-            "ru": {"name": "Russian", "spelling": "standard Russian spelling rules"},
-            "cs": {"name": "Czech", "spelling": "standard Czech spelling rules"},
-            "sk": {"name": "Slovak", "spelling": "standard Slovak spelling rules"},
-            "sl": {"name": "Slovenian", "spelling": "standard Slovenian spelling rules"},
-            "sr": {"name": "Serbian", "spelling": "standard Serbian spelling rules"},
-            "bs": {"name": "Bosnian", "spelling": "standard Bosnian spelling rules"},
-            "uk": {"name": "Ukrainian", "spelling": "standard Ukrainian spelling rules"},
-            "hu": {"name": "Hungarian", "spelling": "standard Hungarian spelling rules"},
-            "ro": {"name": "Romanian", "spelling": "standard Romanian spelling rules"},
-            "bg": {"name": "Bulgarian", "spelling": "standard Bulgarian spelling rules"},
-            "el": {"name": "Greek", "spelling": "standard Greek spelling rules"},
-            "sv": {"name": "Swedish", "spelling": "standard Swedish spelling rules"},
-            "da": {"name": "Danish", "spelling": "standard Danish spelling rules"},
-            "fi": {"name": "Finnish", "spelling": "standard Finnish spelling rules"},
-            "no": {"name": "Norwegian", "spelling": "standard Norwegian spelling rules"},
-            "ja": {"name": "Japanese", "spelling": "standard Japanese writing conventions"},
-            "ko": {"name": "Korean", "spelling": "standard Korean writing conventions"},
-            "zh": {"name": "Chinese", "spelling": "standard Chinese writing conventions"},
-            "ar": {"name": "Arabic", "spelling": "standard Arabic writing conventions"},
-            "tr": {"name": "Turkish", "spelling": "standard Turkish spelling rules"},
-        }
-
-        config = language_config.get(
-            language, {"name": language.upper(), "spelling": f"standard {language.upper()} spelling rules"}
-        )
+        config = resolve_language_spec(language)
         lang_name = config["name"]
         spelling_rules = config["spelling"]
 

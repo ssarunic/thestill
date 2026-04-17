@@ -141,7 +141,21 @@ class Episode(BaseModel):
     downsampled_audio_path: Optional[str] = None  # Filename of the downsampled WAV file (in downsampled_audio/)
     raw_transcript_path: Optional[str] = None  # Filename of the raw transcript JSON (Whisper output)
     clean_transcript_path: Optional[str] = None  # Filename of the cleaned transcript MD (corrected, formatted)
+    # Structured ``AnnotatedTranscript`` JSON sidecar produced by the
+    # segmented-cleanup path (spec #18). Populated on next cleanup run;
+    # ``None`` for episodes cleaned before Phase D or via the legacy
+    # fallback (e.g. Parakeet). Not part of ``Episode.state`` — the
+    # CLEANED state still gates on ``clean_transcript_path``.
+    clean_transcript_json_path: Optional[str] = None
     summary_path: Optional[str] = None  # Filename of the summary (future use)
+
+    # Per-episode playback offset in seconds, applied by the player when
+    # the downsampled-WAV-derived segment timestamps drift from the
+    # publisher's MP3 (leading silence trimmed during downsampling,
+    # inserted pre-roll, etc.). Default 0.0. The DB is authoritative;
+    # the cached value in the ``AnnotatedTranscript`` JSON sidecar is
+    # overwritten with this on every read.
+    playback_time_offset_seconds: float = 0.0
 
     # Failure tracking (set when processing fails after exhausting retries or hits a fatal error)
     failed_at_stage: Optional[str] = None  # Stage where failure occurred ('download', 'transcribe', etc.)

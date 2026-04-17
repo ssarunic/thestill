@@ -2,7 +2,7 @@
 
 This page explains how to collect hard data about where `thestill refresh`
 spends its time. Use it when evaluating the phase-1/2 optimizations in
-[spec #18](../specs/18-refresh-performance.md).
+[spec #19](../specs/19-refresh-performance.md).
 
 ## What gets measured
 
@@ -167,7 +167,7 @@ Expected shape of a healthy-but-unoptimized run:
 - `parse` is small-to-moderate (tens of ms for small feeds, hundreds
   for huge archives).
 
-If the data matches, phase-1 work from spec #18 is justified:
+If the data matches, phase-1 work from spec #19 is justified:
 
 1. Parse-once refactor → halves `http_fetch` event count.
 2. `ThreadPoolExecutor` → batch `duration_ms` drops roughly N× for pool
