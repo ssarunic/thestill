@@ -1,8 +1,8 @@
 # Refresh Performance — Profiling and Parallelization
 
-**Status**: 💡 Proposal
+**Status**: 🚧 Active development
 **Created**: 2026-04-17
-**Updated**: 2026-04-17 (resolved open questions on task-manager locking and conditional-GET scope)
+**Updated**: 2026-04-17 (phases 0 and 1.1–1.4 shipped; conditional GET + DB batching still open)
 **Priority**: Medium (scales with feed count; not urgent at single-user scale today)
 
 ## Overview
@@ -127,23 +127,25 @@ others. Phases 1 and 2 are independent and can land in any order.
 
 ### Phase 1 — Quick wins (no new infra)
 
-1. **Eliminate the double RSS fetch.** Refactor so the RSS body is fetched
-   once per podcast per refresh and both metadata extraction and episode
-   extraction work off the same parsed object. Expected: ~40–50% wall-clock
-   cut on the RSS path even before concurrency.
-2. **`requests.Session` with `HTTPAdapter(pool_maxsize=N)`.** Keep-alive and
-   connection reuse across feeds on the same host.
-3. **Tighter timeouts + retry.** `(connect=5, read=15)` + `urllib3.Retry` with
-   jitter. Avoids 30 s stalls on a single bad host.
-4. **`ThreadPoolExecutor(max_workers=N)` over podcasts.** Gated behind a
-   config flag (default `1` = current behavior) until we have phase-0 data.
-   Per-host concurrency cap to avoid hammering shared hosts (Megaphone,
-   Libsyn, Transistor host many feeds each). Feed I/O releases the GIL so
-   threads are sufficient.
-5. **Conditional GET.** Store `etag` and `last_modified` on the `podcasts`
-   table (schema migration). Send `If-None-Match` / `If-Modified-Since`. 304
-   responses are near-zero cost. Combined with phase 1, unchanged feeds
-   become essentially free.
+1. **Eliminate the double RSS fetch.** ✅ Shipped. `RSSMediaSource.fetch_and_parse`
+   fetches + parses once; `extract_metadata` and `fetch_episodes` accept
+   pre-parsed input. `PodcastFeedManager._refresh_single_podcast` calls
+   `fetch_and_parse` once and threads the result through both extractors.
+2. **`requests.Session` with `HTTPAdapter(pool_maxsize=N)`.** ✅ Shipped.
+   `RSSMediaSource` owns a shared session with keep-alive + connection pool.
+3. **Tighter timeouts + retry.** ✅ Shipped. `DEFAULT_TIMEOUT = (5, 15)` and
+   a `urllib3.Retry` policy (2 retries on 500/502/503/504 with backoff) on
+   the session.
+4. **`ThreadPoolExecutor(max_workers=N)` over podcasts.** ✅ Shipped.
+   `REFRESH_MAX_WORKERS` (default `1` = historical serial behavior) and
+   `REFRESH_MAX_PER_HOST` (default `2`) config knobs. Per-host
+   `threading.Semaphore` guards the HTTP fetch block to prevent hammering
+   shared hosts. SQLite already runs in WAL mode, so concurrent writes
+   serialize safely.
+5. **Conditional GET.** ⏳ Open. Store `etag` and `last_modified` on the
+   `podcasts` table (schema migration). Send `If-None-Match` /
+   `If-Modified-Since`. 304 responses are near-zero cost. With the phase-1
+   changes already shipped, unchanged feeds still pay full download + parse.
 
 ### Phase 2 — Structural
 

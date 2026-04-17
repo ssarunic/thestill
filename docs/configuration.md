@@ -63,6 +63,8 @@ See [transcription-providers.md](transcription-providers.md) for provider-specif
 |----------|-------------|---------|
 | `MAX_EPISODES_PER_PODCAST` | Limit episodes tracked per podcast | - (no limit) |
 | `DELETE_AUDIO_AFTER_PROCESSING` | Delete audio after each stage | `false` |
+| `REFRESH_MAX_WORKERS` | Parallel workers for `thestill refresh` (see [spec #18](../specs/18-refresh-performance.md)) | `1` |
+| `REFRESH_MAX_PER_HOST` | Cap on concurrent HTTP fetches per host during refresh | `2` |
 
 ### MAX_EPISODES_PER_PODCAST
 

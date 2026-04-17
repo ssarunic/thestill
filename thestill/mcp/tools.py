@@ -67,7 +67,12 @@ def setup_tools(server: Server, storage_path: str):
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
     podcast_service = PodcastService(storage_path, repository, path_manager)
     stats_service = StatsService(storage_path, repository, path_manager)
-    feed_manager = PodcastFeedManager(repository, path_manager)
+    feed_manager = PodcastFeedManager(
+        repository,
+        path_manager,
+        max_workers=config.refresh_max_workers,
+        max_per_host=config.refresh_max_per_host,
+    )
     refresh_service = RefreshService(feed_manager, podcast_service)
     audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
     audio_preprocessor = AudioPreprocessor(logger=logger)

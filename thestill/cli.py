@@ -149,7 +149,12 @@ def main(ctx, config, quiet):
         repository = SqlitePodcastRepository(db_path=config_obj.database_path)
         podcast_service = PodcastService(storage_path, repository, path_manager)
         stats_service = StatsService(storage_path, repository, path_manager)
-        feed_manager = PodcastFeedManager(repository, path_manager)
+        feed_manager = PodcastFeedManager(
+            repository,
+            path_manager,
+            max_workers=config_obj.refresh_max_workers,
+            max_per_host=config_obj.refresh_max_per_host,
+        )
         audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
         audio_preprocessor = AudioPreprocessor(console=console)
         external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager)

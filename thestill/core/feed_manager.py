@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import feedparser
 from structlog import get_logger
@@ -46,13 +49,25 @@ class PodcastFeedManager:
     - Business logic (delegates to service layer)
     """
 
-    def __init__(self, podcast_repository: PodcastRepository, path_manager: PathManager) -> None:
+    def __init__(
+        self,
+        podcast_repository: PodcastRepository,
+        path_manager: PathManager,
+        max_workers: int = 1,
+        max_per_host: int = 2,
+    ) -> None:
         """
         Initialize feed manager.
 
         Args:
             podcast_repository: Repository for persistence
             path_manager: Path manager for file operations
+            max_workers: Number of parallel workers for refresh. 1 (default) keeps
+                the historical serial behavior. Values >1 enable a ThreadPoolExecutor
+                over podcasts; see spec #18 for rationale.
+            max_per_host: Cap on concurrent HTTP fetches per origin host. Prevents
+                hammering shared podcast hosts (Megaphone, Libsyn, Transistor) when
+                many feeds live on the same CDN. Only consulted when max_workers>1.
         """
         self.repository: PodcastRepository = podcast_repository
         self.path_manager: PathManager = path_manager
@@ -64,6 +79,10 @@ class PodcastFeedManager:
         )
         self._in_transaction: bool = False
         self._transaction_podcasts: Dict[str, Podcast] = {}
+        self.max_workers: int = max(1, max_workers)
+        self.max_per_host: int = max(1, max_per_host)
+        self._host_semaphores: Dict[str, threading.Semaphore] = {}
+        self._host_semaphore_lock = threading.Lock()
 
     @contextmanager
     def transaction(self):
@@ -185,6 +204,165 @@ class PodcastFeedManager:
         """Remove a podcast feed"""
         return self.repository.delete(rss_url)
 
+    def _host_semaphore(self, host: str) -> threading.Semaphore:
+        """Return a per-host semaphore, created on first access under a lock."""
+        with self._host_semaphore_lock:
+            sem = self._host_semaphores.get(host)
+            if sem is None:
+                sem = threading.Semaphore(self.max_per_host)
+                self._host_semaphores[host] = sem
+        return sem
+
+    def _refresh_single_podcast(
+        self,
+        podcast: Podcast,
+        max_episodes_per_podcast: Optional[int],
+    ) -> Tuple[Podcast, List[Episode], bool]:
+        """
+        Refresh a single podcast. Safe to call from a worker thread.
+
+        Returns:
+            (podcast, new_episodes, had_error). `new_episodes` is empty when
+            there is nothing new (or on error).
+        """
+        podcast_start = time.perf_counter()
+        had_error = False
+        new_eps: List[Episode] = []
+        source: Any = None
+        try:
+            source = self.media_source_factory.detect_source(str(podcast.rss_url))
+            rss_url_str = str(podcast.rss_url)
+
+            metadata_changed = False
+            parsed_feed: Optional[Any] = None
+            rss_content: Optional[str] = None
+
+            if isinstance(source, RSSMediaSource):
+                # Parse-once: fetch + parse the RSS body a single time, then feed
+                # the result to both extract_metadata and fetch_episodes. Spec #18.
+                host = urlparse(rss_url_str).hostname or ""
+                if self.max_workers > 1 and host:
+                    with self._host_semaphore(host):
+                        rss_content, parsed_feed = source.fetch_and_parse(rss_url_str, podcast.slug)
+                else:
+                    rss_content, parsed_feed = source.fetch_and_parse(rss_url_str, podcast.slug)
+
+                if parsed_feed is not None:
+                    metadata = source.extract_metadata(
+                        rss_url_str,
+                        rss_content=rss_content,
+                        parsed_feed=parsed_feed,
+                    )
+                    if metadata:
+                        metadata_changed = self._apply_rss_metadata(podcast, metadata)
+
+            fetch_kwargs: Dict[str, Any] = {
+                "url": str(podcast.rss_url),
+                "existing_episodes": podcast.episodes,
+                "last_processed": podcast.last_processed,
+                "max_episodes": max_episodes_per_podcast,
+            }
+            if isinstance(source, RSSMediaSource):
+                fetch_kwargs["podcast_slug"] = podcast.slug
+                fetch_kwargs["parsed_feed"] = parsed_feed
+                # If fetch_and_parse already failed, skip the episode extraction
+                if parsed_feed is None:
+                    episodes: List[Episode] = []
+                else:
+                    episodes = source.fetch_episodes(**fetch_kwargs)
+            else:
+                episodes = source.fetch_episodes(**fetch_kwargs)
+
+            if metadata_changed and not episodes:
+                self.repository.save_podcast(podcast)
+
+            # Add new episodes to podcast (in-memory dedup against existing list)
+            for episode in episodes:
+                if not any(ep.external_id == episode.external_id for ep in podcast.episodes):
+                    podcast.episodes.append(episode)
+
+            if episodes and max_episodes_per_podcast:
+                from ..models.podcast import EpisodeState
+
+                processed_eps = [ep for ep in podcast.episodes if ep.state == EpisodeState.CLEANED]
+                unprocessed_eps = [ep for ep in podcast.episodes if ep.state != EpisodeState.CLEANED]
+                unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
+                available_slots = max(0, max_episodes_per_podcast - len(processed_eps))
+                podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
+
+            if episodes:
+                new_eps = episodes
+                if podcast.episodes:
+                    most_recent_date = max(
+                        (ep.pub_date for ep in podcast.episodes if ep.pub_date),
+                        default=None,
+                    )
+                    if most_recent_date:
+                        podcast.last_processed = most_recent_date
+
+                for episode in episodes:
+                    episode.podcast_id = podcast.id
+                with log_phase_timing(
+                    "persist",
+                    podcast_slug=podcast.slug,
+                    episode_count=len(episodes),
+                ):
+                    self.repository.save_episodes(episodes)
+                    self.repository.save_podcast(podcast)
+                    if isinstance(source, RSSMediaSource):
+                        self._save_transcript_links_for_episodes(podcast, episodes, source)
+
+        except Exception as e:
+            had_error = True
+            logger.error(
+                "Error checking feed",
+                podcast_rss_url=str(podcast.rss_url),
+                error=str(e),
+                exc_info=True,
+            )
+        finally:
+            logger.info(
+                "feed_refresh_summary",
+                podcast_slug=podcast.slug,
+                source_type=type(source).__name__ if source is not None else None,
+                duration_ms=round((time.perf_counter() - podcast_start) * 1000, 2),
+                new_episodes=len(new_eps),
+                had_error=had_error,
+            )
+        return podcast, new_eps, had_error
+
+    def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
+        """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
+        changed = False
+        if metadata.get("language") and podcast.language != metadata["language"]:
+            logger.info(
+                "Updating podcast language",
+                podcast_slug=podcast.slug,
+                old_language=podcast.language,
+                new_language=metadata["language"],
+            )
+            podcast.language = metadata["language"]
+            changed = True
+
+        # Transistor and similar CDNs rotate signed URLs, so stored image_url
+        # values go stale and 404. Overwrite unconditionally.
+        if podcast.image_url != metadata.get("image_url"):
+            logger.info(
+                "Updating podcast image URL",
+                podcast_slug=podcast.slug,
+                old_image_url=podcast.image_url,
+                new_image_url=metadata.get("image_url"),
+            )
+            podcast.image_url = metadata.get("image_url")
+            changed = True
+
+        for field in ("primary_category", "primary_subcategory", "secondary_category", "secondary_subcategory"):
+            if getattr(podcast, field) != metadata.get(field):
+                setattr(podcast, field, metadata.get(field))
+                changed = True
+
+        return changed
+
     def get_new_episodes(
         self,
         max_episodes_per_podcast: Optional[int] = None,
@@ -224,140 +402,53 @@ class PodcastFeedManager:
 
         podcasts_with_errors = 0
 
-        for idx, podcast in enumerate(podcasts):
-            # Report progress
-            if progress_callback:
-                progress_callback(idx, total_podcasts, podcast.title)
-            podcast_start = time.perf_counter()
-            podcast_had_error = False
-            podcast_new_episode_count = 0
-            source: Any = None
-            try:
-                # Detect source type and fetch episodes
-                source = self.media_source_factory.detect_source(str(podcast.rss_url))
-
-                # Build fetch arguments - include podcast_slug for RSS sources (debug RSS saving)
-                fetch_kwargs: Dict[str, Any] = {
-                    "url": str(podcast.rss_url),
-                    "existing_episodes": podcast.episodes,
-                    "last_processed": podcast.last_processed,
-                    "max_episodes": max_episodes_per_podcast,
+        use_pool = self.max_workers > 1 and total_podcasts > 1
+        if use_pool:
+            # Preserve input ordering in the returned list so callers see a
+            # deterministic shape regardless of completion order.
+            results: Dict[int, Tuple[Podcast, List[Episode], bool]] = {}
+            with ThreadPoolExecutor(
+                max_workers=min(self.max_workers, total_podcasts),
+                thread_name_prefix="thestill-refresh",
+            ) as executor:
+                future_to_idx = {
+                    executor.submit(self._refresh_single_podcast, podcast, max_episodes_per_podcast): idx
+                    for idx, podcast in enumerate(podcasts)
                 }
+                completed = 0
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    completed += 1
+                    try:
+                        results[idx] = future.result()
+                    except Exception as e:
+                        podcast = podcasts[idx]
+                        logger.error(
+                            "Refresh worker raised unexpectedly",
+                            podcast_rss_url=str(podcast.rss_url),
+                            error=str(e),
+                            exc_info=True,
+                        )
+                        results[idx] = (podcast, [], True)
+                    if progress_callback:
+                        returned_podcast = results[idx][0]
+                        progress_callback(completed, total_podcasts, returned_podcast.title)
 
-                # Add podcast_slug for RSS sources to enable debug RSS saving
-                metadata_changed = False
-                if isinstance(source, RSSMediaSource):
-                    fetch_kwargs["podcast_slug"] = podcast.slug
-
-                    # Update metadata from RSS feed if it changed
-                    metadata = source.extract_metadata(str(podcast.rss_url))
-                    if metadata:
-                        # Update language
-                        if metadata.get("language") and podcast.language != metadata["language"]:
-                            logger.info(
-                                "Updating podcast language",
-                                podcast_slug=podcast.slug,
-                                old_language=podcast.language,
-                                new_language=metadata["language"],
-                            )
-                            podcast.language = metadata["language"]
-                            metadata_changed = True
-
-                        # Transistor and similar CDNs rotate signed URLs, so stored
-                        # image_url values go stale and 404. Overwrite unconditionally.
-                        if podcast.image_url != metadata.get("image_url"):
-                            logger.info(
-                                "Updating podcast image URL",
-                                podcast_slug=podcast.slug,
-                                old_image_url=podcast.image_url,
-                                new_image_url=metadata.get("image_url"),
-                            )
-                            podcast.image_url = metadata.get("image_url")
-                            metadata_changed = True
-
-                        # Update categories (overwrite with current values from RSS)
-                        if podcast.primary_category != metadata.get("primary_category"):
-                            podcast.primary_category = metadata.get("primary_category")
-                            metadata_changed = True
-                        if podcast.primary_subcategory != metadata.get("primary_subcategory"):
-                            podcast.primary_subcategory = metadata.get("primary_subcategory")
-                            metadata_changed = True
-                        if podcast.secondary_category != metadata.get("secondary_category"):
-                            podcast.secondary_category = metadata.get("secondary_category")
-                            metadata_changed = True
-                        if podcast.secondary_subcategory != metadata.get("secondary_subcategory"):
-                            podcast.secondary_subcategory = metadata.get("secondary_subcategory")
-                            metadata_changed = True
-
-                episodes = source.fetch_episodes(**fetch_kwargs)
-
-                # Save podcast if metadata changed (even if no new episodes)
-                if metadata_changed and not episodes:
-                    self.repository.save_podcast(podcast)
-
-                # Add new episodes to podcast
-                for episode in episodes:
-                    existing_episode = next(
-                        (ep for ep in podcast.episodes if ep.external_id == episode.external_id), None
-                    )
-                    if not existing_episode:
-                        podcast.episodes.append(episode)
-
-                # Apply max_episodes_per_podcast limit if set
-                if episodes and max_episodes_per_podcast:
-                    # Keep already processed episodes + most recent unprocessed episodes up to limit
-                    from ..models.podcast import EpisodeState
-
-                    processed_eps = [ep for ep in podcast.episodes if ep.state == EpisodeState.CLEANED]
-                    unprocessed_eps = [ep for ep in podcast.episodes if ep.state != EpisodeState.CLEANED]
-                    unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-
-                    # Calculate available slots for unprocessed episodes
-                    total_limit = max_episodes_per_podcast
-                    available_slots = max(0, total_limit - len(processed_eps))
-                    podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
-
-                if episodes:
-                    new_episodes.append((podcast, episodes))
-                    podcast_new_episode_count = len(episodes)
-
-                    # Update last_processed to the most recent episode's pub_date
-                    # This ensures next refresh only considers episodes newer than what we've seen
-                    if podcast.episodes:
-                        most_recent_date = max((ep.pub_date for ep in podcast.episodes if ep.pub_date), default=None)
-                        if most_recent_date:
-                            podcast.last_processed = most_recent_date
-
-                    # Save new episodes and update podcast metadata
-                    # Use targeted saves to avoid updating unchanged episode timestamps
-                    for episode in episodes:
-                        episode.podcast_id = podcast.id
-                    with log_phase_timing(
-                        "persist",
-                        podcast_slug=podcast.slug,
-                        episode_count=len(episodes),
-                    ):
-                        self.repository.save_episodes(episodes)
-                        self.repository.save_podcast(podcast)
-
-                        # Extract and save transcript links for RSS sources (Podcasting 2.0)
-                        if isinstance(source, RSSMediaSource):
-                            self._save_transcript_links_for_episodes(podcast, episodes, source)
-
-            except Exception as e:
-                podcast_had_error = True
-                logger.error("Error checking feed", podcast_rss_url=str(podcast.rss_url), error=str(e), exc_info=True)
-                continue
-            finally:
-                podcasts_with_errors += 1 if podcast_had_error else 0
-                logger.info(
-                    "feed_refresh_summary",
-                    podcast_slug=podcast.slug,
-                    source_type=type(source).__name__ if source is not None else None,
-                    duration_ms=round((time.perf_counter() - podcast_start) * 1000, 2),
-                    new_episodes=podcast_new_episode_count,
-                    had_error=podcast_had_error,
-                )
+            for idx in range(total_podcasts):
+                podcast, eps, had_error = results[idx]
+                if had_error:
+                    podcasts_with_errors += 1
+                if eps:
+                    new_episodes.append((podcast, eps))
+        else:
+            for idx, podcast in enumerate(podcasts):
+                if progress_callback:
+                    progress_callback(idx, total_podcasts, podcast.title)
+                podcast, eps, had_error = self._refresh_single_podcast(podcast, max_episodes_per_podcast)
+                if had_error:
+                    podcasts_with_errors += 1
+                if eps:
+                    new_episodes.append((podcast, eps))
 
         logger.info(
             "feed_refresh_batch_summary",
@@ -366,6 +457,7 @@ class PodcastFeedManager:
             podcasts_with_new_episodes=len(new_episodes),
             total_new_episodes=sum(len(eps) for _, eps in new_episodes),
             podcasts_with_errors=podcasts_with_errors,
+            max_workers=self.max_workers,
         )
         return new_episodes
 

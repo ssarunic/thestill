@@ -15,7 +15,7 @@ One event per measured block. Fields:
 
 | Field          | Source                                           | Notes                                  |
 |----------------|--------------------------------------------------|----------------------------------------|
-| `phase`        | `http_fetch`, `metadata_parse`, `parse`, `persist` | Which block of work                  |
+| `phase`        | `http_fetch`, `parse`, `persist`                 | Which block of work                    |
 | `duration_ms`  | Wall clock                                       | Float, 2-decimal ms                    |
 | `podcast_slug` | Only set where available                         | Join key                               |
 | `url`          | For HTTP phases                                  | Full feed URL                          |
@@ -25,10 +25,9 @@ One event per measured block. Fields:
 | `episode_count`| For `persist`                                    | Episodes saved this call               |
 | `error`        | For failed `http_fetch`                          | Exception repr                         |
 
-`http_fetch` and `metadata_parse` fire twice per RSS podcast today (once
-from `extract_metadata`, once from `fetch_episodes`) — this is the
-double-fetch called out in the spec and the event counts will show it
-plainly.
+After the parse-once refactor, each RSS podcast emits exactly one
+`http_fetch` and one `parse` per refresh. If you see more than one of
+either per podcast in a run, something has regressed.
 
 ### 2. `feed_refresh_summary`
 
@@ -91,7 +90,8 @@ jq -r 'select(.event == "feed_phase_timing" and .phase == "http_fetch")
         }'
 ```
 
-Count phase events per podcast to confirm the double-fetch:
+Verify there's only one `http_fetch` per podcast per refresh (sanity
+check that the parse-once refactor still holds):
 
 ```bash
 jq -r 'select(.event == "feed_phase_timing") | [.podcast_slug, .phase] | @tsv' \

@@ -64,6 +64,12 @@ class Config(BaseModel):
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
+    # Refresh Configuration (spec #18)
+    # 1 = serial (historical behavior); raise to enable ThreadPoolExecutor over feeds.
+    refresh_max_workers: int = 1
+    # Per-host concurrency cap so bursts don't hammer Megaphone/Libsyn/Transistor.
+    refresh_max_per_host: int = 2
+
     # Transcription Configuration
     transcription_provider: str = "whisper"  # whisper, parakeet, google, or elevenlabs
     whisper_model: str = "base"
@@ -216,6 +222,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None
         ),
+        "refresh_max_workers": int(os.getenv("REFRESH_MAX_WORKERS", "1")),
+        "refresh_max_per_host": int(os.getenv("REFRESH_MAX_PER_HOST", "2")),
         "transcription_provider": os.getenv("TRANSCRIPTION_PROVIDER", "whisper"),
         "whisper_model": os.getenv("WHISPER_MODEL", "base"),
         "whisper_device": os.getenv("WHISPER_DEVICE", "auto"),
