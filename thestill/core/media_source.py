@@ -34,21 +34,57 @@ import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
 import feedparser
 import requests
+from requests.adapters import HTTPAdapter
 from structlog import get_logger
+from urllib3.util.retry import Retry
 
 from ..models.podcast import Episode, TranscriptLink
 from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
+from ..utils.timing import log_phase_timing
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
     from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
+
+
+class FetchRSSResult(NamedTuple):
+    """Outcome of a single RSS HTTP fetch (spec #19).
+
+    ``not_modified`` is the 304 signal; ``content`` is ``None`` in that
+    case. ``etag`` / ``last_modified`` are echoed from the response
+    headers (or kept from the input on 304) so the caller can persist
+    them for the next refresh.
+    """
+
+    content: Optional[str]
+    status_code: int
+    etag: Optional[str]
+    last_modified: Optional[str]
+    not_modified: bool
+    error: Optional[str]
+
+
+class FetchAndParseResult(NamedTuple):
+    """Outcome of :meth:`RSSMediaSource.fetch_and_parse`.
+
+    Adds the parsed feedparser result to :class:`FetchRSSResult`. On a
+    304 hit, both ``content`` and ``parsed_feed`` are ``None``.
+    """
+
+    content: Optional[str]
+    parsed_feed: Optional[Any]
+    status_code: int
+    etag: Optional[str]
+    last_modified: Optional[str]
+    not_modified: bool
+    error: Optional[str]
 
 
 class MediaSource(ABC):
@@ -132,15 +168,42 @@ class RSSMediaSource(MediaSource):
     - Saving raw RSS content for debugging (optional)
     """
 
-    def __init__(self, path_manager: Optional["PathManager"] = None) -> None:
+    # Default timeout: (connect, read) in seconds.
+    # Short connect avoids hanging on unreachable hosts; read is generous
+    # enough for large feed bodies but not for a hung server.
+    DEFAULT_TIMEOUT: tuple = (5, 15)
+
+    def __init__(self, path_manager: Optional["PathManager"] = None, pool_maxsize: int = 16) -> None:
         """
         Initialize RSS media source.
 
         Args:
             path_manager: Optional path manager for saving debug RSS files.
                          If provided, raw RSS content will be saved during fetch_episodes.
+            pool_maxsize: Max concurrent HTTP connections per host for the shared session.
         """
         self.path_manager = path_manager
+        self.session = self._build_session(pool_maxsize)
+
+    @staticmethod
+    def _build_session(pool_maxsize: int) -> requests.Session:
+        """Build a requests.Session with retry, keep-alive, and connection pooling."""
+        session = requests.Session()
+        # Custom User-Agent avoids being blocked by some podcast hosts (e.g., Buzzsprout)
+        session.headers.update({"User-Agent": "Thestill/1.0 (+https://thestill.me)"})
+        retry = Retry(
+            total=2,
+            connect=2,
+            read=1,
+            backoff_factor=0.5,
+            status_forcelist=(500, 502, 503, 504),
+            allowed_methods=frozenset(["GET"]),
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
 
     def is_valid_url(self, url: str) -> bool:
         """
@@ -165,34 +228,50 @@ class RSSMediaSource(MediaSource):
         # This is a fallback since RSS feeds can have any URL structure
         return not YouTubeDownloader.is_youtube_url(url)
 
-    def extract_metadata(self, url: str) -> Optional[Dict[str, Any]]:
+    def extract_metadata(
+        self,
+        url: str,
+        rss_content: Optional[str] = None,
+        parsed_feed: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Extract podcast metadata from RSS feed or Apple Podcasts URL.
 
+        If `rss_content` and `parsed_feed` are supplied, the HTTP fetch and
+        feedparser parse are skipped — the caller is expected to have already
+        fetched and parsed the feed (see `fetch_and_parse`). This is how
+        `PodcastFeedManager.get_new_episodes` avoids the historical
+        double-fetch of each RSS body per refresh (spec #19).
+
         Args:
             url: RSS feed URL or Apple Podcasts URL
+            rss_content: Optional pre-fetched RSS body. Skips HTTP fetch if set.
+            parsed_feed: Optional pre-parsed feedparser result. Skips parse if set.
 
         Returns:
             Dictionary with 'title', 'description', 'rss_url', 'image_url', 'language',
-            and category fields, or None if extraction fails
+            and category fields, or None if extraction fails.
         """
         try:
-            # Resolve Apple Podcasts URLs to RSS first
-            rss_url = self._extract_rss_from_apple_url(url)
-            if not rss_url:
-                rss_url = url  # Assume it's already an RSS URL
+            if rss_content is not None and parsed_feed is not None:
+                rss_url = url
+            else:
+                # Resolve Apple Podcasts URLs to RSS first
+                rss_url = self._extract_rss_from_apple_url(url)
+                if not rss_url:
+                    rss_url = url  # Assume it's already an RSS URL
 
-            # Fetch raw RSS content for category extraction
-            rss_content = self._fetch_rss_content(rss_url)
-            if not rss_content:
-                logger.warning(f"Failed to fetch RSS content: {rss_url}")
-                return None
+                if rss_content is None:
+                    fetch_result = self.fetch_rss_content(rss_url)
+                    rss_content = fetch_result.content
+                    if not rss_content:
+                        logger.warning(f"Failed to fetch RSS content: {rss_url}")
+                        return None
 
-            # Parse RSS feed with feedparser for basic metadata
-            parsed_feed = feedparser.parse(rss_content)
-            if parsed_feed.bozo:
-                logger.warning(f"Invalid RSS feed: {rss_url}")
-                return None
+                if parsed_feed is None:
+                    parsed_feed = self.parse_rss(rss_content, rss_url)
+                    if parsed_feed is None:
+                        return None
 
             feed = parsed_feed.feed
 
@@ -294,42 +373,58 @@ class RSSMediaSource(MediaSource):
         last_processed: Optional[datetime] = None,
         max_episodes: Optional[int] = None,
         podcast_slug: Optional[str] = None,
+        parsed_feed: Optional[Any] = None,
+        known_external_ids: Optional[set] = None,
     ) -> List[Episode]:
         """
         Fetch new episodes from RSS feed.
 
+        If `parsed_feed` is supplied, the HTTP fetch and feedparser parse are
+        skipped. The feed_manager uses this to avoid double-fetching each RSS
+        body per refresh (spec #19).
+
         Args:
             url: RSS feed URL
-            existing_episodes: List of episodes already tracked
+            existing_episodes: List of episodes already tracked. Used as the
+                dedup source unless ``known_external_ids`` is supplied.
             last_processed: Timestamp of last processed episode (for incremental fetch)
             max_episodes: Optional limit on number of episodes to return
             podcast_slug: Optional podcast slug for saving debug RSS file
+            parsed_feed: Optional pre-parsed feedparser result. Skips fetch+parse if set.
+            known_external_ids: Optional set of already-tracked external IDs.
+                When supplied, replaces the linear scan over
+                ``existing_episodes`` on the refresh hot path (spec #19 PR 3).
 
         Returns:
             List of new Episode objects from the feed
         """
         try:
-            # Fetch raw RSS content and optionally save for debugging
-            rss_content = self._fetch_rss_content(url, podcast_slug)
-            if rss_content is None:
-                logger.warning(f"Failed to fetch RSS feed: {url}")
-                return []
+            if parsed_feed is None:
+                # Fetch raw RSS content and optionally save for debugging
+                fetch_result = self.fetch_rss_content(url, podcast_slug)
+                rss_content = fetch_result.content
+                if rss_content is None:
+                    logger.warning(f"Failed to fetch RSS feed: {url}")
+                    return []
 
-            # Parse the fetched content
-            parsed_feed = feedparser.parse(rss_content)
-            if parsed_feed.bozo:
-                logger.warning(f"Invalid RSS feed during episode fetch: {url}")
-                return []
+                parsed_feed = self.parse_rss(rss_content, url)
+                if parsed_feed is None:
+                    logger.warning(f"Invalid RSS feed during episode fetch: {url}")
+                    return []
+
+            if known_external_ids is not None:
+                seen_ids = known_external_ids
+                known_count = len(known_external_ids)
+            else:
+                seen_ids = {ep.external_id for ep in existing_episodes}
+                known_count = len(existing_episodes)
 
             episodes = []
             for entry in parsed_feed.entries:
                 episode_date = self._parse_date(entry.get("published_parsed"))
                 episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
-                # Skip episodes that already exist in the database
-                # Check if episode already exists (regardless of state)
-                existing_episode = next((ep for ep in existing_episodes if ep.external_id == episode_external_id), None)
-                if existing_episode:
+                if episode_external_id in seen_ids:
                     continue
 
                 # Include episode if:
@@ -337,7 +432,7 @@ class RSSMediaSource(MediaSource):
                 # 2. It's newer than last_processed, OR
                 # 3. We have very few episodes tracked (indicates tracking was broken/reset)
                 should_include = (
-                    last_processed is None or episode_date > last_processed or len(existing_episodes) < 3
+                    last_processed is None or episode_date > last_processed or known_count < 3
                 )  # Assume most feeds have >3 episodes
 
                 if should_include:
@@ -413,33 +508,154 @@ class RSSMediaSource(MediaSource):
         # This method returns None to signal that behavior
         return None
 
-    def _fetch_rss_content(self, url: str, podcast_slug: Optional[str] = None) -> Optional[str]:
+    def fetch_rss_content(
+        self,
+        url: str,
+        podcast_slug: Optional[str] = None,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+    ) -> "FetchRSSResult":
         """
-        Fetch RSS content from URL and optionally save for debugging.
+        Fetch RSS content from URL, optionally with conditional GET.
+
+        Uses the shared `requests.Session` with retry + connection pooling.
+        When ``etag`` or ``last_modified`` are supplied, sends
+        ``If-None-Match`` / ``If-Modified-Since`` so unchanged feeds can
+        return 304 and skip the body download (spec #19).
+
+        Emits exactly one ``feed_phase_timing`` event per call. The phase
+        label is ``conditional_get_hit`` on 304 and ``http_fetch`` on all
+        other outcomes (200, 4xx/5xx, network errors) so hit rate is
+        greppable without arithmetic.
 
         Args:
-            url: RSS feed URL
-            podcast_slug: Optional podcast slug for saving debug file
+            url: RSS feed URL.
+            podcast_slug: Optional slug for debug file write.
+            etag: Previously stored ``ETag`` header, echoed as
+                ``If-None-Match``.
+            last_modified: Previously stored ``Last-Modified`` header,
+                echoed as ``If-Modified-Since``.
 
         Returns:
-            RSS content as string, or None if fetch fails
+            ``FetchRSSResult`` capturing body, cache headers, and status.
         """
-        try:
-            # Use custom User-Agent to avoid being blocked by some podcast hosts (e.g., Buzzsprout)
-            headers = {"User-Agent": "Thestill/1.0 (+https://thestill.me)"}
-            response = requests.get(url, timeout=30, headers=headers)
-            response.raise_for_status()
-            rss_content = response.text
+        headers: Dict[str, str] = {}
+        if etag:
+            headers["If-None-Match"] = etag
+        if last_modified:
+            headers["If-Modified-Since"] = last_modified
 
-            # Save debug RSS file if path_manager and podcast_slug are provided
-            if self.path_manager and podcast_slug:
-                self._save_debug_rss(podcast_slug, rss_content)
+        conditional = bool(headers)
+        with log_phase_timing("http_fetch", url=url, podcast_slug=podcast_slug, conditional=conditional) as timing_ctx:
+            try:
+                response = self.session.get(url, timeout=self.DEFAULT_TIMEOUT, headers=headers or None)
+                timing_ctx["status_code"] = response.status_code
+                if response.status_code == 304:
+                    timing_ctx["phase"] = "conditional_get_hit"
+                    return FetchRSSResult(
+                        content=None,
+                        status_code=304,
+                        etag=response.headers.get("ETag") or etag,
+                        last_modified=response.headers.get("Last-Modified") or last_modified,
+                        not_modified=True,
+                        error=None,
+                    )
+                response.raise_for_status()
+                rss_content = response.text
+                timing_ctx["bytes"] = len(rss_content)
+            except requests.RequestException as e:
+                timing_ctx["error"] = str(e)
+                logger.error(f"Error fetching RSS feed {url}: {e}")
+                return FetchRSSResult(
+                    content=None,
+                    status_code=0,
+                    etag=None,
+                    last_modified=None,
+                    not_modified=False,
+                    error=str(e),
+                )
 
-            return rss_content
+        if self.path_manager and podcast_slug:
+            self._save_debug_rss(podcast_slug, rss_content)
 
-        except requests.RequestException as e:
-            logger.error(f"Error fetching RSS feed {url}: {e}")
+        return FetchRSSResult(
+            content=rss_content,
+            status_code=response.status_code,
+            etag=response.headers.get("ETag"),
+            last_modified=response.headers.get("Last-Modified"),
+            not_modified=False,
+            error=None,
+        )
+
+    def parse_rss(self, rss_content: str, url: str = "") -> Optional[Any]:
+        """
+        Parse RSS content with feedparser. Emits a timed `parse` phase event.
+
+        Args:
+            rss_content: Raw RSS XML as string.
+            url: Optional feed URL, attached to the timing event for correlation.
+
+        Returns:
+            Parsed feedparser result, or None if the content is malformed.
+        """
+        with log_phase_timing("parse", url=url, bytes=len(rss_content)) as parse_ctx:
+            parsed_feed = feedparser.parse(rss_content)
+            parse_ctx["entries"] = len(parsed_feed.entries)
+        if parsed_feed.bozo:
+            logger.warning(f"Invalid RSS feed: {url}")
             return None
+        return parsed_feed
+
+    def fetch_and_parse(
+        self,
+        url: str,
+        podcast_slug: Optional[str] = None,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+    ) -> "FetchAndParseResult":
+        """
+        One-shot fetch + parse with conditional-GET support.
+
+        Replaces the historical pattern of fetching and parsing once for
+        metadata extraction and again for episode extraction — see spec #19.
+        When ``etag``/``last_modified`` are supplied and the server returns
+        304, no parse is performed and the caller short-circuits the whole
+        refresh for this podcast.
+
+        Args:
+            url: RSS feed URL.
+            podcast_slug: Optional slug for debug RSS saving.
+            etag: Previously stored ``ETag`` header (conditional GET input).
+            last_modified: Previously stored ``Last-Modified`` header
+                (conditional GET input).
+
+        Returns:
+            ``FetchAndParseResult`` — body, parsed feed, cache headers, and
+            ``not_modified`` flag. On 304, ``content`` and ``parsed_feed``
+            are both ``None`` and ``not_modified`` is ``True``. On error,
+            all fields except ``error`` are ``None``/``False``.
+        """
+        fetch = self.fetch_rss_content(url, podcast_slug, etag=etag, last_modified=last_modified)
+        if fetch.not_modified or fetch.content is None:
+            return FetchAndParseResult(
+                content=fetch.content,
+                parsed_feed=None,
+                status_code=fetch.status_code,
+                etag=fetch.etag,
+                last_modified=fetch.last_modified,
+                not_modified=fetch.not_modified,
+                error=fetch.error,
+            )
+        parsed_feed = self.parse_rss(fetch.content, url)
+        return FetchAndParseResult(
+            content=fetch.content,
+            parsed_feed=parsed_feed,
+            status_code=fetch.status_code,
+            etag=fetch.etag,
+            last_modified=fetch.last_modified,
+            not_modified=False,
+            error=None,
+        )
 
     def _save_debug_rss(self, podcast_slug: str, content: str) -> None:
         """

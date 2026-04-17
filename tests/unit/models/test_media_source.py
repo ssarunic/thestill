@@ -13,8 +13,20 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from thestill.core.media_source import MediaSourceFactory, RSSMediaSource, YouTubeMediaSource
+from thestill.core.media_source import FetchRSSResult, MediaSourceFactory, RSSMediaSource, YouTubeMediaSource
 from thestill.models.podcast import Episode
+
+
+def _fetch_ok(content: str) -> FetchRSSResult:
+    """Build a successful-200 ``FetchRSSResult`` for mocking (spec #19)."""
+    return FetchRSSResult(
+        content=content,
+        status_code=200,
+        etag=None,
+        last_modified=None,
+        not_modified=False,
+        error=None,
+    )
 
 
 @pytest.fixture
@@ -66,7 +78,7 @@ class TestRSSMediaSource:
         # Mock the RSS content fetch
         mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed):
                 metadata = source.extract_metadata("https://example.com/feed.xml")
 
@@ -88,7 +100,7 @@ class TestRSSMediaSource:
         # Mock the RSS content fetch
         mock_rss_content = "<invalid>xml</invalid>"
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed):
                 metadata = source.extract_metadata("https://example.com/feed.xml")
 
@@ -114,7 +126,7 @@ class TestRSSMediaSource:
         mock_feed.bozo = False
         mock_feed.feed = {"title": "Apple Podcast", "description": "From iTunes"}
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed):
                 metadata = source.extract_metadata("https://podcasts.apple.com/us/podcast/id123456")
 
@@ -145,7 +157,7 @@ class TestRSSMediaSource:
         mock_response.text = "<rss>fake content</rss>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+        with patch("requests.sessions.Session.get", return_value=mock_response):
             with patch("feedparser.parse", return_value=mock_feed):
                 episodes = source.fetch_episodes(
                     url="https://example.com/feed.xml",
@@ -191,7 +203,7 @@ class TestRSSMediaSource:
         mock_response.text = "<rss>fake content</rss>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+        with patch("requests.sessions.Session.get", return_value=mock_response):
             with patch("feedparser.parse", return_value=mock_feed):
                 episodes = source.fetch_episodes(
                     url="https://example.com/feed.xml",
@@ -229,7 +241,7 @@ class TestRSSMediaSource:
         mock_response.text = "<rss>fake content</rss>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+        with patch("requests.sessions.Session.get", return_value=mock_response):
             with patch("feedparser.parse", return_value=mock_feed):
                 episodes = source.fetch_episodes(
                     url="https://example.com/feed.xml",
@@ -253,7 +265,7 @@ class TestRSSMediaSource:
         mock_response.text = "<rss>invalid content</rss>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+        with patch("requests.sessions.Session.get", return_value=mock_response):
             with patch("feedparser.parse", return_value=mock_feed):
                 episodes = source.fetch_episodes(
                     url="https://example.com/feed.xml",
@@ -520,7 +532,7 @@ class TestRSSMediaSource:
 
         mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed_data):
                 metadata = source.extract_metadata("https://example.com/feed.xml")
 
@@ -556,7 +568,7 @@ class TestRSSMediaSource:
 
         mock_rss_content = "<rss><channel><title>Test</title></channel></rss>"
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed_data):
                 metadata = source.extract_metadata("https://example.com/feed.xml")
 
@@ -566,7 +578,7 @@ class TestRSSMediaSource:
         feed2 = FeedDict({"title": "Test Podcast", "description": "A test podcast"})
         mock_feed_data.feed = feed2
 
-        with patch.object(source, "_fetch_rss_content", return_value=mock_rss_content):
+        with patch.object(source, "fetch_rss_content", return_value=_fetch_ok(mock_rss_content)):
             with patch("feedparser.parse", return_value=mock_feed_data):
                 metadata = source.extract_metadata("https://example.com/feed.xml")
 
@@ -612,7 +624,7 @@ class TestRSSMediaSource:
         mock_response.text = "<rss>fake content</rss>"
         mock_response.raise_for_status = MagicMock()
 
-        with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+        with patch("requests.sessions.Session.get", return_value=mock_response):
             with patch("feedparser.parse", return_value=mock_feed):
                 episodes = source.fetch_episodes(
                     url="https://example.com/feed.xml",
@@ -668,7 +680,7 @@ class TestRSSMediaSource:
             mock_response.text = "<rss>fake content</rss>"
             mock_response.raise_for_status = MagicMock()
 
-            with patch("thestill.core.media_source.requests.get", return_value=mock_response):
+            with patch("requests.sessions.Session.get", return_value=mock_response):
                 with patch("feedparser.parse", return_value=mock_feed):
                     episodes = source.fetch_episodes(
                         url="https://example.com/feed.xml",

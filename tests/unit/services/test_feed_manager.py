@@ -33,6 +33,7 @@ def mock_repository():
     mock_repo.save = Mock(return_value=True)
     mock_repo.delete = Mock(return_value=True)
     mock_repo.get_all = Mock(return_value=[])
+    mock_repo.get_podcasts_for_refresh = Mock(return_value=([], {}))
     mock_repo.get_by_url = Mock(return_value=None)
     mock_repo.update = Mock(return_value=True)
     return mock_repo
@@ -261,6 +262,7 @@ class TestGetNewEpisodes:
             episodes=[],
         )
         mock_repository.get_all.return_value = [youtube_podcast]
+        mock_repository.get_podcasts_for_refresh.return_value = ([youtube_podcast], {})
 
         # Setup media source to return YouTube episodes
         mock_source = Mock()
@@ -356,6 +358,7 @@ class TestEdgeCases:
         """Should skip podcasts with malformed feeds."""
         podcast = Podcast(title="Bad Feed", description="", rss_url="https://example.com/bad.xml", episodes=[])
         mock_repository.get_all.return_value = [podcast]
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
 
         # Simulate parsing error
         mock_parse.side_effect = Exception("Parse error")

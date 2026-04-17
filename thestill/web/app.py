@@ -108,7 +108,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize shared services (same pattern as CLI)
     path_manager = PathManager(str(config.storage_path))
     repository = SqlitePodcastRepository(db_path=config.database_path)
-    feed_manager = PodcastFeedManager(repository, path_manager)
+    feed_manager = PodcastFeedManager(
+        repository,
+        path_manager,
+        max_workers=config.refresh_max_workers,
+        max_per_host=config.refresh_max_per_host,
+    )
     podcast_service = PodcastService(config.storage_path, repository, path_manager)
     refresh_service = RefreshService(feed_manager, podcast_service)
     stats_service = StatsService(config.storage_path, repository, path_manager)
