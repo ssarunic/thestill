@@ -2,7 +2,7 @@
 
 **Status**: 💡 Proposal
 **Created**: 2026-04-17
-**Updated**: 2026-04-17
+**Updated**: 2026-04-17 (resolved open questions on task-manager locking and conditional-GET scope)
 **Priority**: Medium (scales with feed count; not urgent at single-user scale today)
 
 ## Overview
@@ -201,19 +201,39 @@ Required before switching the scheduler on by default:
 4. **PR 4+ — Scheduler + adaptive cadence.** Only after PR 1–3 numbers
    justify the added complexity.
 
+## Design decisions
+
+- **Thread pool scope (RSS vs YouTube).** Single shared pool with a
+  semaphore per source type, not separate pools. `yt-dlp` is slow and
+  spawns subprocesses, so one blocked worker can stall several RSS
+  fetches behind it, but managing two pool lifecycles is over-engineered
+  for the current scale. Cap concurrent `yt-dlp` calls at 2 while leaving
+  the overall pool at its configured size. Re-evaluate if phase-0 data
+  shows YouTube dominating wall time.
+- **Default pool size.** PR 2 ships with the pool size config flag
+  defaulting to `1` (current behavior, opt-in). Once phase-0 data is in,
+  bump the default to `8` with a per-host cap of `2`. The per-host cap
+  matters more than the total — Megaphone, Libsyn, and Transistor each
+  host dozens of feeds, and hammering one origin with 8 concurrent
+  requests is both rude and sometimes rate-limited. Both values stay as
+  config knobs.
+- **`task_manager` locking granularity.** Keep the current global 409
+  behavior for now. Per-podcast locking only becomes necessary when the
+  scheduler (phase 2, item 7) lands, because that is the first point
+  where a scheduled run and a user-triggered run can legitimately
+  coexist for different podcasts. Land per-podcast locking in the same
+  PR as the scheduler, informed by the scheduler's actual needs.
+- **Conditional-GET state scope (multi-user).** Per-podcast, shared
+  across users. The `ETag` / `Last-Modified` describe the origin feed
+  state and have no per-user dimension. Consistent with spec #13's
+  "process once, deliver to many" model: if a shared refresh was fresh
+  enough for user A five minutes ago, it's fresh enough for user B
+  following the same podcast. No forced refresh on new follow.
+
 ## Open questions
 
-- Should YouTube refresh share the thread pool, or run in a separate pool
-  (since `yt-dlp` has different characteristics and sometimes spawns
-  subprocesses)?
-- What is the right default thread-pool size? Phase 0 data + a per-host
-  concurrency cap will answer this; best to leave as a config knob initially.
-- Does the existing `task_manager` 409 behavior need to relax to per-podcast
-  locking sooner rather than later, or can that wait until the scheduler
-  lands?
-- For multi-user (spec #07), should conditional-GET state be per-podcast
-  (shared) or per-user? Per-podcast seems obviously correct; flagged for
-  review against the multi-user model.
+None remaining at spec time. New questions may surface during phase-0
+data review or PR implementation; track them inline with the relevant PR.
 
 ## Related specs
 
