@@ -29,7 +29,7 @@ Usage:
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Generator, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
 
 from structlog import get_logger
 
@@ -467,12 +467,22 @@ def handle_clean(task: Task, state: "AppState") -> None:
         if not cleaning_result:
             raise TransientError(f"Transcript cleaning returned no result for episode: {episode.title}")
 
+        # Persist the segmented-JSON sidecar path when the segmented
+        # pipeline produced one (see thestill/cli.py:694 for the
+        # canonical pattern). Without this the UI can't find the
+        # structured transcript even though the file is on disk.
+        clean_transcript_json_db_path: Optional[str] = None
+        if cleaning_result.get("cleaned_json_path"):
+            json_filename = f"{Path(cleaned_filename).stem}.json"
+            clean_transcript_json_db_path = f"{podcast.slug}/{json_filename}"
+
         # Update episode state
         state.feed_manager.mark_episode_processed(
             str(podcast.rss_url),
             episode.external_id,
             raw_transcript_path=episode.raw_transcript_path,
             clean_transcript_path=clean_transcript_db_path,
+            clean_transcript_json_path=clean_transcript_json_db_path,
         )
 
         logger.info(f"Transcript cleaning completed for episode: {episode.title}")

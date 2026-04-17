@@ -261,20 +261,31 @@ async def get_episode_transcript_by_slugs(
 
     podcast, episode = result
 
-    transcript_result = state.podcast_service.get_transcript(podcast.id, episode.id)
+    # ``episode`` is already resolved above via repository.get_episode_by_slug.
+    # Use the ``_for_episode`` service methods so the three transcript
+    # fetches don't each re-walk the podcast/episode lookup.
+    transcript_result = state.podcast_service.get_transcript_for_episode(episode)
 
-    if transcript_result is None:
-        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    response_payload: dict = {
+        "episode_id": episode.id,
+        "episode_title": episode.title,
+        "content": transcript_result.content,
+        "available": transcript_result.transcript_type is not None,
+        "transcript_type": transcript_result.transcript_type,
+    }
 
-    return api_response(
-        {
-            "episode_id": episode.id,
-            "episode_title": episode.title,
-            "content": transcript_result.content,
-            "available": transcript_result.transcript_type is not None,
-            "transcript_type": transcript_result.transcript_type,
+    segmented = state.podcast_service.get_segmented_transcript_for_episode(episode)
+    if segmented is not None:
+        response_payload["segments"] = segmented.annotated.model_dump()
+
+    shadow = state.podcast_service.get_shadow_transcript_for_episode(episode)
+    if shadow is not None:
+        response_payload["shadow"] = {
+            "pipeline": shadow.pipeline,
+            "content": shadow.content,
         }
-    )
+
+    return api_response(response_payload)
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")

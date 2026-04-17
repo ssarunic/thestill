@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TranscriptType } from '../api/types'
+import { getSpeakerColor } from '../utils/speakerColors'
 
 interface TranscriptViewerProps {
   content: string
@@ -78,23 +79,6 @@ function parseTranscript(content: string) {
 
   flushMarkdown()
   return segments
-}
-
-// Map speaker IDs to colors
-const speakerColors: Record<string, string> = {
-  'SPEAKER_00': 'text-blue-700',
-  'SPEAKER_01': 'text-purple-700',
-  'SPEAKER_02': 'text-green-700',
-  'SPEAKER_03': 'text-orange-700',
-  'SPEAKER_04': 'text-pink-700',
-}
-
-function getSpeakerColor(speaker: string): string {
-  if (speakerColors[speaker]) return speakerColors[speaker]
-  // Generate consistent color for named speakers
-  const hash = speaker.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
-  const colors = ['text-blue-700', 'text-purple-700', 'text-green-700', 'text-orange-700', 'text-pink-700', 'text-indigo-700', 'text-red-700']
-  return colors[hash % colors.length]
 }
 
 // Get status message based on episode state

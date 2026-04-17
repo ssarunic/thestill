@@ -7,6 +7,7 @@ import AudioPlayer from '../components/AudioPlayer'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('../components/TranscriptViewer'))
+const SegmentedTranscriptViewer = lazy(() => import('../components/SegmentedTranscriptViewer'))
 const SummaryViewer = lazy(() => import('../components/SummaryViewer'))
 import ExpandableDescription from '../components/ExpandableDescription'
 import { EpisodeNumber } from '../components/EpisodeNumber'
@@ -17,6 +18,7 @@ import ShareButton from '../components/ShareButton'
 import type { PipelineStage, FailureType } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
+type TranscriptSubTab = 'segmented' | 'legacy' | 'shadow'
 
 const stateColors: Record<string, string> = {
   discovered: 'bg-gray-100 text-gray-600',
@@ -41,6 +43,7 @@ function formatDate(dateStr: string | null): string {
 export default function EpisodeDetail() {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
+  const [transcriptSubTab, setTranscriptSubTab] = useState<TranscriptSubTab>('segmented')
   const queryClient = useQueryClient()
 
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
@@ -274,17 +277,131 @@ export default function EpisodeDetail() {
                 episodeState={episode?.state}
               />
             ) : (
-              <TranscriptViewer
-                content={transcriptData?.content ?? ''}
-                isLoading={transcriptLoading}
-                available={transcriptData?.available}
+              <TranscriptPanel
+                transcriptData={transcriptData}
+                transcriptLoading={transcriptLoading}
                 episodeState={episode?.state}
-                transcriptType={transcriptData?.transcript_type}
+                subTab={transcriptSubTab}
+                onSubTabChange={setTranscriptSubTab}
               />
             )}
           </Suspense>
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Transcript panel — renders the "Segmented / Legacy blended / Shadow"
+ * sub-tab toggle (spec #18 Phase D) and the chosen viewer beneath it.
+ *
+ * The toggle is only shown when more than one variant is available.
+ * "Segmented" is the default when present; otherwise "Legacy blended"
+ * is the fallback. "Shadow" appears only when the cleanup processor
+ * wrote a dual-pipeline debug file.
+ */
+interface TranscriptPanelProps {
+  transcriptData: import('../api/types').ContentResponse | undefined
+  transcriptLoading: boolean
+  episodeState: string | undefined
+  subTab: TranscriptSubTab
+  onSubTabChange: (next: TranscriptSubTab) => void
+}
+
+function TranscriptPanel({
+  transcriptData,
+  transcriptLoading,
+  episodeState,
+  subTab,
+  onSubTabChange,
+}: TranscriptPanelProps) {
+  const hasSegments = !!transcriptData?.segments
+  const hasLegacy = !!transcriptData?.content && transcriptData.content.length > 0
+  const hasShadow = !!transcriptData?.shadow
+
+  // Clamp the selected sub-tab to one that's actually available. Avoids
+  // flashing an empty panel when the user previously viewed a segmented
+  // transcript and then navigates to a Parakeet-fallback episode where
+  // only legacy exists.
+  const availableSubTabs: TranscriptSubTab[] = []
+  if (hasSegments) availableSubTabs.push('segmented')
+  if (hasLegacy) availableSubTabs.push('legacy')
+  if (hasShadow) availableSubTabs.push('shadow')
+  const effectiveSubTab: TranscriptSubTab = availableSubTabs.includes(subTab)
+    ? subTab
+    : availableSubTabs[0] ?? 'legacy'
+
+  const showToggle = availableSubTabs.length >= 2
+
+  return (
+    <div>
+      {showToggle && (
+        <div className="flex gap-1 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
+          {hasSegments && (
+            <SubTabButton
+              label="Segmented"
+              active={effectiveSubTab === 'segmented'}
+              onClick={() => onSubTabChange('segmented')}
+            />
+          )}
+          {hasLegacy && (
+            <SubTabButton
+              label="Legacy blended"
+              active={effectiveSubTab === 'legacy'}
+              onClick={() => onSubTabChange('legacy')}
+            />
+          )}
+          {hasShadow && (
+            <SubTabButton
+              label={`Shadow (${transcriptData!.shadow!.pipeline})`}
+              active={effectiveSubTab === 'shadow'}
+              onClick={() => onSubTabChange('shadow')}
+            />
+          )}
+        </div>
+      )}
+
+      {effectiveSubTab === 'segmented' && transcriptData?.segments ? (
+        <SegmentedTranscriptViewer transcript={transcriptData.segments} />
+      ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
+        <TranscriptViewer
+          content={transcriptData.shadow.content}
+          isLoading={false}
+          available
+          episodeState={episodeState}
+          transcriptType="cleaned"
+        />
+      ) : (
+        <TranscriptViewer
+          content={transcriptData?.content ?? ''}
+          isLoading={transcriptLoading}
+          available={transcriptData?.available}
+          episodeState={episodeState}
+          transcriptType={transcriptData?.transcript_type}
+        />
+      )}
+    </div>
+  )
+}
+
+interface SubTabButtonProps {
+  label: string
+  active: boolean
+  onClick: () => void
+}
+
+function SubTabButton({ label, active, onClick }: SubTabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+        active
+          ? 'bg-white text-primary-700 shadow-sm'
+          : 'text-gray-600 hover:text-gray-900'
+      }`}
+    >
+      {label}
+    </button>
   )
 }

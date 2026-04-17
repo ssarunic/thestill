@@ -195,6 +195,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN audio_mime_type TEXT NULL")
             logger.info("Migration complete: THES-142 columns added to episodes")
 
+        # spec #18 Migration: segmented cleanup sidecar + playback offset.
+        # Refresh the column set in case earlier migrations added columns.
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns = {row["name"] for row in cursor.fetchall()}
+        if "clean_transcript_json_path" not in episode_columns:
+            logger.info("Migrating database: adding spec #18 columns to episodes table")
+            conn.execute("ALTER TABLE episodes ADD COLUMN clean_transcript_json_path TEXT NULL")
+            conn.execute("ALTER TABLE episodes ADD COLUMN playback_time_offset_seconds REAL NOT NULL DEFAULT 0.0")
+            logger.info("Migration complete: spec #18 columns added to episodes")
+
         # THES-153 Migration: Create digests tables if they don't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
         if cursor.fetchone() is None:
@@ -311,7 +321,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 downsampled_audio_path TEXT NULL,
                 raw_transcript_path TEXT NULL,
                 clean_transcript_path TEXT NULL,
+                -- spec #18: structured AnnotatedTranscript JSON sidecar
+                clean_transcript_json_path TEXT NULL,
                 summary_path TEXT NULL,
+                -- spec #18: per-episode playback offset (DB is source of truth;
+                -- the JSON sidecar carries a cached copy of this value)
+                playback_time_offset_seconds REAL NOT NULL DEFAULT 0.0,
                 FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                 UNIQUE(podcast_id, external_id),
                 CHECK (length(id) = 36),
@@ -957,7 +972,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         explicit = ?, episode_type = ?, episode_number = ?, season_number = ?, website_url = ?,
                         audio_file_size = ?, audio_mime_type = ?,
                         audio_path = ?, downsampled_audio_path = ?,
-                        raw_transcript_path = ?, clean_transcript_path = ?, summary_path = ?,
+                        raw_transcript_path = ?, clean_transcript_path = ?,
+                        clean_transcript_json_path = ?, summary_path = ?,
+                        playback_time_offset_seconds = ?,
                         updated_at = ?
                     WHERE podcast_id = ? AND external_id = ?
                     """,
@@ -981,7 +998,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         episode.downsampled_audio_path,
                         episode.raw_transcript_path,
                         episode.clean_transcript_path,
+                        # spec #18: segmented-cleanup sidecar + playback offset
+                        episode.clean_transcript_json_path,
                         episode.summary_path,
+                        episode.playback_time_offset_seconds,
                         now.isoformat(),
                         episode.podcast_id,
                         episode.external_id,
@@ -999,8 +1019,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     description_html, pub_date, audio_url, duration, image_url,
                     explicit, episode_type, episode_number, season_number, website_url,
                     audio_file_size, audio_mime_type,
-                    audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path, summary_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
+                    clean_transcript_json_path, summary_path, playback_time_offset_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     episode.id,
@@ -1027,7 +1048,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode.downsampled_audio_path,
                     episode.raw_transcript_path,
                     episode.clean_transcript_path,
+                    # spec #18: segmented-cleanup sidecar + playback offset
+                    episode.clean_transcript_json_path,
                     episode.summary_path,
+                    episode.playback_time_offset_seconds,
                 ),
             )
             logger.debug(f"Inserted new episode: {episode.title}")
@@ -1071,6 +1095,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "downsampled_audio_path",
             "raw_transcript_path",
             "clean_transcript_path",
+            # spec #18: segmented-cleanup sidecar path
+            "clean_transcript_json_path",
+            "playback_time_offset_seconds",
             "summary_path",
             "title",
             "slug",
@@ -1637,6 +1664,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             downsampled_audio_path=row["downsampled_audio_path"],
             raw_transcript_path=row["raw_transcript_path"],
             clean_transcript_path=row["clean_transcript_path"],
+            # spec #18: structured JSON sidecar + playback offset. Row
+            # accessors default to ``None`` / absent keys when the column
+            # hasn't been migrated yet; the ``or 0.0`` below keeps
+            # ``Episode.playback_time_offset_seconds`` a plain float.
+            clean_transcript_json_path=(
+                row["clean_transcript_json_path"] if "clean_transcript_json_path" in row.keys() else None
+            ),
+            playback_time_offset_seconds=(
+                row["playback_time_offset_seconds"]
+                if "playback_time_offset_seconds" in row.keys() and row["playback_time_offset_seconds"] is not None
+                else 0.0
+            ),
             summary_path=row["summary_path"],
             # Failure tracking fields
             failed_at_stage=row["failed_at_stage"],
@@ -1654,9 +1693,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 description_html, pub_date, audio_url, duration, image_url,
                 explicit, episode_type, episode_number, season_number, website_url,
                 audio_file_size, audio_mime_type,
-                audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path, summary_path,
+                audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
+                clean_transcript_json_path, summary_path, playback_time_offset_seconds,
                 failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -1685,7 +1725,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.downsampled_audio_path,
                 episode.raw_transcript_path,
                 episode.clean_transcript_path,
+                # spec #18: segmented-cleanup sidecar + playback offset
+                episode.clean_transcript_json_path,
                 episode.summary_path,
+                episode.playback_time_offset_seconds,
                 episode.failed_at_stage,
                 episode.failure_reason,
                 episode.failure_type.value if episode.failure_type else None,

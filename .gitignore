@@ -189,3 +189,6 @@ thestill/web/static/
 # Matches outputs/ and any model-suffixed variant like outputs_gemini_flash3/
 evaluation/outputs/
 evaluation/outputs_*/
+
+# scripts/compare_cleanup.py JSON metric dumps (spec #18 smoke-test harness)
+reports/

@@ -563,6 +563,7 @@ class PodcastFeedManager:
         episode_external_id: str,
         raw_transcript_path: Optional[str] = None,
         clean_transcript_path: Optional[str] = None,
+        clean_transcript_json_path: Optional[str] = None,
         summary_path: Optional[str] = None,
     ) -> None:
         """
@@ -573,6 +574,10 @@ class PodcastFeedManager:
             episode_external_id: External ID (from RSS feed) of the episode
             raw_transcript_path: Optional path to raw transcript file
             clean_transcript_path: Optional path to cleaned transcript file
+            clean_transcript_json_path: Optional path to the segmented
+                ``AnnotatedTranscript`` JSON sidecar (spec #18 Phase D).
+                Populated only when the segmented cleanup pipeline was
+                the primary producer; ``None`` for legacy-primary runs.
             summary_path: Optional path to summary file
         """
         if self._in_transaction:
@@ -588,6 +593,10 @@ class PodcastFeedManager:
                             episode.raw_transcript_path = raw_transcript_path if raw_transcript_path else None
                         if clean_transcript_path is not None:
                             episode.clean_transcript_path = clean_transcript_path if clean_transcript_path else None
+                        if clean_transcript_json_path is not None:
+                            episode.clean_transcript_json_path = (
+                                clean_transcript_json_path if clean_transcript_json_path else None
+                            )
                         if summary_path is not None:
                             episode.summary_path = summary_path if summary_path else None
                         podcast.last_processed = datetime.now()
@@ -610,6 +619,10 @@ class PodcastFeedManager:
                 updates["raw_transcript_path"] = raw_transcript_path if raw_transcript_path else None
             if clean_transcript_path is not None:
                 updates["clean_transcript_path"] = clean_transcript_path if clean_transcript_path else None
+            if clean_transcript_json_path is not None:
+                updates["clean_transcript_json_path"] = (
+                    clean_transcript_json_path if clean_transcript_json_path else None
+                )
             if summary_path is not None:
                 updates["summary_path"] = summary_path if summary_path else None
 
