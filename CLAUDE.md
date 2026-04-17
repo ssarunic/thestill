@@ -159,6 +159,7 @@ These IDs enable tracing requests across all layers of the application.
 
 - [configuration.md](docs/configuration.md) - Environment variables and settings
 - [logging-configuration.md](docs/logging-configuration.md) - Structured logging setup and usage
+- [profiling-refresh.md](docs/profiling-refresh.md) - Profile `thestill refresh` and interpret phase timing events
 - [transcription-providers.md](docs/transcription-providers.md) - Provider setup guides
 - [web-server.md](docs/web-server.md) - API endpoints and webhooks
 - [mcp-usage.md](docs/mcp-usage.md) - MCP server usage

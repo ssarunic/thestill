@@ -43,6 +43,7 @@ from structlog import get_logger
 from ..models.podcast import Episode, TranscriptLink
 from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
+from ..utils.timing import log_phase_timing
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -189,7 +190,8 @@ class RSSMediaSource(MediaSource):
                 return None
 
             # Parse RSS feed with feedparser for basic metadata
-            parsed_feed = feedparser.parse(rss_content)
+            with log_phase_timing("metadata_parse", url=rss_url, bytes=len(rss_content)):
+                parsed_feed = feedparser.parse(rss_content)
             if parsed_feed.bozo:
                 logger.warning(f"Invalid RSS feed: {rss_url}")
                 return None
@@ -316,7 +318,9 @@ class RSSMediaSource(MediaSource):
                 return []
 
             # Parse the fetched content
-            parsed_feed = feedparser.parse(rss_content)
+            with log_phase_timing("parse", url=url, podcast_slug=podcast_slug, bytes=len(rss_content)) as parse_ctx:
+                parsed_feed = feedparser.parse(rss_content)
+                parse_ctx["entries"] = len(parsed_feed.entries)
             if parsed_feed.bozo:
                 logger.warning(f"Invalid RSS feed during episode fetch: {url}")
                 return []
@@ -424,22 +428,25 @@ class RSSMediaSource(MediaSource):
         Returns:
             RSS content as string, or None if fetch fails
         """
-        try:
-            # Use custom User-Agent to avoid being blocked by some podcast hosts (e.g., Buzzsprout)
-            headers = {"User-Agent": "Thestill/1.0 (+https://thestill.me)"}
-            response = requests.get(url, timeout=30, headers=headers)
-            response.raise_for_status()
-            rss_content = response.text
+        # Use custom User-Agent to avoid being blocked by some podcast hosts (e.g., Buzzsprout)
+        headers = {"User-Agent": "Thestill/1.0 (+https://thestill.me)"}
+        with log_phase_timing("http_fetch", url=url, podcast_slug=podcast_slug) as timing_ctx:
+            try:
+                response = requests.get(url, timeout=30, headers=headers)
+                response.raise_for_status()
+                rss_content = response.text
+                timing_ctx["status_code"] = response.status_code
+                timing_ctx["bytes"] = len(rss_content)
+            except requests.RequestException as e:
+                timing_ctx["error"] = str(e)
+                logger.error(f"Error fetching RSS feed {url}: {e}")
+                return None
 
-            # Save debug RSS file if path_manager and podcast_slug are provided
-            if self.path_manager and podcast_slug:
-                self._save_debug_rss(podcast_slug, rss_content)
+        # Save debug RSS file if path_manager and podcast_slug are provided
+        if self.path_manager and podcast_slug:
+            self._save_debug_rss(podcast_slug, rss_content)
 
-            return rss_content
-
-        except requests.RequestException as e:
-            logger.error(f"Error fetching RSS feed {url}: {e}")
-            return None
+        return rss_content
 
     def _save_debug_rss(self, podcast_slug: str, content: str) -> None:
         """

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
+from ..utils.timing import log_phase_timing
 from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = get_logger(__name__)
@@ -204,6 +206,7 @@ class PodcastFeedManager:
             List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
         """
         new_episodes = []
+        batch_start = time.perf_counter()
 
         # Get podcasts - filter to single podcast if podcast_id is provided
         if podcast_id:
@@ -219,10 +222,16 @@ class PodcastFeedManager:
             podcasts = self.repository.get_all()
         total_podcasts = len(podcasts)
 
+        podcasts_with_errors = 0
+
         for idx, podcast in enumerate(podcasts):
             # Report progress
             if progress_callback:
                 progress_callback(idx, total_podcasts, podcast.title)
+            podcast_start = time.perf_counter()
+            podcast_had_error = False
+            podcast_new_episode_count = 0
+            source: Any = None
             try:
                 # Detect source type and fetch episodes
                 source = self.media_source_factory.detect_source(str(podcast.rss_url))
@@ -310,6 +319,7 @@ class PodcastFeedManager:
 
                 if episodes:
                     new_episodes.append((podcast, episodes))
+                    podcast_new_episode_count = len(episodes)
 
                     # Update last_processed to the most recent episode's pub_date
                     # This ensures next refresh only considers episodes newer than what we've seen
@@ -322,17 +332,41 @@ class PodcastFeedManager:
                     # Use targeted saves to avoid updating unchanged episode timestamps
                     for episode in episodes:
                         episode.podcast_id = podcast.id
-                    self.repository.save_episodes(episodes)
-                    self.repository.save_podcast(podcast)
+                    with log_phase_timing(
+                        "persist",
+                        podcast_slug=podcast.slug,
+                        episode_count=len(episodes),
+                    ):
+                        self.repository.save_episodes(episodes)
+                        self.repository.save_podcast(podcast)
 
-                    # Extract and save transcript links for RSS sources (Podcasting 2.0)
-                    if isinstance(source, RSSMediaSource):
-                        self._save_transcript_links_for_episodes(podcast, episodes, source)
+                        # Extract and save transcript links for RSS sources (Podcasting 2.0)
+                        if isinstance(source, RSSMediaSource):
+                            self._save_transcript_links_for_episodes(podcast, episodes, source)
 
             except Exception as e:
+                podcast_had_error = True
                 logger.error("Error checking feed", podcast_rss_url=str(podcast.rss_url), error=str(e), exc_info=True)
                 continue
+            finally:
+                podcasts_with_errors += 1 if podcast_had_error else 0
+                logger.info(
+                    "feed_refresh_summary",
+                    podcast_slug=podcast.slug,
+                    source_type=type(source).__name__ if source is not None else None,
+                    duration_ms=round((time.perf_counter() - podcast_start) * 1000, 2),
+                    new_episodes=podcast_new_episode_count,
+                    had_error=podcast_had_error,
+                )
 
+        logger.info(
+            "feed_refresh_batch_summary",
+            duration_ms=round((time.perf_counter() - batch_start) * 1000, 2),
+            total_podcasts=total_podcasts,
+            podcasts_with_new_episodes=len(new_episodes),
+            total_new_episodes=sum(len(eps) for _, eps in new_episodes),
+            podcasts_with_errors=podcasts_with_errors,
+        )
         return new_episodes
 
     def _save_transcript_links_for_episodes(
