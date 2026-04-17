@@ -58,4 +58,7 @@ def log_phase_timing(phase: str, event: str = "feed_phase_timing", **context: An
         yield ctx
     finally:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        logger.info(event, phase=phase, duration_ms=duration_ms, **ctx)
+        # Callers may override the phase label via ``ctx["phase"]`` — pop
+        # before logging so the kwarg doesn't collide with ``phase=...``.
+        emitted_phase = ctx.pop("phase", phase)
+        logger.info(event, phase=emitted_phase, duration_ms=duration_ms, **ctx)

@@ -2,7 +2,7 @@
 
 **Status**: 🚧 Active development
 **Created**: 2026-04-17
-**Updated**: 2026-04-17 (phases 0 and 1.1–1.4 shipped; conditional GET + DB batching still open)
+**Updated**: 2026-04-17 (phases 0 and 1.1–1.5 shipped; phase 2.1 shipped; scheduler / adaptive cadence / reliability layer still open)
 **Priority**: Medium (scales with feed count; not urgent at single-user scale today)
 
 ## Overview
@@ -142,16 +142,25 @@ others. Phases 1 and 2 are independent and can land in any order.
    `threading.Semaphore` guards the HTTP fetch block to prevent hammering
    shared hosts. SQLite already runs in WAL mode, so concurrent writes
    serialize safely.
-5. **Conditional GET.** ⏳ Open. Store `etag` and `last_modified` on the
-   `podcasts` table (schema migration). Send `If-None-Match` /
-   `If-Modified-Since`. 304 responses are near-zero cost. With the phase-1
-   changes already shipped, unchanged feeds still pay full download + parse.
+5. **Conditional GET.** ✅ Shipped (PR 3). `etag` / `last_modified` columns
+   on `podcasts` via idempotent migration. `RSSMediaSource.fetch_rss_content`
+   echoes them as `If-None-Match` / `If-Modified-Since`; on 304, the phase
+   event is relabelled to `conditional_get_hit`, no body is read, and
+   `feed_manager._refresh_single_podcast` returns immediately without
+   parsing or metadata extraction. The batch summary carries a
+   `conditional_get_hits` counter. `requests.Session` already advertises
+   `Accept-Encoding: gzip, deflate` by default — no extra work needed to
+   get compressed transfers on the remaining 200 responses.
 
 ### Phase 2 — Structural
 
-1. **Batch DB writes.** Collect results, commit once at the end of the
-   refresh in a single transaction. Eliminate the `get_all()` N+1 by loading
-   `(podcast_id, external_id)` pairs upfront into a set for dedup.
+1. **Batch DB writes.** ✅ Shipped (PR 3). `SqlitePodcastRepository.save_refresh_batch`
+   does one transaction per refresh: `executemany` UPDATE for changed
+   podcasts + `INSERT OR IGNORE` for new episodes. `_refresh_single_podcast`
+   no longer touches the DB — it mutates in-memory state and the caller
+   flushes at the end. `get_podcasts_for_refresh` replaces the `get_all()`
+   N+1 with two queries: one for podcasts (no episode hydration), one for
+   every `(podcast_id, external_id)` pair used as the dedup source.
 2. **In-process scheduler (`APScheduler`).** Before reaching for Redis, a
    single-process scheduler with per-feed `next_refresh_at` is enough for
    one user and a few hundred feeds. Scheduler wakes every minute, picks
@@ -198,10 +207,14 @@ Required before switching the scheduler on by default:
 2. **PR 2 — Obvious wins.** Eliminate double-fetch, add `requests.Session`,
    tighten timeouts, introduce `ThreadPoolExecutor` behind a config flag
    defaulting to `1`. No behavior change until the flag is flipped.
-3. **PR 3 — Conditional GET + DB batching.** Schema migration for
-   `etag`/`last_modified`; move persistence to end-of-run.
+3. **PR 3 — Conditional GET + DB batching.** ✅ Shipped. Schema migration
+   for `etag`/`last_modified`; persistence moved to one end-of-run
+   transaction; `get_all()` N+1 replaced by `get_podcasts_for_refresh`.
+   See Outcome section below for measured results.
 4. **PR 4+ — Scheduler + adaptive cadence.** Only after PR 1–3 numbers
-   justify the added complexity.
+   justify the added complexity. (PR 1–3 numbers are in; PR 4 is still
+   optional — the steady-state refresh is now fast enough that automating
+   it earns its complexity only when multi-user / many-feed hosting lands.)
 
 ## Design decisions
 
@@ -246,3 +259,108 @@ data review or PR implementation; track them inline with the relevant PR.
 - [13-multi-user-shared-podcasts.md](13-multi-user-shared-podcasts.md) —
   already established that podcast refresh is a shared, once-per-podcast
   operation
+
+## Outcome (PR 1–3, as of 2026-04-17)
+
+Measured against the author's real 33-feed subscription list. Same machine,
+same network, same time-of-day; `max_workers=1` on all runs (serial).
+
+### Phase 0 — baseline (pre-work)
+
+- Batch wall time: **44,920 ms**
+- `http_fetch` sum: **33,890 ms** (75% of wall time), one event per podcast
+- `parse` sum: **10,230 ms** (23% of wall time)
+- `persist` events: 0 (no new episodes in this run)
+- Dominant outlier: `the-twenty-minute-vc-20vc…` at **30,300 ms** for an
+  11.9 MB / 1444-entry body — a single feed responsible for 67% of the
+  entire refresh wall time.
+- Distribution was sharply bimodal: 32 feeds finished in <500 ms each;
+  one feed burned 30 seconds.
+
+Takeaway at phase 0: literal p50 `http_fetch` was only 37 ms. The
+pathology was one outlier, not a general network slowness. Conditional
+GET was the obvious lever — on a repeat refresh with zero new episodes,
+every byte of that 11.9 MB body was wasted.
+
+### Phase 1 + 3 — shipped
+
+- Batch wall time: **2,030 ms** (≈**22× faster** than baseline)
+- `conditional_get_hit` events: **31 / 33** (94% hit rate)
+- `http_fetch` events: **2** — only the feeds whose origins emit neither
+  `ETag` nor `Last-Modified` (currently just one Cloudflare Workers
+  origin and one transient miss that resolved on next refresh).
+- `parse` events: **2** (matches non-cacheable feeds; the 31 304-hits
+  skip parse entirely).
+- `persist_batch`: **1** event at 7.56 ms for the whole refresh.
+- 20vc outlier: **894 ms** on a 304 response (down from 30,300 ms on a
+  200). The server still needs to validate the conditional headers, but
+  the 11.9 MB body is no longer transferred and the 2 s parse is skipped.
+- Errors: 0.
+
+### What the remaining 2 "misses" tell us
+
+- **`dwarkesh-podcast`** is served from `apple.dwarkesh-podcast.workers.dev`
+  (a Cloudflare Workers origin). The origin emits neither `ETag` nor
+  `Last-Modified`, so conditional GET has nothing to echo. Every
+  refresh costs a full ~130 ms gzipped fetch + parse of a 494 kB body.
+  Not worth engineering a workaround.
+- **`bg2pod-with-brad-gerstner-and-bill-gurley`** *does* emit a weak
+  ETag; observed misses are transient and resolve on the next refresh.
+  Nothing to fix in code.
+
+### What was NOT worth doing (investigated, rejected)
+
+- **Body-hash fallback** ("DIY ETag when server doesn't send one").
+  Only helps the single Dwarkesh case and saves the parse step only
+  (~30 ms on 494 kB). Complexity not justified for a single feed.
+- **Enabling gzip explicitly.** `requests.Session` already advertises
+  `Accept-Encoding: gzip, deflate` by default and all observed origins
+  honor it. No-op.
+- **RFC 5005 feed paging / archiving.** Zero of the 33 tracked feeds
+  implement it. It is a real standard but effectively dead in practice
+  for podcast RSS. A client-side implementation would exercise on nothing.
+- **PodcastIndex API.** Would replace direct RSS polling with a
+  third-party aggregator; trades source-of-truth + zero external
+  dependencies for an API key and rate limits. Wrong fit for a
+  self-hosted tool that already has the feeds it cares about.
+- **Bumping `REFRESH_MAX_WORKERS` default from 1 → 8.** Phase-0 data
+  showed a single outlier dominating wall time; parallelising 8 ways
+  would have dropped batch to ~30 s (capped by the outlier). Conditional
+  GET solved the outlier directly, so the parallelism bump is now worth
+  much less and the default stays at 1. The knob remains for users
+  with hundreds of feeds.
+
+### Files touched by PR 3
+
+- Model: [thestill/models/podcast.py](../thestill/models/podcast.py) —
+  added `etag`, `last_modified` fields.
+- Schema: [thestill/repositories/sqlite_podcast_repository.py](../thestill/repositories/sqlite_podcast_repository.py)
+  — idempotent migration, new `save_refresh_batch`, new
+  `get_podcasts_for_refresh`, SELECT lists extended.
+- Abstract repo: [thestill/repositories/podcast_repository.py](../thestill/repositories/podcast_repository.py)
+  — two new abstract methods.
+- HTTP: [thestill/core/media_source.py](../thestill/core/media_source.py)
+  — `FetchRSSResult` / `FetchAndParseResult` NamedTuples, conditional
+  headers, 304 short-circuit, `known_external_ids` dedup parameter on
+  `fetch_episodes`.
+- Refresh loop: [thestill/core/feed_manager.py](../thestill/core/feed_manager.py)
+  — 4-tuple (now 5-tuple) return threading `source` through, batch
+  accumulator + one-transaction flush, no per-podcast DB writes.
+- Timing: [thestill/utils/timing.py](../thestill/utils/timing.py) —
+  allow callers to override `phase` via `ctx` so `conditional_get_hit`
+  can emit from the same context manager.
+- Tests: [tests/unit/models/test_media_source.py](../tests/unit/models/test_media_source.py)
+  and [tests/unit/services/test_feed_manager.py](../tests/unit/services/test_feed_manager.py)
+  — updated mocks for the new return shapes.
+
+### Open after PR 3 (kept in this spec, not scoped as a follow-up yet)
+
+- Phase 2.2 — in-process scheduler
+- Phase 2.3 — adaptive cadence per feed
+- Phase 2.4 — stagger starts
+- Phase 3 — async / Redis / WebSub (deferred)
+- Phase 4 — reliability layer required before automating refresh
+
+The practical recommendation is to hold these until multi-user hosting
+(spec #07) materialises, since the single-user refresh is now cheap
+enough that the added complexity would not earn its keep.

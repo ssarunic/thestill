@@ -7,7 +7,7 @@ enabling easy swapping between different storage backends (JSON, SQLite, Postgre
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..models.podcast import Episode, Podcast, TranscriptLink
 
@@ -26,6 +26,17 @@ class PodcastRepository(ABC):
 
         Returns:
             List of all podcasts, ordered by creation date (newest first)
+        """
+        pass
+
+    @abstractmethod
+    def get_podcasts_for_refresh(self) -> Tuple[List[Podcast], Dict[str, Set[str]]]:
+        """
+        Lightweight loader for the refresh hot path (spec #19).
+
+        Returns podcasts without hydrating episodes, plus a separately
+        queried ``{podcast_id: {external_id, ...}}`` map for in-memory
+        dedup. Replaces the N+1 ``get_all()`` on refresh.
         """
         pass
 
@@ -211,6 +222,24 @@ class PodcastRepository(ABC):
 
         Raises:
             ValueError: If any episode.podcast_id is not set
+        """
+        pass
+
+    @abstractmethod
+    def save_refresh_batch(self, changed_podcasts: List[Podcast], new_episodes: List[Episode]) -> None:
+        """
+        Persist a refresh batch in a single transaction (spec #19).
+
+        Updates metadata + conditional-GET cache headers for every
+        podcast in ``changed_podcasts`` and bulk-inserts
+        ``new_episodes``. Intended to replace the per-podcast
+        ``save_podcast`` / ``save_episodes`` calls inside the refresh
+        loop so N podcasts pay one transaction instead of 2N.
+
+        Args:
+            changed_podcasts: Podcasts whose state changed this refresh.
+            new_episodes: Episodes to insert. Must each have
+                ``podcast_id`` set.
         """
         pass
 

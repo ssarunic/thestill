@@ -28,7 +28,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from structlog import get_logger
 
@@ -205,6 +205,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN playback_time_offset_seconds REAL NOT NULL DEFAULT 0.0")
             logger.info("Migration complete: spec #18 columns added to episodes")
 
+        # spec #19 Migration: HTTP conditional-GET cache columns on podcasts.
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns = {row["name"] for row in cursor.fetchall()}
+        if "etag" not in podcast_columns:
+            logger.info("Migrating database: adding spec #19 conditional-GET columns to podcasts table")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN etag TEXT NULL")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_modified TEXT NULL")
+            logger.info("Migration complete: spec #19 conditional-GET columns added to podcasts")
+
         # THES-153 Migration: Create digests tables if they don't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
         if cursor.fetchone() is None:
@@ -280,6 +289,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
                 copyright TEXT NULL,
                 last_processed TIMESTAMP NULL,
+                -- spec #19: HTTP conditional-GET cache
+                etag TEXT NULL,
+                last_modified TEXT NULL,
                 CHECK (length(id) = 36),
                 CHECK (length(rss_url) > 0)
             );
@@ -519,6 +531,72 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     # PodcastRepository Interface Implementation
     # ============================================================================
 
+    def get_podcasts_for_refresh(self) -> Tuple[List[Podcast], Dict[str, Set[str]]]:
+        """Lightweight refresh loader (spec #19).
+
+        Replaces ``get_all()`` on the refresh hot path. Two queries
+        total: one for all podcasts (no episode hydration), one for
+        every ``(podcast_id, external_id)`` pair. The returned dict is
+        used by the fetch-episodes filter for in-memory dedup, so the
+        refresh loop never needs the full Episode models — it just
+        needs to know which externals are already tracked.
+
+        Returns:
+            ``(podcasts, known_external_ids_by_podcast)`` where each
+            ``Podcast`` has an empty ``episodes`` list and the dict maps
+            ``podcast_id`` to the set of known ``external_id`` values.
+            A podcast with no tracked episodes has no key in the dict.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, created_at, rss_url, title, slug, description, image_url, language,
+                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       author, explicit, show_type, website_url, is_complete, copyright,
+                       last_processed, etag, last_modified, updated_at
+                FROM podcasts
+                ORDER BY created_at DESC
+                """
+            )
+            podcast_rows = cursor.fetchall()
+
+            dedup: Dict[str, Set[str]] = {}
+            for ext_row in conn.execute("SELECT podcast_id, external_id FROM episodes"):
+                dedup.setdefault(ext_row["podcast_id"], set()).add(ext_row["external_id"])
+
+        podcasts: List[Podcast] = []
+        for row in podcast_rows:
+            explicit = None
+            if row["explicit"] is not None:
+                explicit = row["explicit"] == 1
+            podcasts.append(
+                Podcast(
+                    id=row["id"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                    rss_url=row["rss_url"],
+                    title=row["title"],
+                    slug=row["slug"] or "",
+                    description=row["description"],
+                    image_url=row["image_url"],
+                    language=row["language"] if row["language"] else "en",
+                    primary_category=row["primary_category"],
+                    primary_subcategory=row["primary_subcategory"],
+                    secondary_category=row["secondary_category"],
+                    secondary_subcategory=row["secondary_subcategory"],
+                    author=row["author"],
+                    explicit=explicit,
+                    show_type=row["show_type"],
+                    website_url=row["website_url"],
+                    is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
+                    copyright=row["copyright"],
+                    last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+                    etag=row["etag"],
+                    last_modified=row["last_modified"],
+                    episodes=[],
+                )
+            )
+        return podcasts, dedup
+
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:
@@ -528,7 +606,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
             """
@@ -549,7 +627,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -569,7 +647,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -589,7 +667,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
             """,
@@ -612,7 +690,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
                 LIMIT 1 OFFSET ?
@@ -636,7 +714,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, updated_at
+                       last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE slug = ?
             """,
@@ -759,7 +837,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, title, slug, description, image_url, language,
                        primary_category, primary_subcategory, secondary_category, secondary_subcategory,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed
+                       last_processed, etag, last_modified
                 FROM podcasts WHERE rss_url = ?
                 """,
                 (str(podcast.rss_url),),
@@ -789,6 +867,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     or existing["is_complete"] != (1 if podcast.is_complete else 0)
                     or existing["copyright"] != podcast.copyright
                     or existing_last_processed != last_processed_str
+                    or existing["etag"] != podcast.etag
+                    or existing["last_modified"] != podcast.last_modified
                 )
 
                 if changed:
@@ -799,7 +879,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         SET title = ?, slug = ?, description = ?, image_url = ?, language = ?,
                             primary_category = ?, primary_subcategory = ?, secondary_category = ?, secondary_subcategory = ?,
                             author = ?, explicit = ?, show_type = ?, website_url = ?, is_complete = ?, copyright = ?,
-                            last_processed = ?, updated_at = ?
+                            last_processed = ?, etag = ?, last_modified = ?, updated_at = ?
                         WHERE rss_url = ?
                         """,
                         (
@@ -819,6 +899,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                             1 if podcast.is_complete else 0,
                             podcast.copyright,
                             last_processed_str,
+                            podcast.etag,
+                            podcast.last_modified,
                             now.isoformat(),
                             str(podcast.rss_url),
                         ),
@@ -832,8 +914,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                     INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, language,
                                           primary_category, primary_subcategory, secondary_category, secondary_subcategory,
-                                          author, explicit, show_type, website_url, is_complete, copyright, last_processed)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                          author, explicit, show_type, website_url, is_complete, copyright,
+                                          last_processed, etag, last_modified)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         podcast.id,
@@ -856,6 +939,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         1 if podcast.is_complete else 0,
                         podcast.copyright,
                         podcast.last_processed.isoformat() if podcast.last_processed else None,
+                        podcast.etag,
+                        podcast.last_modified,
                     ),
                 )
                 logger.debug(f"Inserted new podcast: {podcast.title}")
@@ -910,6 +995,124 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         with self._get_connection() as conn:
             return [self._save_episode_idempotent(conn, ep) for ep in episodes]
+
+    def save_refresh_batch(self, changed_podcasts: List[Podcast], new_episodes: List[Episode]) -> None:
+        """
+        Commit one refresh's worth of state in a single transaction (spec #19).
+
+        Avoids the N+1 pattern of calling ``save_podcast`` / ``save_episodes``
+        once per podcast (each opens its own connection + commits). Expects
+        ``new_episodes`` to already be deduped against the DB — the refresh
+        loop filters against the loaded ``podcast.episodes`` list before
+        queueing, and the INSERT relies on the ``UNIQUE(podcast_id,
+        external_id)`` constraint as a defensive backstop via
+        ``INSERT OR IGNORE``.
+
+        Args:
+            changed_podcasts: Podcasts whose bookkeeping changed — metadata,
+                ``last_processed``, or conditional-GET cache headers.
+            new_episodes: Newly discovered episodes to insert. Must each
+                carry ``podcast_id``.
+        """
+        if not changed_podcasts and not new_episodes:
+            return
+
+        for ep in new_episodes:
+            if not ep.podcast_id:
+                raise ValueError(f"episode.podcast_id must be set for episode: {ep.title}")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            # Blind UPDATE keyed by id — the refresh loop already chose
+            # these rows to write, so we skip the read-then-diff of
+            # ``save_podcast``.
+            podcast_params = [
+                (
+                    p.title,
+                    p.slug,
+                    p.description,
+                    p.image_url,
+                    p.language,
+                    p.primary_category,
+                    p.primary_subcategory,
+                    p.secondary_category,
+                    p.secondary_subcategory,
+                    p.author,
+                    1 if p.explicit is True else (0 if p.explicit is False else None),
+                    p.show_type,
+                    p.website_url,
+                    1 if p.is_complete else 0,
+                    p.copyright,
+                    p.last_processed.isoformat() if p.last_processed else None,
+                    p.etag,
+                    p.last_modified,
+                    now_iso,
+                    p.id,
+                )
+                for p in changed_podcasts
+            ]
+            if podcast_params:
+                conn.executemany(
+                    """
+                    UPDATE podcasts
+                    SET title = ?, slug = ?, description = ?, image_url = ?, language = ?,
+                        primary_category = ?, primary_subcategory = ?, secondary_category = ?, secondary_subcategory = ?,
+                        author = ?, explicit = ?, show_type = ?, website_url = ?, is_complete = ?, copyright = ?,
+                        last_processed = ?, etag = ?, last_modified = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    podcast_params,
+                )
+
+            # Refresh only discovers brand-new episodes, so INSERT OR
+            # IGNORE defends against the rare concurrent-refresh race on
+            # ``(podcast_id, external_id)``.
+            episode_params = [
+                (
+                    ep.id,
+                    ep.podcast_id,
+                    ep.created_at.isoformat(),
+                    now_iso,
+                    ep.external_id,
+                    ep.title,
+                    ep.slug,
+                    ep.description,
+                    ep.description_html,
+                    ep.pub_date.isoformat() if ep.pub_date else None,
+                    str(ep.audio_url),
+                    ep.duration,
+                    ep.image_url,
+                    1 if ep.explicit is True else (0 if ep.explicit is False else None),
+                    ep.episode_type,
+                    ep.episode_number,
+                    ep.season_number,
+                    ep.website_url,
+                    ep.audio_file_size,
+                    ep.audio_mime_type,
+                    ep.audio_path,
+                    ep.downsampled_audio_path,
+                    ep.raw_transcript_path,
+                    ep.clean_transcript_path,
+                    ep.clean_transcript_json_path,
+                    ep.summary_path,
+                    ep.playback_time_offset_seconds,
+                )
+                for ep in new_episodes
+            ]
+            if episode_params:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO episodes (
+                        id, podcast_id, created_at, updated_at, external_id, title, slug, description,
+                        description_html, pub_date, audio_url, duration, image_url,
+                        explicit, episode_type, episode_number, season_number, website_url,
+                        audio_file_size, audio_mime_type,
+                        audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
+                        clean_transcript_json_path, summary_path, playback_time_offset_seconds
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    episode_params,
+                )
 
     def _save_episode_idempotent(self, conn: sqlite3.Connection, episode: Episode) -> Episode:
         """
@@ -1585,6 +1788,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+                etag=row["etag"],
+                last_modified=row["last_modified"],
                 episodes=episodes,
             )
         except Exception as e:

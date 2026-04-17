@@ -217,35 +217,67 @@ class PodcastFeedManager:
         self,
         podcast: Podcast,
         max_episodes_per_podcast: Optional[int],
-    ) -> Tuple[Podcast, List[Episode], bool]:
+        known_external_ids: Optional[set] = None,
+    ) -> Tuple[Podcast, List[Episode], bool, bool, Any]:
         """
         Refresh a single podcast. Safe to call from a worker thread.
 
+        Mutates podcast metadata + caching headers in-memory but does
+        NOT write to the database. The batch writer at the end of
+        :meth:`get_new_episodes` persists every changed podcast and all
+        new episodes in a single transaction (spec #19).
+
         Returns:
-            (podcast, new_episodes, had_error). `new_episodes` is empty when
-            there is nothing new (or on error).
+            (podcast, new_episodes, had_error, conditional_get_hit, source).
+            ``conditional_get_hit`` is True when the server returned 304
+            and no parse/extract work ran. ``source`` is the detected
+            media source instance, returned so the caller can reuse it
+            for transcript-link extraction without re-detecting.
         """
         podcast_start = time.perf_counter()
         had_error = False
         new_eps: List[Episode] = []
         source: Any = None
+        conditional_get_hit = False
         try:
-            source = self.media_source_factory.detect_source(str(podcast.rss_url))
             rss_url_str = str(podcast.rss_url)
+            source = self.media_source_factory.detect_source(rss_url_str)
 
-            metadata_changed = False
             parsed_feed: Optional[Any] = None
             rss_content: Optional[str] = None
 
             if isinstance(source, RSSMediaSource):
-                # Parse-once: fetch + parse the RSS body a single time, then feed
-                # the result to both extract_metadata and fetch_episodes. Spec #19.
+                # Parse-once + conditional GET: one fetch, echo stored
+                # ETag / Last-Modified, 304 short-circuits parse. Spec #19.
                 host = urlparse(rss_url_str).hostname or ""
+                fetch_kwargs_rss = {
+                    "etag": podcast.etag,
+                    "last_modified": podcast.last_modified,
+                }
                 if self.max_workers > 1 and host:
                     with self._host_semaphore(host):
-                        rss_content, parsed_feed = source.fetch_and_parse(rss_url_str, podcast.slug)
+                        result = source.fetch_and_parse(rss_url_str, podcast.slug, **fetch_kwargs_rss)
                 else:
-                    rss_content, parsed_feed = source.fetch_and_parse(rss_url_str, podcast.slug)
+                    result = source.fetch_and_parse(rss_url_str, podcast.slug, **fetch_kwargs_rss)
+
+                if result.not_modified:
+                    # Preserve any server-sent header rotation — RFC 7232
+                    # allows servers to refresh ETag / Last-Modified on a
+                    # 304 and a next-refresh hit depends on us keeping up.
+                    conditional_get_hit = True
+                    if result.etag and result.etag != podcast.etag:
+                        podcast.etag = result.etag
+                    if result.last_modified and result.last_modified != podcast.last_modified:
+                        podcast.last_modified = result.last_modified
+                    return podcast, [], False, True, source
+
+                rss_content = result.content
+                parsed_feed = result.parsed_feed
+
+                if result.etag:
+                    podcast.etag = result.etag
+                if result.last_modified:
+                    podcast.last_modified = result.last_modified
 
                 if parsed_feed is not None:
                     metadata = source.extract_metadata(
@@ -254,13 +286,14 @@ class PodcastFeedManager:
                         parsed_feed=parsed_feed,
                     )
                     if metadata:
-                        metadata_changed = self._apply_rss_metadata(podcast, metadata)
+                        self._apply_rss_metadata(podcast, metadata)
 
             fetch_kwargs: Dict[str, Any] = {
-                "url": str(podcast.rss_url),
+                "url": rss_url_str,
                 "existing_episodes": podcast.episodes,
                 "last_processed": podcast.last_processed,
                 "max_episodes": max_episodes_per_podcast,
+                "known_external_ids": known_external_ids,
             }
             if isinstance(source, RSSMediaSource):
                 fetch_kwargs["podcast_slug"] = podcast.slug
@@ -273,22 +306,12 @@ class PodcastFeedManager:
             else:
                 episodes = source.fetch_episodes(**fetch_kwargs)
 
-            if metadata_changed and not episodes:
-                self.repository.save_podcast(podcast)
-
-            # Add new episodes to podcast (in-memory dedup against existing list)
+            # Seed podcast.episodes with the newly discovered ones. The
+            # refresh loader leaves this list empty (dedup runs via
+            # ``known_external_ids`` now), so there's nothing to merge
+            # against — appending unconditionally is safe.
             for episode in episodes:
-                if not any(ep.external_id == episode.external_id for ep in podcast.episodes):
-                    podcast.episodes.append(episode)
-
-            if episodes and max_episodes_per_podcast:
-                from ..models.podcast import EpisodeState
-
-                processed_eps = [ep for ep in podcast.episodes if ep.state == EpisodeState.CLEANED]
-                unprocessed_eps = [ep for ep in podcast.episodes if ep.state != EpisodeState.CLEANED]
-                unprocessed_eps.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-                available_slots = max(0, max_episodes_per_podcast - len(processed_eps))
-                podcast.episodes = processed_eps + unprocessed_eps[:available_slots]
+                podcast.episodes.append(episode)
 
             if episodes:
                 new_eps = episodes
@@ -302,15 +325,6 @@ class PodcastFeedManager:
 
                 for episode in episodes:
                     episode.podcast_id = podcast.id
-                with log_phase_timing(
-                    "persist",
-                    podcast_slug=podcast.slug,
-                    episode_count=len(episodes),
-                ):
-                    self.repository.save_episodes(episodes)
-                    self.repository.save_podcast(podcast)
-                    if isinstance(source, RSSMediaSource):
-                        self._save_transcript_links_for_episodes(podcast, episodes, source)
 
         except Exception as e:
             had_error = True
@@ -328,8 +342,9 @@ class PodcastFeedManager:
                 duration_ms=round((time.perf_counter() - podcast_start) * 1000, 2),
                 new_episodes=len(new_eps),
                 had_error=had_error,
+                conditional_get_hit=conditional_get_hit,
             )
-        return podcast, new_eps, had_error
+        return podcast, new_eps, had_error, conditional_get_hit, source
 
     def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
         """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
@@ -386,9 +401,12 @@ class PodcastFeedManager:
         new_episodes = []
         batch_start = time.perf_counter()
 
-        # Get podcasts - filter to single podcast if podcast_id is provided
+        # Lightweight refresh load: one query for podcasts + one for the
+        # dedup pairs (spec #19 PR 3). The filter path keeps using the
+        # fully-hydrated loaders since callers expect the returned
+        # podcast to match ``get_by_url`` / ``get_by_id`` shape.
+        known_external_ids_by_podcast: Dict[str, set] = {}
         if podcast_id:
-            # Try to find by RSS URL first, then by ID
             podcast = self.repository.get_by_url(podcast_id)
             if not podcast:
                 podcast = self.repository.get_by_id(podcast_id)
@@ -396,23 +414,60 @@ class PodcastFeedManager:
                 logger.warning("Podcast not found for refresh", podcast_id=podcast_id)
                 return []
             podcasts = [podcast]
+            known_external_ids_by_podcast[podcast.id] = {ep.external_id for ep in podcast.episodes if ep.external_id}
         else:
-            podcasts = self.repository.get_all()
+            podcasts, known_external_ids_by_podcast = self.repository.get_podcasts_for_refresh()
         total_podcasts = len(podcasts)
 
         podcasts_with_errors = 0
+        conditional_get_hits = 0
+        # Accumulators for the end-of-batch write (spec #19). Worker
+        # threads mutate podcast/episode models in-memory; the main
+        # thread flushes them in a single transaction after the loop.
+        changed_podcasts: List[Podcast] = []
+        new_episode_rows: List[Episode] = []
+        transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
+
+        def _record_outcome(
+            podcast: Podcast,
+            eps: List[Episode],
+            had_error: bool,
+            hit: bool,
+            source: Any,
+        ) -> None:
+            nonlocal podcasts_with_errors, conditional_get_hits
+            if had_error:
+                podcasts_with_errors += 1
+            if hit:
+                # 304 hits still persist rotated cache headers, which
+                # ``_refresh_single_podcast`` already captured in-memory.
+                # Worth the extra UPDATE only if something actually
+                # changed; plain 304s skip the batch entirely.
+                conditional_get_hits += 1
+                return
+            changed_podcasts.append(podcast)
+            if eps:
+                new_episodes.append((podcast, eps))
+                new_episode_rows.extend(eps)
+                if isinstance(source, RSSMediaSource):
+                    transcript_link_work.append((podcast, eps, source))
 
         use_pool = self.max_workers > 1 and total_podcasts > 1
         if use_pool:
             # Preserve input ordering in the returned list so callers see a
             # deterministic shape regardless of completion order.
-            results: Dict[int, Tuple[Podcast, List[Episode], bool]] = {}
+            results: Dict[int, Tuple[Podcast, List[Episode], bool, bool, Any]] = {}
             with ThreadPoolExecutor(
                 max_workers=min(self.max_workers, total_podcasts),
                 thread_name_prefix="thestill-refresh",
             ) as executor:
                 future_to_idx = {
-                    executor.submit(self._refresh_single_podcast, podcast, max_episodes_per_podcast): idx
+                    executor.submit(
+                        self._refresh_single_podcast,
+                        podcast,
+                        max_episodes_per_podcast,
+                        known_external_ids_by_podcast.get(podcast.id, set()),
+                    ): idx
                     for idx, podcast in enumerate(podcasts)
                 }
                 completed = 0
@@ -429,26 +484,48 @@ class PodcastFeedManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        results[idx] = (podcast, [], True)
+                        results[idx] = (podcast, [], True, False, None)
                     if progress_callback:
                         returned_podcast = results[idx][0]
                         progress_callback(completed, total_podcasts, returned_podcast.title)
 
             for idx in range(total_podcasts):
-                podcast, eps, had_error = results[idx]
-                if had_error:
-                    podcasts_with_errors += 1
-                if eps:
-                    new_episodes.append((podcast, eps))
+                _record_outcome(*results[idx])
         else:
             for idx, podcast in enumerate(podcasts):
                 if progress_callback:
                     progress_callback(idx, total_podcasts, podcast.title)
-                podcast, eps, had_error = self._refresh_single_podcast(podcast, max_episodes_per_podcast)
-                if had_error:
-                    podcasts_with_errors += 1
-                if eps:
-                    new_episodes.append((podcast, eps))
+                _record_outcome(
+                    *self._refresh_single_podcast(
+                        podcast,
+                        max_episodes_per_podcast,
+                        known_external_ids_by_podcast.get(podcast.id, set()),
+                    )
+                )
+
+        # Single-transaction batch persist (spec #19). Runs even when
+        # `new_episode_rows` is empty, because podcasts that saw a 200
+        # response still need their refreshed cache headers saved.
+        if changed_podcasts or new_episode_rows:
+            with log_phase_timing(
+                "persist_batch",
+                podcasts=len(changed_podcasts),
+                new_episodes=len(new_episode_rows),
+            ):
+                self.repository.save_refresh_batch(changed_podcasts, new_episode_rows)
+
+        # Transcript links rely on the debug RSS file that was written
+        # during the fetch; do them after the main batch so a failure
+        # here never rolls back the refresh state. Non-critical work.
+        for podcast_tl, eps_tl, src_tl in transcript_link_work:
+            try:
+                self._save_transcript_links_for_episodes(podcast_tl, eps_tl, src_tl)
+            except Exception as e:
+                logger.warning(
+                    "Transcript-link extraction failed; refresh otherwise succeeded",
+                    podcast_slug=podcast_tl.slug,
+                    error=str(e),
+                )
 
         logger.info(
             "feed_refresh_batch_summary",
@@ -457,6 +534,7 @@ class PodcastFeedManager:
             podcasts_with_new_episodes=len(new_episodes),
             total_new_episodes=sum(len(eps) for _, eps in new_episodes),
             podcasts_with_errors=podcasts_with_errors,
+            conditional_get_hits=conditional_get_hits,
             max_workers=self.max_workers,
         )
         return new_episodes

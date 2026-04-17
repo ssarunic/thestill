@@ -314,6 +314,13 @@ class Podcast(BaseModel):
     # Processing status
     last_processed: Optional[datetime] = None
 
+    # HTTP conditional-GET cache (spec #19). Stored verbatim from the
+    # previous refresh's response headers and echoed back as
+    # ``If-None-Match`` / ``If-Modified-Since`` on the next refresh so
+    # unchanged feeds return 304 and we skip body download + parse.
+    etag: Optional[str] = None
+    last_modified: Optional[str] = None
+
     # Episodes
     episodes: List[Episode] = []
 
