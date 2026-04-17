@@ -39,6 +39,7 @@ describing current phase and gates.
 | 10 | [queue-viewer](10-queue-viewer.md) | 🚧 Active development | Task queue viewer page: pending/processing/retry tasks with bump-to-front |
 | 11 | [task-queue-monitor](11-task-queue-monitor.md) | 🚧 Active development | Unified task queue monitor replacing the Failed Tasks page |
 | 12 | [whisperx-chunk-progress-tracking](12-whisperx-chunk-progress-tracking.md) | 🚧 Active development | Capture WhisperX stdout progress output and convert to real-time callbacks |
+| 18 | [refresh-performance](18-refresh-performance.md) | 💡 Proposal | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
 
 ## Completed
 
