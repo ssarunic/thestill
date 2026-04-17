@@ -495,9 +495,6 @@ class RSSMediaSource(MediaSource):
 
         return rss_content
 
-    # Backwards-compatible alias for callers still using the private name.
-    _fetch_rss_content = fetch_rss_content
-
     def parse_rss(self, rss_content: str, url: str = "") -> Optional[Any]:
         """
         Parse RSS content with feedparser. Emits a timed `parse` phase event.
