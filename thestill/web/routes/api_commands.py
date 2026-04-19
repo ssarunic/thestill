@@ -541,12 +541,24 @@ class QueuedTaskWithContext(BaseModel):
     next_retry_at: Optional[str] = None
 
 
+class StageWorkerStatus(BaseModel):
+    """Worker pool status for a single pipeline stage."""
+
+    stage: str
+    active: int  # Currently processing
+    capacity: int  # Max parallel jobs for this stage
+    pending: int  # Tasks waiting for this stage
+    retry_scheduled: int  # Tasks in backoff for this stage
+
+
 class QueueTasksResponse(BaseModel):
     """Response for the queue tasks list endpoint."""
 
     status: str
     timestamp: str
     worker_running: bool
+    # Per-stage worker pools (one entry per TaskStage, in pipeline order)
+    stages: list[StageWorkerStatus]
     # Task lists
     processing_tasks: list[QueuedTaskWithContext]
     pending_tasks: list[QueuedTaskWithContext]
@@ -1135,10 +1147,38 @@ async def get_queue_tasks(
     retry_scheduled = [enrich_task(t) for t in tasks_by_status["retry_scheduled"]]
     completed = [enrich_task(t) for t in tasks_by_status["completed"]]
 
+    # Build per-stage worker pool status. Capacity comes from the worker
+    # (one semaphore per stage); pending/retry counts come from the queue
+    # snapshot we already loaded.
+    worker_status = state.task_worker.get_status()
+    stage_status = worker_status.get("stages", {})
+
+    pending_by_stage: Dict[str, int] = {}
+    for task in tasks_by_status["pending"]:
+        pending_by_stage[task.stage.value] = pending_by_stage.get(task.stage.value, 0) + 1
+
+    retry_by_stage: Dict[str, int] = {}
+    for task in tasks_by_status["retry_scheduled"]:
+        retry_by_stage[task.stage.value] = retry_by_stage.get(task.stage.value, 0) + 1
+
+    # Preserve pipeline order (download → ... → summarize)
+    stage_order = [TaskStage.DOWNLOAD, TaskStage.DOWNSAMPLE, TaskStage.TRANSCRIBE, TaskStage.CLEAN, TaskStage.SUMMARIZE]
+    stages = [
+        StageWorkerStatus(
+            stage=stage.value,
+            active=stage_status.get(stage.value, {}).get("active", 0),
+            capacity=stage_status.get(stage.value, {}).get("capacity", 0),
+            pending=pending_by_stage.get(stage.value, 0),
+            retry_scheduled=retry_by_stage.get(stage.value, 0),
+        )
+        for stage in stage_order
+    ]
+
     return QueueTasksResponse(
         status="ok",
         timestamp=datetime.utcnow().isoformat(),
         worker_running=state.task_worker.is_running(),
+        stages=stages,
         processing_tasks=processing,
         pending_tasks=pending,
         retry_scheduled_tasks=retry_scheduled,

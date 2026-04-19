@@ -14,7 +14,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -60,7 +60,16 @@ class Config(BaseModel):
 
     # Processing Configuration
     max_workers: int = 3
-    parallel_jobs: int = 1  # Number of episodes to process in parallel (1 = sequential)
+    parallel_jobs: int = 1  # Default per-stage capacity; stages below override it individually.
+    # Per-stage worker capacity. Each TaskStage is polled by its own loop with
+    # its own semaphore, so tuning these lets independent hosts run in
+    # parallel (e.g. transcribe on Dalston while clean hits Gemini).
+    # A value of 0 or missing falls back to ``parallel_jobs``.
+    download_parallel_jobs: Optional[int] = None
+    downsample_parallel_jobs: Optional[int] = None
+    transcribe_parallel_jobs: Optional[int] = None
+    clean_parallel_jobs: Optional[int] = None
+    summarize_parallel_jobs: Optional[int] = None
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
@@ -149,6 +158,24 @@ class Config(BaseModel):
         # Use PathManager to ensure all directories exist
         self.path_manager.ensure_directories_exist()
 
+    def get_parallel_jobs_per_stage(self) -> Dict[str, int]:
+        """
+        Resolve per-stage worker capacity.
+
+        Returns a dict keyed by TaskStage.value (``download``, ``downsample``,
+        ``transcribe``, ``clean``, ``summarize``) with the effective capacity
+        for each stage. Stages without an explicit override fall back to
+        ``parallel_jobs``.
+        """
+        overrides = {
+            "download": self.download_parallel_jobs,
+            "downsample": self.downsample_parallel_jobs,
+            "transcribe": self.transcribe_parallel_jobs,
+            "clean": self.clean_parallel_jobs,
+            "summarize": self.summarize_parallel_jobs,
+        }
+        return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
+
 
 def load_config(env_file: Optional[str] = None) -> Config:
     """Load configuration from environment variables and .env file"""
@@ -218,6 +245,21 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # clean_transcripts_path, summaries_path, evaluations_path
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "parallel_jobs": int(os.getenv("PARALLEL_JOBS", "1")),
+        "download_parallel_jobs": (
+            int(os.getenv("DOWNLOAD_PARALLEL_JOBS")) if os.getenv("DOWNLOAD_PARALLEL_JOBS") else None
+        ),
+        "downsample_parallel_jobs": (
+            int(os.getenv("DOWNSAMPLE_PARALLEL_JOBS")) if os.getenv("DOWNSAMPLE_PARALLEL_JOBS") else None
+        ),
+        "transcribe_parallel_jobs": (
+            int(os.getenv("TRANSCRIBE_PARALLEL_JOBS")) if os.getenv("TRANSCRIBE_PARALLEL_JOBS") else None
+        ),
+        "clean_parallel_jobs": (
+            int(os.getenv("CLEAN_PARALLEL_JOBS")) if os.getenv("CLEAN_PARALLEL_JOBS") else None
+        ),
+        "summarize_parallel_jobs": (
+            int(os.getenv("SUMMARIZE_PARALLEL_JOBS")) if os.getenv("SUMMARIZE_PARALLEL_JOBS") else None
+        ),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None

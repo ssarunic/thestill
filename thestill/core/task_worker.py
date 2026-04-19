@@ -15,10 +15,9 @@
 """
 Background task worker for processing queued tasks.
 
-The TaskWorker runs in a background thread with an internal asyncio event loop,
-polling the queue for pending tasks and executing them using the appropriate
-handlers. It supports parallel job processing controlled by the parallel_jobs
-parameter — when set to 1 (default), tasks execute sequentially as before.
+The TaskWorker runs in a background thread with an internal asyncio event loop
+that spawns one poller per pipeline stage. Each stage has its own semaphore so
+a slow stage (e.g. transcribe) cannot block a fast one (e.g. clean).
 
 Usage:
     from thestill.core.task_worker import TaskWorker
@@ -28,7 +27,15 @@ Usage:
     queue_manager = QueueManager(db_path)
     handlers = create_task_handlers(app_state)
 
-    worker = TaskWorker(queue_manager, handlers, parallel_jobs=2)
+    worker = TaskWorker(
+        queue_manager,
+        handlers,
+        parallel_jobs_per_stage={
+            TaskStage.DOWNLOAD: 4,
+            TaskStage.TRANSCRIBE: 1,
+            TaskStage.CLEAN: 2,
+        },
+    )
     worker.start()
 
     # ... application runs ...
@@ -59,12 +66,13 @@ class TaskWorker:
     """
     Background worker that polls the queue and processes tasks.
 
-    Supports concurrent processing of multiple episodes via parallel_jobs.
-    Each job processes one episode through its pipeline stages sequentially,
-    but multiple jobs can run in parallel (e.g., one episode transcribing on
-    Dalston while another is cleaning on Gemini).
+    Runs one poller coroutine per TaskStage, each bounded by its own
+    semaphore. This means a slow transcribe task does not block a fast
+    clean task — they pull from independent per-stage queues.
 
-    When parallel_jobs=1, behavior is identical to sequential processing.
+    Per-stage capacity is controlled by ``parallel_jobs_per_stage``. Any
+    stage without an explicit entry falls back to ``parallel_jobs`` (legacy
+    default).
     """
 
     # Default configuration
@@ -80,6 +88,7 @@ class TaskWorker:
         progress_store: Optional["ProgressStore"] = None,
         repository: Optional["SqlitePodcastRepository"] = None,
         parallel_jobs: int = 1,
+        parallel_jobs_per_stage: Optional[Dict[TaskStage, int]] = None,
     ):
         """
         Initialize task worker.
@@ -91,7 +100,10 @@ class TaskWorker:
             stale_timeout_minutes: Minutes before resetting stale tasks
             progress_store: Optional progress store for real-time progress updates
             repository: Optional repository for episode failure tracking
-            parallel_jobs: Max episodes to process in parallel (1 = sequential)
+            parallel_jobs: Fallback per-stage capacity when a stage has no
+                explicit entry in ``parallel_jobs_per_stage``.
+            parallel_jobs_per_stage: Per-stage capacity overrides. Any stage
+                omitted from this dict falls back to ``parallel_jobs``.
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
@@ -101,10 +113,16 @@ class TaskWorker:
         self.repository = repository
         self.parallel_jobs = max(1, parallel_jobs)
 
+        overrides = parallel_jobs_per_stage or {}
+        self.parallel_jobs_per_stage: Dict[TaskStage, int] = {
+            stage: max(1, overrides.get(stage, self.parallel_jobs)) for stage in TaskStage
+        }
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._active_tasks: dict[str, Task] = {}  # episode_id → Task being processed
+        # Per-stage active tasks: stage -> {episode_id: Task}
+        self._active_by_stage: Dict[TaskStage, Dict[str, Task]] = {stage: {} for stage in TaskStage}
         self._active_lock = threading.Lock()
 
     def start(self) -> None:
@@ -120,7 +138,10 @@ class TaskWorker:
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="TaskWorker")
         self._thread.start()
-        logger.info("task_worker_started", parallel_jobs=self.parallel_jobs)
+        logger.info(
+            "task_worker_started",
+            parallel_jobs_per_stage={s.value: c for s, c in self.parallel_jobs_per_stage.items()},
+        )
 
     def stop(self, timeout: float = 10.0) -> None:
         """
@@ -135,9 +156,9 @@ class TaskWorker:
 
         self._running = False
 
-        # Signal the event loop to stop
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        # Per-stage pollers check self._running at the top of each poll
+        # iteration and exit, letting asyncio.gather(...) complete cleanly.
+        # We don't call loop.stop() — that races with run_until_complete.
 
         if self._thread and self._thread.is_alive():
             logger.info("waiting_for_task_worker", action="finishing_current_tasks")
@@ -155,18 +176,28 @@ class TaskWorker:
     def get_current_task(self) -> Optional[Task]:
         """Get a task currently being processed (first active, for backward compat)."""
         with self._active_lock:
-            if self._active_tasks:
-                return next(iter(self._active_tasks.values()))
+            for stage_active in self._active_by_stage.values():
+                if stage_active:
+                    return next(iter(stage_active.values()))
         return None
 
     def get_status(self) -> dict:
-        """Get worker status information."""
+        """Get worker status information, including per-stage utilization."""
         with self._active_lock:
-            active_count = len(self._active_tasks)
+            stages = {
+                stage.value: {
+                    "active": len(self._active_by_stage[stage]),
+                    "capacity": self.parallel_jobs_per_stage[stage],
+                }
+                for stage in TaskStage
+            }
+            active_count = sum(s["active"] for s in stages.values())
         return {
             "running": self.is_running(),
             "parallel_jobs": self.parallel_jobs,
+            "parallel_jobs_per_stage": {s.value: c for s, c in self.parallel_jobs_per_stage.items()},
             "active_episodes": active_count,
+            "stages": stages,
             "poll_interval": self.poll_interval,
         }
 
@@ -187,50 +218,76 @@ class TaskWorker:
             self._loop = None
 
     async def _async_worker_loop(self) -> None:
-        """Main async worker loop that polls and dispatches tasks."""
-        logger.info("task_worker_loop_started", parallel_jobs=self.parallel_jobs)
+        """Spawn one poll loop per TaskStage and wait for them."""
+        logger.info(
+            "task_worker_loop_started",
+            parallel_jobs_per_stage={s.value: c for s, c in self.parallel_jobs_per_stage.items()},
+        )
 
         # Reset any stale tasks from previous runs on startup
         self._reset_stale_tasks()
 
-        sem = asyncio.Semaphore(self.parallel_jobs)
+        # One semaphore + poll loop per stage. Each stage's capacity is
+        # independent, so a saturated TRANSCRIBE pool cannot starve CLEAN.
+        semaphores: Dict[TaskStage, asyncio.Semaphore] = {
+            stage: asyncio.Semaphore(self.parallel_jobs_per_stage[stage]) for stage in TaskStage
+        }
+        pollers = [asyncio.create_task(self._stage_poll_loop(stage, semaphores[stage])) for stage in TaskStage]
+
+        try:
+            await asyncio.gather(*pollers, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
+
+        logger.info("task_worker_loop_ended")
+
+    async def _stage_poll_loop(self, stage: TaskStage, sem: asyncio.Semaphore) -> None:
+        """Poll the queue for a single stage and dispatch up to its capacity."""
+        capacity = self.parallel_jobs_per_stage[stage]
+        active = self._active_by_stage[stage]
+        logger.info("stage_poll_loop_started", stage=stage.value, capacity=capacity)
 
         while self._running:
             try:
                 with self._active_lock:
-                    slots = self.parallel_jobs - len(self._active_tasks)
-                    exclude = set(self._active_tasks.keys()) if self._active_tasks else None
+                    slots = capacity - len(active)
+                    exclude = set(active.keys()) if active else None
 
                 if slots > 0:
                     for _ in range(slots):
-                        task = self.queue_manager.get_next_task(exclude_episode_ids=exclude)
+                        task = self.queue_manager.get_next_task(stage=stage, exclude_episode_ids=exclude)
                         if task is None:
                             break
 
                         with self._active_lock:
-                            if task.episode_id in self._active_tasks:
+                            if task.episode_id in active:
                                 continue
-                            self._active_tasks[task.episode_id] = task
-                            exclude = set(self._active_tasks.keys())
+                            active[task.episode_id] = task
+                            exclude = set(active.keys())
 
-                        asyncio.create_task(self._process_task_async(task, sem))
+                        asyncio.create_task(self._process_task_async(task, sem, stage))
 
                 await asyncio.sleep(self.poll_interval)
 
             except Exception as e:
-                logger.exception("unexpected_error_in_worker_loop", error=str(e), exc_info=True)
+                logger.exception(
+                    "unexpected_error_in_stage_loop",
+                    stage=stage.value,
+                    error=str(e),
+                    exc_info=True,
+                )
                 await asyncio.sleep(self.poll_interval)
 
-        logger.info("task_worker_loop_ended")
+        logger.info("stage_poll_loop_ended", stage=stage.value)
 
-    async def _process_task_async(self, task: Task, sem: asyncio.Semaphore) -> None:
-        """Process a task in a thread, bounded by the semaphore."""
+    async def _process_task_async(self, task: Task, sem: asyncio.Semaphore, stage: TaskStage) -> None:
+        """Process a task in a thread, bounded by the stage's semaphore."""
         async with sem:
             try:
                 await asyncio.to_thread(self._process_task, task)
             finally:
                 with self._active_lock:
-                    self._active_tasks.pop(task.episode_id, None)
+                    self._active_by_stage[stage].pop(task.episode_id, None)
 
     def _process_task(self, task: Task) -> None:
         """
