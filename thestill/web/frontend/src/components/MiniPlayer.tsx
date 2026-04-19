@@ -21,6 +21,7 @@ export default function MiniPlayer() {
     duration,
     toggle,
     seek,
+    skip,
     stop,
   } = usePlayer()
   const currentTime = usePlayerTime()
@@ -86,6 +87,20 @@ export default function MiniPlayer() {
 
         <button
           type="button"
+          onClick={() => skip(-15)}
+          aria-label="Back 15 seconds"
+          disabled={!hasDuration}
+          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
+            <path d="M11 17l-5-5 5-5" />
+            <path d="M18 17l-5-5 5-5" />
+          </svg>
+          <span className="sr-only">15</span>
+        </button>
+
+        <button
+          type="button"
           onClick={toggle}
           aria-label={isPlaying ? 'Pause' : 'Play'}
           className="w-10 h-10 flex items-center justify-center rounded-full bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 flex-shrink-0 disabled:opacity-50"
@@ -106,6 +121,20 @@ export default function MiniPlayer() {
               <path d="M8 5v14l11-7z" />
             </svg>
           )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => skip(15)}
+          aria-label="Forward 15 seconds"
+          disabled={!hasDuration}
+          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
+            <path d="M13 17l5-5-5-5" />
+            <path d="M6 17l5-5-5-5" />
+          </svg>
+          <span className="sr-only">15</span>
         </button>
 
         <button

@@ -30,6 +30,7 @@ interface PlayerContextValue {
   resume: () => void
   toggle: () => void
   seek: (seconds: number) => void
+  skip: (deltaSeconds: number) => void
   setRate: (rate: number) => void
   stop: () => void
   isCurrent: (episodeId: string) => boolean
@@ -94,6 +95,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const skip = useCallback((deltaSeconds: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const duration = Number.isFinite(audio.duration) ? audio.duration : Infinity
+    audio.currentTime = Math.min(duration, Math.max(0, audio.currentTime + deltaSeconds))
+  }, [])
+
   const setRate = useCallback((rate: number) => {
     const audio = audioRef.current
     if (!audio) return
@@ -134,6 +142,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       resume,
       toggle,
       seek,
+      skip,
       setRate,
       stop,
       isCurrent,
@@ -149,6 +158,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       resume,
       toggle,
       seek,
+      skip,
       setRate,
       stop,
       isCurrent,
