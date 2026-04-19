@@ -217,7 +217,18 @@ export default function EpisodeDetail() {
 
           {/* Audio Player */}
           <div className="border-t border-gray-100 pt-4">
-            <AudioPlayer audioUrl={episode.audio_url} title={episode.title} />
+            <AudioPlayer
+              track={{
+                episodeId: episode.id,
+                podcastSlug: podcastSlug!,
+                episodeSlug: episodeSlug!,
+                title: episode.title,
+                podcastTitle: episode.podcast_title,
+                audioUrl: episode.audio_url,
+                artworkUrl: episode.image_url ?? episode.podcast_image_url,
+                durationHint: episode.duration,
+              }}
+            />
           </div>
 
           {(episode.description_html || episode.description) && (
