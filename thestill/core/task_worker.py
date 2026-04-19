@@ -156,9 +156,8 @@ class TaskWorker:
 
         self._running = False
 
-        # Per-stage pollers check self._running at the top of each poll
-        # iteration and exit, letting asyncio.gather(...) complete cleanly.
-        # We don't call loop.stop() — that races with run_until_complete.
+        # Pollers exit on self._running check; calling loop.stop() here would
+        # race with run_until_complete and raise at shutdown.
 
         if self._thread and self._thread.is_alive():
             logger.info("waiting_for_task_worker", action="finishing_current_tasks")
@@ -227,8 +226,6 @@ class TaskWorker:
         # Reset any stale tasks from previous runs on startup
         self._reset_stale_tasks()
 
-        # One semaphore + poll loop per stage. Each stage's capacity is
-        # independent, so a saturated TRANSCRIBE pool cannot starve CLEAN.
         semaphores: Dict[TaskStage, asyncio.Semaphore] = {
             stage: asyncio.Semaphore(self.parallel_jobs_per_stage[stage]) for stage in TaskStage
         }

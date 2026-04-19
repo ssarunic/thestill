@@ -158,21 +158,21 @@ class Config(BaseModel):
         # Use PathManager to ensure all directories exist
         self.path_manager.ensure_directories_exist()
 
-    def get_parallel_jobs_per_stage(self) -> Dict[str, int]:
+    def get_parallel_jobs_per_stage(self) -> Dict["TaskStage", int]:  # noqa: F821
         """
         Resolve per-stage worker capacity.
 
-        Returns a dict keyed by TaskStage.value (``download``, ``downsample``,
-        ``transcribe``, ``clean``, ``summarize``) with the effective capacity
-        for each stage. Stages without an explicit override fall back to
-        ``parallel_jobs``.
+        Stages without an explicit override fall back to ``parallel_jobs``.
         """
+        # Imported lazily to avoid utils -> core coupling at module load.
+        from ..core.queue_manager import TaskStage
+
         overrides = {
-            "download": self.download_parallel_jobs,
-            "downsample": self.downsample_parallel_jobs,
-            "transcribe": self.transcribe_parallel_jobs,
-            "clean": self.clean_parallel_jobs,
-            "summarize": self.summarize_parallel_jobs,
+            TaskStage.DOWNLOAD: self.download_parallel_jobs,
+            TaskStage.DOWNSAMPLE: self.downsample_parallel_jobs,
+            TaskStage.TRANSCRIBE: self.transcribe_parallel_jobs,
+            TaskStage.CLEAN: self.clean_parallel_jobs,
+            TaskStage.SUMMARIZE: self.summarize_parallel_jobs,
         }
         return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
 
@@ -245,21 +245,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # clean_transcripts_path, summaries_path, evaluations_path
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "parallel_jobs": int(os.getenv("PARALLEL_JOBS", "1")),
-        "download_parallel_jobs": (
-            int(os.getenv("DOWNLOAD_PARALLEL_JOBS")) if os.getenv("DOWNLOAD_PARALLEL_JOBS") else None
-        ),
-        "downsample_parallel_jobs": (
-            int(os.getenv("DOWNSAMPLE_PARALLEL_JOBS")) if os.getenv("DOWNSAMPLE_PARALLEL_JOBS") else None
-        ),
-        "transcribe_parallel_jobs": (
-            int(os.getenv("TRANSCRIBE_PARALLEL_JOBS")) if os.getenv("TRANSCRIBE_PARALLEL_JOBS") else None
-        ),
-        "clean_parallel_jobs": (
-            int(os.getenv("CLEAN_PARALLEL_JOBS")) if os.getenv("CLEAN_PARALLEL_JOBS") else None
-        ),
-        "summarize_parallel_jobs": (
-            int(os.getenv("SUMMARIZE_PARALLEL_JOBS")) if os.getenv("SUMMARIZE_PARALLEL_JOBS") else None
-        ),
+        **{
+            f"{stage}_parallel_jobs": (int(os.getenv(f"{stage.upper()}_PARALLEL_JOBS")) or None)
+            for stage in ("download", "downsample", "transcribe", "clean", "summarize")
+            if os.getenv(f"{stage.upper()}_PARALLEL_JOBS")
+        },
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None

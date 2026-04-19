@@ -22,6 +22,7 @@ with concurrency protection and progress tracking.
 import asyncio
 import json
 import threading
+from collections import Counter
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -1147,31 +1148,21 @@ async def get_queue_tasks(
     retry_scheduled = [enrich_task(t) for t in tasks_by_status["retry_scheduled"]]
     completed = [enrich_task(t) for t in tasks_by_status["completed"]]
 
-    # Build per-stage worker pool status. Capacity comes from the worker
-    # (one semaphore per stage); pending/retry counts come from the queue
-    # snapshot we already loaded.
-    worker_status = state.task_worker.get_status()
-    stage_status = worker_status.get("stages", {})
+    # Build per-stage worker pool status. get_status() always populates all
+    # TaskStage keys, so no defensive fallbacks needed.
+    stage_status = state.task_worker.get_status()["stages"]
+    pending_by_stage = Counter(t.stage.value for t in tasks_by_status["pending"])
+    retry_by_stage = Counter(t.stage.value for t in tasks_by_status["retry_scheduled"])
 
-    pending_by_stage: Dict[str, int] = {}
-    for task in tasks_by_status["pending"]:
-        pending_by_stage[task.stage.value] = pending_by_stage.get(task.stage.value, 0) + 1
-
-    retry_by_stage: Dict[str, int] = {}
-    for task in tasks_by_status["retry_scheduled"]:
-        retry_by_stage[task.stage.value] = retry_by_stage.get(task.stage.value, 0) + 1
-
-    # Preserve pipeline order (download → ... → summarize)
-    stage_order = [TaskStage.DOWNLOAD, TaskStage.DOWNSAMPLE, TaskStage.TRANSCRIBE, TaskStage.CLEAN, TaskStage.SUMMARIZE]
     stages = [
         StageWorkerStatus(
             stage=stage.value,
-            active=stage_status.get(stage.value, {}).get("active", 0),
-            capacity=stage_status.get(stage.value, {}).get("capacity", 0),
-            pending=pending_by_stage.get(stage.value, 0),
-            retry_scheduled=retry_by_stage.get(stage.value, 0),
+            active=stage_status[stage.value]["active"],
+            capacity=stage_status[stage.value]["capacity"],
+            pending=pending_by_stage[stage.value],
+            retry_scheduled=retry_by_stage[stage.value],
         )
-        for stage in stage_order
+        for stage in TaskStage
     ]
 
     return QueueTasksResponse(
