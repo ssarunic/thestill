@@ -60,6 +60,7 @@ export default function EpisodeDetail() {
       if (!episode) return
       if (player.isCurrent(episode.id)) {
         player.seek(seconds)
+        if (!player.isPlaying) player.resume()
         return
       }
       player.play(

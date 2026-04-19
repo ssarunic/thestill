@@ -136,7 +136,7 @@ const AdBreak = memo(function AdBreak({
 }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   const absoluteSeconds = segment.start + offset
-  const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
+  const activeRing = isActive ? 'bg-amber-100/80 shadow-sm' : ''
   const dimClass = dimmed ? 'opacity-70' : ''
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ad break${sponsor}`,
@@ -194,11 +194,9 @@ const ContentSegment = memo(function ContentSegment({
   const absoluteSeconds = segment.start + offset
   const speakerText = getSpeakerColor(speaker)
   const speakerBorder = getSpeakerBorderColor(speaker)
-  const containerActive = isActive
-    ? 'bg-primary-50/70 ring-1 ring-primary-100'
-    : 'hover:bg-gray-50/70'
+  const containerActive = isActive ? 'bg-primary-50/70' : 'hover:bg-gray-50/70'
   const paragraphBorder = isActive ? speakerBorder : 'border-gray-200'
-  const paragraphAccent = isActive ? 'border-l-[3px]' : 'border-l-2'
+  const paragraphAccent = 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   const dimClass = dimmed ? 'opacity-70' : ''
   const bodyClass = isFiller ? 'text-gray-500 italic' : 'text-gray-800'
@@ -218,24 +216,23 @@ const ContentSegment = memo(function ContentSegment({
       data-filler={isFiller ? 'true' : 'false'}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1.5">
-        <span className={`font-sans text-sm font-semibold tracking-tight ${speakerText}`}>
+      <p
+        className={`${bodyClass} pl-4 ${paragraphAccent} ${paragraphBorder} text-base leading-[1.7] !mb-0`}
+      >
+        <TimestampLink
+          seconds={absoluteSeconds}
+          onCopy={onCopyTimestamp}
+          className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${timestampColor}`}
+        />
+        <span className={`font-sans font-semibold tracking-tight ${speakerText}`}>
           {speaker}
           {isFiller && (
             <span className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wider text-gray-400">
               filler
             </span>
           )}
-        </span>
-        <TimestampLink
-          seconds={absoluteSeconds}
-          onCopy={onCopyTimestamp}
-          className={`font-mono text-[11px] tabular-nums ${timestampColor}`}
-        />
-      </div>
-      <p
-        className={`${bodyClass} pl-4 ${paragraphAccent} ${paragraphBorder} text-[15px] leading-[1.75] sm:text-[17px]`}
-      >
+          :
+        </span>{' '}
         {highlightMatches(segment.text, searchQuery)}
       </p>
     </div>
@@ -501,7 +498,7 @@ export default function SegmentedTranscriptViewer({
         </label>
       </div>
 
-      <div className="transcript-content leading-relaxed space-y-1.5">
+      <div className="transcript-content leading-relaxed space-y-[3px]">
         {renderRows.map((row) => {
           if (row.type === 'hidden') {
             return (
