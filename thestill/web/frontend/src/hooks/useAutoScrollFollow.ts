@@ -1,16 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-/**
- * Hook that scrolls an element registered in its ref map into view each time
- * the active key changes, provided follow-mode is enabled. User-initiated
- * scrolling temporarily suspends follow so we don't fight the reader.
- *
- * Usage:
- *
- *   const follow = useAutoScrollFollow({ activeKey: activeId, enabled })
- *   <div ref={follow.registerRef(id)}>...</div>
- *   {follow.userScrolledAway && <button onClick={follow.resume}>Resume</button>}
- */
 export interface UseAutoScrollFollowOptions {
   activeKey: string | number | null
   enabled: boolean
@@ -24,68 +13,75 @@ export interface UseAutoScrollFollowResult {
   resume: () => void
 }
 
+const SCROLL_KEYS = new Set(['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'End', 'Home'])
+
+function now() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function scrollNodeIntoCenter(node: HTMLElement) {
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+}
+
 export function useAutoScrollFollow({
   activeKey,
   enabled,
   pauseAfterUserScrollMs = 8000,
 }: UseAutoScrollFollowOptions): UseAutoScrollFollowResult {
   const refs = useRef<Map<string | number, HTMLElement>>(new Map())
+  // Cache of per-key ref callbacks so each segment gets a stable identity
+  // across parent re-renders — avoids React teardown+setup per tick.
+  const refCallbacks = useRef<Map<string | number, (el: HTMLElement | null) => void>>(new Map())
   const [pausedUntil, setPausedUntil] = useState(0)
   const programmaticScrollAt = useRef(0)
 
-  const registerRef = useMemo(() => {
-    return (key: string | number) => (el: HTMLElement | null) => {
+  const registerRef = useCallback((key: string | number) => {
+    const existing = refCallbacks.current.get(key)
+    if (existing) return existing
+    const callback = (el: HTMLElement | null) => {
       if (el) refs.current.set(key, el)
       else refs.current.delete(key)
     }
+    refCallbacks.current.set(key, callback)
+    return callback
   }, [])
-
-  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
   const resume = useCallback(() => {
     setPausedUntil(0)
     programmaticScrollAt.current = now()
     const node = activeKey != null ? refs.current.get(activeKey) : undefined
-    if (node) {
-      const reduceMotion = typeof window !== 'undefined'
-        && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
-    }
+    if (node) scrollNodeIntoCenter(node)
   }, [activeKey])
 
-  // Scroll the active segment into view whenever it changes while follow
-  // is on.
   useEffect(() => {
     if (!enabled || activeKey == null) return
     if (pausedUntil > now()) return
     const node = refs.current.get(activeKey)
     if (!node) return
-    const reduceMotion = typeof window !== 'undefined'
-      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     programmaticScrollAt.current = now()
-    node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+    scrollNodeIntoCenter(node)
   }, [activeKey, enabled, pausedUntil])
 
-  // Detect user-driven scroll via wheel/touch/keyboard and pause follow.
   useEffect(() => {
     if (!enabled) return
+    // Allow a small window for our own smooth-scroll to settle before
+    // counting any scroll event as user input.
     const markUserScrolled = () => {
-      // Ignore scroll events that we triggered ourselves — allow a small
-      // window for smooth-scrolling to settle before counting anything as
-      // user input.
       if (now() - programmaticScrollAt.current < 600) return
       setPausedUntil(now() + pauseAfterUserScrollMs)
     }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) markUserScrolled()
+    }
     window.addEventListener('wheel', markUserScrolled, { passive: true })
     window.addEventListener('touchmove', markUserScrolled, { passive: true })
-    window.addEventListener('keydown', (e) => {
-      if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'End', 'Home'].includes(e.key)) {
-        markUserScrolled()
-      }
-    })
+    window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('wheel', markUserScrolled)
       window.removeEventListener('touchmove', markUserScrolled)
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [enabled, pauseAfterUserScrollMs])
 
@@ -94,7 +90,6 @@ export function useAutoScrollFollow({
   return { registerRef, userScrolledAway, resume }
 }
 
-/** Read+write a boolean preference to localStorage. */
 export function usePersistedBoolean(key: string, initial: boolean): [boolean, (next: boolean) => void] {
   const [value, setValue] = useState<boolean>(() => {
     if (typeof window === 'undefined') return initial
@@ -112,7 +107,7 @@ export function usePersistedBoolean(key: string, initial: boolean): [boolean, (n
       try {
         window.localStorage.setItem(key, next ? 'true' : 'false')
       } catch {
-        // ignore — Safari private mode etc.
+        // Safari private mode rejects writes; fall through.
       }
     },
     [key],

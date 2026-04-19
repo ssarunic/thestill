@@ -48,10 +48,36 @@ function handleActivationKey(event: KeyboardEvent<HTMLDivElement>, onActivate: (
   }
 }
 
-// Case-insensitive, non-regex match highlighter. Splits the supplied
-// text around each occurrence of `query` and returns a mix of plain
-// strings and <mark>-wrapped matches. Returns the original text
-// untouched when the query is empty or no match is found.
+// Don't hijack keyboard shortcuts while the user is typing. Exported so
+// the keydown effect and any future handlers share the same rules.
+function isTypingTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  if (el.isContentEditable) return true
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
+type SeekableProps = Pick<
+  React.HTMLAttributes<HTMLDivElement>,
+  'role' | 'tabIndex' | 'aria-label' | 'onClick' | 'onKeyDown'
+>
+
+function seekableProps(
+  label: string,
+  onSeek: ((seconds: number) => void) | undefined,
+  seconds: number,
+): SeekableProps {
+  if (!onSeek) return {}
+  const activate = () => onSeek(seconds)
+  return {
+    role: 'button',
+    tabIndex: 0,
+    'aria-label': label,
+    onClick: activate,
+    onKeyDown: (e) => handleActivationKey(e, activate),
+  }
+}
+
 function highlightMatches(text: string, query: string) {
   if (!query) return text
   const needle = query.toLowerCase()
@@ -121,25 +147,28 @@ const AdBreak = memo(function AdBreak({
   segmentIndex,
 }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
+  const absoluteSeconds = segment.start + offset
   const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
-  const seekable = !!onSeek
-  const activate = useCallback(() => onSeek?.(segment.start + offset), [onSeek, segment.start, offset])
   const dimClass = dimmed ? 'opacity-40' : ''
+  const interactive = seekableProps(
+    `Seek to ${formatTimestamp(absoluteSeconds)} — ad break${sponsor}`,
+    onSeek,
+    absoluteSeconds,
+  )
+  const seekableClasses = onSeek
+    ? 'cursor-pointer hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400'
+    : ''
   return (
     <div
+      {...interactive}
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       data-segment-index={segmentIndex}
-      role={seekable ? 'button' : undefined}
-      tabIndex={seekable ? 0 : undefined}
-      aria-label={seekable ? `Seek to ${formatTimestamp(segment.start + offset)} — ad break${sponsor}` : undefined}
-      onClick={seekable ? activate : undefined}
-      onKeyDown={seekable ? (e) => handleActivationKey(e, activate) : undefined}
-      className={`my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekable ? 'cursor-pointer hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400' : ''}`}
+      className={`my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
     >
       <div className="flex items-center gap-3 text-amber-800">
         <TimestampLink
-          seconds={segment.start + offset}
+          seconds={absoluteSeconds}
           onCopy={onCopyTimestamp}
           className="font-mono text-[11px] tabular-nums text-amber-700/80"
         />
@@ -177,6 +206,7 @@ const ContentSegment = memo(function ContentSegment({
   segmentIndex,
 }: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
+  const absoluteSeconds = segment.start + offset
   const speakerText = getSpeakerColor(speaker)
   const speakerBorder = getSpeakerBorderColor(speaker)
   const containerActive = isActive
@@ -185,26 +215,24 @@ const ContentSegment = memo(function ContentSegment({
   const paragraphBorder = isActive ? speakerBorder : 'border-gray-200'
   const paragraphAccent = isActive ? 'border-l-[3px]' : 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
-  const seekable = !!onSeek
-  const activate = useCallback(() => onSeek?.(segment.start + offset), [onSeek, segment.start, offset])
   const dimClass = dimmed ? 'opacity-40' : ''
   const bodyClass = isFiller ? 'text-gray-500 italic' : 'text-gray-800'
+  const interactive = seekableProps(
+    `Seek to ${formatTimestamp(absoluteSeconds)} — ${speaker}`,
+    onSeek,
+    absoluteSeconds,
+  )
+  const seekableClasses = onSeek
+    ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400'
+    : ''
   return (
     <div
+      {...interactive}
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
       data-segment-index={segmentIndex}
-      role={seekable ? 'button' : undefined}
-      tabIndex={seekable ? 0 : undefined}
-      aria-label={
-        seekable
-          ? `Seek to ${formatTimestamp(segment.start + offset)} — ${speaker}`
-          : undefined
-      }
-      onClick={seekable ? activate : undefined}
-      onKeyDown={seekable ? (e) => handleActivationKey(e, activate) : undefined}
-      className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekable ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400' : ''}`}
+      className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1.5">
         <span className={`font-sans text-sm font-semibold tracking-tight ${speakerText}`}>
@@ -216,7 +244,7 @@ const ContentSegment = memo(function ContentSegment({
           )}
         </span>
         <TimestampLink
-          seconds={segment.start + offset}
+          seconds={absoluteSeconds}
           onCopy={onCopyTimestamp}
           className={`font-mono text-[11px] tabular-nums ${timestampColor}`}
         />
@@ -239,8 +267,6 @@ export default function SegmentedTranscriptViewer({
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
   const [showFiller, setShowFiller] = usePersistedBoolean(SHOW_FILLER_STORAGE_KEY, false)
   const [searchInput, setSearchInput] = useState('')
-  // React's useDeferredValue gives us a cheap debounce: typing stays
-  // responsive while the re-renders lag one frame behind.
   const searchQuery = useDeferredValue(searchInput.trim())
   const [showHelp, setShowHelp] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -255,18 +281,15 @@ export default function SegmentedTranscriptViewer({
     [showFiller, transcript.segments],
   )
 
-  // Only listen to the playback tick when this episode is the one the
-  // player has loaded. Otherwise we'd rerender the viewer for every
-  // timeupdate of an unrelated episode.
   const currentTime = usePlayerTime()
   const { track } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
   const activeSegmentId = useMemo(() => {
     if (!isCurrentEpisode) return null
-    // Search over the full (unfiltered) list so filler gaps don't make the
-    // highlight flicker, then map back to the nearest non-filler segment
-    // (unless filler is visible, in which case the raw match is fine).
+    // Search the full (unfiltered) list so filler gaps don't flicker the
+    // highlight, then walk back to the nearest non-filler segment when
+    // filler is hidden.
     const idx = findActiveSegmentIndex(transcript.segments, currentTime, offset)
     if (idx < 0) return null
     if (showFiller) return transcript.segments[idx].id
@@ -305,7 +328,6 @@ export default function SegmentedTranscriptViewer({
     !!onSeekRequest && transcript.segments.length > 0,
   )
 
-  // Pre-compute matching ids so dimming is O(1) per segment render.
   const matchingIds = useMemo(() => {
     if (!searchQuery) return null
     const needle = searchQuery.toLowerCase()
@@ -320,17 +342,7 @@ export default function SegmentedTranscriptViewer({
 
   const matchCount = matchingIds?.size ?? 0
 
-  // Keyboard shortcuts. Scoped to the window, but bailouts keep typing
-  // in any input/textarea/contenteditable safe. j/k and ↓/↑ move focus
-  // between segments; f toggles follow; / focuses the search input;
-  // Shift+? opens the keybindings sheet; Escape closes it.
   useEffect(() => {
-    const isTypingTarget = (el: EventTarget | null) => {
-      if (!(el instanceof HTMLElement)) return false
-      if (el.isContentEditable) return true
-      const tag = el.tagName
-      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-    }
     const focusSegmentAt = (nextIndex: number) => {
       const list = listRef.current
       if (!list) return
