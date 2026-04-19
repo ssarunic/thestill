@@ -1,6 +1,6 @@
 # Floating Media Player — Persistent Playback Across Routes
 
-**Status**: 📋 Planned
+**Status**: 🚧 Active development (shipped on branch `claude/floating-media-player-Xomlj`, PR #3)
 **Created**: 2026-04-19
 **Updated**: 2026-04-19
 **Priority**: Medium (UX quality-of-life; unblocks richer player work in spec #18)
