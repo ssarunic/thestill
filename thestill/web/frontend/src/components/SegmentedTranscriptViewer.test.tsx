@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { PlayerProvider } from '../contexts/PlayerContext'
 import SegmentedTranscriptViewer from './SegmentedTranscriptViewer'
+import { ToastProvider } from './Toast'
 
 function transcript(): AnnotatedTranscriptDump {
   return {
@@ -28,8 +29,21 @@ function transcript(): AnnotatedTranscriptDump {
         start: 10,
         end: 20,
         speaker: 'Bob',
-        text: 'Second segment',
+        text: 'Second segment about shipping',
         kind: 'content',
+        sponsor: null,
+        source_segment_ids: [],
+        source_word_span: null,
+        user_segment_id: null,
+        metadata: {},
+      },
+      {
+        id: 3,
+        start: 20,
+        end: 25,
+        speaker: 'Alice',
+        text: 'um filler words',
+        kind: 'filler',
         sponsor: null,
         source_segment_ids: [],
         source_word_span: null,
@@ -41,7 +55,11 @@ function transcript(): AnnotatedTranscriptDump {
 }
 
 function renderWithPlayer(ui: React.ReactElement) {
-  return render(<PlayerProvider>{ui}</PlayerProvider>)
+  return render(
+    <ToastProvider>
+      <PlayerProvider>{ui}</PlayerProvider>
+    </ToastProvider>,
+  )
 }
 
 describe('SegmentedTranscriptViewer', () => {
@@ -49,10 +67,18 @@ describe('SegmentedTranscriptViewer', () => {
     window.localStorage.clear()
   })
 
-  it('renders every non-filler segment', () => {
+  it('renders every non-filler segment by default', () => {
     renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
     expect(screen.getByText('First segment')).toBeInTheDocument()
-    expect(screen.getByText('Second segment')).toBeInTheDocument()
+    expect(screen.getByText(/Second segment about shipping/)).toBeInTheDocument()
+    expect(screen.queryByText(/um filler words/)).toBeNull()
+  })
+
+  it('reveals filler segments when Show filler is toggled on', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show filler/ }))
+    expect(screen.getByText(/um filler words/)).toBeInTheDocument()
+    expect(window.localStorage.getItem('thestill:transcript:showFiller')).toBe('true')
   })
 
   it('does not expose seek affordance when no handler is provided', () => {
@@ -84,5 +110,16 @@ describe('SegmentedTranscriptViewer', () => {
     fireEvent.click(checkbox)
     expect(checkbox).toBeChecked()
     expect(window.localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
+  })
+
+  it('filters transcript rendering to segments containing the search term', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    const input = screen.getByRole('searchbox', { name: /Search transcript/ })
+    fireEvent.change(input, { target: { value: 'shipping' } })
+    const matchCount = screen.getByText('1')
+    expect(matchCount).toBeInTheDocument()
+    // The non-matching segment's container should carry the dimmed class.
+    const firstSegment = screen.getByText('First segment').closest('[data-active]') as HTMLElement
+    expect(firstSegment.className).toMatch(/opacity-40/)
   })
 })
