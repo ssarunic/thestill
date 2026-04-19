@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Episode, EpisodeWithPodcast, FailureType } from '../api/types'
+import type { Episode, EpisodeWithPodcast, FailureType, PipelineStage } from '../api/types'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
@@ -15,6 +15,15 @@ interface EpisodeCardProps {
   onSelect?: (episodeId: string, selected: boolean) => void
   // Artwork fallback (optional - use podcast image if episode has none)
   podcastImageUrl?: string | null
+  processingStage?: PipelineStage
+}
+
+const stageLabels: Record<PipelineStage, string> = {
+  download: 'Downloading',
+  downsample: 'Downsampling',
+  transcribe: 'Transcribing',
+  clean: 'Cleaning',
+  summarize: 'Summarizing',
 }
 
 const stateColors: Record<string, string> = {
@@ -63,6 +72,7 @@ export default function EpisodeCard({
   isSelected,
   onSelect,
   podcastImageUrl,
+  processingStage,
 }: EpisodeCardProps) {
   const [showFailureModal, setShowFailureModal] = useState(false)
   const retryMutation = useRetryFailedEpisode()
@@ -141,6 +151,12 @@ export default function EpisodeCard({
             {isFailed && episode.failure_type && (
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${failureTypeColors[episode.failure_type]}`}>
                 {failureTypeLabels[episode.failure_type]}
+              </span>
+            )}
+            {processingStage && (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+                {stageLabels[processingStage]}
               </span>
             )}
             {/* Always show state badge */}
