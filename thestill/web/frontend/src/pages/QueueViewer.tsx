@@ -201,10 +201,12 @@ function StageLane({
   bumpingTaskId,
   cancellingTaskId,
 }: StageLaneProps) {
-  const utilization = stage.capacity > 0 ? stage.active / stage.capacity : 0
+  const hasCapacity = stage.capacity > 0
+  const utilization = hasCapacity ? stage.active / stage.capacity : 0
   const isBusy = stage.active > 0
   // Flag the lane as backpressured when pending depth is >=3x the pool size.
-  const isBackpressured = stage.pending > 0 && stage.pending >= stage.capacity * 3
+  // capacity <= 0 means the backend didn't report this stage, so we can't judge backpressure.
+  const isBackpressured = hasCapacity && stage.pending > 0 && stage.pending >= stage.capacity * 3
   const isIdle = !isBusy && stage.pending === 0 && stage.retry_scheduled === 0
 
   return (
@@ -225,7 +227,7 @@ function StageLane({
                   : 'bg-blue-50 text-blue-700'
             }`}
           >
-            {stage.active}/{stage.capacity} busy
+            {hasCapacity ? `${stage.active}/${stage.capacity} busy` : `${stage.active} busy`}
           </span>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-600">

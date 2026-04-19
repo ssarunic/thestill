@@ -180,6 +180,13 @@ class TaskWorker:
                     return next(iter(stage_active.values()))
         return None
 
+    def _all_active_episode_ids_locked(self) -> set[str]:
+        """Return episode IDs active in any stage. Caller must hold _active_lock."""
+        ids: set[str] = set()
+        for stage_active in self._active_by_stage.values():
+            ids.update(stage_active.keys())
+        return ids
+
     def get_status(self) -> dict:
         """Get worker status information, including per-stage utilization."""
         with self._active_lock:
@@ -248,7 +255,7 @@ class TaskWorker:
             try:
                 with self._active_lock:
                     slots = capacity - len(active)
-                    exclude = set(active.keys()) if active else None
+                    exclude = self._all_active_episode_ids_locked() or None
 
                 if slots > 0:
                     for _ in range(slots):
@@ -257,10 +264,13 @@ class TaskWorker:
                             break
 
                         with self._active_lock:
-                            if task.episode_id in active:
+                            # Recheck under lock: another stage may have claimed this
+                            # episode between the poll and now. Same-episode cross-stage
+                            # concurrency would race on transcript/summary artifacts.
+                            if any(task.episode_id in s for s in self._active_by_stage.values()):
                                 continue
                             active[task.episode_id] = task
-                            exclude = set(active.keys())
+                            exclude = self._all_active_episode_ids_locked()
 
                         asyncio.create_task(self._process_task_async(task, sem, stage))
 
