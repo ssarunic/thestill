@@ -22,6 +22,7 @@ with concurrency protection and progress tracking.
 import asyncio
 import json
 import threading
+from collections import Counter
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -541,12 +542,24 @@ class QueuedTaskWithContext(BaseModel):
     next_retry_at: Optional[str] = None
 
 
+class StageWorkerStatus(BaseModel):
+    """Worker pool status for a single pipeline stage."""
+
+    stage: str
+    active: int  # Currently processing
+    capacity: int  # Max parallel jobs for this stage
+    pending: int  # Tasks waiting for this stage
+    retry_scheduled: int  # Tasks in backoff for this stage
+
+
 class QueueTasksResponse(BaseModel):
     """Response for the queue tasks list endpoint."""
 
     status: str
     timestamp: str
     worker_running: bool
+    # Per-stage worker pools (one entry per TaskStage, in pipeline order)
+    stages: list[StageWorkerStatus]
     # Task lists
     processing_tasks: list[QueuedTaskWithContext]
     pending_tasks: list[QueuedTaskWithContext]
@@ -1135,10 +1148,28 @@ async def get_queue_tasks(
     retry_scheduled = [enrich_task(t) for t in tasks_by_status["retry_scheduled"]]
     completed = [enrich_task(t) for t in tasks_by_status["completed"]]
 
+    # Build per-stage worker pool status. get_status() always populates all
+    # TaskStage keys, so no defensive fallbacks needed.
+    stage_status = state.task_worker.get_status()["stages"]
+    pending_by_stage = Counter(t.stage.value for t in tasks_by_status["pending"])
+    retry_by_stage = Counter(t.stage.value for t in tasks_by_status["retry_scheduled"])
+
+    stages = [
+        StageWorkerStatus(
+            stage=stage.value,
+            active=stage_status[stage.value]["active"],
+            capacity=stage_status[stage.value]["capacity"],
+            pending=pending_by_stage[stage.value],
+            retry_scheduled=retry_by_stage[stage.value],
+        )
+        for stage in TaskStage
+    ]
+
     return QueueTasksResponse(
         status="ok",
         timestamp=datetime.utcnow().isoformat(),
         worker_running=state.task_worker.is_running(),
+        stages=stages,
         processing_tasks=processing,
         pending_tasks=pending,
         retry_scheduled_tasks=retry_scheduled,
