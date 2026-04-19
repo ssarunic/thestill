@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { usePlayer } from '../contexts/PlayerContext'
+import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -18,12 +18,12 @@ export default function MiniPlayer() {
     track,
     isPlaying,
     isLoading,
-    currentTime,
     duration,
     toggle,
     seek,
     stop,
   } = usePlayer()
+  const currentTime = usePlayerTime()
 
   if (!track) return null
 

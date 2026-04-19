@@ -2,7 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -23,7 +23,6 @@ interface PlayerContextValue {
   track: PlayerTrack | null
   isPlaying: boolean
   isLoading: boolean
-  currentTime: number
   duration: number
   playbackRate: number
   play: (track: PlayerTrack) => void
@@ -37,9 +36,11 @@ interface PlayerContextValue {
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null)
+const PlayerTimeContext = createContext<number>(0)
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const trackRef = useRef<PlayerTrack | null>(null)
   const [track, setTrack] = useState<PlayerTrack | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -47,34 +48,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
 
-  useEffect(() => {
+  const play = useCallback((next: PlayerTrack) => {
     const audio = audioRef.current
     if (!audio) return
-    if (!track) {
-      audio.pause()
-      audio.removeAttribute('src')
-      audio.load()
+    const current = trackRef.current
+    if (current && current.episodeId === next.episodeId) {
+      // Same episode — just resume. Still inside user-gesture stack.
+      audio.play().catch(() => setIsPlaying(false))
       return
     }
-    const absolute = new URL(track.audioUrl, window.location.href).href
-    if (audio.src !== absolute) {
-      audio.src = track.audioUrl
-      setCurrentTime(0)
-      setDuration(track.durationHint ?? 0)
-      audio.play().catch(() => {
-        setIsPlaying(false)
-      })
-    }
-  }, [track])
-
-  const play = useCallback((next: PlayerTrack) => {
-    setTrack((current) => {
-      if (current && current.episodeId === next.episodeId) {
-        audioRef.current?.play().catch(() => setIsPlaying(false))
-        return current
-      }
-      return next
-    })
+    // New episode — assign source and call play() synchronously so the
+    // initial play request stays inside the click handler, otherwise
+    // Safari/iOS reject it as autoplay (NotAllowedError).
+    audio.src = next.audioUrl
+    trackRef.current = next
+    setTrack(next)
+    setCurrentTime(0)
+    setDuration(next.durationHint ?? 0)
+    audio.play().catch(() => setIsPlaying(false))
   }, [])
 
   const pause = useCallback(() => {
@@ -110,6 +101,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const stop = useCallback(() => {
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.removeAttribute('src')
+      audio.load()
+    }
+    trackRef.current = null
     setTrack(null)
     setIsPlaying(false)
     setCurrentTime(0)
@@ -121,26 +119,47 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [track]
   )
 
+  // Memoize so the state-context value identity only changes when
+  // low-frequency state changes. currentTime is delivered via a separate
+  // context so high-frequency ticks don't re-render PlayerContext consumers.
+  const value = useMemo<PlayerContextValue>(
+    () => ({
+      track,
+      isPlaying,
+      isLoading,
+      duration,
+      playbackRate,
+      play,
+      pause,
+      resume,
+      toggle,
+      seek,
+      setRate,
+      stop,
+      isCurrent,
+    }),
+    [
+      track,
+      isPlaying,
+      isLoading,
+      duration,
+      playbackRate,
+      play,
+      pause,
+      resume,
+      toggle,
+      seek,
+      setRate,
+      stop,
+      isCurrent,
+    ]
+  )
+
   return (
-    <PlayerContext.Provider
-      value={{
-        track,
-        isPlaying,
-        isLoading,
-        currentTime,
-        duration,
-        playbackRate,
-        play,
-        pause,
-        resume,
-        toggle,
-        seek,
-        setRate,
-        stop,
-        isCurrent,
-      }}
-    >
-      {children}
+    <PlayerContext.Provider value={value}>
+      <PlayerTimeContext.Provider value={currentTime}>
+        {children}
+      </PlayerTimeContext.Provider>
       <audio
         ref={audioRef}
         preload="metadata"
@@ -174,4 +193,8 @@ export function usePlayer(): PlayerContextValue {
     throw new Error('usePlayer must be used within a PlayerProvider')
   }
   return ctx
+}
+
+export function usePlayerTime(): number {
+  return useContext(PlayerTimeContext)
 }

@@ -1,4 +1,4 @@
-import { usePlayer, type PlayerTrack } from '../contexts/PlayerContext'
+import { usePlayer, usePlayerTime, type PlayerTrack } from '../contexts/PlayerContext'
 
 interface AudioPlayerProps {
   track: PlayerTrack
@@ -18,10 +18,11 @@ function formatTime(seconds: number): string {
 
 export default function AudioPlayer({ track }: AudioPlayerProps) {
   const player = usePlayer()
+  const playerTime = usePlayerTime()
   const isCurrent = player.isCurrent(track.episodeId)
   const isPlaying = isCurrent && player.isPlaying
   const isLoading = isCurrent && player.isLoading
-  const currentTime = isCurrent ? player.currentTime : 0
+  const currentTime = isCurrent ? playerTime : 0
   const duration = isCurrent && player.duration > 0
     ? player.duration
     : track.durationHint ?? 0
