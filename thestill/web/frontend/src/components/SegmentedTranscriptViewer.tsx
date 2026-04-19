@@ -18,10 +18,14 @@ function formatTimestamp(seconds: number): string {
 function AdBreak({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   return (
-    <div className="my-4 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r">
-      <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
-        <span className="font-mono text-xs">[{formatTimestamp(segment.start + offset)}]</span>
-        <span>Ad break{sponsor}</span>
+    <div className="my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md">
+      <div className="flex items-center gap-3 text-amber-800">
+        <span className="font-mono text-[11px] tabular-nums text-amber-700/80">
+          {formatTimestamp(segment.start + offset)}
+        </span>
+        <span className="text-xs font-semibold uppercase tracking-wider">
+          Ad break{sponsor}
+        </span>
       </div>
     </div>
   )
@@ -30,14 +34,16 @@ function AdBreak({ segment, offset }: { segment: AnnotatedSegment; offset: numbe
 function ContentSegment({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
   const speaker = segment.speaker ?? 'Unknown'
   return (
-    <div className="mb-4">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="font-mono text-xs text-gray-400">
-          [{formatTimestamp(segment.start + offset)}]
+    <div className="group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1.5">
+        <span className={`font-sans text-sm font-semibold tracking-tight ${getSpeakerColor(speaker)}`}>
+          {speaker}
         </span>
-        <span className={`font-sans font-semibold ${getSpeakerColor(speaker)}`}>{speaker}:</span>
+        <span className="font-mono text-[11px] tabular-nums text-gray-400">
+          {formatTimestamp(segment.start + offset)}
+        </span>
       </div>
-      <p className="text-gray-800 pl-4 border-l-2 border-gray-200 text-base leading-[1.7] sm:text-lg">
+      <p className="text-gray-800 pl-4 border-l-2 border-gray-200 text-[15px] leading-[1.75] sm:text-[17px]">
         {segment.text}
       </p>
     </div>
@@ -53,7 +59,7 @@ export default function SegmentedTranscriptViewer({ transcript }: SegmentedTrans
 
   if (visibleSegments.length === 0) {
     return (
-      <div className="text-center py-12 min-h-[300px]">
+      <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
         <p className="text-gray-600 font-medium">No content segments available</p>
         <p className="text-sm text-gray-400 mt-1">
           This transcript's segments have all been marked as filler.
@@ -63,7 +69,7 @@ export default function SegmentedTranscriptViewer({ transcript }: SegmentedTrans
   }
 
   return (
-    <div className="transcript-content leading-relaxed space-y-1">
+    <div className="transcript-content leading-relaxed space-y-1.5">
       {visibleSegments.map((segment) =>
         segment.kind === 'ad_break' ? (
           <AdBreak key={segment.id} segment={segment} offset={offset} />
