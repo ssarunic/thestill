@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
-import AudioPlayer from '../components/AudioPlayer'
+import { usePlayer } from '../contexts/PlayerContext'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('../components/TranscriptViewer'))
@@ -45,6 +45,7 @@ export default function EpisodeDetail() {
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [transcriptSubTab, setTranscriptSubTab] = useState<TranscriptSubTab>('segmented')
   const queryClient = useQueryClient()
+  const player = usePlayer()
 
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
@@ -215,20 +216,55 @@ export default function EpisodeDetail() {
             </div>
           )}
 
-          {/* Audio Player */}
+          {/* Play button — delegates transport to the floating mini-player */}
           <div className="border-t border-gray-100 pt-4">
-            <AudioPlayer
-              track={{
-                episodeId: episode.id,
-                podcastSlug: podcastSlug!,
-                episodeSlug: episodeSlug!,
-                title: episode.title,
-                podcastTitle: episode.podcast_title,
-                audioUrl: episode.audio_url,
-                artworkUrl: episode.image_url ?? episode.podcast_image_url,
-                durationHint: episode.duration,
-              }}
-            />
+            {(() => {
+              const isCurrent = player.isCurrent(episode.id)
+              const isPlaying = isCurrent && player.isPlaying
+              const isLoading = isCurrent && player.isLoading
+              const handleClick = () => {
+                if (isCurrent) {
+                  player.toggle()
+                } else {
+                  player.play({
+                    episodeId: episode.id,
+                    podcastSlug: podcastSlug!,
+                    episodeSlug: episodeSlug!,
+                    title: episode.title,
+                    podcastTitle: episode.podcast_title,
+                    audioUrl: episode.audio_url,
+                    artworkUrl: episode.image_url ?? episode.podcast_image_url,
+                    durationHint: episode.duration,
+                  })
+                }
+              }
+              return (
+                <button
+                  type="button"
+                  onClick={handleClick}
+                  disabled={isLoading && !isPlaying}
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
+                  className="inline-flex items-center gap-3 px-5 py-2.5 rounded-full bg-primary-900 text-white font-medium hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50 transition-colors"
+                >
+                  {isLoading && !isPlaying ? (
+                    <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                  ) : isPlaying ? (
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <rect x="6" y="5" width="4" height="14" rx="1" />
+                      <rect x="14" y="5" width="4" height="14" rx="1" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  )}
+                  <span>{isPlaying ? 'Pause' : isCurrent ? 'Resume' : 'Play episode'}</span>
+                </button>
+              )
+            })()}
           </div>
 
           {(episode.description_html || episode.description) && (
