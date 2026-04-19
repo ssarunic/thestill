@@ -137,9 +137,13 @@ describe('Digests Page', () => {
 
       render(<Digests />, { wrapper: createWrapper() })
 
-      expect(screen.getByText('Completed')).toBeInTheDocument()
+      // "Completed" and "Failed" appear in both the digest-card badge and
+      // the info box at the bottom of the page. "Pending" only appears in
+      // the badge. Assert at least one match for each so the test tolerates
+      // the info-box duplication.
+      expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1)
       expect(screen.getByText('Pending')).toBeInTheDocument()
-      expect(screen.getByText('Failed')).toBeInTheDocument()
+      expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1)
     })
   })
 
@@ -206,12 +210,28 @@ describe('Digests Page', () => {
 
       render(<Digests />, { wrapper: createWrapper() })
 
-      // Total digests
-      expect(screen.getByText('4')).toBeInTheDocument()
-      // Completed (2)
-      expect(screen.getByText('2')).toBeInTheDocument()
-      // Partial (1)
-      expect(screen.getByText('1')).toBeInTheDocument()
+      // Scope each assertion to its stat card so we don't collide with the
+      // identical count (1) shared by Partial and Failed.
+      const totalCard = screen.getByText('Total Digests').parentElement!
+      expect(within(totalCard).getByText('4')).toBeInTheDocument()
+
+      const completedCard = screen
+        .getAllByText('Completed')
+        .map((el) => el.parentElement)
+        .find((el) => el?.querySelector('.text-2xl') !== null)!
+      expect(within(completedCard).getByText('2')).toBeInTheDocument()
+
+      const partialCard = screen
+        .getAllByText('Partial')
+        .map((el) => el.parentElement)
+        .find((el) => el?.querySelector('.text-2xl') !== null)!
+      expect(within(partialCard).getByText('1')).toBeInTheDocument()
+
+      const failedCard = screen
+        .getAllByText('Failed')
+        .map((el) => el.parentElement)
+        .find((el) => el?.querySelector('.text-2xl') !== null)!
+      expect(within(failedCard).getByText('1')).toBeInTheDocument()
     })
   })
 
