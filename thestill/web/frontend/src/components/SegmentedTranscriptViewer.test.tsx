@@ -122,4 +122,29 @@ describe('SegmentedTranscriptViewer', () => {
     const firstSegment = screen.getByText('First segment').closest('[data-active]') as HTMLElement
     expect(firstSegment.className).toMatch(/opacity-40/)
   })
+
+  it('toggles the keyboard help sheet on ?', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.keyDown(window, { key: '?' })
+    expect(screen.getByRole('dialog', { name: /keyboard shortcuts/i })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('focuses the search input when / is pressed outside an input', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    const input = screen.getByRole('searchbox', { name: /Search transcript/ })
+    expect(document.activeElement).not.toBe(input)
+    fireEvent.keyDown(window, { key: '/' })
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('moves focus to the next segment on j', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} onSeekRequest={() => {}} />)
+    const buttons = screen.getAllByRole('button', { name: /Seek to/ })
+    buttons[0].focus()
+    fireEvent.keyDown(window, { key: 'j' })
+    expect(document.activeElement).toBe(buttons[1])
+  })
 })

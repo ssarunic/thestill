@@ -49,7 +49,7 @@ export function useAutoScrollFollow({
     if (node) {
       const reduceMotion = typeof window !== 'undefined'
         && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      node.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+      node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
     }
   }, [activeKey])
 
@@ -63,7 +63,7 @@ export function useAutoScrollFollow({
     const reduceMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     programmaticScrollAt.current = now()
-    node.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+    node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
   }, [activeKey, enabled, pausedUntil])
 
   // Detect user-driven scroll via wheel/touch/keyboard and pause follow.

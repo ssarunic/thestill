@@ -1,4 +1,13 @@
-import { memo, useCallback, useDeferredValue, useMemo, useState, type KeyboardEvent } from 'react'
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react'
 import type { AnnotatedSegment, AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import {
@@ -97,6 +106,7 @@ interface AdBreakProps {
   onCopyTimestamp: (seconds: number) => void
   searchQuery: string
   dimmed: boolean
+  segmentIndex: number
 }
 
 const AdBreak = memo(function AdBreak({
@@ -108,6 +118,7 @@ const AdBreak = memo(function AdBreak({
   onCopyTimestamp,
   searchQuery,
   dimmed,
+  segmentIndex,
 }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
@@ -118,6 +129,7 @@ const AdBreak = memo(function AdBreak({
     <div
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
+      data-segment-index={segmentIndex}
       role={seekable ? 'button' : undefined}
       tabIndex={seekable ? 0 : undefined}
       aria-label={seekable ? `Seek to ${formatTimestamp(segment.start + offset)} — ad break${sponsor}` : undefined}
@@ -149,6 +161,7 @@ interface ContentSegmentProps {
   searchQuery: string
   dimmed: boolean
   isFiller: boolean
+  segmentIndex: number
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -161,6 +174,7 @@ const ContentSegment = memo(function ContentSegment({
   searchQuery,
   dimmed,
   isFiller,
+  segmentIndex,
 }: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
   const speakerText = getSpeakerColor(speaker)
@@ -180,6 +194,7 @@ const ContentSegment = memo(function ContentSegment({
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
+      data-segment-index={segmentIndex}
       role={seekable ? 'button' : undefined}
       tabIndex={seekable ? 0 : undefined}
       aria-label={
@@ -227,6 +242,9 @@ export default function SegmentedTranscriptViewer({
   // React's useDeferredValue gives us a cheap debounce: typing stays
   // responsive while the re-renders lag one frame behind.
   const searchQuery = useDeferredValue(searchInput.trim())
+  const [showHelp, setShowHelp] = useState(false)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const { showToast } = useToast()
 
   const renderedSegments = useMemo(
@@ -302,6 +320,90 @@ export default function SegmentedTranscriptViewer({
 
   const matchCount = matchingIds?.size ?? 0
 
+  // Keyboard shortcuts. Scoped to the window, but bailouts keep typing
+  // in any input/textarea/contenteditable safe. j/k and ↓/↑ move focus
+  // between segments; f toggles follow; / focuses the search input;
+  // Shift+? opens the keybindings sheet; Escape closes it.
+  useEffect(() => {
+    const isTypingTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false
+      if (el.isContentEditable) return true
+      const tag = el.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    }
+    const focusSegmentAt = (nextIndex: number) => {
+      const list = listRef.current
+      if (!list) return
+      const max = renderedSegments.length - 1
+      const clamped = Math.min(max, Math.max(0, nextIndex))
+      const node = list.querySelector<HTMLElement>(`[data-segment-index="${clamped}"]`)
+      if (node) {
+        node.focus({ preventScroll: true })
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+      }
+    }
+    const currentFocusIndex = () => {
+      const el = document.activeElement
+      if (!(el instanceof HTMLElement)) return -1
+      const idx = el.getAttribute('data-segment-index')
+      return idx == null ? -1 : Number(idx)
+    }
+    const handler = (e: KeyboardEvent | globalThis.KeyboardEvent) => {
+      // '/' focuses search even from outside the list, as long as we're
+      // not already typing somewhere.
+      if (e.key === '/' && !isTypingTarget(e.target)) {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+        return
+      }
+      if (e.key === '?' && !isTypingTarget(e.target)) {
+        e.preventDefault()
+        setShowHelp((prev) => !prev)
+        return
+      }
+      if (e.key === 'Escape') {
+        if (showHelp) {
+          setShowHelp(false)
+          return
+        }
+        if (document.activeElement === searchInputRef.current && searchInput) {
+          setSearchInput('')
+          return
+        }
+      }
+      if (isTypingTarget(e.target)) return
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        const from = currentFocusIndex()
+        if (from === -1) {
+          focusSegmentAt(0)
+        } else {
+          focusSegmentAt(from + 1)
+        }
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'k' || e.key === 'ArrowUp') {
+        const from = currentFocusIndex()
+        if (from === -1) {
+          focusSegmentAt(0)
+        } else {
+          focusSegmentAt(from - 1)
+        }
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'f') {
+        setFollowPlayback(!followPlayback)
+        e.preventDefault()
+        return
+      }
+    }
+    window.addEventListener('keydown', handler as (e: globalThis.KeyboardEvent) => void)
+    return () => window.removeEventListener('keydown', handler as (e: globalThis.KeyboardEvent) => void)
+  }, [renderedSegments.length, followPlayback, setFollowPlayback, showHelp, searchInput])
+
   if (transcript.segments.length === 0) {
     return (
       <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
@@ -330,10 +432,11 @@ export default function SegmentedTranscriptViewer({
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <div className="relative flex-1 min-w-[200px]">
           <input
+            ref={searchInputRef}
             type="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search transcript…"
+            placeholder="Search transcript (press /)"
             aria-label="Search transcript"
             className="w-full rounded-md border border-gray-200 bg-white pl-8 pr-10 py-1.5 text-sm placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
           />
@@ -370,10 +473,19 @@ export default function SegmentedTranscriptViewer({
           />
           <span>Follow playback</span>
         </label>
+        <button
+          type="button"
+          onClick={() => setShowHelp(true)}
+          className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2 decoration-dotted"
+          aria-label="Show keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+        >
+          ?
+        </button>
       </div>
 
-      <div className="transcript-content leading-relaxed space-y-1.5">
-        {renderedSegments.map((segment) => {
+      <div ref={listRef} className="transcript-content leading-relaxed space-y-1.5">
+        {renderedSegments.map((segment, index) => {
           const isActive = segment.id === activeSegmentId
           const dimmed = !!matchingIds && !matchingIds.has(segment.id)
           return segment.kind === 'ad_break' ? (
@@ -387,6 +499,7 @@ export default function SegmentedTranscriptViewer({
               onCopyTimestamp={handleCopyTimestamp}
               searchQuery={searchQuery}
               dimmed={dimmed}
+              segmentIndex={index}
             />
           ) : (
             <ContentSegment
@@ -400,6 +513,7 @@ export default function SegmentedTranscriptViewer({
               searchQuery={searchQuery}
               dimmed={dimmed}
               isFiller={segment.kind === 'filler'}
+              segmentIndex={index}
             />
           )
         })}
@@ -416,6 +530,51 @@ export default function SegmentedTranscriptViewer({
           </svg>
           Resume follow
         </button>
+      )}
+
+      {showHelp && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Transcript keyboard shortcuts"
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowHelp(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl p-5 w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-900">Keyboard shortcuts</h3>
+              <button
+                type="button"
+                onClick={() => setShowHelp(false)}
+                className="text-gray-400 hover:text-gray-600"
+                aria-label="Close"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <dl className="space-y-2 text-sm">
+              {[
+                ['j  or  ↓', 'Next segment'],
+                ['k  or  ↑', 'Previous segment'],
+                ['Enter / Space', 'Seek to focused segment'],
+                ['f', 'Toggle follow playback'],
+                ['/', 'Focus search'],
+                ['Esc', 'Clear search / close help'],
+                ['?', 'Show this help'],
+              ].map(([keys, label]) => (
+                <div key={keys} className="flex items-baseline justify-between gap-3">
+                  <dt className="font-mono text-xs text-gray-500">{keys}</dt>
+                  <dd className="text-gray-800">{label}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
       )}
     </div>
   )
