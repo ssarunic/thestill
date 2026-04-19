@@ -54,6 +54,46 @@ export default function EpisodeDetail() {
   // Reading position persistence - auto-restores when episode ID is available
   useReadingPosition(episodeData?.episode?.id)
 
+  // Seek handler for transcript segment clicks. If this episode is already
+  // loaded in the player we just move the playhead (preserving play/paused
+  // state). Otherwise load the track at the requested offset — the seek
+  // itself is fired on the audio element's `loadedmetadata` handler path
+  // via setting currentTime right after play().
+  const episode = episodeData?.episode
+  const handleSegmentSeek = useCallback(
+    (seconds: number) => {
+      if (!episode) return
+      if (player.isCurrent(episode.id)) {
+        player.seek(seconds)
+        return
+      }
+      player.play({
+        episodeId: episode.id,
+        podcastSlug: podcastSlug!,
+        episodeSlug: episodeSlug!,
+        title: episode.title,
+        podcastTitle: episode.podcast_title,
+        audioUrl: episode.audio_url,
+        artworkUrl: episode.image_url ?? episode.podcast_image_url,
+        durationHint: episode.duration,
+      })
+      // Queue the seek for the next tick so the audio element has time to
+      // accept the new src before we set currentTime. Browsers clamp seek
+      // attempts on an unloaded track silently, so retry until duration
+      // resolves — capped to avoid a runaway loop on unplayable URLs.
+      let attempts = 0
+      const trySeek = () => {
+        attempts += 1
+        player.seek(seconds)
+        if (attempts < 30 && player.duration === 0) {
+          setTimeout(trySeek, 100)
+        }
+      }
+      setTimeout(trySeek, 50)
+    },
+    [episode, podcastSlug, episodeSlug, player],
+  )
+
   // Handle task completion - refresh relevant data
   const handleTaskComplete = useCallback((stage: PipelineStage) => {
     // Always refresh episode data to get updated state
@@ -83,8 +123,6 @@ export default function EpisodeDetail() {
       </div>
     )
   }
-
-  const episode = episodeData?.episode
 
   return (
     <div className="space-y-6">
@@ -329,6 +367,7 @@ export default function EpisodeDetail() {
                 transcriptLoading={transcriptLoading}
                 episodeState={episode?.state}
                 episodeId={episode?.id ?? null}
+                onSegmentSeek={handleSegmentSeek}
                 subTab={transcriptSubTab}
                 onSubTabChange={setTranscriptSubTab}
               />
@@ -354,6 +393,7 @@ interface TranscriptPanelProps {
   transcriptLoading: boolean
   episodeState: string | undefined
   episodeId: string | null
+  onSegmentSeek: (seconds: number) => void
   subTab: TranscriptSubTab
   onSubTabChange: (next: TranscriptSubTab) => void
 }
@@ -363,6 +403,7 @@ function TranscriptPanel({
   transcriptLoading,
   episodeState,
   episodeId,
+  onSegmentSeek,
   subTab,
   onSubTabChange,
 }: TranscriptPanelProps) {
@@ -416,6 +457,7 @@ function TranscriptPanel({
         <SegmentedTranscriptViewer
           transcript={transcriptData.segments}
           episodeId={episodeId}
+          onSeekRequest={onSegmentSeek}
         />
       ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
         <TranscriptViewer
