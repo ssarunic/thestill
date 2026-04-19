@@ -44,6 +44,7 @@ describing current phase and gates.
 | 20 | [parallel-task-queues](20-parallel-task-queues.md) | 🚧 Active development | Per-stage worker pools so a slow transcribe task no longer blocks a fast clean task; stage-swimlane UI |
 | 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 🚧 Active development | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 | 22 | [floating-media-player](22-floating-media-player.md) | 🚧 Active development | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
+| 23 | [transcript-playback-sync](23-transcript-playback-sync.md) | 🚧 Active development | Highlight the currently-playing segment, optional auto-scroll follow mode, click-to-seek, deep-linked timestamps, transcript search |
 
 ## Completed
 
