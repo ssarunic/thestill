@@ -1,6 +1,7 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast } from '../hooks/useApi'
+import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast, useQueueTasks } from '../hooks/useApi'
+import type { PipelineStage } from '../api/types'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
@@ -58,6 +59,13 @@ export default function PodcastDetail() {
   // Flatten all pages into a single episodes array
   const allEpisodes = episodesData?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = episodesData?.pages[0]?.total ?? 0
+
+  // Map of episode_id -> active pipeline stage from the task queue. Shared
+  // via React Query with the Queue page; no duplicate requests.
+  const { data: queueData } = useQueueTasks()
+  const processingByEpisodeId = new Map<string, PipelineStage>(
+    queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
+  )
 
   if (podcastError) {
     return (
@@ -232,13 +240,18 @@ export default function PodcastDetail() {
           </div>
         ) : (
           <div className="space-y-3">
-            {allEpisodes.map((episode, index) => (
-              <EpisodeCard
-                key={episode.external_id || index}
-                episode={episode}
-                podcastImageUrl={podcast?.image_url}
-              />
-            ))}
+            {allEpisodes.map((episode, index) => {
+              const processingStage = processingByEpisodeId.get(episode.id)
+              return (
+                <EpisodeCard
+                  key={episode.external_id || index}
+                  episode={episode}
+                  podcastImageUrl={podcast?.image_url}
+                  isProcessing={processingStage !== undefined}
+                  processingStage={processingStage}
+                />
+              )
+            })}
 
             {/* Load more trigger */}
             <div ref={loadMoreRef} className="py-4">

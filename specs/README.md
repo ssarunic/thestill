@@ -41,6 +41,7 @@ describing current phase and gates.
 | 12 | [whisperx-chunk-progress-tracking](12-whisperx-chunk-progress-tracking.md) | 🚧 Active development | Capture WhisperX stdout progress output and convert to real-time callbacks |
 | 18 | [segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) | 🚧 Active development | Per-segment cleanup with word timestamps preserved; prerequisite for richer media player |
 | 19 | [refresh-performance](19-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
+| 20 | [episode-processing-indicator](20-episode-processing-indicator.md) | 📋 Planned (2026-04-19) | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 
 ## Completed
 
