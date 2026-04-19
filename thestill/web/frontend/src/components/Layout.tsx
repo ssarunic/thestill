@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import MobileHeader from './MobileHeader'
+import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
+import { PlayerProvider, usePlayer } from '../contexts/PlayerContext'
 
 interface NavItemProps {
   to: string
@@ -56,10 +58,11 @@ function useScreenSize(): ScreenSize {
   return screenSize
 }
 
-export default function Layout() {
+function LayoutContent() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
   const screenSize = useScreenSize()
+  const { track } = usePlayer()
 
   // Close sidebar/drawer when screen size changes
   useEffect(() => {
@@ -237,11 +240,25 @@ export default function Layout() {
         Tablet (640-1024px): ml-16 for collapsed sidebar
         Desktop (≥1024px): ml-64 for full sidebar
       */}
-      <main className="min-h-screen transition-all duration-300 ml-0 pt-14 sm:pt-0 sm:ml-16 lg:ml-64">
+      <main
+        className={`min-h-screen transition-all duration-300 ml-0 pt-14 sm:pt-0 sm:ml-16 lg:ml-64 ${
+          track ? 'pb-24' : ''
+        }`}
+      >
         <div className="p-4 md:p-6 lg:p-8">
           <Outlet />
         </div>
       </main>
+
+      <MiniPlayer />
     </div>
+  )
+}
+
+export default function Layout() {
+  return (
+    <PlayerProvider>
+      <LayoutContent />
+    </PlayerProvider>
   )
 }

@@ -1,38 +1,63 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import MorningBriefingWidget from './MorningBriefingWidget'
 import { ToastProvider } from './Toast'
+import type { DigestPreviewResponse } from '../api/types'
 
-// Mock the useApi hooks
 vi.mock('../hooks/useApi', () => ({
-  useDashboardStats: vi.fn(),
+  useMorningBriefingCount: vi.fn(),
   useLatestDigest: vi.fn(),
-  useCreateDigest: vi.fn(),
+  useCreateMorningBriefing: vi.fn(),
 }))
 
-import { useDashboardStats, useLatestDigest, useCreateDigest } from '../hooks/useApi'
+import {
+  useMorningBriefingCount,
+  useLatestDigest,
+  useCreateMorningBriefing,
+} from '../hooks/useApi'
 
-const mockUseDashboardStats = useDashboardStats as ReturnType<typeof vi.fn>
+const mockUseMorningBriefingCount = useMorningBriefingCount as ReturnType<typeof vi.fn>
 const mockUseLatestDigest = useLatestDigest as ReturnType<typeof vi.fn>
-const mockUseCreateDigest = useCreateDigest as ReturnType<typeof vi.fn>
+const mockUseCreateMorningBriefing = useCreateMorningBriefing as ReturnType<typeof vi.fn>
+
+function makeBriefingData(count: number): DigestPreviewResponse {
+  return {
+    status: 'ok',
+    timestamp: '2026-01-01T00:00:00Z',
+    episodes: Array.from({ length: count }, (_, i) => ({
+      episode_id: `ep-${i}`,
+      episode_title: `Episode ${i}`,
+      episode_slug: `episode-${i}`,
+      podcast_id: `pod-${i}`,
+      podcast_title: `Pod ${i}`,
+      podcast_slug: `pod-${i}`,
+      state: 'summarized',
+      pub_date: '2026-01-01T00:00:00Z',
+    })),
+    total_matching: count,
+    criteria: {
+      since_days: 7,
+      max_episodes: 10,
+      podcast_id: null,
+      ready_only: true,
+      exclude_digested: false,
+    },
+  }
+}
 
 function createWrapper() {
   const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
+    defaultOptions: { queries: { retry: false } },
   })
 
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+          <ToastProvider>{children}</ToastProvider>
         </BrowserRouter>
       </QueryClientProvider>
     )
@@ -44,33 +69,30 @@ describe('MorningBriefingWidget', () => {
     vi.clearAllMocks()
   })
 
-  it('renders pending episode count from dashboard stats', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: {
-        podcasts_tracked: 5,
-        episodes_total: 100,
-        episodes_processed: 75,
-        episodes_pending: 25,
-        pipeline: {},
-      },
+  it('renders available episode count from morning briefing preview', () => {
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(25),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
     expect(screen.getByText('25')).toBeInTheDocument()
-    expect(screen.getByText('episodes ready to summarize')).toBeInTheDocument()
+    expect(screen.getByText('episodes ready for digest')).toBeInTheDocument()
   })
 
-  it('shows loading state when stats are loading', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: null,
-      isLoading: true,
-    })
+  it('shows loading state while the count is loading', () => {
+    mockUseMorningBriefingCount.mockReturnValue({ data: null, isLoading: true })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
@@ -78,8 +100,8 @@ describe('MorningBriefingWidget', () => {
   })
 
   it('displays latest digest status when available', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 10 },
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(10),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({
@@ -92,7 +114,10 @@ describe('MorningBriefingWidget', () => {
         },
       },
     })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
@@ -100,19 +125,22 @@ describe('MorningBriefingWidget', () => {
     expect(screen.getByText('(5/5)')).toBeInTheDocument()
   })
 
-  it('calls createDigest when Quick Catch-Up is clicked', async () => {
+  it('calls createMorningBriefing when Quick Catch-Up is clicked', async () => {
     const user = userEvent.setup()
     const mockMutateAsync = vi.fn().mockResolvedValue({
       status: 'completed',
+      timestamp: '2026-01-01T00:00:00Z',
+      message: 'ok',
+      digest_id: 'd-1',
       episodes_selected: 5,
     })
 
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 10 },
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(10),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({
+    mockUseCreateMorningBriefing.mockReturnValue({
       mutateAsync: mockMutateAsync,
       isPending: false,
     })
@@ -122,21 +150,20 @@ describe('MorningBriefingWidget', () => {
     const button = screen.getByRole('button', { name: /quick catch-up/i })
     await user.click(button)
 
-    expect(mockMutateAsync).toHaveBeenCalledWith({
-      since_days: 7,
-      max_episodes: 10,
-      ready_only: true,
-      exclude_digested: true,
-    })
+    // Server-configured defaults; the hook takes no arguments.
+    expect(mockMutateAsync).toHaveBeenCalledWith()
   })
 
-  it('disables button when there are no pending episodes', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 0 },
+  it('disables the button when there are no pending episodes', () => {
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(0),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
@@ -145,12 +172,12 @@ describe('MorningBriefingWidget', () => {
   })
 
   it('shows loading spinner when creating digest', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 10 },
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(10),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({
+    mockUseCreateMorningBriefing.mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: true,
     })
@@ -161,29 +188,35 @@ describe('MorningBriefingWidget', () => {
   })
 
   it('renders link to digests page', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 5 },
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(5),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
-    const link = screen.getByRole('link', { name: /view all/i })
+    const link = screen.getByRole('link', { name: /view all|digests/i })
     expect(link).toHaveAttribute('href', '/digests')
   })
 
   it('uses singular "episode" when count is 1', () => {
-    mockUseDashboardStats.mockReturnValue({
-      data: { episodes_pending: 1 },
+    mockUseMorningBriefingCount.mockReturnValue({
+      data: makeBriefingData(1),
       isLoading: false,
     })
     mockUseLatestDigest.mockReturnValue({ data: null })
-    mockUseCreateDigest.mockReturnValue({ mutateAsync: vi.fn(), isPending: false })
+    mockUseCreateMorningBriefing.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
 
     render(<MorningBriefingWidget />, { wrapper: createWrapper() })
 
-    expect(screen.getByText('episode ready to summarize')).toBeInTheDocument()
+    expect(screen.getByText('episode ready for digest')).toBeInTheDocument()
   })
 })
