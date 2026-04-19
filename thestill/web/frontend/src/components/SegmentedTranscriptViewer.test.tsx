@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { PlayerProvider } from '../contexts/PlayerContext'
 import SegmentedTranscriptViewer from './SegmentedTranscriptViewer'
@@ -45,6 +45,10 @@ function renderWithPlayer(ui: React.ReactElement) {
 }
 
 describe('SegmentedTranscriptViewer', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
   it('renders every non-filler segment', () => {
     renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
     expect(screen.getByText('First segment')).toBeInTheDocument()
@@ -71,5 +75,14 @@ describe('SegmentedTranscriptViewer', () => {
     const node = screen.getByRole('button', { name: /Seek to 00:00 — Alice/ })
     fireEvent.keyDown(node, { key: 'Enter' })
     expect(onSeek).toHaveBeenCalledWith(0)
+  })
+
+  it('persists the Follow playback toggle to localStorage', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    const checkbox = screen.getByRole('checkbox', { name: /Follow playback/ })
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    expect(window.localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
   })
 })

@@ -1,8 +1,14 @@
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react'
 import type { AnnotatedSegment, AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import {
+  useAutoScrollFollow,
+  usePersistedBoolean,
+} from '../hooks/useAutoScrollFollow'
 import { getSpeakerBorderColor, getSpeakerColor } from '../utils/speakerColors'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
+
+const FOLLOW_STORAGE_KEY = 'thestill:transcript:followPlayback'
 
 interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
@@ -35,15 +41,17 @@ interface AdBreakProps {
   offset: number
   isActive: boolean
   onSeek?: (seconds: number) => void
+  registerRef?: (el: HTMLElement | null) => void
 }
 
-const AdBreak = memo(function AdBreak({ segment, offset, isActive, onSeek }: AdBreakProps) {
+const AdBreak = memo(function AdBreak({ segment, offset, isActive, onSeek, registerRef }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
   const seekable = !!onSeek
   const activate = useCallback(() => onSeek?.(segment.start + offset), [onSeek, segment.start, offset])
   return (
     <div
+      ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       role={seekable ? 'button' : undefined}
       tabIndex={seekable ? 0 : undefined}
@@ -69,6 +77,7 @@ interface ContentSegmentProps {
   offset: number
   isActive: boolean
   onSeek?: (seconds: number) => void
+  registerRef?: (el: HTMLElement | null) => void
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -76,6 +85,7 @@ const ContentSegment = memo(function ContentSegment({
   offset,
   isActive,
   onSeek,
+  registerRef,
 }: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
   const speakerText = getSpeakerColor(speaker)
@@ -90,6 +100,7 @@ const ContentSegment = memo(function ContentSegment({
   const activate = useCallback(() => onSeek?.(segment.start + offset), [onSeek, segment.start, offset])
   return (
     <div
+      ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       role={seekable ? 'button' : undefined}
       tabIndex={seekable ? 0 : undefined}
@@ -137,6 +148,8 @@ export default function SegmentedTranscriptViewer({
   const { track } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
+  const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
+
   const activeSegmentId = useMemo(() => {
     if (!isCurrentEpisode) return null
     // Search over the full (unfiltered) list so filler gaps don't make the
@@ -151,6 +164,11 @@ export default function SegmentedTranscriptViewer({
     return null
   }, [isCurrentEpisode, transcript.segments, currentTime, offset])
 
+  const follow = useAutoScrollFollow({
+    activeKey: activeSegmentId,
+    enabled: followPlayback && isCurrentEpisode,
+  })
+
   if (visibleSegments.length === 0) {
     return (
       <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
@@ -163,27 +181,56 @@ export default function SegmentedTranscriptViewer({
   }
 
   return (
-    <div className="transcript-content leading-relaxed space-y-1.5">
-      {visibleSegments.map((segment) => {
-        const isActive = segment.id === activeSegmentId
-        return segment.kind === 'ad_break' ? (
-          <AdBreak
-            key={segment.id}
-            segment={segment}
-            offset={offset}
-            isActive={isActive}
-            onSeek={onSeekRequest}
+    <div className="relative">
+      <div className="flex items-center justify-end mb-3">
+        <label className="inline-flex items-center gap-2 text-xs text-gray-600 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={followPlayback}
+            onChange={(e) => setFollowPlayback(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
           />
-        ) : (
-          <ContentSegment
-            key={segment.id}
-            segment={segment}
-            offset={offset}
-            isActive={isActive}
-            onSeek={onSeekRequest}
-          />
-        )
-      })}
+          <span>Follow playback</span>
+        </label>
+      </div>
+
+      <div className="transcript-content leading-relaxed space-y-1.5">
+        {visibleSegments.map((segment) => {
+          const isActive = segment.id === activeSegmentId
+          return segment.kind === 'ad_break' ? (
+            <AdBreak
+              key={segment.id}
+              segment={segment}
+              offset={offset}
+              isActive={isActive}
+              onSeek={onSeekRequest}
+              registerRef={follow.registerRef(segment.id)}
+            />
+          ) : (
+            <ContentSegment
+              key={segment.id}
+              segment={segment}
+              offset={offset}
+              isActive={isActive}
+              onSeek={onSeekRequest}
+              registerRef={follow.registerRef(segment.id)}
+            />
+          )
+        })}
+      </div>
+
+      {followPlayback && follow.userScrolledAway && activeSegmentId != null && (
+        <button
+          type="button"
+          onClick={follow.resume}
+          className="fixed bottom-28 right-6 z-20 inline-flex items-center gap-2 rounded-full bg-primary-900 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+          Resume follow
+        </button>
+      )}
     </div>
   )
 }
