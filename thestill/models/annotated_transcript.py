@@ -34,13 +34,22 @@ guarantee that the two stay in sync.
 """
 
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set
 
 from pydantic import BaseModel, Field
 
 from thestill.models.transcript import Transcript
 
-SegmentKind = Literal["content", "filler", "ad_break"]
+# Segment kinds are open-ended tags describing what a span of the
+# transcript *is*, independent of how any given consumer chooses to
+# render it. ``content`` is the default narrative bucket; ``filler``
+# flags um/uh-style words the segmenter or cleaner wants dropped;
+# ``ad_break`` tags sponsor reads; ``music`` / ``intro`` / ``outro``
+# tag pre-/post-roll content that isn't the main discussion. Rendering
+# policy lives at the renderer / UI layer, not on the tag itself — the
+# canonical Markdown projection strips ads (so the summariser never
+# sees them), while the web viewer can toggle any kind on or off.
+SegmentKind = Literal["content", "filler", "ad_break", "music", "intro", "outro"]
 
 # Timecode granularity used by the legacy blended-Markdown formatter: one
 # speaker block gets a fresh [HH:MM:SS] stamp either on speaker change or
@@ -150,6 +159,7 @@ class AnnotatedTranscript(BaseModel):
         self,
         *,
         timecode_interval_seconds: float = _BLENDED_TIMECODE_INTERVAL_SECONDS,
+        exclude_kinds: Optional[Iterable[SegmentKind]] = None,
     ) -> str:
         """Render this transcript to the legacy blended-Markdown format.
 
@@ -158,10 +168,21 @@ class AnnotatedTranscript(BaseModel):
         summariser depends on during the transition (spec #18 §"Scope").
 
         Rules in addition to the legacy formatter's behaviour:
-        - ``kind="filler"`` segments are dropped entirely.
+        - ``kind="filler"`` segments are dropped entirely (silently, no
+          boundary — they merge into the surrounding speaker block).
         - ``kind="ad_break"`` segments flush any pending speaker block and
           emit the legacy ``**[TIMESTAMP] [AD BREAK]** - Sponsor`` marker.
+        - ``exclude_kinds`` segments (any kind you pass in) are skipped
+          entirely — their speaker block is flushed so the next rendered
+          segment stamps a fresh timecode. The canonical ads-stripped
+          projection used by the summariser passes
+          ``exclude_kinds={"ad_break"}``; the web viewer omits the filter
+          to display the full transcript.
+
+        ``filler`` cannot be added to ``exclude_kinds`` because it is
+        already dropped unconditionally; passing it is a no-op.
         """
+        skip_kinds: Set[SegmentKind] = set(exclude_kinds or ())
         lines: List[str] = []
         current_speaker: Optional[str] = None
         current_text: List[str] = []
@@ -200,6 +221,17 @@ class AnnotatedTranscript(BaseModel):
                 # before the next content block" — a content segment
                 # that follows a leading filler must stamp at its own
                 # start, not 0.0.
+                have_emitted = True
+                continue
+
+            if segment.kind in skip_kinds:
+                # An excluded kind behaves like a hard boundary: flush any
+                # pending speaker block so the next rendered segment gets
+                # a fresh timecode stamp, then drop the segment. Matches
+                # the "ad break flushes, then emits a marker" path, minus
+                # the marker emission.
+                flush_block()
+                current_speaker = None
                 have_emitted = True
                 continue
 

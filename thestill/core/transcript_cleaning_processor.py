@@ -27,7 +27,10 @@ Two Pass-2 pipelines coexist during the spec #18 transition window:
 - ``segmented`` — the structure-preserving pipeline of spec #18
   (``TranscriptSegmenter`` + ``SegmentedTranscriptCleaner``). Produces a
   JSON sidecar of per-segment cleaned text alongside the blended
-  Markdown render.
+  Markdown render. The JSON sidecar is canonical and preserves every
+  segment kind (including full ad text); the Markdown is an
+  ads-stripped projection fed to the summariser. Callers that want the
+  "with ads" view render from the JSON on demand.
 
 Which pipeline runs as the **primary** producer of
 ``clean_transcript_path`` is selected by ``THESTILL_CLEANUP_PIPELINE``
@@ -432,7 +435,13 @@ class TranscriptCleaningProcessor:
                 episode_facts=episode_facts,
                 language=language,
             )
-            return cleaned_annotated.to_blended_markdown(), cleaned_annotated
+            # Ads are tagged on the JSON sidecar (the canonical artefact)
+            # and stripped from the Markdown projection — the summariser
+            # has always read ads-free Markdown and continues to. The
+            # web viewer renders from the JSON when it wants the full
+            # transcript with ads visible.
+            markdown = cleaned_annotated.to_blended_markdown(exclude_kinds={"ad_break"})
+            return markdown, cleaned_annotated
 
         raise ValueError(f"unknown pipeline: {pipeline!r}")
 

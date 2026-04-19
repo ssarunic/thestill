@@ -367,6 +367,160 @@ class TestNonContentKinds:
         assert " - " not in rendered
 
 
+class TestExcludeKindsFilter:
+    """``exclude_kinds`` drops tagged segments while preserving the rest.
+
+    The canonical Markdown projection is ads-stripped (``exclude_kinds=
+    {"ad_break"}``). Other callers — notably the web viewer with ads
+    visible — render from JSON directly and don't touch this renderer,
+    but the filter is general enough to accept any kind the schema
+    supports.
+    """
+
+    def test_exclude_ad_break_drops_marker_and_text(self) -> None:
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=10.0, speaker="A", text="before"),
+                AnnotatedSegment(
+                    id=1,
+                    start=10.0,
+                    end=60.0,
+                    speaker=None,
+                    text="support for the show comes from acme",
+                    kind="ad_break",
+                    sponsor="Acme",
+                ),
+                AnnotatedSegment(id=2, start=60.0, end=70.0, speaker="A", text="after"),
+            ],
+        )
+
+        rendered = annotated.to_blended_markdown(exclude_kinds={"ad_break"})
+
+        assert "[AD BREAK]" not in rendered
+        assert "Acme" not in rendered
+        assert "support for the show" not in rendered
+        assert "before" in rendered
+        assert "after" in rendered
+
+    def test_exclude_ad_break_creates_block_boundary(self) -> None:
+        """A skipped ad break still breaks the surrounding speaker run —
+        the segment after the ad must stamp a fresh timecode rather than
+        merging into the pre-ad content block."""
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=10.0, speaker="A", text="before"),
+                AnnotatedSegment(
+                    id=1,
+                    start=10.0,
+                    end=60.0,
+                    speaker=None,
+                    text="ad copy",
+                    kind="ad_break",
+                ),
+                AnnotatedSegment(id=2, start=60.0, end=70.0, speaker="A", text="after"),
+            ],
+        )
+
+        rendered = annotated.to_blended_markdown(exclude_kinds={"ad_break"})
+
+        assert "[00:00] **A:** before" in rendered
+        assert "[01:00] **A:** after" in rendered
+
+    def test_default_exclude_kinds_preserves_legacy_ad_marker(self) -> None:
+        """Backward compat: when the caller omits ``exclude_kinds``, ad
+        breaks still emit the legacy marker they always did."""
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(
+                    id=0,
+                    start=10.0,
+                    end=60.0,
+                    speaker=None,
+                    text="ad copy",
+                    kind="ad_break",
+                    sponsor="Acme",
+                ),
+            ],
+        )
+
+        rendered = annotated.to_blended_markdown()
+
+        assert "**[00:10] [AD BREAK]** - Acme" in rendered
+
+    def test_exclude_multiple_kinds(self) -> None:
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=5.0, speaker="A", text="theme", kind="music"),
+                AnnotatedSegment(id=1, start=5.0, end=10.0, speaker="A", text="hello everyone", kind="intro"),
+                AnnotatedSegment(id=2, start=10.0, end=20.0, speaker="A", text="main topic"),
+            ],
+        )
+
+        rendered = annotated.to_blended_markdown(exclude_kinds={"music", "intro"})
+
+        assert "theme" not in rendered
+        assert "hello everyone" not in rendered
+        assert "main topic" in rendered
+
+    def test_exclude_empty_iterable_is_noop(self) -> None:
+        """Passing an empty set must behave identically to not passing the arg."""
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=5.0, speaker="A", text="hello"),
+                AnnotatedSegment(
+                    id=1,
+                    start=5.0,
+                    end=10.0,
+                    speaker=None,
+                    text="",
+                    kind="ad_break",
+                    sponsor="Acme",
+                ),
+            ],
+        )
+
+        assert annotated.to_blended_markdown(exclude_kinds=set()) == annotated.to_blended_markdown()
+
+
+class TestExtendedSegmentKinds:
+    """``music``/``intro``/``outro`` are accepted kinds that render as
+    speaker blocks by default — the UI / summariser feeds decide whether
+    to strip them via ``exclude_kinds``."""
+
+    def test_music_segment_renders_as_speaker_block(self) -> None:
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=5.0, speaker="A", text="theme plays", kind="music"),
+            ],
+        )
+
+        rendered = annotated.to_blended_markdown()
+
+        assert "**A:** theme plays" in rendered
+
+    def test_intro_and_outro_round_trip_through_the_schema(self) -> None:
+        """The Pydantic Literal accepts every extended kind the spec declares."""
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[
+                AnnotatedSegment(id=0, start=0.0, end=5.0, speaker="A", text="welcome", kind="intro"),
+                AnnotatedSegment(id=1, start=5.0, end=10.0, speaker="A", text="main"),
+                AnnotatedSegment(id=2, start=10.0, end=15.0, speaker="A", text="thanks for listening", kind="outro"),
+            ],
+        )
+
+        dumped = annotated.model_dump_json()
+        restored = AnnotatedTranscript.model_validate_json(dumped)
+
+        assert [s.kind for s in restored.segments] == ["intro", "content", "outro"]
+
+
 class TestLeadingNonContentSegments:
     """Regression: leading filler/ad_break must not force the first content
     block to ``[00:00]``. The legacy formatter left ``block_start_time``
