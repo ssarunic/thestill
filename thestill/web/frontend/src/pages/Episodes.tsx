@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useAllEpisodesInfinite } from '../hooks/useApi'
+import { useAllEpisodesInfinite, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import EpisodeCard from '../components/EpisodeCard'
 import EpisodeFilters from '../components/EpisodeFilters'
 import BulkActionsBar from '../components/BulkActionsBar'
@@ -76,6 +76,8 @@ export default function Episodes() {
   // Flatten all pages into a single episodes array
   const allEpisodes = data?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = data?.pages[0]?.total ?? 0
+
+  const processingByEpisodeId = useProcessingStageByEpisodeId()
 
   // Selection handlers
   const handleSelect = useCallback((episodeId: string, selected: boolean) => {
@@ -201,6 +203,7 @@ export default function Episodes() {
                 showPodcastName={true}
                 isSelected={selectedIds.has(episode.id)}
                 onSelect={handleSelect}
+                processingStage={processingByEpisodeId.get(episode.id)}
               />
             ))}
           </div>

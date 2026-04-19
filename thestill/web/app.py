@@ -156,7 +156,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         digest_repository=digest_repository,
     )
 
-    # Create task worker with handlers that have access to app_state
+    # Create task worker with handlers that have access to app_state.
+    # Each TaskStage gets its own poll loop + semaphore so slow stages
+    # (transcribe) don't starve fast ones (clean).
     task_handlers = create_task_handlers(app_state)
     task_worker = TaskWorker(
         queue_manager,
@@ -164,6 +166,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         progress_store=progress_store,
         repository=repository,
         parallel_jobs=config.parallel_jobs,
+        parallel_jobs_per_stage=config.get_parallel_jobs_per_stage(),
     )
     app_state.task_worker = task_worker
 

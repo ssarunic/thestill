@@ -117,7 +117,7 @@ A floating `<MiniPlayer />` renders inside `Layout` whenever
 instead calls `player.play(episode)`; a new inline "full player" view reads
 the same context so the two stay in sync trivially.
 
-**Pros**
+#### Pros
 
 - Persistence is free: the audio element is mounted once above `<Outlet />`
   and never touched on navigation.
@@ -131,7 +131,7 @@ the same context so the two stay in sync trivially.
 - Small diff: one new file (context+provider+mini-player can live together),
   one touched page, one deletion path for the current `AudioPlayer`.
 
-**Cons**
+#### Cons
 
 - Context value changes on every `timeupdate` event (~4 Hz) can re-render
   every consumer. Mitigations: split high-frequency state (`currentTime`,
@@ -144,11 +144,11 @@ the same context so the two stay in sync trivially.
 Render the `<audio>` element via `createPortal` so the node lives outside the
 route subtree.
 
-**Pros**
+#### Pros
 
 - Solves the unmount problem without introducing context.
 
-**Cons**
+#### Cons
 
 - Doesn't solve state sharing. A mini player on every page and a rich view on
   the episode page both need to read the same state, so we still need a
@@ -163,13 +163,13 @@ route subtree.
 A plain TypeScript module holds the `HTMLAudioElement` (or Howler instance)
 and exposes a pub/sub API; React components subscribe through a hook.
 
-**Pros**
+#### Pros
 
 - Fully decoupled from the React tree.
 - Easy to drive from non-React code (e.g., a hotkey handler, a service
   worker).
 
-**Cons**
+#### Cons
 
 - Functionally equivalent to Option A but bypasses React's ownership model.
 - StrictMode double-invocation and HMR need manual guards to avoid creating
@@ -186,11 +186,11 @@ cheap from Option A.
 
 Drop in a packaged player component.
 
-**Pros**
+#### Pros
 
 - Fast to ship.
 
-**Cons**
+#### Cons
 
 - Still needs to be mounted in `Layout` with shared state, i.e. still Option
   A underneath.

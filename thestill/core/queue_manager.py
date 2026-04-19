@@ -278,6 +278,13 @@ class QueueManager:
                 WHERE status = 'retry_scheduled'
             """
             )
+            # Per-stage polling: get_next_task(stage=X) runs 5×/poll-interval
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tasks_stage_status_priority
+                ON tasks(stage, status, priority DESC, created_at ASC)
+            """
+            )
 
             logger.debug("Tasks table ensured")
 
