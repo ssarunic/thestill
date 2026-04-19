@@ -353,6 +353,11 @@ export function useQueueTasks(completedLimit = 10) {
   })
 }
 
+export function useProcessingStageByEpisodeId(): Map<string, PipelineStage> {
+  const { data } = useQueueTasks()
+  return new Map(data?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? [])
+}
+
 export function useBumpQueueTask() {
   const queryClient = useQueryClient()
 

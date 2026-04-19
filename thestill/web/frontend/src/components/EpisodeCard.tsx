@@ -154,10 +154,7 @@ export default function EpisodeCard({
               </span>
             )}
             {processingStage && (
-              <span
-                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700"
-                title={stageLabels[processingStage]}
-              >
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
                 <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
                 {stageLabels[processingStage]}
               </span>

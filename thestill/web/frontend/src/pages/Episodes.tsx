@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useAllEpisodesInfinite, useQueueTasks } from '../hooks/useApi'
+import { useAllEpisodesInfinite, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import EpisodeCard from '../components/EpisodeCard'
 import EpisodeFilters from '../components/EpisodeFilters'
 import BulkActionsBar from '../components/BulkActionsBar'
-import type { EpisodeFilters as EpisodeFiltersType, EpisodeState, PipelineStage } from '../api/types'
+import type { EpisodeFilters as EpisodeFiltersType, EpisodeState } from '../api/types'
 
 export default function Episodes() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -77,14 +77,7 @@ export default function Episodes() {
   const allEpisodes = data?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = data?.pages[0]?.total ?? 0
 
-  const { data: queueData } = useQueueTasks()
-  const processingByEpisodeId = useMemo(
-    () =>
-      new Map<string, PipelineStage>(
-        queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
-      ),
-    [queueData]
-  )
+  const processingByEpisodeId = useProcessingStageByEpisodeId()
 
   // Selection handlers
   const handleSelect = useCallback((episodeId: string, selected: boolean) => {

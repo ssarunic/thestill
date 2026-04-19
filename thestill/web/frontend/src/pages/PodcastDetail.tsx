@@ -1,7 +1,6 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast, useQueueTasks } from '../hooks/useApi'
-import type { PipelineStage } from '../api/types'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
@@ -60,14 +59,7 @@ export default function PodcastDetail() {
   const allEpisodes = episodesData?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = episodesData?.pages[0]?.total ?? 0
 
-  const { data: queueData } = useQueueTasks()
-  const processingByEpisodeId = useMemo(
-    () =>
-      new Map<string, PipelineStage>(
-        queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
-      ),
-    [queueData]
-  )
+  const processingByEpisodeId = useProcessingStageByEpisodeId()
 
   if (podcastError) {
     return (
