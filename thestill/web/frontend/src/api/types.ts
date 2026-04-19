@@ -508,10 +508,20 @@ export interface QueuedTaskWithContext {
   next_retry_at: string | null
 }
 
+export interface StageWorkerStatus {
+  stage: PipelineStage
+  active: number // Currently processing
+  capacity: number // Max parallel jobs for this stage
+  pending: number // Tasks waiting for this stage
+  retry_scheduled: number // Tasks in backoff for this stage
+}
+
 export interface QueueTasksResponse {
   status: string
   timestamp: string
   worker_running: boolean
+  // Per-stage worker pools (pipeline order)
+  stages: StageWorkerStatus[]
   processing_tasks: QueuedTaskWithContext[]
   pending_tasks: QueuedTaskWithContext[]
   retry_scheduled_tasks: QueuedTaskWithContext[]

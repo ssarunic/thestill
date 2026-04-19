@@ -41,6 +41,7 @@ describing current phase and gates.
 | 12 | [whisperx-chunk-progress-tracking](12-whisperx-chunk-progress-tracking.md) | 🚧 Active development | Capture WhisperX stdout progress output and convert to real-time callbacks |
 | 18 | [segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) | 🚧 Active development | Per-segment cleanup with word timestamps preserved; prerequisite for richer media player |
 | 19 | [refresh-performance](19-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
+| 20 | [parallel-task-queues](20-parallel-task-queues.md) | 🚧 Active development | Per-stage worker pools so a slow transcribe task no longer blocks a fast clean task; stage-swimlane UI |
 
 ## Completed
 
