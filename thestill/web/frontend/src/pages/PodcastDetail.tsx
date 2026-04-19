@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast, useQueueTasks } from '../hooks/useApi'
 import type { PipelineStage } from '../api/types'
 import { useToast } from '../components/Toast'
@@ -60,11 +60,13 @@ export default function PodcastDetail() {
   const allEpisodes = episodesData?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = episodesData?.pages[0]?.total ?? 0
 
-  // Map of episode_id -> active pipeline stage from the task queue. Shared
-  // via React Query with the Queue page; no duplicate requests.
   const { data: queueData } = useQueueTasks()
-  const processingByEpisodeId = new Map<string, PipelineStage>(
-    queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
+  const processingByEpisodeId = useMemo(
+    () =>
+      new Map<string, PipelineStage>(
+        queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
+      ),
+    [queueData]
   )
 
   if (podcastError) {
@@ -240,18 +242,14 @@ export default function PodcastDetail() {
           </div>
         ) : (
           <div className="space-y-3">
-            {allEpisodes.map((episode, index) => {
-              const processingStage = processingByEpisodeId.get(episode.id)
-              return (
-                <EpisodeCard
-                  key={episode.external_id || index}
-                  episode={episode}
-                  podcastImageUrl={podcast?.image_url}
-                  isProcessing={processingStage !== undefined}
-                  processingStage={processingStage}
-                />
-              )
-            })}
+            {allEpisodes.map((episode, index) => (
+              <EpisodeCard
+                key={episode.external_id || index}
+                episode={episode}
+                podcastImageUrl={podcast?.image_url}
+                processingStage={processingByEpisodeId.get(episode.id)}
+              />
+            ))}
 
             {/* Load more trigger */}
             <div ref={loadMoreRef} className="py-4">

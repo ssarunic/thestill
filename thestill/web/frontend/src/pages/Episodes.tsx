@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAllEpisodesInfinite, useQueueTasks } from '../hooks/useApi'
 import EpisodeCard from '../components/EpisodeCard'
@@ -77,13 +77,13 @@ export default function Episodes() {
   const allEpisodes = data?.pages.flatMap((page) => page.episodes) ?? []
   const totalEpisodes = data?.pages[0]?.total ?? 0
 
-  // Map of episode_id -> active pipeline stage, sourced from the task queue.
-  // The hook polls /api/commands/queue/tasks (5s active, 15s idle) and is
-  // shared via React Query, so this does not duplicate requests when the
-  // Queue page is also open.
   const { data: queueData } = useQueueTasks()
-  const processingByEpisodeId = new Map<string, PipelineStage>(
-    queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
+  const processingByEpisodeId = useMemo(
+    () =>
+      new Map<string, PipelineStage>(
+        queueData?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? []
+      ),
+    [queueData]
   )
 
   // Selection handlers
@@ -203,20 +203,16 @@ export default function Episodes() {
       ) : (
         <>
           <div className="space-y-3">
-            {allEpisodes.map((episode) => {
-              const processingStage = processingByEpisodeId.get(episode.id)
-              return (
-                <EpisodeCard
-                  key={episode.id}
-                  episode={episode}
-                  showPodcastName={true}
-                  isSelected={selectedIds.has(episode.id)}
-                  onSelect={handleSelect}
-                  isProcessing={processingStage !== undefined}
-                  processingStage={processingStage}
-                />
-              )
-            })}
+            {allEpisodes.map((episode) => (
+              <EpisodeCard
+                key={episode.id}
+                episode={episode}
+                showPodcastName={true}
+                isSelected={selectedIds.has(episode.id)}
+                onSelect={handleSelect}
+                processingStage={processingByEpisodeId.get(episode.id)}
+              />
+            ))}
           </div>
 
           {/* Load more trigger */}

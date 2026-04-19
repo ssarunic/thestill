@@ -15,8 +15,6 @@ interface EpisodeCardProps {
   onSelect?: (episodeId: string, selected: boolean) => void
   // Artwork fallback (optional - use podcast image if episode has none)
   podcastImageUrl?: string | null
-  // Processing indicator (optional - true when an active queue task targets this episode)
-  isProcessing?: boolean
   processingStage?: PipelineStage
 }
 
@@ -74,7 +72,6 @@ export default function EpisodeCard({
   isSelected,
   onSelect,
   podcastImageUrl,
-  isProcessing = false,
   processingStage,
 }: EpisodeCardProps) {
   const [showFailureModal, setShowFailureModal] = useState(false)
@@ -156,14 +153,13 @@ export default function EpisodeCard({
                 {failureTypeLabels[episode.failure_type]}
               </span>
             )}
-            {/* Show processing badge when an active queue task targets this episode */}
-            {isProcessing && (
+            {processingStage && (
               <span
                 className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700"
-                title={processingStage ? `Pipeline stage: ${processingStage}` : 'Pipeline task in progress'}
+                title={stageLabels[processingStage]}
               >
                 <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
-                {processingStage ? stageLabels[processingStage] : 'Processing'}
+                {stageLabels[processingStage]}
               </span>
             )}
             {/* Always show state badge */}
