@@ -42,7 +42,7 @@ describing current phase and gates.
 | 18 | [segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) | 🚧 Active development | Per-segment cleanup with word timestamps preserved; prerequisite for richer media player |
 | 19 | [refresh-performance](19-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
 | 20 | [parallel-task-queues](20-parallel-task-queues.md) | 🚧 Active development | Per-stage worker pools so a slow transcribe task no longer blocks a fast clean task; stage-swimlane UI |
-| 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 📋 Planned (2026-04-19) | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
+| 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 🚧 Active development | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 
 ## Completed
 

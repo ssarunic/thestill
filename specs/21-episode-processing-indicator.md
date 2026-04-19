@@ -1,6 +1,6 @@
 # Episode Processing Indicator
 
-**Status**: 📋 Planned (2026-04-19)
+**Status**: 🚧 Active development
 **Created**: 2026-04-19
 **Updated**: 2026-04-19
 **Priority**: Low (UX polish; no functional gap)
