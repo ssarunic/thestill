@@ -1,9 +1,13 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import type { AnnotatedSegment, AnnotatedTranscriptDump } from '../api/types'
-import { getSpeakerColor } from '../utils/speakerColors'
+import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import { getSpeakerBorderColor, getSpeakerColor } from '../utils/speakerColors'
+import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 
 interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
+  // Enables active-segment highlighting when the player is on this episode.
+  episodeId?: string | null
 }
 
 function formatTimestamp(seconds: number): string {
@@ -15,10 +19,20 @@ function formatTimestamp(seconds: number): string {
   return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`
 }
 
-function AdBreak({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
+interface AdBreakProps {
+  segment: AnnotatedSegment
+  offset: number
+  isActive: boolean
+}
+
+const AdBreak = memo(function AdBreak({ segment, offset, isActive }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
+  const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
   return (
-    <div className="my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md">
+    <div
+      data-active={isActive ? 'true' : 'false'}
+      className={`my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md transition-shadow ${activeRing}`}
+    >
       <div className="flex items-center gap-3 text-amber-800">
         <span className="font-mono text-[11px] tabular-nums text-amber-700/80">
           {formatTimestamp(segment.start + offset)}
@@ -29,33 +43,80 @@ function AdBreak({ segment, offset }: { segment: AnnotatedSegment; offset: numbe
       </div>
     </div>
   )
+})
+
+interface ContentSegmentProps {
+  segment: AnnotatedSegment
+  offset: number
+  isActive: boolean
 }
 
-function ContentSegment({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
+const ContentSegment = memo(function ContentSegment({
+  segment,
+  offset,
+  isActive,
+}: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
+  const speakerText = getSpeakerColor(speaker)
+  const speakerBorder = getSpeakerBorderColor(speaker)
+  const containerActive = isActive
+    ? 'bg-primary-50/70 ring-1 ring-primary-100'
+    : 'hover:bg-gray-50/70'
+  const paragraphBorder = isActive ? speakerBorder : 'border-gray-200'
+  const paragraphAccent = isActive ? 'border-l-[3px]' : 'border-l-2'
+  const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   return (
-    <div className="group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3">
+    <div
+      data-active={isActive ? 'true' : 'false'}
+      className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive}`}
+    >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1.5">
-        <span className={`font-sans text-sm font-semibold tracking-tight ${getSpeakerColor(speaker)}`}>
+        <span className={`font-sans text-sm font-semibold tracking-tight ${speakerText}`}>
           {speaker}
         </span>
-        <span className="font-mono text-[11px] tabular-nums text-gray-400">
+        <span className={`font-mono text-[11px] tabular-nums ${timestampColor}`}>
           {formatTimestamp(segment.start + offset)}
         </span>
       </div>
-      <p className="text-gray-800 pl-4 border-l-2 border-gray-200 text-[15px] leading-[1.75] sm:text-[17px]">
+      <p
+        className={`text-gray-800 pl-4 ${paragraphAccent} ${paragraphBorder} text-[15px] leading-[1.75] sm:text-[17px]`}
+      >
         {segment.text}
       </p>
     </div>
   )
-}
+})
 
-export default function SegmentedTranscriptViewer({ transcript }: SegmentedTranscriptViewerProps) {
+export default function SegmentedTranscriptViewer({
+  transcript,
+  episodeId,
+}: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
   const visibleSegments = useMemo(
     () => transcript.segments.filter((seg) => seg.kind !== 'filler'),
     [transcript.segments],
   )
+
+  // Only listen to the playback tick when this episode is the one the
+  // player has loaded. Otherwise we'd rerender the viewer for every
+  // timeupdate of an unrelated episode.
+  const currentTime = usePlayerTime()
+  const { track } = usePlayer()
+  const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
+
+  const activeSegmentId = useMemo(() => {
+    if (!isCurrentEpisode) return null
+    // Search over the full (unfiltered) list so filler gaps don't make the
+    // highlight flicker, then map back to the nearest visible segment.
+    const idx = findActiveSegmentIndex(transcript.segments, currentTime, offset)
+    if (idx < 0) return null
+    for (let i = idx; i >= 0; i -= 1) {
+      if (transcript.segments[i].kind !== 'filler') {
+        return transcript.segments[i].id
+      }
+    }
+    return null
+  }, [isCurrentEpisode, transcript.segments, currentTime, offset])
 
   if (visibleSegments.length === 0) {
     return (
@@ -70,13 +131,14 @@ export default function SegmentedTranscriptViewer({ transcript }: SegmentedTrans
 
   return (
     <div className="transcript-content leading-relaxed space-y-1.5">
-      {visibleSegments.map((segment) =>
-        segment.kind === 'ad_break' ? (
-          <AdBreak key={segment.id} segment={segment} offset={offset} />
+      {visibleSegments.map((segment) => {
+        const isActive = segment.id === activeSegmentId
+        return segment.kind === 'ad_break' ? (
+          <AdBreak key={segment.id} segment={segment} offset={offset} isActive={isActive} />
         ) : (
-          <ContentSegment key={segment.id} segment={segment} offset={offset} />
-        ),
-      )}
+          <ContentSegment key={segment.id} segment={segment} offset={offset} isActive={isActive} />
+        )
+      })}
     </div>
   )
 }

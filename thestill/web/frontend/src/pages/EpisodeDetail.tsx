@@ -328,6 +328,7 @@ export default function EpisodeDetail() {
                 transcriptData={transcriptData}
                 transcriptLoading={transcriptLoading}
                 episodeState={episode?.state}
+                episodeId={episode?.id ?? null}
                 subTab={transcriptSubTab}
                 onSubTabChange={setTranscriptSubTab}
               />
@@ -352,6 +353,7 @@ interface TranscriptPanelProps {
   transcriptData: import('../api/types').ContentResponse | undefined
   transcriptLoading: boolean
   episodeState: string | undefined
+  episodeId: string | null
   subTab: TranscriptSubTab
   onSubTabChange: (next: TranscriptSubTab) => void
 }
@@ -360,6 +362,7 @@ function TranscriptPanel({
   transcriptData,
   transcriptLoading,
   episodeState,
+  episodeId,
   subTab,
   onSubTabChange,
 }: TranscriptPanelProps) {
@@ -410,7 +413,10 @@ function TranscriptPanel({
       )}
 
       {effectiveSubTab === 'segmented' && transcriptData?.segments ? (
-        <SegmentedTranscriptViewer transcript={transcriptData.segments} />
+        <SegmentedTranscriptViewer
+          transcript={transcriptData.segments}
+          episodeId={episodeId}
+        />
       ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
         <TranscriptViewer
           content={transcriptData.shadow.content}
