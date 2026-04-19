@@ -41,6 +41,7 @@ describing current phase and gates.
 | 12 | [whisperx-chunk-progress-tracking](12-whisperx-chunk-progress-tracking.md) | 🚧 Active development | Capture WhisperX stdout progress output and convert to real-time callbacks |
 | 18 | [segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) | 🚧 Active development | Per-segment cleanup with word timestamps preserved; prerequisite for richer media player |
 | 19 | [refresh-performance](19-refresh-performance.md) | 🚧 Active development | Profile `thestill refresh`, parallelize feed fetching, add conditional GET, design automated scheduler |
+| 20 | [floating-media-player](20-floating-media-player.md) | 📋 Planned (2026-04-19) | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
 
 ## Completed
 
