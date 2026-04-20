@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { AnnotatedSegment, AnnotatedTranscriptDump, SegmentKind } from '../api/types'
 import { getSpeakerColor } from '../utils/speakerColors'
 
@@ -6,10 +6,6 @@ interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
 }
 
-// Kinds the reader can toggle. `filler` carries no text and exists in
-// the JSON only as a source anchor — it is never rendered. `content`
-// is always shown (hiding it would leave an empty page). Every other
-// kind gets a toggle pill.
 type TogglableKind = Exclude<SegmentKind, 'filler' | 'content'>
 
 const TOGGLE_ORDER: TogglableKind[] = ['ad_break', 'music', 'intro', 'outro']
@@ -21,9 +17,8 @@ const KIND_LABELS: Record<TogglableKind, string> = {
   outro: 'Outro',
 }
 
-// Persist reader preference across episodes so the choice survives
-// navigation. One global key — not per-episode — matches how readers
-// use the site ("I never want to see ads").
+// One global preference, not per-episode: matches how readers use the
+// site ("I never want to see ads").
 const HIDDEN_KINDS_STORAGE_KEY = 'thestill:transcriptViewer:hiddenKinds'
 
 function loadHiddenKinds(): Set<TogglableKind> {
@@ -33,10 +28,11 @@ function loadHiddenKinds(): Set<TogglableKind> {
     if (!raw) return new Set()
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return new Set()
-    const valid = parsed.filter((value): value is TogglableKind =>
-      typeof value === 'string' && (TOGGLE_ORDER as string[]).includes(value),
+    return new Set(
+      parsed.filter((value): value is TogglableKind =>
+        typeof value === 'string' && (TOGGLE_ORDER as string[]).includes(value),
+      ),
     )
-    return new Set(valid)
   } catch {
     return new Set()
   }
@@ -61,39 +57,30 @@ function formatTimestamp(seconds: number): string {
   return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`
 }
 
-function AdBreakSegment({ segment, offset }: { segment: AnnotatedSegment; offset: number }) {
-  const suffix = segment.sponsor ? ` — ${segment.sponsor}` : ''
-  return (
-    <div
-      data-testid={`segment-ad_break-${segment.id}`}
-      className="my-4 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 rounded-r"
-    >
-      <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
-        <span className="font-mono text-xs">[{formatTimestamp(segment.start + offset)}]</span>
-        <span>Ad break{suffix}</span>
-      </div>
-      {segment.text ? (
-        <p className="text-gray-800 mt-2 text-base leading-[1.7] whitespace-pre-wrap">{segment.text}</p>
-      ) : null}
-    </div>
-  )
+const BLOCK_STYLES: Record<TogglableKind, { border: string; bg: string; text: string }> = {
+  ad_break: { border: 'border-amber-400', bg: 'bg-amber-50', text: 'text-amber-800' },
+  music: { border: 'border-slate-300', bg: 'bg-slate-50', text: 'text-slate-700' },
+  intro: { border: 'border-slate-300', bg: 'bg-slate-50', text: 'text-slate-700' },
+  outro: { border: 'border-slate-300', bg: 'bg-slate-50', text: 'text-slate-700' },
 }
 
-function TaggedSegment({
+function BlockSegment({
   segment,
   offset,
-  label,
+  kind,
 }: {
   segment: AnnotatedSegment
   offset: number
-  label: string
+  kind: TogglableKind
 }) {
+  const { border, bg, text } = BLOCK_STYLES[kind]
+  const label = kind === 'ad_break' ? `Ad break${segment.sponsor ? ` — ${segment.sponsor}` : ''}` : KIND_LABELS[kind]
   return (
     <div
-      data-testid={`segment-${segment.kind}-${segment.id}`}
-      className="my-4 border-l-4 border-slate-300 bg-slate-50 px-4 py-3 rounded-r"
+      data-testid={`segment-${kind}-${segment.id}`}
+      className={`my-4 border-l-4 ${border} ${bg} px-4 py-3 rounded-r`}
     >
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+      <div className={`flex items-center gap-2 text-sm font-medium ${text}`}>
         <span className="font-mono text-xs">[{formatTimestamp(segment.start + offset)}]</span>
         <span>{label}</span>
       </div>
@@ -122,24 +109,11 @@ function ContentSegment({ segment, offset }: { segment: AnnotatedSegment; offset
 }
 
 function renderSegment(segment: AnnotatedSegment, offset: number) {
-  switch (segment.kind) {
-    case 'ad_break':
-      return <AdBreakSegment key={segment.id} segment={segment} offset={offset} />
-    case 'music':
-      return <TaggedSegment key={segment.id} segment={segment} offset={offset} label="Music" />
-    case 'intro':
-      return <TaggedSegment key={segment.id} segment={segment} offset={offset} label="Intro" />
-    case 'outro':
-      return <TaggedSegment key={segment.id} segment={segment} offset={offset} label="Outro" />
-    case 'filler':
-      // Defensive fallthrough — filler should already be filtered out
-      // before this function runs. Returning null keeps React happy
-      // without disturbing sibling keys.
-      return null
-    case 'content':
-    default:
-      return <ContentSegment key={segment.id} segment={segment} offset={offset} />
+  if (segment.kind === 'filler') return null
+  if (segment.kind === 'content') {
+    return <ContentSegment key={segment.id} segment={segment} offset={offset} />
   }
+  return <BlockSegment key={segment.id} segment={segment} offset={offset} kind={segment.kind} />
 }
 
 interface ToggleBarProps {
@@ -183,40 +157,31 @@ function ToggleBar({ presentKinds, hiddenKinds, onToggle }: ToggleBarProps) {
 export default function SegmentedTranscriptViewer({ transcript }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
 
-  const [hiddenKinds, setHiddenKinds] = useState<Set<TogglableKind>>(() => loadHiddenKinds())
+  const [hiddenKinds, setHiddenKinds] = useState<Set<TogglableKind>>(loadHiddenKinds)
 
-  useEffect(() => {
-    saveHiddenKinds(hiddenKinds)
-  }, [hiddenKinds])
-
-  const presentKinds = useMemo(() => {
+  const { presentKinds, visibleSegments } = useMemo(() => {
     const present = new Set<TogglableKind>()
+    const visible: AnnotatedSegment[] = []
     for (const seg of transcript.segments) {
-      if ((TOGGLE_ORDER as string[]).includes(seg.kind)) {
+      if (seg.kind === 'filler') continue
+      if (seg.kind !== 'content') {
         present.add(seg.kind as TogglableKind)
+        if (hiddenKinds.has(seg.kind as TogglableKind)) continue
       }
+      visible.push(seg)
     }
-    return TOGGLE_ORDER.filter((kind) => present.has(kind))
-  }, [transcript.segments])
-
-  const visibleSegments = useMemo(
-    () =>
-      transcript.segments.filter((seg) => {
-        if (seg.kind === 'filler') return false
-        if (seg.kind === 'content') return true
-        return !hiddenKinds.has(seg.kind as TogglableKind)
-      }),
-    [transcript.segments, hiddenKinds],
-  )
+    return {
+      presentKinds: TOGGLE_ORDER.filter((kind) => present.has(kind)),
+      visibleSegments: visible,
+    }
+  }, [transcript.segments, hiddenKinds])
 
   const toggleKind = (kind: TogglableKind) => {
     setHiddenKinds((prev) => {
       const next = new Set(prev)
-      if (next.has(kind)) {
-        next.delete(kind)
-      } else {
-        next.add(kind)
-      }
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      saveHiddenKinds(next)
       return next
     })
   }

@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.annotated_transcript import AnnotatedTranscript
+from ..models.annotated_transcript import AnnotatedTranscript, SegmentKind
 from ..models.transcript import Transcript
 from ..utils.console import ConsoleOutput
 from ..utils.path_manager import CleanupPipelineName
@@ -67,6 +67,13 @@ logger = get_logger(__name__)
 # these constants give call sites string values that match the Literal.
 _PRIMARY_SEGMENTED: CleanupPipelineName = "segmented"
 _PRIMARY_LEGACY: CleanupPipelineName = "legacy"
+
+# Kinds stripped from the canonical blended-Markdown projection that
+# feeds the summariser. The JSON sidecar always carries every kind
+# (including full ad text) — the web viewer filters for display
+# instead. Adding a kind here is the one edit required when a new
+# kind should be hidden from summarisation.
+_ADS_STRIPPED_KINDS: frozenset[SegmentKind] = frozenset({"ad_break"})
 
 
 class TranscriptCleaningProcessor:
@@ -440,7 +447,7 @@ class TranscriptCleaningProcessor:
             # has always read ads-free Markdown and continues to. The
             # web viewer renders from the JSON when it wants the full
             # transcript with ads visible.
-            markdown = cleaned_annotated.to_blended_markdown(exclude_kinds={"ad_break"})
+            markdown = cleaned_annotated.to_blended_markdown(exclude_kinds=_ADS_STRIPPED_KINDS)
             return markdown, cleaned_annotated
 
         raise ValueError(f"unknown pipeline: {pipeline!r}")
