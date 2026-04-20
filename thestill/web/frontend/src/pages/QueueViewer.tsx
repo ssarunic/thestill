@@ -400,6 +400,27 @@ export default function QueueViewer() {
   const totalCapacity = orderedStages.reduce((sum, s) => sum + s.capacity, 0)
   const totalActive = orderedStages.reduce((sum, s) => sum + s.active, 0)
 
+  // Stages advance sequentially, so collapse to the latest stage reached per episode.
+  const stageRank: Record<PipelineStage, number> = {
+    download: 0,
+    downsample: 1,
+    transcribe: 2,
+    clean: 3,
+    summarize: 4,
+  }
+  const latestCompletedByEpisode = new Map<string, QueuedTaskWithContext>()
+  for (const task of completed_tasks) {
+    const existing = latestCompletedByEpisode.get(task.episode_id)
+    if (!existing || stageRank[task.stage] > stageRank[existing.stage]) {
+      latestCompletedByEpisode.set(task.episode_id, task)
+    }
+  }
+  const collapsedCompletedTasks = Array.from(latestCompletedByEpisode.values()).sort((a, b) => {
+    const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0
+    const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0
+    return bTime - aTime
+  })
+
   const isQueueIdle = activeLanes.length === 0 && retry_scheduled_count === 0
 
   return (
@@ -494,15 +515,15 @@ export default function QueueViewer() {
         </div>
       )}
 
-      {/* Recently Completed */}
-      {completed_tasks.length > 0 && (
+      {/* Recently Completed — one row per episode, showing the latest stage reached */}
+      {collapsedCompletedTasks.length > 0 && (
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-3">
-            Recently Completed ({completed_shown})
+            Recently Completed ({collapsedCompletedTasks.length})
           </h2>
           <div className="space-y-3">
-            {completed_tasks.map((task) => (
-              <TaskCard key={task.task_id} task={task} />
+            {collapsedCompletedTasks.map((task) => (
+              <TaskCard key={task.episode_id} task={task} />
             ))}
           </div>
         </div>
