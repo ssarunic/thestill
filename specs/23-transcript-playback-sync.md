@@ -1,8 +1,8 @@
 # Transcript Playback Sync — Highlight, Auto-scroll, Click-to-seek
 
-**Status**: 🚧 Active development
+**Status**: ✅ Complete
 **Created**: 2026-04-19
-**Updated**: 2026-04-19
+**Updated**: 2026-04-20
 **Priority**: Medium (UX quality-of-life, builds on specs #18 and #22)
 
 ## Overview
