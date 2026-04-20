@@ -19,13 +19,20 @@ export interface PlayerTrack {
   durationHint?: number | null
 }
 
+export interface PlayOptions {
+  // Start playback at this offset in seconds. For a new track we defer
+  // the seek until the audio element reports metadata (duration) is
+  // available; browsers silently clamp seeks on unloaded media.
+  startAt?: number
+}
+
 interface PlayerContextValue {
   track: PlayerTrack | null
   isPlaying: boolean
   isLoading: boolean
   duration: number
   playbackRate: number
-  play: (track: PlayerTrack) => void
+  play: (track: PlayerTrack, options?: PlayOptions) => void
   pause: () => void
   resume: () => void
   toggle: () => void
@@ -42,6 +49,7 @@ const PlayerTimeContext = createContext<number>(0)
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const trackRef = useRef<PlayerTrack | null>(null)
+  const pendingSeekRef = useRef<number | null>(null)
   const [track, setTrack] = useState<PlayerTrack | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -49,11 +57,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
 
-  const play = useCallback((next: PlayerTrack) => {
+  const play = useCallback((next: PlayerTrack, options?: PlayOptions) => {
     const audio = audioRef.current
     if (!audio) return
     const current = trackRef.current
     if (current && current.episodeId === next.episodeId) {
+      if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
+        audio.currentTime = Math.max(0, options.startAt)
+      }
       // Same episode — just resume. Still inside user-gesture stack.
       audio.play().catch(() => setIsPlaying(false))
       return
@@ -63,6 +74,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // Safari/iOS reject it as autoplay (NotAllowedError).
     audio.src = next.audioUrl
     trackRef.current = next
+    pendingSeekRef.current =
+      options?.startAt !== undefined && Number.isFinite(options.startAt)
+        ? Math.max(0, options.startAt)
+        : null
     setTrack(next)
     setCurrentTime(0)
     setDuration(next.durationHint ?? 0)
@@ -182,6 +197,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onWaiting={() => setIsLoading(true)}
         onCanPlay={() => setIsLoading(false)}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => {
+          if (pendingSeekRef.current != null) {
+            e.currentTarget.currentTime = pendingSeekRef.current
+            pendingSeekRef.current = null
+          }
+        }}
         onDurationChange={(e) => {
           const d = e.currentTarget.duration
           if (Number.isFinite(d)) setDuration(d)

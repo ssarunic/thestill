@@ -21,10 +21,27 @@ const FALLBACK_COLORS = [
   'text-red-700',
 ]
 
+// Border variants aligned with the text palette above. Used as the
+// left-accent colour on the active segment so the highlight visually
+// ties back to the speaker label.
+const BORDER_FOR_TEXT: Record<string, string> = {
+  'text-blue-700': 'border-blue-500',
+  'text-purple-700': 'border-purple-500',
+  'text-green-700': 'border-green-500',
+  'text-orange-700': 'border-orange-500',
+  'text-pink-700': 'border-pink-500',
+  'text-indigo-700': 'border-indigo-500',
+  'text-red-700': 'border-red-500',
+}
+
 export function getSpeakerColor(speaker: string): string {
   if (speakerColors[speaker]) return speakerColors[speaker]
   // Consistent hash-based fallback so named speakers (e.g. "Lenny
   // Rachitsky") keep the same colour across renders.
   const hash = speaker.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
   return FALLBACK_COLORS[hash % FALLBACK_COLORS.length]
+}
+
+export function getSpeakerBorderColor(speaker: string): string {
+  return BORDER_FOR_TEXT[getSpeakerColor(speaker)] ?? 'border-primary-500'
 }
