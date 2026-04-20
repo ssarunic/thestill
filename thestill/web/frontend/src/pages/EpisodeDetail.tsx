@@ -54,6 +54,32 @@ export default function EpisodeDetail() {
   // Reading position persistence - auto-restores when episode ID is available
   useReadingPosition(episodeData?.episode?.id)
 
+  const episode = episodeData?.episode
+  const handleSegmentSeek = useCallback(
+    (seconds: number) => {
+      if (!episode) return
+      if (player.isCurrent(episode.id)) {
+        player.seek(seconds)
+        if (!player.isPlaying) player.resume()
+        return
+      }
+      player.play(
+        {
+          episodeId: episode.id,
+          podcastSlug: podcastSlug!,
+          episodeSlug: episodeSlug!,
+          title: episode.title,
+          podcastTitle: episode.podcast_title,
+          audioUrl: episode.audio_url,
+          artworkUrl: episode.image_url ?? episode.podcast_image_url,
+          durationHint: episode.duration,
+        },
+        { startAt: seconds },
+      )
+    },
+    [episode, podcastSlug, episodeSlug, player],
+  )
+
   // Handle task completion - refresh relevant data
   const handleTaskComplete = useCallback((stage: PipelineStage) => {
     // Always refresh episode data to get updated state
@@ -83,8 +109,6 @@ export default function EpisodeDetail() {
       </div>
     )
   }
-
-  const episode = episodeData?.episode
 
   return (
     <div className="space-y-6">
@@ -328,6 +352,8 @@ export default function EpisodeDetail() {
                 transcriptData={transcriptData}
                 transcriptLoading={transcriptLoading}
                 episodeState={episode?.state}
+                episodeId={episode?.id ?? null}
+                onSegmentSeek={handleSegmentSeek}
                 subTab={transcriptSubTab}
                 onSubTabChange={setTranscriptSubTab}
               />
@@ -352,6 +378,8 @@ interface TranscriptPanelProps {
   transcriptData: import('../api/types').ContentResponse | undefined
   transcriptLoading: boolean
   episodeState: string | undefined
+  episodeId: string | null
+  onSegmentSeek: (seconds: number) => void
   subTab: TranscriptSubTab
   onSubTabChange: (next: TranscriptSubTab) => void
 }
@@ -360,6 +388,8 @@ function TranscriptPanel({
   transcriptData,
   transcriptLoading,
   episodeState,
+  episodeId,
+  onSegmentSeek,
   subTab,
   onSubTabChange,
 }: TranscriptPanelProps) {
@@ -410,7 +440,11 @@ function TranscriptPanel({
       )}
 
       {effectiveSubTab === 'segmented' && transcriptData?.segments ? (
-        <SegmentedTranscriptViewer transcript={transcriptData.segments} />
+        <SegmentedTranscriptViewer
+          transcript={transcriptData.segments}
+          episodeId={episodeId}
+          onSeekRequest={onSegmentSeek}
+        />
       ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
         <TranscriptViewer
           content={transcriptData.shadow.content}
