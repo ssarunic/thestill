@@ -4,7 +4,6 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
 } from 'react'
@@ -46,15 +45,6 @@ function handleActivationKey(event: KeyboardEvent<HTMLDivElement>, onActivate: (
     event.preventDefault()
     onActivate()
   }
-}
-
-// Don't hijack keyboard shortcuts while the user is typing. Exported so
-// the keydown effect and any future handlers share the same rules.
-function isTypingTarget(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false
-  if (el.isContentEditable) return true
-  const tag = el.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
 type SeekableProps = Pick<
@@ -132,7 +122,6 @@ interface AdBreakProps {
   onCopyTimestamp: (seconds: number) => void
   searchQuery: string
   dimmed: boolean
-  segmentIndex: number
 }
 
 const AdBreak = memo(function AdBreak({
@@ -144,12 +133,11 @@ const AdBreak = memo(function AdBreak({
   onCopyTimestamp,
   searchQuery,
   dimmed,
-  segmentIndex,
 }: AdBreakProps) {
   const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
   const absoluteSeconds = segment.start + offset
   const activeRing = isActive ? 'ring-2 ring-amber-400/70 shadow-sm' : ''
-  const dimClass = dimmed ? 'opacity-40' : ''
+  const dimClass = dimmed ? 'opacity-70' : ''
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ad break${sponsor}`,
     onSeek,
@@ -163,7 +151,6 @@ const AdBreak = memo(function AdBreak({
       {...interactive}
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
-      data-segment-index={segmentIndex}
       className={`my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
     >
       <div className="flex items-center gap-3 text-amber-800">
@@ -190,7 +177,6 @@ interface ContentSegmentProps {
   searchQuery: string
   dimmed: boolean
   isFiller: boolean
-  segmentIndex: number
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -203,7 +189,6 @@ const ContentSegment = memo(function ContentSegment({
   searchQuery,
   dimmed,
   isFiller,
-  segmentIndex,
 }: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
   const absoluteSeconds = segment.start + offset
@@ -215,7 +200,7 @@ const ContentSegment = memo(function ContentSegment({
   const paragraphBorder = isActive ? speakerBorder : 'border-gray-200'
   const paragraphAccent = isActive ? 'border-l-[3px]' : 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
-  const dimClass = dimmed ? 'opacity-40' : ''
+  const dimClass = dimmed ? 'opacity-70' : ''
   const bodyClass = isFiller ? 'text-gray-500 italic' : 'text-gray-800'
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ${speaker}`,
@@ -231,7 +216,6 @@ const ContentSegment = memo(function ContentSegment({
       ref={registerRef}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
-      data-segment-index={segmentIndex}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1.5">
@@ -258,6 +242,12 @@ const ContentSegment = memo(function ContentSegment({
   )
 })
 
+// Rows are either a normal segment render or a placeholder for a run of
+// non-matching segments collapsed under a single "N hidden" pill.
+type RenderRow =
+  | { type: 'segment'; segment: AnnotatedSegment; expandedFromHidden: boolean }
+  | { type: 'hidden'; firstId: number; count: number }
+
 export default function SegmentedTranscriptViewer({
   transcript,
   episodeId,
@@ -268,9 +258,10 @@ export default function SegmentedTranscriptViewer({
   const [showFiller, setShowFiller] = usePersistedBoolean(SHOW_FILLER_STORAGE_KEY, false)
   const [searchInput, setSearchInput] = useState('')
   const searchQuery = useDeferredValue(searchInput.trim())
-  const [showHelp, setShowHelp] = useState(false)
-  const listRef = useRef<HTMLDivElement | null>(null)
-  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0)
+  const [expandedHiddenGroups, setExpandedHiddenGroups] = useState<Set<number>>(
+    () => new Set(),
+  )
   const { showToast } = useToast()
 
   const renderedSegments = useMemo(
@@ -328,93 +319,91 @@ export default function SegmentedTranscriptViewer({
     !!onSeekRequest && transcript.segments.length > 0,
   )
 
-  const matchingIds = useMemo(() => {
-    if (!searchQuery) return null
+  const { matchingIds, matchOrder } = useMemo(() => {
+    if (!searchQuery) return { matchingIds: null as Set<number> | null, matchOrder: [] as number[] }
     const needle = searchQuery.toLowerCase()
-    const set = new Set<number>()
+    const ids = new Set<number>()
+    const order: number[] = []
     for (const seg of renderedSegments) {
-      if (seg.text.toLowerCase().includes(needle)) set.add(seg.id)
-      else if (seg.sponsor && seg.sponsor.toLowerCase().includes(needle)) set.add(seg.id)
-      else if (seg.speaker && seg.speaker.toLowerCase().includes(needle)) set.add(seg.id)
+      const hit =
+        seg.text.toLowerCase().includes(needle) ||
+        (seg.sponsor?.toLowerCase().includes(needle) ?? false) ||
+        (seg.speaker?.toLowerCase().includes(needle) ?? false)
+      if (hit) {
+        ids.add(seg.id)
+        order.push(seg.id)
+      }
     }
-    return set
+    return { matchingIds: ids, matchOrder: order }
   }, [searchQuery, renderedSegments])
 
-  const matchCount = matchingIds?.size ?? 0
-
+  // Reset nav + expand state when the match set changes.
   useEffect(() => {
-    const focusSegmentAt = (nextIndex: number) => {
-      const list = listRef.current
-      if (!list) return
-      const max = renderedSegments.length - 1
-      const clamped = Math.min(max, Math.max(0, nextIndex))
-      const node = list.querySelector<HTMLElement>(`[data-segment-index="${clamped}"]`)
-      if (node) {
-        node.focus({ preventScroll: true })
-        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-        node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+    setCurrentMatchIndex(0)
+    setExpandedHiddenGroups(new Set())
+  }, [searchQuery])
+
+  // Scroll the first match into view when a fresh search has results.
+  useEffect(() => {
+    if (!searchQuery || matchOrder.length === 0) return
+    follow.scrollToKey(matchOrder[0])
+    // follow is stable from useAutoScrollFollow; intentionally exclude.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, matchOrder])
+
+  const goToMatch = useCallback(
+    (delta: number) => {
+      if (matchOrder.length === 0) return
+      setCurrentMatchIndex((prev) => {
+        const next = (prev + delta + matchOrder.length) % matchOrder.length
+        follow.scrollToKey(matchOrder[next])
+        return next
+      })
+    },
+    [matchOrder, follow],
+  )
+
+  const expandHiddenGroup = useCallback((firstId: number) => {
+    setExpandedHiddenGroups((prev) => {
+      const next = new Set(prev)
+      next.add(firstId)
+      return next
+    })
+  }, [])
+
+  const renderRows = useMemo<RenderRow[]>(() => {
+    if (!matchingIds) {
+      return renderedSegments.map((segment) => ({
+        type: 'segment',
+        segment,
+        expandedFromHidden: false,
+      }))
+    }
+    const rows: RenderRow[] = []
+    let hidden: AnnotatedSegment[] = []
+    const flushHidden = () => {
+      if (hidden.length === 0) return
+      const firstId = hidden[0].id
+      if (expandedHiddenGroups.has(firstId)) {
+        for (const seg of hidden) {
+          rows.push({ type: 'segment', segment: seg, expandedFromHidden: true })
+        }
+      } else {
+        rows.push({ type: 'hidden', firstId, count: hidden.length })
+      }
+      hidden = []
+    }
+    for (const seg of renderedSegments) {
+      if (matchingIds.has(seg.id)) {
+        flushHidden()
+        rows.push({ type: 'segment', segment: seg, expandedFromHidden: false })
+      } else {
+        hidden.push(seg)
       }
     }
-    const currentFocusIndex = () => {
-      const el = document.activeElement
-      if (!(el instanceof HTMLElement)) return -1
-      const idx = el.getAttribute('data-segment-index')
-      return idx == null ? -1 : Number(idx)
-    }
-    const handler = (e: KeyboardEvent | globalThis.KeyboardEvent) => {
-      // '/' focuses search even from outside the list, as long as we're
-      // not already typing somewhere.
-      if (e.key === '/' && !isTypingTarget(e.target)) {
-        e.preventDefault()
-        searchInputRef.current?.focus()
-        searchInputRef.current?.select()
-        return
-      }
-      if (e.key === '?' && !isTypingTarget(e.target)) {
-        e.preventDefault()
-        setShowHelp((prev) => !prev)
-        return
-      }
-      if (e.key === 'Escape') {
-        if (showHelp) {
-          setShowHelp(false)
-          return
-        }
-        if (document.activeElement === searchInputRef.current && searchInput) {
-          setSearchInput('')
-          return
-        }
-      }
-      if (isTypingTarget(e.target)) return
-      if (e.key === 'j' || e.key === 'ArrowDown') {
-        const from = currentFocusIndex()
-        if (from === -1) {
-          focusSegmentAt(0)
-        } else {
-          focusSegmentAt(from + 1)
-        }
-        e.preventDefault()
-        return
-      }
-      if (e.key === 'k' || e.key === 'ArrowUp') {
-        const from = currentFocusIndex()
-        if (from === -1) {
-          focusSegmentAt(0)
-        } else {
-          focusSegmentAt(from - 1)
-        }
-        e.preventDefault()
-        return
-      }
-      if (e.key === 'f') {
-        setFollowPlayback(!followPlayback)
-        e.preventDefault()
-        return
-      }
-    }
-    window.addEventListener('keydown', handler as (e: globalThis.KeyboardEvent) => void)
-    return () => window.removeEventListener('keydown', handler as (e: globalThis.KeyboardEvent) => void)
-  }, [renderedSegments.length, followPlayback, setFollowPlayback, showHelp, searchInput])
+    flushHidden()
+    return rows
+  }, [matchingIds, renderedSegments, expandedHiddenGroups])
 
   if (transcript.segments.length === 0) {
     return (
@@ -441,16 +430,15 @@ export default function SegmentedTranscriptViewer({
 
   return (
     <div className="relative">
-      <div className="flex flex-wrap items-center gap-3 mb-3">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2 mb-3 bg-white border-b border-gray-100 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="relative flex-1 min-w-[180px]">
           <input
-            ref={searchInputRef}
             type="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search transcript (press /)"
+            placeholder="Search transcript…"
             aria-label="Search transcript"
-            className="w-full rounded-md border border-gray-200 bg-white pl-8 pr-10 py-1.5 text-sm placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+            className="w-full rounded-md border border-gray-200 bg-white pl-8 pr-3 py-1.5 text-sm placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
           />
           <svg
             className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
@@ -461,12 +449,38 @@ export default function SegmentedTranscriptViewer({
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
           </svg>
-          {searchQuery && (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-mono tabular-nums text-gray-400">
-              {matchCount}
-            </span>
-          )}
         </div>
+        {searchQuery && (
+          <div className="inline-flex items-center gap-1 text-xs text-gray-600">
+            <span className="font-mono tabular-nums min-w-[3.5rem] text-right">
+              {matchOrder.length === 0
+                ? 'No matches'
+                : `${currentMatchIndex + 1} / ${matchOrder.length}`}
+            </span>
+            <button
+              type="button"
+              onClick={() => goToMatch(-1)}
+              disabled={matchOrder.length === 0}
+              aria-label="Previous match"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => goToMatch(1)}
+              disabled={matchOrder.length === 0}
+              aria-label="Next match"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          </div>
+        )}
         <label className="inline-flex items-center gap-2 text-xs text-gray-600 select-none cursor-pointer">
           <input
             type="checkbox"
@@ -485,21 +499,30 @@ export default function SegmentedTranscriptViewer({
           />
           <span>Follow playback</span>
         </label>
-        <button
-          type="button"
-          onClick={() => setShowHelp(true)}
-          className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2 decoration-dotted"
-          aria-label="Show keyboard shortcuts"
-          title="Keyboard shortcuts (?)"
-        >
-          ?
-        </button>
       </div>
 
-      <div ref={listRef} className="transcript-content leading-relaxed space-y-1.5">
-        {renderedSegments.map((segment, index) => {
+      <div className="transcript-content leading-relaxed space-y-1.5">
+        {renderRows.map((row) => {
+          if (row.type === 'hidden') {
+            return (
+              <button
+                key={`hidden-${row.firstId}`}
+                type="button"
+                onClick={() => expandHiddenGroup(row.firstId)}
+                className="my-2 w-full inline-flex items-center justify-center gap-2 rounded-md border border-dashed border-gray-200 bg-gray-50/60 py-1.5 px-3 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                <span>
+                  {row.count} segment{row.count === 1 ? '' : 's'} hidden
+                </span>
+                <span className="opacity-60">· Click to show</span>
+              </button>
+            )
+          }
+          const { segment, expandedFromHidden } = row
           const isActive = segment.id === activeSegmentId
-          const dimmed = !!matchingIds && !matchingIds.has(segment.id)
           return segment.kind === 'ad_break' ? (
             <AdBreak
               key={segment.id}
@@ -510,8 +533,7 @@ export default function SegmentedTranscriptViewer({
               registerRef={follow.registerRef(segment.id)}
               onCopyTimestamp={handleCopyTimestamp}
               searchQuery={searchQuery}
-              dimmed={dimmed}
-              segmentIndex={index}
+              dimmed={expandedFromHidden}
             />
           ) : (
             <ContentSegment
@@ -523,9 +545,8 @@ export default function SegmentedTranscriptViewer({
               registerRef={follow.registerRef(segment.id)}
               onCopyTimestamp={handleCopyTimestamp}
               searchQuery={searchQuery}
-              dimmed={dimmed}
+              dimmed={expandedFromHidden}
               isFiller={segment.kind === 'filler'}
-              segmentIndex={index}
             />
           )
         })}
@@ -542,51 +563,6 @@ export default function SegmentedTranscriptViewer({
           </svg>
           Resume follow
         </button>
-      )}
-
-      {showHelp && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Transcript keyboard shortcuts"
-          className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => setShowHelp(false)}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl p-5 w-full max-w-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-900">Keyboard shortcuts</h3>
-              <button
-                type="button"
-                onClick={() => setShowHelp(false)}
-                className="text-gray-400 hover:text-gray-600"
-                aria-label="Close"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <dl className="space-y-2 text-sm">
-              {[
-                ['j  or  ↓', 'Next segment'],
-                ['k  or  ↑', 'Previous segment'],
-                ['Enter / Space', 'Seek to focused segment'],
-                ['f', 'Toggle follow playback'],
-                ['/', 'Focus search'],
-                ['Esc', 'Clear search / close help'],
-                ['?', 'Show this help'],
-              ].map(([keys, label]) => (
-                <div key={keys} className="flex items-baseline justify-between gap-3">
-                  <dt className="font-mono text-xs text-gray-500">{keys}</dt>
-                  <dd className="text-gray-800">{label}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </div>
       )}
     </div>
   )

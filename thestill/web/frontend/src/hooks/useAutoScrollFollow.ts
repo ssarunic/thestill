@@ -11,6 +11,7 @@ export interface UseAutoScrollFollowResult {
   registerRef: (key: string | number) => (el: HTMLElement | null) => void
   userScrolledAway: boolean
   resume: () => void
+  scrollToKey: (key: string | number) => void
 }
 
 const SCROLL_KEYS = new Set(['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'End', 'Home'])
@@ -85,9 +86,16 @@ export function useAutoScrollFollow({
     }
   }, [enabled, pauseAfterUserScrollMs])
 
+  const scrollToKey = useCallback((key: string | number) => {
+    const node = refs.current.get(key)
+    if (!node) return
+    programmaticScrollAt.current = now()
+    scrollNodeIntoCenter(node)
+  }, [])
+
   const userScrolledAway = pausedUntil > now()
 
-  return { registerRef, userScrolledAway, resume }
+  return { registerRef, userScrolledAway, resume, scrollToKey }
 }
 
 export function usePersistedBoolean(key: string, initial: boolean): [boolean, (next: boolean) => void] {

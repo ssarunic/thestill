@@ -1,6 +1,6 @@
 # Transcript Playback Sync — Highlight, Auto-scroll, Click-to-seek
 
-**Status**: ✅ Complete
+**Status**: 🚧 Active development (shipped on branch `claude/style-transcript-segments-uISZE`, PR #4)
 **Created**: 2026-04-19
 **Updated**: 2026-04-20
 **Priority**: Medium (UX quality-of-life, builds on specs #18 and #22)

@@ -112,39 +112,37 @@ describe('SegmentedTranscriptViewer', () => {
     expect(window.localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
   })
 
-  it('filters transcript rendering to segments containing the search term', () => {
+  it('collapses non-matching segments during search and keeps matches visible', () => {
     renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
     const input = screen.getByRole('searchbox', { name: /Search transcript/ })
     fireEvent.change(input, { target: { value: 'shipping' } })
-    const matchCount = screen.getByText('1')
-    expect(matchCount).toBeInTheDocument()
-    // The non-matching segment's container should carry the dimmed class.
-    const firstSegment = screen.getByText('First segment').closest('[data-active]') as HTMLElement
-    expect(firstSegment.className).toMatch(/opacity-40/)
+
+    // The matched term is wrapped in a <mark>, so query by the mark element.
+    const mark = document.querySelector('mark')
+    expect(mark?.textContent).toBe('shipping')
+    expect(screen.queryByText('First segment')).toBeNull()
+    expect(
+      screen.getByRole('button', { name: /1 segment hidden/ }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('1 / 1')).toBeInTheDocument()
   })
 
-  it('toggles the keyboard help sheet on ?', () => {
-    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
-    expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.keyDown(window, { key: '?' })
-    expect(screen.getByRole('dialog', { name: /keyboard shortcuts/i })).toBeInTheDocument()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
-
-  it('focuses the search input when / is pressed outside an input', () => {
+  it('expands a hidden group when the user clicks its placeholder', () => {
     renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
     const input = screen.getByRole('searchbox', { name: /Search transcript/ })
-    expect(document.activeElement).not.toBe(input)
-    fireEvent.keyDown(window, { key: '/' })
-    expect(document.activeElement).toBe(input)
+    fireEvent.change(input, { target: { value: 'shipping' } })
+    fireEvent.click(screen.getByRole('button', { name: /1 segment hidden/ }))
+    expect(screen.getByText('First segment')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /segment hidden/ }),
+    ).toBeNull()
   })
 
-  it('moves focus to the next segment on j', () => {
-    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} onSeekRequest={() => {}} />)
-    const buttons = screen.getAllByRole('button', { name: /Seek to/ })
-    buttons[0].focus()
-    fireEvent.keyDown(window, { key: 'j' })
-    expect(document.activeElement).toBe(buttons[1])
+  it('surfaces No matches when the search term is not present', () => {
+    renderWithPlayer(<SegmentedTranscriptViewer transcript={transcript()} />)
+    const input = screen.getByRole('searchbox', { name: /Search transcript/ })
+    fireEvent.change(input, { target: { value: 'absent needle' } })
+    expect(screen.getByText('No matches')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Next match/ })).toBeDisabled()
   })
 })
