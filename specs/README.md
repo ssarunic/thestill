@@ -44,6 +44,7 @@ describing current phase and gates.
 | 20 | [parallel-task-queues](20-parallel-task-queues.md) | 🚧 Active development | Per-stage worker pools so a slow transcribe task no longer blocks a fast clean task; stage-swimlane UI |
 | 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 🚧 Active development | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 | 22 | [floating-media-player](22-floating-media-player.md) | 🚧 Active development | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
+| 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
 
 ## Completed
 
@@ -56,6 +57,7 @@ Shipped work. Kept for historical context and rollback reference.
 | 15 | [mistral-llm-provider](15-mistral-llm-provider.md) | 2026-01-12 | Added Mistral AI as fifth LLM provider with full feature parity |
 | 16 | [full-pipeline-and-failure-handling](16-full-pipeline-and-failure-handling.md) | 2026-01-07 | Full-pipeline execution + transient/fatal error split + DLQ |
 | 17 | [pylint-fixes](17-pylint-fixes.md) | 2026-01-15 | Pylint score lifted to 9.19/10, zero E-level errors remaining |
+| 23 | [transcript-playback-sync](23-transcript-playback-sync.md) | 2026-04-20 | Active-segment highlight, follow-playback toggle, click-to-seek, deep-linked timestamps, filler reveal, in-transcript search with collapse/next-prev |
 
 ## Status legend
 
