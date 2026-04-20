@@ -203,7 +203,7 @@ export type TranscriptType = 'cleaned' | 'raw'
 // models in thestill/models/annotated_transcript.py. Keep the field
 // list in lock-step with the Python side — they are the contract the
 // SegmentedTranscriptViewer renders from.
-export type SegmentKind = 'content' | 'filler' | 'ad_break'
+export type SegmentKind = 'content' | 'filler' | 'ad_break' | 'music' | 'intro' | 'outro'
 
 export interface WordSpan {
   start_segment_id: number
