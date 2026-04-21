@@ -16,11 +16,14 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
+import structlog
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic.config import ConfigDict
 
 from .path_manager import PathManager
+
+logger = structlog.get_logger(__name__)
 
 
 class Config(BaseModel):
@@ -177,12 +180,76 @@ class Config(BaseModel):
         return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
 
 
+def _find_dotenv_from_package() -> Optional[str]:
+    """
+    Walk upward from this module's location looking for a ``.env``.
+
+    In editable installs (``pip install -e .``) this finds the
+    repo-root ``.env`` even when the process was launched from an
+    unrelated CWD (e.g. an MCP client spawning ``thestill-mcp`` with
+    CWD=``$HOME``).
+
+    Using ``__file__`` directly rather than ``dotenv.find_dotenv`` —
+    find_dotenv walks the call stack, which misbehaves under ``python
+    -c`` and frozen interpreters where the top frame's filename is
+    synthetic. Walking ``__file__`` gives deterministic behaviour.
+    """
+    current = Path(__file__).resolve().parent
+    for candidate_dir in (current, *current.parents):
+        candidate = candidate_dir / ".env"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _find_dotenv_from_cwd() -> Optional[str]:
+    """Walk upward from the current working directory looking for ``.env``."""
+    try:
+        current = Path.cwd().resolve()
+    except (FileNotFoundError, OSError):
+        return None
+    for candidate_dir in (current, *current.parents):
+        candidate = candidate_dir / ".env"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _resolve_env_file(explicit: Optional[str]) -> Optional[str]:
+    """
+    Resolve which ``.env`` to load, in this priority order:
+
+    1. Explicit ``env_file`` argument (CLI ``--config`` flag).
+    2. ``THESTILL_ENV_FILE`` environment variable. Escape hatch for
+       launchers whose CWD is unpredictable — notably MCP clients like
+       Claude Desktop, which typically spawn servers with CWD=``$HOME``
+       rather than the project root.
+    3. Walk upward from this module's location (catches editable
+       installs where the .env sits at the repo root).
+    4. Walk upward from the CWD (matches the historical default for
+       interactive CLI use from the repo root).
+
+    Returns the resolved path (for logging), or ``None`` when no
+    ``.env`` was found and only actual environment variables apply.
+    """
+    if explicit:
+        return explicit
+
+    from_env_var = os.getenv("THESTILL_ENV_FILE")
+    if from_env_var:
+        return from_env_var
+
+    return _find_dotenv_from_package() or _find_dotenv_from_cwd()
+
+
 def load_config(env_file: Optional[str] = None) -> Config:
     """Load configuration from environment variables and .env file"""
-    if env_file:
-        load_dotenv(env_file)
+    resolved_env_file = _resolve_env_file(env_file)
+    if resolved_env_file:
+        load_dotenv(resolved_env_file)
+        logger.info("config_env_file_loaded", path=resolved_env_file)
     else:
-        load_dotenv()
+        logger.info("config_env_file_not_found", note="using process environment only")
 
     # Get LLM provider
     llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()

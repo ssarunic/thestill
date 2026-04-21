@@ -10,7 +10,7 @@ import importlib.util
 
 import pytest
 
-from thestill.core.task_handlers import validate_transcription_provider
+from thestill.core.transcriber_factory import validate_transcription_provider
 from thestill.utils.exceptions import ThestillError
 
 
