@@ -13,8 +13,7 @@
 # limitations under the License.
 
 """
-Prompt-safety helpers for LLM calls that consume attacker-controlled text
-(spec #25, item 1.4).
+Prompt-safety helpers for LLM calls that consume attacker-controlled text.
 
 The podcast pipeline routinely funnels strings that the user does not
 control — episode audio transcripts, RSS titles and descriptions, feed

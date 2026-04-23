@@ -177,7 +177,10 @@ def handle_download(task: Task, state: "AppState") -> None:
     with _handler_error_context(f"downloading audio for {episode.title}"):
         # Create downloader and download
         # Note: download_episode raises DownloadError on failure (no longer returns None)
-        downloader = AudioDownloader(str(state.path_manager.original_audio_dir()))
+        downloader = AudioDownloader(
+            str(state.path_manager.original_audio_dir()),
+            max_bytes=state.config.max_audio_bytes,
+        )
         audio_path = downloader.download_episode(episode, podcast)
 
         # Get duration from downloaded file
@@ -255,7 +258,10 @@ def handle_downsample(task: Task, state: "AppState") -> None:
         if state.config.delete_audio_after_processing and episode.audio_path:
             from .audio_downloader import AudioDownloader
 
-            downloader = AudioDownloader(str(state.path_manager.original_audio_dir()))
+            downloader = AudioDownloader(
+                str(state.path_manager.original_audio_dir()),
+                max_bytes=state.config.max_audio_bytes,
+            )
             if downloader.delete_audio_file(episode):
                 state.feed_manager.clear_episode_audio_path(str(podcast.rss_url), episode.external_id)
                 logger.info(f"Cleaned up original audio file for episode: {episode.title}")

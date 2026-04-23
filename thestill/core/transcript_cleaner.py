@@ -164,7 +164,7 @@ class TranscriptCleaner:
         - Final formatting
         """
         # Build prompts (system prompt carries the untrusted-content preamble;
-        # spec #25, item 1.4).
+        # ).
         system_prompt = self._build_cleanup_system_prompt(language=language) + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_cleanup_user_prompt(
             formatted_transcript=formatted_transcript,
@@ -179,11 +179,11 @@ class TranscriptCleaner:
         # Calculate effective chunk size based on OUTPUT token limit
         # For transcript cleaning, output ≈ input size, so we need to ensure
         # each chunk's output fits within the model's output token limit.
-        #
+
         # Key insight: Even if a model supports 65K output tokens, LLMs tend to
         # produce better quality and more reliable outputs with smaller chunks.
         # We cap at ~16K output tokens (~64K chars) for reliability.
-        #
+
         # Use ~4 chars per token estimate, with 80% safety margin for output.
         practical_output_limit = min(max_output_tokens, 16384)  # Cap at 16K tokens
         max_output_chars = int(practical_output_limit * 4 * 0.8)
@@ -474,7 +474,7 @@ IMPORTANT:
             lines.append(f"Ad Sponsors: {', '.join(episode_facts.ad_sponsors)}")
         lines.append("")
 
-        # spec #25, item 1.4: transcript content is untrusted; fence it.
+        # Transcript content is untrusted; fence it.
         lines.append("TRANSCRIPT TO CLEAN:")
         lines.append(wrap_untrusted(formatted_transcript, label="TRANSCRIPT"))
 

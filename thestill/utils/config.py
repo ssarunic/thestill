@@ -142,7 +142,7 @@ class Config(BaseModel):
     jwt_algorithm: str = "HS256"  # JWT signing algorithm
     jwt_expire_days: int = 30  # JWT token expiration in days
 
-    # Deployment / Web Surface Configuration (spec #25 Phase 2)
+    # Deployment / Web Surface Configuration
     # "production" locks down cookies, docs endpoints, CORS and verbose errors.
     # "development" keeps the ergonomic defaults for local dev.
     environment: str = "production"  # production | development
@@ -320,7 +320,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "jwt_secret_key": os.getenv("JWT_SECRET_KEY", ""),
         "jwt_algorithm": os.getenv("JWT_ALGORITHM", "HS256"),
         "jwt_expire_days": int(os.getenv("JWT_EXPIRE_DAYS", "30")),
-        # Deployment / Web Surface (spec #25 Phase 2)
+        # Deployment / Web Surface
         "environment": os.getenv("ENVIRONMENT", "production").lower(),
         "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",
         "allowed_origins": [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()],
@@ -331,7 +331,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
     }
 
-    # spec #25 item 2.1 (post-review hardening): production must not emit
+    # Production must not emit
     # non-secure auth cookies. The footgun is COOKIE_SECURE=false slipping
     # through from a shared .env — refuse it loudly. Development can still
     # opt out.
@@ -341,7 +341,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
         )
 
-    # spec #25 item 2.4 (post-review hardening): multi-user mode runs OAuth,
+    # Multi-user mode runs OAuth,
     # which must build a non-spoofable callback URL. Refuse to boot if the
     # operator forgot to tell us our public hostname AND didn't configure a
     # trusted proxy.

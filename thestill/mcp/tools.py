@@ -81,7 +81,7 @@ def setup_tools(server: Server, storage_path: str):
     # Load full config for database path and other settings
     config = load_config()
 
-    # spec #25 item 2.3 (post-review hardening): per-session MCP quota key.
+    # Per-session MCP quota key.
     # stdio transport has one client per server process, so process identity
     # IS session identity. When the server moves to HTTP/SSE transport,
     # swap this for the real per-connection id exposed by the MCP runtime.
@@ -101,7 +101,10 @@ def setup_tools(server: Server, storage_path: str):
         max_per_host=config.refresh_max_per_host,
     )
     refresh_service = RefreshService(feed_manager, podcast_service)
-    audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
+    audio_downloader = AudioDownloader(
+        str(path_manager.original_audio_dir()),
+        max_bytes=config.max_audio_bytes,
+    )
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)

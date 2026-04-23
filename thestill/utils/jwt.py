@@ -108,7 +108,6 @@ def _unsafe_peek_token_expiry(token: str) -> Optional[datetime]:
     Anything that needs trustworthy expiry must call
     :func:`get_token_expiry` with the secret key.
 
-    spec #25, item 2.2.
     """
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
@@ -143,7 +142,7 @@ def is_token_expiring_soon(
     Check if a signed, valid token is within ``threshold_days`` of
     its expiry. Used to drive silent refresh.
 
-    spec #25, item 2.2: previously this function trusted unverified
+    previously this function trusted unverified
     ``exp`` claims, which let an attacker pretend their forged token
     was fresh. Now we always verify the signature; an invalid or
     already-expired token returns ``True`` so the caller refreshes

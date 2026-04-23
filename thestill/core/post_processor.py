@@ -241,8 +241,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 
         Appends the untrusted-content preamble defined in
         :mod:`thestill.utils.prompt_safety` so the model knows to treat
-        anything inside the sentinels as data rather than instructions
-        (spec #25, item 1.4).
+        anything inside the sentinels as data rather than instructions.
         """
         return self.SYSTEM_PROMPT + UNTRUSTED_CONTENT_PREAMBLE
 
@@ -254,7 +253,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         system_prompt: str,
     ) -> str:
         """Process a single transcript chunk"""
-        # spec #25, item 1.4: wrap transcript content in untrusted sentinels
+        # Wrap transcript content in untrusted sentinels
         # so prompt-injection attempts inside the audio cannot hijack the
         # model into ignoring the operator's instructions.
         header = "TRANSCRIPT:\n\n"

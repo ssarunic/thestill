@@ -33,7 +33,7 @@ from typing import Optional
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
@@ -238,7 +238,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.stop()
         logger.info("task_worker_stopped")
 
-    # spec #25, item 2.8: /docs and /redoc are off by default in production.
+    # /docs and /redoc are off by default in production.
     # Flip ENABLE_DOCS=true (or ENVIRONMENT=development) to re-enable them.
     _is_dev = config.environment == "development"
     docs_enabled = _is_dev or config.enable_docs
@@ -252,11 +252,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         openapi_url="/openapi.json" if docs_enabled else None,
     )
 
-    # spec #25, item 2.8: sanitise the default exception response so we don't
-    # leak exception messages / tracebacks to clients in production. Logs
-    # keep full detail server-side.
-    from fastapi.responses import JSONResponse
-
+    # Sanitise the default exception response so we don't leak exception
+    # messages / tracebacks to clients in production. Logs keep full
+    # detail server-side.
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
         logger.exception("unhandled_exception", path=str(request.url.path), error_type=type(exc).__name__)
@@ -270,7 +268,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Add logging middleware for request/response tracking
     app.add_middleware(LoggingMiddleware)
 
-    # CORS (spec #25, item 2.5): origins come from ALLOWED_ORIGINS env,
+    # CORS: origins come from ALLOWED_ORIGINS env,
     # methods and headers are explicit. In development we fall back to the
     # Vite dev server ports so local work still functions.
     cors_origins = list(config.allowed_origins)
@@ -282,7 +280,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             "http://127.0.0.1:3000",
         ]
     # Reject credentialed wildcard at startup (post-review hardening of
-    # spec #25 item 2.5). Browsers spec-forbid Access-Control-Allow-Credentials
+    # ). Browsers spec-forbid Access-Control-Allow-Credentials
     # with Access-Control-Allow-Origin: *, and Starlette would echo whatever
     # origin asked, so ALLOWED_ORIGINS="*" is a footgun — refuse it.
     if any(origin.strip() == "*" for origin in cors_origins):

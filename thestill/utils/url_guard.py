@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-SSRF guard for user-supplied URLs (spec #25, item 1.2).
+SSRF guard for user-supplied URLs.
 
 Every outbound HTTP fetch triggered by user input (RSS feed URL, episode
 audio URL, Apple-podcast lookup, external transcript URL, etc.) must
@@ -43,7 +43,7 @@ import ipaddress
 import os
 import socket
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -207,10 +207,38 @@ def guarded_get(url: str, **kwargs) -> requests.Response:
         return session.get(url, **kwargs)
 
 
+def guarded_redirect_fetch(
+    url: str,
+    get_fn: Callable[..., requests.Response],
+    **kwargs: Any,
+) -> requests.Response:
+    """
+    Issue a GET that refuses SSRF targets and re-validates one redirect hop.
+
+    Uses the caller-supplied ``get_fn`` (typically ``requests.get`` imported
+    into the caller's module) so test suites that patch HTTP at the caller
+    namespace continue to work.  Fails closed: any :class:`UnsafeURLError`
+    propagates.
+
+    Exists so ``audio_downloader`` and ``external_transcript_downloader``
+    don't each re-implement the ``if status in 3xx: validate + refetch``
+    dance.
+    """
+    validate_public_url(url)
+    kwargs.setdefault("allow_redirects", False)
+    response = get_fn(url, **kwargs)
+    if response.status_code in (301, 302, 303, 307, 308):
+        location = response.headers.get("Location", "")
+        validate_public_url(location)
+        response = get_fn(location, **kwargs)
+    return response
+
+
 __all__ = [
     "UnsafeURLError",
     "ResolvedHost",
     "validate_public_url",
     "guarded_session",
     "guarded_get",
+    "guarded_redirect_fetch",
 ]

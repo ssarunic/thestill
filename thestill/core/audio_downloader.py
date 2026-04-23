@@ -24,8 +24,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from ..models.podcast import Episode, Podcast
 from ..utils.audio_integrity import InvalidAudioFile, assert_audio_file
-from ..utils.config import load_config
-from ..utils.url_guard import UnsafeURLError, validate_public_url
+from ..utils.url_guard import UnsafeURLError, guarded_redirect_fetch
 from .media_source import MediaSourceFactory
 
 logger = structlog.get_logger(__name__)
@@ -49,9 +48,9 @@ class AudioDownloader:
     # Network configuration
     _DEFAULT_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
     _CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
-    # spec #25, item 2.7: fallback cap if the config-driven value can't be
-    # read (e.g. during tests that instantiate AudioDownloader without env).
-    _FALLBACK_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+    # Default cap on any single download when the caller did not specify one.
+    # Matches Config.max_audio_bytes so CLI / web / MCP see the same ceiling.
+    _DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
     # Retry configuration
     _MAX_RETRY_ATTEMPTS = 3  # Maximum number of download retry attempts
@@ -74,21 +73,15 @@ class AudioDownloader:
 
         Args:
             storage_path: Directory path for storing downloaded audio files.
-            max_bytes: Hard ceiling on any single download (spec #25 item 2.7).
-                If ``None``, resolves from ``Config.max_audio_bytes``
-                (env ``MAX_AUDIO_BYTES``), falling back to
-                ``_FALLBACK_MAX_BYTES`` if config loading fails.
+            max_bytes: Hard ceiling on any single download. Callers should
+                thread ``Config.max_audio_bytes`` through; if omitted we
+                use ``_DEFAULT_MAX_BYTES`` so bare instantiation in tests
+                still enforces the cap.
         """
         self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.media_source_factory: MediaSourceFactory = MediaSourceFactory(storage_path)
-        if max_bytes is not None:
-            self.max_bytes = int(max_bytes)
-        else:
-            try:
-                self.max_bytes = int(load_config().max_audio_bytes)
-            except Exception:  # pragma: no cover — missing env vars in tests
-                self.max_bytes = self._FALLBACK_MAX_BYTES
+        self.max_bytes = int(max_bytes) if max_bytes is not None else self._DEFAULT_MAX_BYTES
 
     def download_episode(
         self,
@@ -184,40 +177,21 @@ class AudioDownloader:
             requests.exceptions.RequestException: If download fails after all retries
             DownloadError: If the URL targets a private/loopback/cloud-metadata address.
         """
-        # spec #25, item 1.2: block SSRF targets before issuing the request, and
-        # disable redirects so a public URL cannot be 302'd into a private one.
+        # Block SSRF targets and re-validate any 3xx
+        # redirect so a public URL cannot 302 into a private one.
         try:
-            validate_public_url(url)
-        except UnsafeURLError as exc:
-            raise DownloadError(f"Refusing to download from unsafe URL: {exc}") from exc
-
-        response = requests.get(
-            url,
-            stream=True,
-            headers={"User-Agent": "Thestill/1.0"},
-            timeout=self._DEFAULT_TIMEOUT_SECONDS,
-            allow_redirects=False,
-        )
-        # Check by status code (not is_redirect) so the logic is robust
-        # against mocked responses in tests.
-        if response.status_code in (301, 302, 303, 307, 308):
-            location = response.headers.get("Location", "")
-            try:
-                validate_public_url(location)
-            except UnsafeURLError as exc:
-                raise DownloadError(
-                    f"Refusing to follow redirect to unsafe URL {location!r}: {exc}"
-                ) from exc
-            response = requests.get(
-                location,
+            response = guarded_redirect_fetch(
+                url,
+                requests.get,
                 stream=True,
                 headers={"User-Agent": "Thestill/1.0"},
                 timeout=self._DEFAULT_TIMEOUT_SECONDS,
-                allow_redirects=False,
             )
+        except UnsafeURLError as exc:
+            raise DownloadError(f"Refusing to download from unsafe URL: {exc}") from exc
         response.raise_for_status()
 
-        # spec #25, item 2.7: pre-check content-length, then enforce a
+        # Pre-check content-length, then enforce a
         # cumulative cap while streaming so a lying/missing header cannot
         # defeat the limit.
         try:
@@ -226,8 +200,7 @@ class AudioDownloader:
             advertised = 0
         if advertised and advertised > self.max_bytes:
             raise DownloadError(
-                f"Refusing download: server advertised {advertised} bytes, "
-                f"cap is {self.max_bytes} bytes"
+                f"Refusing download: server advertised {advertised} bytes, " f"cap is {self.max_bytes} bytes"
             )
 
         downloaded = 0
@@ -239,8 +212,7 @@ class AudioDownloader:
                         downloaded += len(chunk)
                         if downloaded > self.max_bytes:
                             raise DownloadError(
-                                f"Refusing download: stream exceeded cap "
-                                f"({self.max_bytes} bytes) while reading"
+                                f"Refusing download: stream exceeded cap " f"({self.max_bytes} bytes) while reading"
                             )
         except Exception:
             # Leave no half-written file behind if we bail on cap/IO error;
@@ -252,7 +224,7 @@ class AudioDownloader:
                 pass
             raise
 
-        # spec #25, item 2.7: magic-byte integrity check. Rejects zip bombs,
+        # Magic-byte integrity check. Rejects zip bombs,
         # HTML error pages, and polyglot payloads before ffmpeg gets a chance.
         try:
             codec = assert_audio_file(local_path)

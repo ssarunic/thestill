@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-In-process rate limiter (spec #25, item 2.3).
+In-process rate limiter.
 
 A tiny sliding-window limiter with per-key buckets. Used on auth and
 webhook endpoints to blunt brute-force and webhook-spam, and on MCP
@@ -122,11 +122,11 @@ def _resolve_client_ip(request: Request) -> str:
     """
     Identify the real client behind any trusted reverse proxy.
 
-    spec #25 item 2.3 (post-review hardening): using ``request.client.host``
-    alone collapses all users to the reverse-proxy IP in real deployments,
-    which means one misbehaving client can lock everyone out. To avoid that
-    AND the inverse problem (``X-Forwarded-For`` is attacker-spoofable), we
-    only consult the forwarded header when the immediate peer is in
+    Using ``request.client.host`` alone collapses all users to the
+    reverse-proxy IP in real deployments, which means one misbehaving
+    client can lock everyone out. To avoid that AND the inverse problem
+    (``X-Forwarded-For`` is attacker-spoofable), we only consult the
+    forwarded header when the immediate peer is in
     ``Config.trusted_proxies``.
 
     Note on XFF semantics: clients append and proxies prepend. The
@@ -137,13 +137,11 @@ def _resolve_client_ip(request: Request) -> str:
     pollute entries that appear BEFORE the last trusted hop.
     """
     peer = request.client.host if request.client else "unknown"
-    trusted_proxies: Optional[set] = None
     try:
-        config = getattr(request.app.state.app_state, "config", None)
-        if config is not None:
-            trusted_proxies = set(config.trusted_proxies or [])
+        config = request.app.state.app_state.config
     except AttributeError:
-        trusted_proxies = None
+        return peer
+    trusted_proxies = trusted_proxy_set(config)
 
     if not trusted_proxies or peer not in trusted_proxies:
         return peer
@@ -158,6 +156,11 @@ def _resolve_client_ip(request: Request) -> str:
             return hop
     # All hops were trusted proxies — fall back to the direct peer.
     return peer
+
+
+def trusted_proxy_set(config) -> frozenset:
+    """Coerce ``config.trusted_proxies`` to the shared frozenset form."""
+    return frozenset(getattr(config, "trusted_proxies", None) or ())
 
 
 def _client_key(request: Request, prefix: str) -> str:

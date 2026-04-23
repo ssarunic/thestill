@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Audio file integrity checks (spec #25, items 2.6 and 2.7).
+Audio file integrity checks.
 
 Validates downloaded audio files against a small allowlist of codec
 magic bytes BEFORE we hand the path to ``ffprobe`` / ``ffmpeg``.
@@ -39,15 +39,15 @@ class InvalidAudioFile(ValueError):
 # Each tuple is (offset, bytes, label).
 _MAGIC_PATTERNS: Tuple[Tuple[int, bytes, str], ...] = (
     (0, b"ID3", "mp3-id3"),
-    (0, b"\xff\xfb", "mp3"),      # MPEG-1 Layer 3, no CRC
-    (0, b"\xff\xf3", "mp3"),      # MPEG-2 Layer 3
-    (0, b"\xff\xf2", "mp3"),      # MPEG-2.5 Layer 3
+    (0, b"\xff\xfb", "mp3"),  # MPEG-1 Layer 3, no CRC
+    (0, b"\xff\xf3", "mp3"),  # MPEG-2 Layer 3
+    (0, b"\xff\xf2", "mp3"),  # MPEG-2.5 Layer 3
     (0, b"\xff\xf1", "aac-adts"),  # AAC ADTS
     (0, b"\xff\xf9", "aac-adts"),  # AAC ADTS (protection absent)
-    (0, b"RIFF", "wav"),           # Container; inner WAVE checked below
+    (0, b"RIFF", "wav"),  # Container; inner WAVE checked below
     (0, b"OggS", "ogg"),
     (0, b"fLaC", "flac"),
-    (4, b"ftyp", "mp4-family"),    # m4a / mp4 / m4b
+    (4, b"ftyp", "mp4-family"),  # m4a / mp4 / m4b
 )
 
 
@@ -80,8 +80,7 @@ def assert_audio_file(path: Path, *, min_bytes: int = 32) -> str:
     label = _looks_like_audio(header)
     if label is None:
         raise InvalidAudioFile(
-            f"file does not match any supported audio codec header: {path} "
-            f"(first 16 bytes: {header.hex()})"
+            f"file does not match any supported audio codec header: {path} " f"(first 16 bytes: {header.hex()})"
         )
     return label
 

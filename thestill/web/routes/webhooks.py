@@ -35,14 +35,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# spec #25, item 1.3: webhook signature + replay hardening.
-# Outside this window the signed timestamp is considered a replay.
-_MAX_WEBHOOK_CLOCK_SKEW_SECONDS = 5 * 60
-# Dev-only escape hatch for running the service without the shared secret.
-# Production deploys must set ELEVENLABS_WEBHOOK_SECRET; anything else is
-# rejected with 401. This env var must be set to "1" to opt out.
-_DEV_ALLOW_UNSIGNED_ENV = "DEV_ALLOW_UNSIGNED_WEBHOOKS"
-
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from structlog import get_logger
@@ -54,9 +46,15 @@ from ..services import WebhookTranscriptProcessor
 
 logger = get_logger(__name__)
 
-# spec #25, item 2.3: per-IP rate limit on webhook ingress. Replay guards
-# and signature verification sit inside the handler; the limiter is the
-# outer moat.
+# Outside this window a signed webhook timestamp is considered a replay.
+_MAX_WEBHOOK_CLOCK_SKEW_SECONDS = 5 * 60
+# Dev-only escape hatch for running the service without the shared secret.
+# Production deploys must set ELEVENLABS_WEBHOOK_SECRET; anything else is
+# rejected with 401. Set this env var to "1" to opt out.
+_DEV_ALLOW_UNSIGNED_ENV = "DEV_ALLOW_UNSIGNED_WEBHOOKS"
+
+# Per-IP rate limit on webhook ingress. Replay guards and signature
+# verification sit inside the handler; the limiter is the outer moat.
 router = APIRouter(dependencies=[Depends(rate_limit_dependency(WEBHOOK_LIMIT, "webhook"))])
 
 
@@ -118,9 +116,7 @@ def _verify_signature(
       ``v<N>`` signature,
     * HMAC-SHA256 over ``"<ts>.<body>"`` matches the supplied signature
       under constant-time comparison, and
-    * the timestamp is within ``_MAX_WEBHOOK_CLOCK_SKEW_SECONDS`` of now
-      (spec #25, item 1.3 — blocks replay of previously-captured
-      webhooks).
+    * the timestamp is within ``_MAX_WEBHOOK_CLOCK_SKEW_SECONDS`` of now.
 
     The caller is responsible for deciding what to do when this returns
     ``False`` (always a 401).  Missing-secret handling is NOT the
@@ -231,7 +227,7 @@ async def elevenlabs_webhook(
     body = await request.body()
 
     # Layer 1: Verify HMAC signature (proves it's from ElevenLabs).
-    # spec #25, item 1.3: fail closed — no secret configured means no
+    # fail closed — no secret configured means no
     # authenticated webhook source, so we refuse the request. The only
     # escape hatch is an explicit DEV_ALLOW_UNSIGNED_WEBHOOKS=1 env var
     # for local testing; production must set ELEVENLABS_WEBHOOK_SECRET.

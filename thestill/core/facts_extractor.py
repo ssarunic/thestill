@@ -186,7 +186,7 @@ class FactsExtractor:
         if podcast_facts:
             podcast_context = self._render_podcast_facts_context(podcast_facts)
 
-        # Build the prompt (spec #25, item 1.4: append untrusted-content preamble).
+        # Build the prompt.
         system_prompt = self._build_facts_extraction_system_prompt(language=language) + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_facts_extraction_user_prompt(
             formatted_transcript=formatted_transcript,
@@ -296,7 +296,7 @@ class FactsExtractor:
         # Format transcript for analysis
         formatted_transcript = self.formatter.format_transcript(transcript_data)
 
-        # Build the prompt (spec #25, item 1.4: append untrusted-content preamble).
+        # Build the prompt.
         system_prompt = self._build_podcast_facts_system_prompt() + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_podcast_facts_user_prompt(
             formatted_transcript=formatted_transcript,
@@ -536,7 +536,7 @@ Return your analysis as JSON with this structure:
         if podcast_context:
             lines.extend(["", podcast_context])
 
-        # spec #25, item 1.4: transcript text is untrusted; fence it.
+        # Transcript text is untrusted; fence it.
         lines.extend(
             [
                 "",
@@ -611,7 +611,7 @@ Return your analysis as JSON:
             f"Ad Sponsors: {episode_facts.ad_sponsors}",
             "",
             "TRANSCRIPT (for additional context):",
-            # spec #25, item 1.4: transcript text is untrusted; fence it.
+            # Transcript text is untrusted; fence it.
             wrap_untrusted(formatted_transcript[:50000], label="TRANSCRIPT"),
         ]
 

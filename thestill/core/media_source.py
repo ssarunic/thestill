@@ -30,12 +30,12 @@ Benefits:
 import json
 import re
 import urllib.request
-import defusedxml.ElementTree as ET  # Hardened against XXE / billion-laughs attacks in untrusted RSS feeds (spec #25, item 1.1).
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
+import defusedxml.ElementTree as ET  # Hardened against XXE / billion-laughs attacks in untrusted RSS feeds.
 import feedparser
 import requests
 from requests.adapters import HTTPAdapter
@@ -202,10 +202,8 @@ class RSSMediaSource(MediaSource):
             respect_retry_after_header=True,
         )
         # Guarded adapter re-validates the URL on every send, so HTTP redirects
-        # cannot smuggle a public host into a private/loopback target (spec #25, item 1.2).
-        adapter = _GuardedHTTPAdapter(
-            max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize
-        )
+        # cannot smuggle a public host into a private/loopback target.
+        adapter = _GuardedHTTPAdapter(max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         return session
@@ -284,7 +282,7 @@ class RSSMediaSource(MediaSource):
             # Priority: itunes:image (higher quality) > standard RSS image
             image_url = None
             if hasattr(feed, "itunes_image") and feed.itunes_image:
-                # feedparser returns itunes:image as a dict with 'href' key
+                # Feedparser returns itunes:image as a dict with 'href' key
                 if isinstance(feed.itunes_image, dict):
                     image_url = feed.itunes_image.get("href")
                 else:
@@ -925,7 +923,7 @@ class RSSMediaSource(MediaSource):
             RSS feed URL if found, None otherwise
         """
         try:
-            # spec #25, item 1.2: refuse to follow user-supplied Apple URLs into
+            # Refuse to follow user-supplied Apple URLs into
             # private / loopback / cloud-metadata space.
             validate_public_url(url)
             request = urllib.request.Request(url)

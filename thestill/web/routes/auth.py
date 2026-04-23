@@ -34,12 +34,12 @@ from fastapi.responses import RedirectResponse
 from structlog import get_logger
 
 from ..dependencies import AppState, get_app_state
-from ..middleware import AUTH_LIMIT, rate_limit_dependency
+from ..middleware import AUTH_LIMIT, rate_limit_dependency, trusted_proxy_set
 from ..responses import api_response
 
 logger = get_logger(__name__)
 
-# spec #25, item 2.3: every /api/auth/* route is IP-rate-limited to blunt
+# Every /api/auth/* route is IP-rate-limited to blunt
 # brute force against OAuth state and authenticated probes.
 router = APIRouter(dependencies=[Depends(rate_limit_dependency(AUTH_LIMIT, "auth"))])
 
@@ -52,7 +52,7 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     """
     Build the OAuth callback redirect URI.
 
-    spec #25, item 2.4 (fail-closed, post-review): ``X-Forwarded-*``
+    ``X-Forwarded-*``
     headers are only honoured when the immediate peer is an IP in
     ``trusted_proxies``. If the peer is NOT a trusted proxy, we refuse
     to derive the hostname from the request — ``request.url.netloc`` is
@@ -65,7 +65,7 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     layer, so the misconfiguration only surfaces where it matters.
     """
     client_host = request.client.host if request.client else ""
-    trusted = set(state.config.trusted_proxies or [])
+    trusted = trusted_proxy_set(state.config)
 
     if client_host in trusted:
         scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
@@ -259,7 +259,7 @@ async def google_callback(
         return response
 
     except Exception as e:
-        # spec #25, item 2.8: don't leak upstream error messages to the client.
+        # Don't leak upstream error messages to the client.
         # Log the type + message server-side; respond with a generic message.
         logger.error("oauth_callback_error", error_type=type(e).__name__, error=str(e))
         raise HTTPException(status_code=400, detail="Authentication failed") from e
