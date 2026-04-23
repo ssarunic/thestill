@@ -101,7 +101,8 @@ phase, items can land in any order.
   tokens. Remove external callers.
 - [ ] **2.3 Rate limiting.**
   Add `slowapi` (or equivalent) with per-IP limits on `/api/auth/*` and
-  `/api/webhooks/*`, and per-session quotas on MCP mutation tools
+  `/webhook/*` (note: webhooks are mounted under `/webhook`, not
+  `/api/webhooks`), and per-session quotas on MCP mutation tools
   (`download_episodes`, `transcribe_episodes`, `summarize`). Quota
   ceiling configurable via env.
 - [ ] **2.4 OAuth redirect trusts `X-Forwarded-*`.**

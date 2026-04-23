@@ -205,23 +205,58 @@ preferred; localhost acceptable for PR-time checks). These catch what
 static review can't.
 
 ```bash
+# Route reference (verify against thestill/web/app.py before editing).
+# A 404/405 from any check below is a FAIL - the smoke test is hitting
+# a stale path and the security control is not actually exercised.
+#
+#   OAuth start:    GET  /api/auth/google/login          (302 -> Google)
+#   Add podcast:    POST /api/commands/add               body {"url": "..."}, auth-gated
+#   Webhook ingest: POST /webhook/elevenlabs/speech-to-text
+
 # S1 — Host-header injection on OAuth start
-curl -s -H "Host: evil.com" http://localhost:8000/api/auth/google | \
-  grep -qi "evil.com" && echo FAIL || echo PASS
-# Must not reflect evil.com into the redirect URI.
+# The endpoint replies with a 302; the attacker-controlled hostname
+# would surface in the Location header (via _get_redirect_uri), not
+# the body. We therefore check the Location header and the body both,
+# and treat 404/405 as a FAIL because it means the smoke test is
+# hitting a stale path and the security control is not exercised.
+S1_STATUS=$(curl -s -o /tmp/s1.body -w "%{http_code}" \
+  -H "Host: evil.com" \
+  "http://localhost:8000/api/auth/google/login")
+S1_LOCATION=$(curl -sI -H "Host: evil.com" \
+  "http://localhost:8000/api/auth/google/login" | awk '/^[Ll]ocation:/ {print $2}')
+if [ "$S1_STATUS" = "404" ] || [ "$S1_STATUS" = "405" ]; then
+  echo "FAIL: endpoint missing (HTTP $S1_STATUS) - update smoke test"
+elif echo "$S1_LOCATION $(cat /tmp/s1.body)" | grep -qi "evil.com"; then
+  echo FAIL
+else
+  echo PASS
+fi
+# Must NOT reflect evil.com into the redirect URI or response body.
 
 # S2 — SSRF: cloud metadata
-curl -s -X POST http://localhost:8000/api/podcasts \
+# /api/commands/add requires auth; set AUTH_HEADER to a valid session
+# cookie or bearer token before running. An unauthenticated 401/403 is
+# not a useful signal - the SSRF guard must run after auth.
+S2_BODY=$(curl -s -X POST http://localhost:8000/api/commands/add \
   -H "Content-Type: application/json" \
-  -d '{"url":"http://169.254.169.254/latest/meta-data/"}' | \
-  grep -qi "meta-data\|iam" && echo FAIL || echo PASS
-# Must be refused before any network I/O.
+  ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+  -d '{"url":"http://169.254.169.254/latest/meta-data/"}')
+if echo "$S2_BODY" | grep -qi "meta-data\|iam"; then
+  echo "FAIL: cloud-metadata contents returned"
+elif echo "$S2_BODY" | grep -qi "unsafe\|refused\|invalid\|blocked"; then
+  echo PASS
+else
+  echo "FAIL: guard did not refuse ($S2_BODY)"
+fi
+# Must refuse with an explicit error, NOT silently succeed.
 
 # S3 — SSRF: loopback
-curl -s -X POST http://localhost:8000/api/podcasts \
+S3_BODY=$(curl -s -X POST http://localhost:8000/api/commands/add \
   -H "Content-Type: application/json" \
-  -d '{"url":"http://127.0.0.1:8000/api/"}' | \
-  grep -qi "error\|refused\|invalid" && echo PASS || echo FAIL
+  ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+  -d '{"url":"http://127.0.0.1:8000/api/"}')
+echo "$S3_BODY" | grep -qi "unsafe\|refused\|invalid\|blocked" \
+  && echo PASS || echo "FAIL ($S3_BODY)"
 # Must refuse.
 
 # S4 — XXE in RSS
@@ -230,19 +265,25 @@ cat > /tmp/xxe.xml <<'XML'
 <!DOCTYPE rss [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
 <rss><channel><title>&xxe;</title></channel></rss>
 XML
-# Host /tmp/xxe.xml locally and add it as a feed. /etc/passwd contents
+# Host /tmp/xxe.xml locally (e.g. `python3 -m http.server 9000`) and
+# POST that URL to /api/commands/add (with auth). /etc/passwd contents
 # must not appear in responses, logs, or disk artifacts.
 
 # S5 — Webhook without secret
-curl -s -X POST http://localhost:8000/api/webhooks/elevenlabs \
+# Unset ELEVENLABS_WEBHOOK_SECRET and DEV_ALLOW_UNSIGNED_WEBHOOKS, then:
+S5_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST http://localhost:8000/webhook/elevenlabs/speech-to-text \
   -H "Content-Type: application/json" \
-  -d '{"status":"ok","transcript":"FORGED"}'
-# Must return 401. In dev with DEV_ALLOW_UNSIGNED_WEBHOOKS=1, PASS
-# only if that env var is intentionally set.
+  -d '{"status":"ok","transcription_id":"forged","transcription":{"text":"FORGED"}}')
+[ "$S5_STATUS" = "401" ] && echo PASS || echo "FAIL (HTTP $S5_STATUS)"
+# 404/405 means the smoke test is hitting a stale path - fix the path
+# before re-running. 401 means the fail-closed guard is working.
 
 # S6 — Webhook replay
-# Generate a valid signature with a 10-minute-old timestamp and POST it.
-# Must return 401.
+# With ELEVENLABS_WEBHOOK_SECRET set, generate a valid HMAC-SHA256
+# signature over `<ts>.<body>` using a timestamp 10 min in the past,
+# then POST to /webhook/elevenlabs/speech-to-text with header
+# `ElevenLabs-Signature: t=<old-ts>,v0=<sig>`. Must return 401.
 
 # S7 — /docs on prod
 ENV=production thestill server &
@@ -257,10 +298,13 @@ curl -sI http://localhost:8000/ | grep -iE \
 
 # S9 — Body size cap
 head -c 5242880 /dev/urandom > /tmp/big.bin   # 5 MB
-curl -s -o /dev/null -w "%{http_code}\n" \
-  -X POST http://localhost:8000/api/webhooks/elevenlabs \
-  --data-binary @/tmp/big.bin
-# Must return 413 (payload too large).
+S9_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST http://localhost:8000/webhook/elevenlabs/speech-to-text \
+  --data-binary @/tmp/big.bin)
+[ "$S9_STATUS" = "413" ] && echo PASS || echo "FAIL (HTTP $S9_STATUS)"
+# Must return 413 (payload too large). A 401 from signature verification
+# happening before the size check is also a FAIL - the size cap must
+# run first or in parallel so a signed attacker cannot memory-DoS.
 
 # S10 — Oversize audio download
 # Add a feed pointing to a server that advertises content-length
