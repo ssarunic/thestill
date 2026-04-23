@@ -101,14 +101,51 @@ class _SlidingWindow:
 _LIMITER = _SlidingWindow()
 
 
-def _client_key(request: Request, prefix: str) -> str:
-    """Derive a per-IP key for HTTP endpoints."""
-    # Prefer the direct socket peer. When behind a trusted proxy, the
-    # LoggingMiddleware / TrustedHost logic should have rewritten this
-    # before the limiter runs. We intentionally do NOT consult
-    # X-Forwarded-For here — an attacker can spoof it and evade limits.
+def _resolve_client_ip(request: Request) -> str:
+    """
+    Identify the real client behind any trusted reverse proxy.
+
+    spec #25 item 2.3 (post-review hardening): using ``request.client.host``
+    alone collapses all users to the reverse-proxy IP in real deployments,
+    which means one misbehaving client can lock everyone out. To avoid that
+    AND the inverse problem (``X-Forwarded-For`` is attacker-spoofable), we
+    only consult the forwarded header when the immediate peer is in
+    ``Config.trusted_proxies``.
+
+    Note on XFF semantics: clients append and proxies prepend. The
+    left-most entry is the originating client; we walk from the right,
+    discarding trusted-proxy hops, and take the first untrusted hop as
+    the real client. This matches IETF RFC 7239's intent and defeats
+    spoofing because an attacker adding a fake XFF entry can only
+    pollute entries that appear BEFORE the last trusted hop.
+    """
     peer = request.client.host if request.client else "unknown"
-    return f"{prefix}:{peer}"
+    trusted_proxies: Optional[set] = None
+    try:
+        config = getattr(request.app.state.app_state, "config", None)
+        if config is not None:
+            trusted_proxies = set(config.trusted_proxies or [])
+    except AttributeError:
+        trusted_proxies = None
+
+    if not trusted_proxies or peer not in trusted_proxies:
+        return peer
+
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if not forwarded:
+        return peer
+
+    # Walk right-to-left, skipping every trusted proxy hop.
+    for hop in reversed([h.strip() for h in forwarded.split(",") if h.strip()]):
+        if hop not in trusted_proxies:
+            return hop
+    # All hops were trusted proxies — fall back to the direct peer.
+    return peer
+
+
+def _client_key(request: Request, prefix: str) -> str:
+    """Derive a per-real-client key for HTTP endpoints."""
+    return f"{prefix}:{_resolve_client_ip(request)}"
 
 
 def rate_limit_dependency(

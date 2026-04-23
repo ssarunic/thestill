@@ -20,6 +20,8 @@ Includes pipeline operations: refresh, download, downsample, transcribe, clean.
 """
 
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,13 @@ def setup_tools(server: Server, storage_path: str):
     """
     # Load full config for database path and other settings
     config = load_config()
+
+    # spec #25 item 2.3 (post-review hardening): per-session MCP quota key.
+    # stdio transport has one client per server process, so process identity
+    # IS session identity. When the server moves to HTTP/SSE transport,
+    # swap this for the real per-connection id exposed by the MCP runtime.
+    _session_key = os.getenv("MCP_SESSION_KEY") or f"pid-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    logger.info("mcp_session_key_initialized", session_key=_session_key)
 
     # Initialize shared components
     path_manager = PathManager(storage_path)
@@ -403,7 +412,7 @@ def setup_tools(server: Server, storage_path: str):
         }
         if name in _MUTATING_TOOLS:
             try:
-                enforce_mcp_mutation_quota(name)
+                enforce_mcp_mutation_quota(name, session_key=_session_key)
             except RateLimitExceeded as exc:
                 return [
                     TextContent(

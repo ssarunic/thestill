@@ -52,11 +52,17 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     """
     Build the OAuth callback redirect URI.
 
-    spec #25, item 2.4: ``X-Forwarded-*`` headers are only honoured when the
-    request originates from a proxy IP in the trusted-proxies allowlist.
-    Anything else falls back to the configured ``public_base_url`` (or, for
-    dev, to the request's own ``url.scheme``/``netloc`` — never the
-    attacker-controllable ``Host`` header).
+    spec #25, item 2.4 (fail-closed, post-review): ``X-Forwarded-*``
+    headers are only honoured when the immediate peer is an IP in
+    ``trusted_proxies``. If the peer is NOT a trusted proxy, we refuse
+    to derive the hostname from the request — ``request.url.netloc`` is
+    built from the attacker-controllable ``Host`` header and cannot be
+    trusted.  In that case we require ``public_base_url`` to be
+    configured; if it isn't, we fail the request with 500 rather than
+    build a spoofable URL.
+
+    In single-user mode OAuth routes reject the request at a higher
+    layer, so the misconfiguration only surfaces where it matters.
     """
     client_host = request.client.host if request.client else ""
     trusted = set(state.config.trusted_proxies or [])
@@ -66,14 +72,22 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
         host = request.headers.get("X-Forwarded-Host", request.url.netloc)
         return f"{scheme}://{host}/api/auth/google/callback"
 
-    # Not behind a trusted proxy. Prefer the configured public base URL —
-    # the attacker-controllable Host header is ignored.
+    # Not behind a trusted proxy. Use the operator-configured canonical URL.
     if state.config.public_base_url:
         return f"{state.config.public_base_url}/api/auth/google/callback"
 
-    # Dev fallback: request.url reflects what the app itself received
-    # (bypasses Host spoofing because Starlette uses the raw ASGI scope).
-    return f"{request.url.scheme}://{request.url.netloc}/api/auth/google/callback"
+    logger.error(
+        "oauth_redirect_fail_closed",
+        reason="public_base_url_not_configured",
+        client_host=client_host,
+    )
+    raise HTTPException(
+        status_code=500,
+        detail=(
+            "OAuth redirect is not configured on this server. "
+            "Set PUBLIC_BASE_URL (or add this host to TRUSTED_PROXIES)."
+        ),
+    )
 
 
 def _set_auth_cookie(response: Response, token: str, state: AppState) -> None:

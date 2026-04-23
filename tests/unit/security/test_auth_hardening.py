@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from thestill.web.routes import auth as auth_route
 
@@ -92,15 +93,19 @@ class TestRedirectUri:
         uri = auth_route._get_redirect_uri(req, state)
         assert uri == "https://public.example.com/api/auth/google/callback"
 
-    def test_dev_fallback_uses_request_url(self):
-        """With no proxy and no public URL, fall back to the ASGI-reported URL."""
+    def test_fails_closed_without_public_base_url(self):
+        """Post-review hardening: no trusted proxy AND no public_base_url
+        must refuse the request rather than fall back to the (spoofable)
+        ASGI Host. The previous version of this test asserted the
+        vulnerable behaviour and was wrong."""
         state = _mk_state(trusted_proxies=[], public_base_url="")
         req = _mk_request(
             client_host="127.0.0.1",
-            headers={"X-Forwarded-Host": "evil.com"},  # untrusted source
+            headers={"X-Forwarded-Host": "evil.com"},
             url_scheme="http",
             url_netloc="localhost:8000",
         )
-        uri = auth_route._get_redirect_uri(req, state)
-        assert uri == "http://localhost:8000/api/auth/google/callback"
-        assert "evil.com" not in uri
+        with pytest.raises(HTTPException) as exc_info:
+            auth_route._get_redirect_uri(req, state)
+        assert exc_info.value.status_code == 500
+        assert "PUBLIC_BASE_URL" in exc_info.value.detail

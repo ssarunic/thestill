@@ -109,3 +109,80 @@ class TestCors:
         assert mw is not None
         origins = mw.kwargs["allow_origins"]
         assert any("localhost" in o or "127.0.0.1" in o for o in origins)
+
+    def test_wildcard_origin_rejected_at_startup(self):
+        """Post-review fix (spec #25 item 2.5): ALLOWED_ORIGINS='*' with
+        credentials violates CORS and would let any site call us with the
+        user's auth cookie. Startup must refuse it."""
+        with pytest.raises(ValueError, match="ALLOWED_ORIGINS"):
+            _build_app(_config_for(environment="production", allowed_origins=["*"]))
+
+
+class TestCookieSecureEnforcement:
+    """Post-review fix for spec #25 item 2.1."""
+
+    def test_production_requires_cookie_secure_true(self):
+        """load_config must refuse COOKIE_SECURE=false when ENVIRONMENT=production."""
+        import os
+
+        from thestill.utils.config import load_config
+
+        saved = {k: os.environ.get(k) for k in ("ENVIRONMENT", "COOKIE_SECURE", "OPENAI_API_KEY")}
+        try:
+            os.environ["ENVIRONMENT"] = "production"
+            os.environ["COOKIE_SECURE"] = "false"
+            os.environ["OPENAI_API_KEY"] = "dummy"
+            with pytest.raises(ValueError, match="COOKIE_SECURE"):
+                load_config()
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_development_can_opt_out_of_secure_cookies(self):
+        import os
+
+        from thestill.utils.config import load_config
+
+        saved = {k: os.environ.get(k) for k in ("ENVIRONMENT", "COOKIE_SECURE", "OPENAI_API_KEY")}
+        try:
+            os.environ["ENVIRONMENT"] = "development"
+            os.environ["COOKIE_SECURE"] = "false"
+            os.environ["OPENAI_API_KEY"] = "dummy"
+            cfg = load_config()
+            assert cfg.cookie_secure is False
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+class TestMultiUserOauthRequiresPublicBaseUrl:
+    """Post-review fix for spec #25 item 2.4."""
+
+    def test_multi_user_without_public_base_url_fails_load(self):
+        import os
+
+        from thestill.utils.config import load_config
+
+        saved = {
+            k: os.environ.get(k)
+            for k in ("MULTI_USER", "PUBLIC_BASE_URL", "TRUSTED_PROXIES", "OPENAI_API_KEY")
+        }
+        try:
+            os.environ["MULTI_USER"] = "true"
+            os.environ.pop("PUBLIC_BASE_URL", None)
+            os.environ.pop("TRUSTED_PROXIES", None)
+            os.environ["OPENAI_API_KEY"] = "dummy"
+            with pytest.raises(ValueError, match="PUBLIC_BASE_URL"):
+                load_config()
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value

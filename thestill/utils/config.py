@@ -339,6 +339,31 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
     }
 
+    # spec #25 item 2.1 (post-review hardening): production must not emit
+    # non-secure auth cookies. The footgun is COOKIE_SECURE=false slipping
+    # through from a shared .env — refuse it loudly. Development can still
+    # opt out.
+    if config_data["environment"] == "production" and not config_data["cookie_secure"]:
+        raise ValueError(
+            "COOKIE_SECURE=false is not permitted when ENVIRONMENT=production. "
+            "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
+        )
+
+    # spec #25 item 2.4 (post-review hardening): multi-user mode runs OAuth,
+    # which must build a non-spoofable callback URL. Refuse to boot if the
+    # operator forgot to tell us our public hostname AND didn't configure a
+    # trusted proxy.
+    if (
+        config_data.get("multi_user")
+        and not config_data["public_base_url"]
+        and not config_data["trusted_proxies"]
+    ):
+        raise ValueError(
+            "MULTI_USER=true requires PUBLIC_BASE_URL (or a TRUSTED_PROXIES "
+            "allowlist). Without it the OAuth redirect URI would be derived "
+            "from the attacker-controllable Host header."
+        )
+
     return Config(**config_data)
 
 

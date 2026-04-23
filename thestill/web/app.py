@@ -281,6 +281,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             "http://127.0.0.1:5173",
             "http://127.0.0.1:3000",
         ]
+    # Reject credentialed wildcard at startup (post-review hardening of
+    # spec #25 item 2.5). Browsers spec-forbid Access-Control-Allow-Credentials
+    # with Access-Control-Allow-Origin: *, and Starlette would echo whatever
+    # origin asked, so ALLOWED_ORIGINS="*" is a footgun — refuse it.
+    if any(origin.strip() == "*" for origin in cors_origins):
+        raise ValueError(
+            "ALLOWED_ORIGINS='*' is not permitted: the web app issues "
+            "credentialed cookies, and wildcard origins with credentials "
+            "violate the CORS spec. Enumerate origins explicitly."
+        )
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,
