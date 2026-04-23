@@ -90,20 +90,39 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     )
 
 
-def _set_auth_cookie(response: Response, token: str, state: AppState) -> None:
-    """Set the authentication cookie (spec #25, item 2.1).
+def _set_secure_cookie(
+    response: Response,
+    *,
+    name: str,
+    value: str,
+    max_age: int,
+    samesite: str,
+    state: AppState,
+) -> None:
+    """Set an httponly, ``state.config.cookie_secure``-gated cookie.
 
-    ``secure`` is True unless explicitly disabled via ``COOKIE_SECURE=false``
-    in a dev environment. ``samesite=strict`` defends against
-    cross-site request forgery on the session bearer.
+    ``samesite=strict`` locks down the session bearer; OAuth's state cookie
+    needs ``lax`` because it must survive the cross-site redirect back from
+    Google.
     """
     response.set_cookie(
-        key=AUTH_COOKIE_NAME,
+        key=name,
+        value=value,
+        max_age=max_age,
+        httponly=True,
+        samesite=samesite,
+        secure=state.config.cookie_secure,
+    )
+
+
+def _set_auth_cookie(response: Response, token: str, state: AppState) -> None:
+    _set_secure_cookie(
+        response,
+        name=AUTH_COOKIE_NAME,
         value=token,
         max_age=AUTH_COOKIE_MAX_AGE,
-        httponly=True,
         samesite="strict",
-        secure=state.config.cookie_secure,
+        state=state,
     )
 
 
@@ -174,13 +193,13 @@ async def google_login(request: Request, state: AppState = Depends(get_app_state
 
     # Store state in session cookie for CSRF protection
     response = RedirectResponse(url=auth_url, status_code=302)
-    response.set_cookie(
-        key="oauth_state",
+    _set_secure_cookie(
+        response,
+        name="oauth_state",
         value=state_token,
         max_age=600,  # 10 minutes
-        httponly=True,
         samesite="lax",
-        secure=state.config.cookie_secure,
+        state=state,
     )
 
     logger.info("Redirecting to Google OAuth")

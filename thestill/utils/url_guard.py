@@ -43,7 +43,7 @@ import ipaddress
 import os
 import socket
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -71,10 +71,19 @@ class ResolvedHost:
     addresses: Tuple[str, ...]
 
 
-def _env_allowlist() -> Iterable[str]:
+_allowlist_cache: Tuple[str, Tuple[str, ...]] = ("", ())
+
+
+def _env_allowlist() -> Tuple[str, ...]:
     """Hostnames exempted from the guard (e.g. a Dalston on ``localhost``)."""
+    global _allowlist_cache
     raw = os.getenv("URL_GUARD_ALLOWLIST", "")
-    return tuple(h.strip().lower() for h in raw.split(",") if h.strip())
+    if raw != _allowlist_cache[0]:
+        _allowlist_cache = (
+            raw,
+            tuple(h.strip().lower() for h in raw.split(",") if h.strip()),
+        )
+    return _allowlist_cache[1]
 
 
 def _is_allowlisted_host(hostname: str) -> bool:
@@ -96,12 +105,9 @@ def _ip_is_public(address: str) -> bool:
         ip = ipaddress.ip_address(address)
     except ValueError:
         return False
-    # ``is_global`` covers the "public internet" case and already excludes
-    # private, loopback, link-local, multicast, reserved, and unspecified
-    # ranges. We spell a few extras out explicitly so future ipaddress
-    # changes don't silently relax the check.
-    if ip.is_private or ip.is_loopback or ip.is_link_local:
-        return False
+    # ``is_global`` excludes private/loopback/link-local/reserved, but *not*
+    # multicast — 224.0.0.0/4 is ``is_global=True`` in stdlib.  Filter the
+    # remaining non-unicast ranges explicitly.
     if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return False
     return bool(ip.is_global)
@@ -152,9 +158,7 @@ def validate_public_url(url: str) -> ResolvedHost:
 
     bad = [addr for addr in addresses if not _ip_is_public(addr)]
     if bad:
-        raise UnsafeURLError(
-            f"hostname {hostname!r} resolves to non-public address(es): {bad}"
-        )
+        raise UnsafeURLError(f"hostname {hostname!r} resolves to non-public address(es): {bad}")
     return ResolvedHost(hostname=hostname, addresses=addresses)
 
 

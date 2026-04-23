@@ -73,6 +73,12 @@ MCP_MUTATION_LIMIT = RateLimit(
 )
 
 
+# Once the bucket table grows past this size, each allow() call evicts any
+# keys whose newest entry is older than the current window. Keeps the
+# in-memory footprint bounded even under IP-rotation spam.
+_SWEEP_TRIGGER = 1024
+
+
 class _SlidingWindow:
     """Thread-safe, key-scoped sliding window counter."""
 
@@ -90,7 +96,18 @@ class _SlidingWindow:
             if len(bucket) >= limit.max_events:
                 return False
             bucket.append(now)
+            # Opportunistic sweep: drop any other empty bucket we stumble
+            # across so a long-running process doesn't accumulate one entry
+            # per unique client IP forever.
+            if len(self._buckets) > _SWEEP_TRIGGER:
+                self._sweep(cutoff)
             return True
+
+    def _sweep(self, cutoff: float) -> None:
+        # Caller holds self._lock.
+        stale = [k for k, b in self._buckets.items() if not b or b[-1] < cutoff]
+        for k in stale:
+            del self._buckets[k]
 
     def reset(self) -> None:
         """Test helper."""

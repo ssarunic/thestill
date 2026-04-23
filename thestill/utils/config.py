@@ -151,11 +151,11 @@ class Config(BaseModel):
     cookie_secure: bool = True
     # CORS origins. Comma-separated in env (ALLOWED_ORIGINS=https://a,https://b).
     # Empty list = no cross-origin access allowed.
-    allowed_origins: list = []  # type: ignore[assignment]  # filled in load_config
+    allowed_origins: list[str] = Field(default_factory=list)
     # IPs of reverse proxies we trust to set X-Forwarded-* headers. Anything
     # else is ignored, so an attacker-controlled Host header cannot influence
     # OAuth redirect construction. Comma-separated in env.
-    trusted_proxies: list = []  # type: ignore[assignment]
+    trusted_proxies: list[str] = Field(default_factory=list)
     # Canonical public URL — used to build OAuth redirects when the request
     # does NOT come from a trusted proxy. Must include scheme.
     public_base_url: str = ""
@@ -323,16 +323,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # Deployment / Web Surface (spec #25 Phase 2)
         "environment": os.getenv("ENVIRONMENT", "production").lower(),
         "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",
-        "allowed_origins": [
-            origin.strip()
-            for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
-            if origin.strip()
-        ],
-        "trusted_proxies": [
-            proxy.strip()
-            for proxy in os.getenv("TRUSTED_PROXIES", "").split(",")
-            if proxy.strip()
-        ],
+        "allowed_origins": [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()],
+        "trusted_proxies": [proxy.strip() for proxy in os.getenv("TRUSTED_PROXIES", "").split(",") if proxy.strip()],
         "public_base_url": os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
@@ -353,11 +345,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
     # which must build a non-spoofable callback URL. Refuse to boot if the
     # operator forgot to tell us our public hostname AND didn't configure a
     # trusted proxy.
-    if (
-        config_data.get("multi_user")
-        and not config_data["public_base_url"]
-        and not config_data["trusted_proxies"]
-    ):
+    if config_data.get("multi_user") and not config_data["public_base_url"] and not config_data["trusted_proxies"]:
         raise ValueError(
             "MULTI_USER=true requires PUBLIC_BASE_URL (or a TRUSTED_PROXIES "
             "allowlist). Without it the OAuth redirect URI would be derived "

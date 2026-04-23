@@ -52,6 +52,23 @@ from .middleware.stdio_adapter import log_mcp_stdio
 
 logger = structlog.get_logger(__name__)
 
+# Tools that consume downstream cost (LLM / transcription / disk). Read-only
+# inspection tools are exempt so ordinary clients can poll freely.
+_MUTATING_TOOLS = frozenset(
+    {
+        "add_podcast",
+        "remove_podcast",
+        "refresh_feeds",
+        "download_episodes",
+        "downsample_audio",
+        "transcribe_episodes",
+        "clean_transcripts",
+        "process_episode",
+        "summarize_episodes",
+        "generate_digest",
+    }
+)
+
 
 def setup_tools(server: Server, storage_path: str):
     """
@@ -394,22 +411,6 @@ def setup_tools(server: Server, storage_path: str):
         """
         logger.info(f"Calling tool: {name} with args: {arguments}")
 
-        # spec #25, item 2.3: per-tool quota so a malicious or runaway
-        # MCP client cannot burn the downstream LLM / transcription
-        # budget. Read-only tools are exempt so ordinary inspection
-        # isn't throttled.
-        _MUTATING_TOOLS = {
-            "add_podcast",
-            "remove_podcast",
-            "refresh_feeds",
-            "download_episodes",
-            "downsample_audio",
-            "transcribe_episodes",
-            "clean_transcripts",
-            "process_episode",
-            "summarize_episodes",
-            "generate_digest",
-        }
         if name in _MUTATING_TOOLS:
             try:
                 enforce_mcp_mutation_quota(name, session_key=_session_key)
