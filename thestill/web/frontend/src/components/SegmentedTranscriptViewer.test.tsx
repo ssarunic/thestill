@@ -154,7 +154,7 @@ describe('SegmentedTranscriptViewer', () => {
   })
 
   describe('kind toggles', () => {
-    it('shows ad break with full cleaned text by default', () => {
+    it('shows ad body text without a summary label when Ads is on', () => {
       renderViewer({
         transcript: makeTranscript([
           seg({
@@ -166,12 +166,13 @@ describe('SegmentedTranscriptViewer', () => {
         ]),
       })
 
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getAllByText(/Acme/).length).toBeGreaterThanOrEqual(1)
+      // Full ad copy reads like body text.
       expect(screen.getByText(/acme\.com/)).toBeInTheDocument()
+      // No "AD BREAK — …" chip above the body when expanded.
+      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
     })
 
-    it('hides ads when the Ads toggle is clicked', async () => {
+    it('collapses ads to a compact "AD BREAK — Sponsor" chip when Ads is off', async () => {
       const user = userEvent.setup()
       renderViewer({
         transcript: makeTranscript([
@@ -181,11 +182,18 @@ describe('SegmentedTranscriptViewer', () => {
         ]),
       })
 
+      // Ads ON: body visible, no chip label.
       expect(screen.getByText(/visit acme\.com/)).toBeInTheDocument()
+      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
 
       await user.click(screen.getByRole('button', { name: 'Ads' }))
 
+      // Ads OFF: body gone, compact chip "Ad break — Acme" visible
+      // (uppercase is CSS-only, so the DOM text is "Ad break").
       expect(screen.queryByText(/visit acme\.com/)).not.toBeInTheDocument()
+      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
+      expect(screen.getByText(/Acme/)).toBeInTheDocument()
+      // Surrounding content is unaffected.
       expect(screen.getByText('before ad')).toBeInTheDocument()
       expect(screen.getByText('after ad')).toBeInTheDocument()
     })
@@ -221,7 +229,7 @@ describe('SegmentedTranscriptViewer', () => {
       expect(screen.getByRole('button', { name: 'Outro' })).toBeInTheDocument()
     })
 
-    it('loads the hidden-kinds preference from localStorage', () => {
+    it('loads the hidden-kinds preference from localStorage and starts collapsed', () => {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(['ad_break']))
 
       renderViewer({
@@ -232,7 +240,10 @@ describe('SegmentedTranscriptViewer', () => {
       })
 
       expect(screen.getByText('content')).toBeInTheDocument()
+      // Ad body is collapsed to the chip, so the body text is absent.
       expect(screen.queryByText('hidden ad')).not.toBeInTheDocument()
+      // But the compact chip is still there so the reader sees the ad position.
+      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Ads' })).toHaveAttribute('aria-pressed', 'false')
     })
 
@@ -264,17 +275,22 @@ describe('SegmentedTranscriptViewer', () => {
       expect(screen.getByText('ad visible')).toBeInTheDocument()
     })
 
-    it('shows a placeholder when every visible kind is toggled off', async () => {
+    it('keeps the chip visible even when every togglable kind is collapsed', async () => {
       const user = userEvent.setup()
       renderViewer({
         transcript: makeTranscript([
-          seg({ id: 0, kind: 'ad_break', text: 'ad copy' }),
+          seg({ id: 0, kind: 'ad_break', text: 'ad copy', sponsor: 'Acme' }),
         ]),
       })
 
       await user.click(screen.getByRole('button', { name: 'Ads' }))
 
-      expect(screen.getByText(/All segment kinds are hidden/i)).toBeInTheDocument()
+      // Body hidden, but the reader still sees the ad marker.
+      expect(screen.queryByText('ad copy')).not.toBeInTheDocument()
+      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
+      expect(screen.getByText(/Acme/)).toBeInTheDocument()
+      const block = screen.getByTestId('segment-ad_break-0')
+      expect(block).toHaveAttribute('data-collapsed', 'true')
     })
 
     it('renders music, intro and outro with their own block style', () => {

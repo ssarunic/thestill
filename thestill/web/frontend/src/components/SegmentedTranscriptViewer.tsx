@@ -219,6 +219,9 @@ interface BlockSegmentProps {
   onCopyTimestamp: (seconds: number) => void
   searchQuery: string
   dimmed: boolean
+  // When true, collapse to a compact "[00:02] AD BREAK — NAVAN" chip.
+  // When false, render the full cleaned ad body with a subtle coloured rail.
+  collapsed: boolean
 }
 
 const BlockSegment = memo(function BlockSegment({
@@ -231,13 +234,13 @@ const BlockSegment = memo(function BlockSegment({
   onCopyTimestamp,
   searchQuery,
   dimmed,
+  collapsed,
 }: BlockSegmentProps) {
   const style = BLOCK_STYLES[kind]
   const baseLabel = kind === 'ad_break' ? 'Ad break' : KIND_LABELS[kind]
   const sponsorSuffix =
     kind === 'ad_break' && segment.sponsor ? ` — ${segment.sponsor}` : ''
   const absoluteSeconds = segment.start + offset
-  const activeRing = isActive ? style.bgActive : ''
   const dimClass = dimmed ? 'opacity-70' : ''
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ${baseLabel}${sponsorSuffix}`,
@@ -245,30 +248,62 @@ const BlockSegment = memo(function BlockSegment({
     absoluteSeconds,
   )
   const seekableClasses = onSeek ? `cursor-pointer ${style.hoverRing}` : ''
+
+  if (collapsed) {
+    const activeRing = isActive ? style.bgActive : ''
+    return (
+      <div
+        {...interactive}
+        ref={registerRef}
+        data-testid={`segment-${kind}-${segment.id}`}
+        data-active={isActive ? 'true' : 'false'}
+        data-collapsed="true"
+        className={`my-3 border-l-4 ${style.border} ${style.bg} px-4 py-2 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
+      >
+        <div className={`flex items-center gap-3 ${style.text}`}>
+          <TimestampLink
+            seconds={absoluteSeconds}
+            onCopy={onCopyTimestamp}
+            className={`font-mono text-[11px] tabular-nums ${style.accent}`}
+          />
+          <span className="text-xs font-semibold uppercase tracking-wider">
+            {baseLabel}
+            {highlightMatches(sponsorSuffix, searchQuery)}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  // Expanded: full ad copy reads like body text but keeps the kind's
+  // accent colour on the left rail so the reader still clocks it as
+  // sponsored content. No label chip — the user reads the ad body directly.
+  const containerActive = isActive ? style.bgActive : 'hover:bg-gray-50/70'
   return (
     <div
       {...interactive}
       ref={registerRef}
       data-testid={`segment-${kind}-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
-      className={`my-5 border-l-4 ${style.border} ${style.bg} px-4 py-3 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
+      data-collapsed="false"
+      className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
-      <div className={`flex items-center gap-3 ${style.text}`}>
+      <p
+        className={`text-gray-800 pl-4 border-l-2 ${style.border} text-base leading-[1.7] !mb-0`}
+      >
         <TimestampLink
           seconds={absoluteSeconds}
           onCopy={onCopyTimestamp}
-          className={`font-mono text-[11px] tabular-nums ${style.accent}`}
+          className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${style.accent}`}
         />
-        <span className="text-xs font-semibold uppercase tracking-wider">
-          {baseLabel}
-          {highlightMatches(sponsorSuffix, searchQuery)}
-        </span>
-      </div>
-      {segment.text ? (
-        <p className="text-gray-800 mt-2 text-base leading-[1.7] whitespace-pre-wrap">
-          {highlightMatches(segment.text, searchQuery)}
-        </p>
-      ) : null}
+        {segment.text
+          ? highlightMatches(segment.text, searchQuery)
+          : (
+            <span className="text-gray-400 italic">
+              (empty {baseLabel.toLowerCase()})
+            </span>
+          )}
+      </p>
     </div>
   )
 })
@@ -417,6 +452,8 @@ export default function SegmentedTranscriptViewer({
     })
   }, [])
 
+  // Togglable kinds are always in the rendered list — toggling the pill
+  // flips them between compact chip and full-text; it never drops them.
   const { presentKinds, renderedSegments } = useMemo(() => {
     const present = new Set<TogglableKind>()
     const visible: AnnotatedSegment[] = []
@@ -427,7 +464,6 @@ export default function SegmentedTranscriptViewer({
       }
       if (seg.kind !== 'content') {
         present.add(seg.kind as TogglableKind)
-        if (hiddenKinds.has(seg.kind as TogglableKind)) continue
       }
       visible.push(seg)
     }
@@ -435,7 +471,7 @@ export default function SegmentedTranscriptViewer({
       presentKinds: TOGGLE_ORDER.filter((kind) => present.has(kind)),
       renderedSegments: visible,
     }
-  }, [transcript.segments, showFiller, hiddenKinds])
+  }, [transcript.segments, showFiller])
 
   const currentTime = usePlayerTime()
   const { track } = usePlayer()
@@ -659,9 +695,10 @@ export default function SegmentedTranscriptViewer({
 
       {renderedSegments.length === 0 ? (
         <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
-          <p className="text-gray-600 font-medium">All segment kinds are hidden</p>
+          <p className="text-gray-600 font-medium">No content segments visible</p>
           <p className="text-sm text-gray-400 mt-1">
-            Toggle a kind above, or enable <em>Show filler</em>, to reveal segments.
+            Every segment in this transcript was marked as filler. Toggle{' '}
+            <em>Show filler</em> above to reveal them.
           </p>
         </div>
       ) : (
@@ -703,11 +740,12 @@ export default function SegmentedTranscriptViewer({
                 />
               )
             }
+            const togglableKind = segment.kind as TogglableKind
             return (
               <BlockSegment
                 key={segment.id}
                 segment={segment}
-                kind={segment.kind as TogglableKind}
+                kind={togglableKind}
                 offset={offset}
                 isActive={isActive}
                 onSeek={onSeekRequest}
@@ -715,6 +753,7 @@ export default function SegmentedTranscriptViewer({
                 onCopyTimestamp={handleCopyTimestamp}
                 searchQuery={searchQuery}
                 dimmed={expandedFromHidden}
+                collapsed={hiddenKinds.has(togglableKind)}
               />
             )
           })}
