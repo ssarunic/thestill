@@ -52,7 +52,7 @@ from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .middleware import LoggingMiddleware
+from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
     api_commands,
     api_dashboard,
@@ -267,6 +267,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # Add logging middleware for request/response tracking
     app.add_middleware(LoggingMiddleware)
+
+    # spec #25 item 3.1: defence-in-depth response headers (CSP, HSTS,
+    # X-Frame-Options, X-Content-Type-Options, Referrer-Policy).
+    app.add_middleware(SecurityHeadersMiddleware, is_production=not _is_dev)
+
+    # spec #25 item 3.7: application-layer body-size cap. Webhooks get the
+    # tighter webhook cap; everything else falls back to the default
+    # (matches the webhook cap so nothing accidentally ships unlimited).
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        default_limit=config.max_webhook_body_bytes,
+        route_limits=[("/webhook/", config.max_webhook_body_bytes)],
+    )
 
     # CORS: origins come from ALLOWED_ORIGINS env,
     # methods and headers are explicit. In development we fall back to the

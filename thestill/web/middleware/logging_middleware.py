@@ -23,6 +23,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from ...utils.log_safety import redact_mapping
+
 logger = structlog.get_logger(__name__)
 
 
@@ -71,9 +73,14 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             client_ip=request.client.host if request.client else "unknown",
         )
 
-        # Log request start
+        # Log request start (sensitive query params like ?token=... are
+        # redacted by the structlog processor AND scrubbed here so even a
+        # misconfigured processor chain can't surface them).
         start_time = time.time()
-        logger.info("http_request_started", query_params=dict(request.query_params))
+        logger.info(
+            "http_request_started",
+            query_params=redact_mapping(dict(request.query_params)),
+        )
 
         try:
             # Process request

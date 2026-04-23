@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1 + 2 shipped 2026-04-23)
+**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23)
 **Created**: 2026-04-23
-**Updated**: 2026-04-23 (Phase 2 High findings 2.1–2.8 closed)
+**Updated**: 2026-04-23 (Phase 3 Medium findings 3.1, 3.4, 3.5, 3.7, 3.9 closed; 3.2/3.3/3.6/3.8 deferred)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -148,13 +148,18 @@ phase, items can land in any order.
 
 ### Phase 3 — Medium (follow-up hardening PR)
 
-- [ ] **3.1 Security headers middleware.**
-  New `thestill/web/middleware/security_headers.py` emitting CSP
-  (strict, no `unsafe-inline` in `script-src`, SPA nonce), HSTS
-  (`max-age=31536000; includeSubDomains`), `X-Content-Type-Options:
-  nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
-  strict-origin-when-cross-origin`.
-- [ ] **3.2 Markdown/transcript XSS in frontend.**
+- [x] **3.1 Security headers middleware.** ✅ Shipped (safe batch).
+  New [web/middleware/security_headers.py](../thestill/web/middleware/security_headers.py)
+  emits CSP (no `unsafe-inline` in `script-src`, `frame-ancestors 'none'`,
+  strict origin allowlists), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, and `Referrer-Policy:
+  strict-origin-when-cross-origin` on every response.
+  `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+  is emitted in production only, so local http dev doesn't get pinned
+  to a TLS cert the box doesn't have.
+  Regression tests: [test_security_headers.py](../tests/unit/security/test_security_headers.py).
+- [ ] **3.2 Markdown/transcript XSS in frontend.** (Deferred — needs live
+  React audit against the Vite dev server.)
   Audit [web/frontend/](../thestill/web/frontend/) renderers. Ensure no
   `dangerouslySetInnerHTML` without DOMPurify with a conservative
   allowlist (no `<script>`, no `on*` handlers, no `javascript:` URIs).
@@ -163,35 +168,55 @@ phase, items can land in any order.
   [path_manager.py:143,155](../thestill/utils/path_manager.py#L143). At
   every path build from a DB slug, assert `^[a-z0-9][a-z0-9-]*$` AND
   `path.resolve().is_relative_to(data_root)`. Fail loud.
-- [ ] **3.4 Feed URL scheme validation.**
-  [feed_manager.py:152](../thestill/core/feed_manager.py#L152). Parse
-  with `urllib.parse`; reject schemes outside `{http, https}` before
-  handing to feedparser or requests.
-- [ ] **3.5 Secrets in logs / error bodies.**
-  [auth_service.py:201](../thestill/services/auth_service.py#L201),
-  [auth.py:200-201](../thestill/web/routes/auth.py#L200-L201),
-  [logging_middleware.py:76](../thestill/web/middleware/logging_middleware.py#L76).
-  Log exception type + sanitized message; never interpolate `str(e)` into
-  HTTP responses. Redact query-param keys `{token, code, state, authorization,
-  api_key, secret, password}` in request logging.
-- [ ] **3.6 SQLite task-queue race.**
+- [x] **3.4 Feed URL scheme validation.** ✅ Shipped (safe batch).
+  [feed_manager.py](../thestill/core/feed_manager.py) `add_podcast`
+  parses with `urllib.parse` and refuses anything outside `{http, https}`
+  before the media-source factory runs. The SSRF guard catches it too,
+  but this makes the failure fast and localised at the entry point and
+  covers the yt-dlp path that bypasses `requests`.
+  Regression tests: [test_feed_scheme.py](../tests/unit/security/test_feed_scheme.py).
+- [x] **3.5 Secrets in logs / error bodies.** ✅ Shipped (safe batch).
+  New [utils/log_safety.py](../thestill/utils/log_safety.py) exposes
+  `redact_mapping` + a `log_safety_processor` wired at the END of the
+  structlog processor chain — so every `logger.*` call across the whole
+  codebase has sensitive keys (`token`, `secret`, `password`,
+  `authorization`, `cookie`, `api_key`, `code`, `state`, `session`, …)
+  replaced with `[redacted]` automatically. Query-param logging in
+  [logging_middleware.py](../thestill/web/middleware/logging_middleware.py)
+  also runs `redact_mapping` explicitly as belt-and-braces. The verbose
+  OAuth error paths in [auth.py](../thestill/web/routes/auth.py) were
+  already fixed in Phase 2 item 2.8.
+  Regression tests: [test_log_safety.py](../tests/unit/security/test_log_safety.py).
+- [ ] **3.6 SQLite task-queue race.** (Deferred — touches background
+  pipeline; wants a two-worker integration test.)
   [queue_manager.py](../thestill/core/queue_manager.py) and
   [task_manager.py](../thestill/web/task_manager.py). Use
   `BEGIN IMMEDIATE` + conditional `UPDATE ... WHERE status='pending'`
   for claim-next-job. Enable WAL + `busy_timeout`. Test with two workers
   claiming the same row.
-- [ ] **3.7 Request body size cap.**
-  Starlette has no default cap. Add `MaxBodySizeMiddleware`: ≤ 1 MB for
-  webhooks, ≤ 64 KB for auth/CRUD endpoints. Also configure any reverse
-  proxy (`client_max_body_size`).
-- [ ] **3.8 yt-dlp supply-chain.**
+- [x] **3.7 Request body size cap.** ✅ Shipped (safe batch).
+  New [web/middleware/body_size.py](../thestill/web/middleware/body_size.py)
+  rejects POST/PUT/PATCH with `Content-Length` above the per-route cap
+  (413). Webhook routes get the tighter `MAX_WEBHOOK_BODY_BYTES` cap;
+  everything else falls back to the same value as the default. GET
+  requests pass through unchanged. Returns a real `JSONResponse` — the
+  initial implementation tried `raise HTTPException` from middleware,
+  which Starlette's `BaseHTTPMiddleware` doesn't auto-convert.
+  Regression tests: [test_body_size.py](../tests/unit/security/test_body_size.py).
+- [ ] **3.8 yt-dlp supply-chain.** (Deferred — needs tooling choice.)
   Hash-lock dependencies via `uv lock` / `pip-compile --generate-hashes`.
   Add automated update PRs via Dependabot/Renovate. Document a fast-patch
   policy: critical yt-dlp CVEs within 48 h.
-- [ ] **3.9 Log injection via CRLF.**
-  Strip control characters from feed-supplied strings before passing to
-  `logger.*`. Prefer structlog's key=value binders over f-string
-  interpolation (already the stated convention in `CLAUDE.md`; enforce in
+- [x] **3.9 Log injection via CRLF.** ✅ Shipped (safe batch).
+  Solved inside [utils/log_safety.py](../thestill/utils/log_safety.py):
+  the `log_safety_processor` walks every event dict and escapes control
+  characters (`\r`, `\n`, `\x00`, etc.; tab preserved) so an RSS title
+  like `"Evil\\r\\n{\"level\":\"critical\"}"` cannot forge a log line in
+  JSON consumers. Applying this as a structlog processor — instead of
+  chasing every `logger.*` call site — means the mitigation is global and
+  regression-proof.
+  Regression tests in [test_log_safety.py](../tests/unit/security/test_log_safety.py)
+  (shared with 3.5).
   review).
 
 ### Phase 4 — Low (opportunistic)
@@ -243,15 +268,15 @@ item also marks the finding resolved.
 | 10 | High     | Subprocess / yt-dlp / ffmpeg exposure | duration.py:205-219; downsample.py | 2.6 | ✅ |
 | 11 | High     | Unbounded audio download + no integrity check | audio_downloader.py:166-176 | 2.7 | ✅ |
 | 12 | High     | `/docs`, `/redoc` exposed on prod | app.py:247-248 | 2.8 | ✅ |
-| 13 | Medium   | No security headers (CSP/HSTS/XFO/XCTO) | app.py middleware | 3.1 | ☐ |
+| 13 | Medium   | No security headers (CSP/HSTS/XFO/XCTO) | app.py middleware | 3.1 | ✅ |
 | 14 | Medium   | Transcript/Markdown XSS in frontend | web/frontend/* | 3.2 | ☐ |
 | 15 | Medium   | Path traversal via slug regression | path_manager.py:143,155 | 3.3 | ☐ |
-| 16 | Medium   | Non-http feed URL schemes accepted | feed_manager.py:152 | 3.4 | ☐ |
-| 17 | Medium   | Secrets in error paths / logs | auth_service.py:201; auth.py:200; logging_middleware.py:76 | 3.5 | ☐ |
+| 16 | Medium   | Non-http feed URL schemes accepted | feed_manager.py:152 | 3.4 | ✅ |
+| 17 | Medium   | Secrets in error paths / logs | auth_service.py:201; auth.py:200; logging_middleware.py:76 | 3.5 | ✅ |
 | 18 | Medium   | SQLite queue race / duplicate processing | queue_manager.py, task_manager.py | 3.6 | ☐ |
-| 19 | Medium   | No request body size limit | app.py | 3.7 | ☐ |
+| 19 | Medium   | No request body size limit | app.py | 3.7 | ✅ |
 | 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ☐ |
-| 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ☐ |
+| 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ✅ |
 | 22 | Low      | Per-restart JWT secret in single-user | auth_service.py:103 | 4.1 | ☐ |
 | 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ☐ |
 | 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ☐ |

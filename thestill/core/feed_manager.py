@@ -158,6 +158,16 @@ class PodcastFeedManager:
             The newly added Podcast object, or None if failed or already exists.
         """
         try:
+            # spec #25 item 3.4: refuse anything but http(s) before we hand
+            # the string to feedparser / yt-dlp. The SSRF guard blocks these
+            # schemes downstream too, but failing fast here gives users a
+            # clear error and covers the yt-dlp path that bypasses
+            # requests.
+            parsed = urlparse(url)
+            if parsed.scheme.lower() not in ("http", "https"):
+                logger.warning("add_podcast_rejected_scheme", url=url, scheme=parsed.scheme)
+                return None
+
             # Detect source type and extract metadata
             source = self.media_source_factory.detect_source(url)
             metadata = source.extract_metadata(url)
