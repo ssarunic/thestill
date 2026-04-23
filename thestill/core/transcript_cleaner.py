@@ -31,6 +31,7 @@ from structlog import get_logger
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.language_config import resolve_language_spec
+from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 logger = get_logger(__name__)
 
@@ -162,8 +163,9 @@ class TranscriptCleaner:
         - Ad break detection and marking
         - Final formatting
         """
-        # Build prompts
-        system_prompt = self._build_cleanup_system_prompt(language=language)
+        # Build prompts (system prompt carries the untrusted-content preamble;
+        # spec #25, item 1.4).
+        system_prompt = self._build_cleanup_system_prompt(language=language) + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_cleanup_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_facts=podcast_facts,
@@ -472,9 +474,9 @@ IMPORTANT:
             lines.append(f"Ad Sponsors: {', '.join(episode_facts.ad_sponsors)}")
         lines.append("")
 
-        # Add transcript
+        # spec #25, item 1.4: transcript content is untrusted; fence it.
         lines.append("TRANSCRIPT TO CLEAN:")
-        lines.append(formatted_transcript)
+        lines.append(wrap_untrusted(formatted_transcript, label="TRANSCRIPT"))
 
         return "\n".join(lines)
 

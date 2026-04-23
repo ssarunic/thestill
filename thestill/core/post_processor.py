@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from thestill.utils.console import ConsoleOutput
+from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 # Import ModelLimits and MODEL_CONFIGS from llm_provider (canonical location)
 # Re-export for backward compatibility with existing imports
@@ -236,8 +237,14 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         return chunks
 
     def _get_formatted_system_prompt(self, metadata: Optional[EpisodeMetadata] = None) -> str:
-        """Return the system prompt (metadata no longer embedded in prompt)."""
-        return self.SYSTEM_PROMPT
+        """Return the system prompt (metadata no longer embedded in prompt).
+
+        Appends the untrusted-content preamble defined in
+        :mod:`thestill.utils.prompt_safety` so the model knows to treat
+        anything inside the sentinels as data rather than instructions
+        (spec #25, item 1.4).
+        """
+        return self.SYSTEM_PROMPT + UNTRUSTED_CONTENT_PREAMBLE
 
     def _process_single_chunk(
         self,
@@ -247,12 +254,13 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         system_prompt: str,
     ) -> str:
         """Process a single transcript chunk"""
-        user_message = "TRANSCRIPT:\n\n"
-
+        # spec #25, item 1.4: wrap transcript content in untrusted sentinels
+        # so prompt-injection attempts inside the audio cannot hijack the
+        # model into ignoring the operator's instructions.
+        header = "TRANSCRIPT:\n\n"
         if total_chunks > 1:
-            user_message += f"[CHUNK {chunk_num}/{total_chunks}]\n\n"
-
-        user_message += chunk_text
+            header += f"[CHUNK {chunk_num}/{total_chunks}]\n\n"
+        user_message = header + wrap_untrusted(chunk_text, label="TRANSCRIPT")
 
         try:
             messages = [

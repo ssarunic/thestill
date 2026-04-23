@@ -23,6 +23,7 @@ import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..models.podcast import Episode, Podcast
+from ..utils.url_guard import UnsafeURLError, validate_public_url
 from .media_source import MediaSourceFactory
 
 logger = structlog.get_logger(__name__)
@@ -160,13 +161,39 @@ class AudioDownloader:
 
         Raises:
             requests.exceptions.RequestException: If download fails after all retries
+            DownloadError: If the URL targets a private/loopback/cloud-metadata address.
         """
+        # spec #25, item 1.2: block SSRF targets before issuing the request, and
+        # disable redirects so a public URL cannot be 302'd into a private one.
+        try:
+            validate_public_url(url)
+        except UnsafeURLError as exc:
+            raise DownloadError(f"Refusing to download from unsafe URL: {exc}") from exc
+
         response = requests.get(
             url,
             stream=True,
             headers={"User-Agent": "Thestill/1.0"},
             timeout=self._DEFAULT_TIMEOUT_SECONDS,
+            allow_redirects=False,
         )
+        # Check by status code (not is_redirect) so the logic is robust
+        # against mocked responses in tests.
+        if response.status_code in (301, 302, 303, 307, 308):
+            location = response.headers.get("Location", "")
+            try:
+                validate_public_url(location)
+            except UnsafeURLError as exc:
+                raise DownloadError(
+                    f"Refusing to follow redirect to unsafe URL {location!r}: {exc}"
+                ) from exc
+            response = requests.get(
+                location,
+                stream=True,
+                headers={"User-Agent": "Thestill/1.0"},
+                timeout=self._DEFAULT_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
         response.raise_for_status()
 
         total_size = int(response.headers.get("content-length", 0))

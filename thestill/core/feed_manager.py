@@ -29,6 +29,7 @@ from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
 from ..utils.timing import log_phase_timing
+from ..utils.url_guard import UnsafeURLError, guarded_get
 from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = get_logger(__name__)
@@ -841,7 +842,21 @@ class PodcastFeedManager:
                         logger.error("Podcast not found", podcast_rss_url=podcast_rss_url)
                         return
 
-                    parsed_feed = feedparser.parse(str(podcast.rss_url))
+                    # spec #25, item 1.2: do NOT let feedparser fetch the URL
+                    # directly — it uses urllib internally and bypasses our
+                    # SSRF guard. Fetch through the guarded session and hand
+                    # feedparser the already-validated body.
+                    try:
+                        _rss_response = guarded_get(str(podcast.rss_url))
+                        _rss_response.raise_for_status()
+                        parsed_feed = feedparser.parse(_rss_response.content)
+                    except UnsafeURLError as _exc:
+                        logger.warning(
+                            "feedparser_fetch_blocked_unsafe_url",
+                            podcast_rss_url=str(podcast.rss_url),
+                            error=str(_exc),
+                        )
+                        return
                     for entry in parsed_feed.entries:
                         entry_external_id = entry.get("guid", entry.get("id", ""))
                         if entry_external_id == episode_external_id:

@@ -30,7 +30,7 @@ Benefits:
 import json
 import re
 import urllib.request
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET  # Hardened against XXE / billion-laughs attacks in untrusted RSS feeds (spec #25, item 1.1).
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +46,7 @@ from ..models.podcast import Episode, TranscriptLink
 from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
+from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -200,7 +201,11 @@ class RSSMediaSource(MediaSource):
             allowed_methods=frozenset(["GET"]),
             respect_retry_after_header=True,
         )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize)
+        # Guarded adapter re-validates the URL on every send, so HTTP redirects
+        # cannot smuggle a public host into a private/loopback target (spec #25, item 1.2).
+        adapter = _GuardedHTTPAdapter(
+            max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize
+        )
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         return session
@@ -548,6 +553,7 @@ class RSSMediaSource(MediaSource):
         conditional = bool(headers)
         with log_phase_timing("http_fetch", url=url, podcast_slug=podcast_slug, conditional=conditional) as timing_ctx:
             try:
+                validate_public_url(url)
                 response = self.session.get(url, timeout=self.DEFAULT_TIMEOUT, headers=headers or None)
                 timing_ctx["status_code"] = response.status_code
                 if response.status_code == 304:
@@ -573,6 +579,17 @@ class RSSMediaSource(MediaSource):
                     last_modified=None,
                     not_modified=False,
                     error=str(e),
+                )
+            except UnsafeURLError as e:
+                timing_ctx["error"] = str(e)
+                logger.warning("rss_fetch_blocked_unsafe_url", url=url, error=str(e))
+                return FetchRSSResult(
+                    content=None,
+                    status_code=0,
+                    etag=None,
+                    last_modified=None,
+                    not_modified=False,
+                    error=f"Unsafe URL refused: {e}",
                 )
 
         if self.path_manager and podcast_slug:
@@ -908,10 +925,13 @@ class RSSMediaSource(MediaSource):
             RSS feed URL if found, None otherwise
         """
         try:
+            # spec #25, item 1.2: refuse to follow user-supplied Apple URLs into
+            # private / loopback / cloud-metadata space.
+            validate_public_url(url)
             request = urllib.request.Request(url)
             request.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request) as response:  # noqa: S310 — URL is SSRF-validated above
                 page_content = response.read().decode("utf-8", errors="ignore")
 
                 # Extract all potential IDs from the page content
