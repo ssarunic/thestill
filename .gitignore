@@ -192,3 +192,8 @@ evaluation/outputs_*/
 
 # scripts/compare_cleanup.py JSON metric dumps (spec #18 smoke-test harness)
 reports/
+
+# Playwright MCP session artefacts (page snapshots + ad-hoc screenshots
+# dropped at the workspace root when debugging in a browser session).
+.playwright-mcp/
+/*.png

@@ -442,6 +442,10 @@ class TranscriptCleaningProcessor:
                 episode_facts=episode_facts,
                 language=language,
             )
+            # Record the duration of the audio we just transcribed. The
+            # viewer uses this to detect drift when the live URL later
+            # returns a DAI-mutated file of a different length.
+            cleaned_annotated.transcript_source_duration_s = transcript_model.get_duration()
             # Ads are tagged on the JSON sidecar (the canonical artefact)
             # and stripped from the Markdown projection — the summariser
             # has always read ads-free Markdown and continues to. The

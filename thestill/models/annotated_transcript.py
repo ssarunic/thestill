@@ -114,12 +114,20 @@ class AnnotatedTranscript(BaseModel):
     output contract changes in a way that invalidates cached JSON sidecars
     on disk. This lets a future re-clean detect stale artefacts by comparing
     versions; spec #18 itself ships ``v1``.
+
+    ``transcript_source_duration_s`` records the duration of the audio file
+    that was transcribed, so downstream consumers can detect timestamp
+    drift when the episode's live URL (typically podtrac/megaphone DAI)
+    later returns a file of a different length. ``None`` means "unknown" —
+    either we never recorded it (legacy artefacts) or the transcriber
+    didn't surface it.
     """
 
     episode_id: str
     segments: List[AnnotatedSegment]
     playback_time_offset_seconds: float = 0.0
     algorithm_version: str = "v1"
+    transcript_source_duration_s: Optional[float] = None
 
     @classmethod
     def from_raw(cls, transcript: Transcript, *, episode_id: str = "") -> "AnnotatedTranscript":

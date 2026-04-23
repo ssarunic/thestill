@@ -231,6 +231,10 @@ export interface AnnotatedTranscriptDump {
   segments: AnnotatedSegment[]
   playback_time_offset_seconds: number
   algorithm_version: string
+  // Duration of the audio file that was transcribed. Compared against
+  // the live audio element's duration to detect DAI-induced drift.
+  // `null` for legacy transcripts cleaned before we recorded this.
+  transcript_source_duration_s: number | null
 }
 
 export interface ShadowTranscript {
