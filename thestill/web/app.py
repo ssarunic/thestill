@@ -238,32 +238,65 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.stop()
         logger.info("task_worker_stopped")
 
-    # Create FastAPI application
+    # spec #25, item 2.8: /docs and /redoc are off by default in production.
+    # Flip ENABLE_DOCS=true (or ENVIRONMENT=development) to re-enable them.
+    _is_dev = config.environment == "development"
+    docs_enabled = _is_dev or config.enable_docs
     app = FastAPI(
         title="Thestill",
         description="Automated podcast transcription and summarization pipeline",
         version="1.0.0",
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
+
+    # spec #25, item 2.8: sanitise the default exception response so we don't
+    # leak exception messages / tracebacks to clients in production. Logs
+    # keep full detail server-side.
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(Exception)
+    async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
+        logger.exception("unhandled_exception", path=str(request.url.path), error_type=type(exc).__name__)
+        if _is_dev:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"{type(exc).__name__}: {exc}"},
+            )
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     # Add logging middleware for request/response tracking
     app.add_middleware(LoggingMiddleware)
 
-    # Add CORS middleware for frontend development
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",  # Vite dev server
-            "http://localhost:3000",  # Alternative dev port
+    # CORS (spec #25, item 2.5): origins come from ALLOWED_ORIGINS env,
+    # methods and headers are explicit. In development we fall back to the
+    # Vite dev server ports so local work still functions.
+    cors_origins = list(config.allowed_origins)
+    if _is_dev and not cors_origins:
+        cors_origins = [
+            "http://localhost:5173",
+            "http://localhost:3000",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:3000",
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        ]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "Accept",
+                "Accept-Language",
+                "Authorization",
+                "Content-Language",
+                "Content-Type",
+                "X-Requested-With",
+            ],
+            max_age=600,
+        )
 
     # Register routes
     # Health check at root level (infrastructure convention for load balancers)

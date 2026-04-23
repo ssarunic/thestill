@@ -34,34 +34,62 @@ from fastapi.responses import RedirectResponse
 from structlog import get_logger
 
 from ..dependencies import AppState, get_app_state
+from ..middleware import AUTH_LIMIT, rate_limit_dependency
 from ..responses import api_response
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+# spec #25, item 2.3: every /api/auth/* route is IP-rate-limited to blunt
+# brute force against OAuth state and authenticated probes.
+router = APIRouter(dependencies=[Depends(rate_limit_dependency(AUTH_LIMIT, "auth"))])
 
 # Cookie configuration
 AUTH_COOKIE_NAME = "auth_token"
 AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days in seconds
 
 
-def _get_redirect_uri(request: Request) -> str:
-    """Build the OAuth callback redirect URI from the request."""
-    # Use X-Forwarded headers if behind a proxy
-    scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
-    host = request.headers.get("X-Forwarded-Host", request.url.netloc)
-    return f"{scheme}://{host}/api/auth/google/callback"
+def _get_redirect_uri(request: Request, state: AppState) -> str:
+    """
+    Build the OAuth callback redirect URI.
+
+    spec #25, item 2.4: ``X-Forwarded-*`` headers are only honoured when the
+    request originates from a proxy IP in the trusted-proxies allowlist.
+    Anything else falls back to the configured ``public_base_url`` (or, for
+    dev, to the request's own ``url.scheme``/``netloc`` — never the
+    attacker-controllable ``Host`` header).
+    """
+    client_host = request.client.host if request.client else ""
+    trusted = set(state.config.trusted_proxies or [])
+
+    if client_host in trusted:
+        scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.url.netloc)
+        return f"{scheme}://{host}/api/auth/google/callback"
+
+    # Not behind a trusted proxy. Prefer the configured public base URL —
+    # the attacker-controllable Host header is ignored.
+    if state.config.public_base_url:
+        return f"{state.config.public_base_url}/api/auth/google/callback"
+
+    # Dev fallback: request.url reflects what the app itself received
+    # (bypasses Host spoofing because Starlette uses the raw ASGI scope).
+    return f"{request.url.scheme}://{request.url.netloc}/api/auth/google/callback"
 
 
-def _set_auth_cookie(response: Response, token: str) -> None:
-    """Set the authentication cookie with secure settings."""
+def _set_auth_cookie(response: Response, token: str, state: AppState) -> None:
+    """Set the authentication cookie (spec #25, item 2.1).
+
+    ``secure`` is True unless explicitly disabled via ``COOKIE_SECURE=false``
+    in a dev environment. ``samesite=strict`` defends against
+    cross-site request forgery on the session bearer.
+    """
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
         value=token,
         max_age=AUTH_COOKIE_MAX_AGE,
         httponly=True,
-        samesite="lax",
-        secure=False,  # Set to True in production with HTTPS
+        samesite="strict",
+        secure=state.config.cookie_secure,
     )
 
 
@@ -127,7 +155,7 @@ async def google_login(request: Request, state: AppState = Depends(get_app_state
             detail="Google OAuth is not available in single-user mode",
         )
 
-    redirect_uri = _get_redirect_uri(request)
+    redirect_uri = _get_redirect_uri(request, state)
     auth_url, state_token = state.auth_service.get_google_auth_url(redirect_uri)
 
     # Store state in session cookie for CSRF protection
@@ -138,6 +166,7 @@ async def google_login(request: Request, state: AppState = Depends(get_app_state
         max_age=600,  # 10 minutes
         httponly=True,
         samesite="lax",
+        secure=state.config.cookie_secure,
     )
 
     logger.info("Redirecting to Google OAuth")
@@ -180,7 +209,7 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Invalid state parameter")
 
     try:
-        redirect_uri = _get_redirect_uri(request)
+        redirect_uri = _get_redirect_uri(request, app_state)
         user, jwt_token = await app_state.auth_service.handle_google_callback(
             code=code,
             redirect_uri=redirect_uri,
@@ -188,17 +217,19 @@ async def google_callback(
 
         # Redirect to home page with auth cookie
         response = RedirectResponse(url="/", status_code=302)
-        _set_auth_cookie(response, jwt_token)
+        _set_auth_cookie(response, jwt_token, app_state)
 
         # Clear the OAuth state cookie
         response.delete_cookie(key="oauth_state")
 
-        logger.info(f"User authenticated: {user.email}")
+        logger.info("user_authenticated", email=user.email)
         return response
 
     except Exception as e:
-        logger.error(f"OAuth callback error: {e}")
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}") from e
+        # spec #25, item 2.8: don't leak upstream error messages to the client.
+        # Log the type + message server-side; respond with a generic message.
+        logger.error("oauth_callback_error", error_type=type(e).__name__, error=str(e))
+        raise HTTPException(status_code=400, detail="Authentication failed") from e
 
 
 @router.post("/logout")

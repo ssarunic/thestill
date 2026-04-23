@@ -49,11 +49,15 @@ from structlog import get_logger
 
 from ...webhook import get_tracker
 from ..dependencies import AppState, get_app_state
+from ..middleware import WEBHOOK_LIMIT, rate_limit_dependency
 from ..services import WebhookTranscriptProcessor
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+# spec #25, item 2.3: per-IP rate limit on webhook ingress. Replay guards
+# and signature verification sit inside the handler; the limiter is the
+# outer moat.
+router = APIRouter(dependencies=[Depends(rate_limit_dependency(WEBHOOK_LIMIT, "webhook"))])
 
 
 def _get_webhook_secret(state: AppState) -> str:

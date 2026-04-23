@@ -142,6 +142,31 @@ class Config(BaseModel):
     jwt_algorithm: str = "HS256"  # JWT signing algorithm
     jwt_expire_days: int = 30  # JWT token expiration in days
 
+    # Deployment / Web Surface Configuration (spec #25 Phase 2)
+    # "production" locks down cookies, docs endpoints, CORS and verbose errors.
+    # "development" keeps the ergonomic defaults for local dev.
+    environment: str = "production"  # production | development
+    # Auth cookie transport. Defaults to True; only flip via COOKIE_SECURE=false
+    # explicitly for local http dev.
+    cookie_secure: bool = True
+    # CORS origins. Comma-separated in env (ALLOWED_ORIGINS=https://a,https://b).
+    # Empty list = no cross-origin access allowed.
+    allowed_origins: list = []  # type: ignore[assignment]  # filled in load_config
+    # IPs of reverse proxies we trust to set X-Forwarded-* headers. Anything
+    # else is ignored, so an attacker-controlled Host header cannot influence
+    # OAuth redirect construction. Comma-separated in env.
+    trusted_proxies: list = []  # type: ignore[assignment]
+    # Canonical public URL — used to build OAuth redirects when the request
+    # does NOT come from a trusted proxy. Must include scheme.
+    public_base_url: str = ""
+    # OpenAPI docs / redoc. On in dev; on in prod only if explicitly enabled.
+    enable_docs: bool = False
+    # Hard cap on any user-triggered audio download. Attackers controlling an
+    # RSS feed can otherwise point us at a 100 GB file. Default 2 GiB.
+    max_audio_bytes: int = 2 * 1024 * 1024 * 1024
+    # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
+    max_webhook_body_bytes: int = 1 * 1024 * 1024
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize PathManager for centralized path management
@@ -295,6 +320,23 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "jwt_secret_key": os.getenv("JWT_SECRET_KEY", ""),
         "jwt_algorithm": os.getenv("JWT_ALGORITHM", "HS256"),
         "jwt_expire_days": int(os.getenv("JWT_EXPIRE_DAYS", "30")),
+        # Deployment / Web Surface (spec #25 Phase 2)
+        "environment": os.getenv("ENVIRONMENT", "production").lower(),
+        "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",
+        "allowed_origins": [
+            origin.strip()
+            for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
+        "trusted_proxies": [
+            proxy.strip()
+            for proxy in os.getenv("TRUSTED_PROXIES", "").split(",")
+            if proxy.strip()
+        ],
+        "public_base_url": os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
+        "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
+        "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
+        "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
     }
 
     return Config(**config_data)

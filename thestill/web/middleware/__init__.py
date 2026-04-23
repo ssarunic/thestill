@@ -15,5 +15,25 @@
 """Web middleware for logging and request tracking."""
 
 from thestill.web.middleware.logging_middleware import LoggingMiddleware
+from thestill.web.middleware.rate_limit import (
+    AUTH_LIMIT,
+    MCP_MUTATION_LIMIT,
+    WEBHOOK_LIMIT,
+    RateLimit,
+    RateLimitExceeded,
+    enforce_mcp_mutation_quota,
+    rate_limit_dependency,
+    reset_for_testing as reset_rate_limits_for_testing,
+)
 
-__all__ = ["LoggingMiddleware"]
+__all__ = [
+    "AUTH_LIMIT",
+    "LoggingMiddleware",
+    "MCP_MUTATION_LIMIT",
+    "RateLimit",
+    "RateLimitExceeded",
+    "WEBHOOK_LIMIT",
+    "enforce_mcp_mutation_quota",
+    "rate_limit_dependency",
+    "reset_rate_limits_for_testing",
+]

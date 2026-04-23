@@ -23,6 +23,8 @@ import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..models.podcast import Episode, Podcast
+from ..utils.audio_integrity import InvalidAudioFile, assert_audio_file
+from ..utils.config import load_config
 from ..utils.url_guard import UnsafeURLError, validate_public_url
 from .media_source import MediaSourceFactory
 
@@ -47,6 +49,9 @@ class AudioDownloader:
     # Network configuration
     _DEFAULT_TIMEOUT_SECONDS = 30  # Timeout for HTTP requests
     _CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
+    # spec #25, item 2.7: fallback cap if the config-driven value can't be
+    # read (e.g. during tests that instantiate AudioDownloader without env).
+    _FALLBACK_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
     # Retry configuration
     _MAX_RETRY_ATTEMPTS = 3  # Maximum number of download retry attempts
@@ -58,16 +63,32 @@ class AudioDownloader:
     _MAX_FILENAME_LENGTH = 100  # Maximum characters for sanitized filenames
     _URL_HASH_LENGTH = 8  # Number of characters from MD5 hash to include
 
-    def __init__(self, storage_path: str = "./data/original_audio") -> None:
+    def __init__(
+        self,
+        storage_path: str = "./data/original_audio",
+        *,
+        max_bytes: Optional[int] = None,
+    ) -> None:
         """
         Initialize audio downloader.
 
         Args:
-            storage_path: Directory path for storing downloaded audio files
+            storage_path: Directory path for storing downloaded audio files.
+            max_bytes: Hard ceiling on any single download (spec #25 item 2.7).
+                If ``None``, resolves from ``Config.max_audio_bytes``
+                (env ``MAX_AUDIO_BYTES``), falling back to
+                ``_FALLBACK_MAX_BYTES`` if config loading fails.
         """
         self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.media_source_factory: MediaSourceFactory = MediaSourceFactory(storage_path)
+        if max_bytes is not None:
+            self.max_bytes = int(max_bytes)
+        else:
+            try:
+                self.max_bytes = int(load_config().max_audio_bytes)
+            except Exception:  # pragma: no cover — missing env vars in tests
+                self.max_bytes = self._FALLBACK_MAX_BYTES
 
     def download_episode(
         self,
@@ -196,16 +217,49 @@ class AudioDownloader:
             )
         response.raise_for_status()
 
-        total_size = int(response.headers.get("content-length", 0))
-        downloaded = 0
+        # spec #25, item 2.7: pre-check content-length, then enforce a
+        # cumulative cap while streaming so a lying/missing header cannot
+        # defeat the limit.
+        try:
+            advertised = int(response.headers.get("content-length", 0))
+        except ValueError:
+            advertised = 0
+        if advertised and advertised > self.max_bytes:
+            raise DownloadError(
+                f"Refusing download: server advertised {advertised} bytes, "
+                f"cap is {self.max_bytes} bytes"
+            )
 
-        with open(local_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=self._CHUNK_SIZE_BYTES):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    # Progress updates are handled by CLI progress bar
-                    # Removed per-chunk logging to avoid terminal spam
+        downloaded = 0
+        try:
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=self._CHUNK_SIZE_BYTES):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded > self.max_bytes:
+                            raise DownloadError(
+                                f"Refusing download: stream exceeded cap "
+                                f"({self.max_bytes} bytes) while reading"
+                            )
+        except Exception:
+            # Leave no half-written file behind if we bail on cap/IO error;
+            # callers re-queue downloads and a partial .mp3 is worse than
+            # nothing (ffprobe would happily "parse" it).
+            try:
+                local_path.unlink(missing_ok=True)
+            except Exception:  # pragma: no cover — best-effort cleanup
+                pass
+            raise
+
+        # spec #25, item 2.7: magic-byte integrity check. Rejects zip bombs,
+        # HTML error pages, and polyglot payloads before ffmpeg gets a chance.
+        try:
+            codec = assert_audio_file(local_path)
+            logger.debug("audio_codec_detected", codec=codec, path=str(local_path))
+        except InvalidAudioFile as exc:
+            local_path.unlink(missing_ok=True)
+            raise DownloadError(f"Downloaded file failed integrity check: {exc}") from exc
 
     def delete_audio_file(self, episode: Episode) -> bool:
         """

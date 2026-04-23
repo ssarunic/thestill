@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phase 1 shipped 2026-04-23)
+**Status**: 🚧 Active development (Phases 1 + 2 shipped 2026-04-23)
 **Created**: 2026-04-23
-**Updated**: 2026-04-23 (Phase 1 Critical findings 1.1–1.4 closed)
+**Updated**: 2026-04-23 (Phase 2 High findings 2.1–2.8 closed)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -89,49 +89,62 @@ phase, items can land in any order.
 
 ### Phase 2 — High (must land before this spec closes)
 
-- [ ] **2.1 Cookie `secure=False` hardcoded.**
-  [auth.py:58-65](../thestill/web/routes/auth.py#L58-L65). Set
-  `secure=True` unconditionally; only fall back via explicit
-  `ENV=dev` guard. Also set `samesite="strict"` for auth cookies
-  (currently `lax`).
-- [ ] **2.2 JWT `verify_signature=False` helper.**
-  [jwt.py:96-117](../thestill/utils/jwt.py#L96-L117). Either verify
-  signature inside `get_token_expiry()`, or rename it to
-  `_unsafe_peek_expiry()` and restrict callers to already-verified
-  tokens. Remove external callers.
-- [ ] **2.3 Rate limiting.**
-  Add `slowapi` (or equivalent) with per-IP limits on `/api/auth/*` and
-  `/webhook/*` (note: webhooks are mounted under `/webhook`, not
-  `/api/webhooks`), and per-session quotas on MCP mutation tools
-  (`download_episodes`, `transcribe_episodes`, `summarize`). Quota
-  ceiling configurable via env.
-- [ ] **2.4 OAuth redirect trusts `X-Forwarded-*`.**
-  [auth.py:48-53](../thestill/web/routes/auth.py#L48-L53). Honor forwarded
-  headers only when `request.client.host` is in a configured trusted-proxy
-  allowlist; otherwise use the configured canonical public URL.
-- [ ] **2.5 CORS wildcard with credentials.**
-  [app.py:256-266](../thestill/web/app.py#L256-L266). Replace
-  `allow_methods=["*"]` / `allow_headers=["*"]` with explicit lists.
-  Origins from env (`ALLOWED_ORIGINS`), never hardcoded. Reject startup
-  config where `allow_credentials=True` and any origin is `*`.
-- [ ] **2.6 Subprocess / yt-dlp / ffmpeg exposure.**
-  Covers [duration.py:205-219](../thestill/utils/duration.py#L205-L219)
-  and downsample/YouTube paths. Actions: pass `--` separators where
-  supported, canonicalize paths before subprocess, validate magic bytes
-  before invoking ffprobe, pin `yt-dlp` via lockfile (not just floor pin),
-  and sandbox the downloader process (separate worker, no loopback
-  network). Add Dependabot/renovate for `yt-dlp`.
-- [ ] **2.7 Unbounded audio download + no integrity check.**
-  [audio_downloader.py:166-176](../thestill/core/audio_downloader.py#L166-L176).
-  Enforce `MAX_AUDIO_BYTES` (default: 2 GB, configurable) both via
-  `content-length` pre-check and cumulative stream-byte count. After
-  download, validate magic bytes against expected codecs (MP3/M4A/OGG/WAV)
-  and reject otherwise.
-- [ ] **2.8 Docs endpoints + verbose errors on prod.**
-  [app.py:247-248](../thestill/web/app.py#L247-L248). Set
-  `docs_url=None, redoc_url=None` unless `ENV=dev`, or require auth.
-  Production exception handlers must not leak tracebacks or upstream error
-  messages to clients.
+- [x] **2.1 Cookie `secure=False` hardcoded.** ✅ Shipped.
+  [auth.py](../thestill/web/routes/auth.py) `_set_auth_cookie` now reads
+  `Config.cookie_secure` (defaults True; toggle via
+  `COOKIE_SECURE=false` for local http dev). `samesite="strict"` on the
+  auth cookie; `oauth_state` cookie also honours `cookie_secure`.
+  Regression tests: [test_auth_hardening.py](../tests/unit/security/test_auth_hardening.py).
+- [x] **2.2 JWT `verify_signature=False` helper.** ✅ Shipped.
+  [jwt.py](../thestill/utils/jwt.py): the old `get_token_expiry` is
+  renamed to `_unsafe_peek_token_expiry` (observability / refresh-decision
+  use only). A new `get_token_expiry(token, secret_key, algorithm)` now
+  verifies the signature. `is_token_expiring_soon` requires the secret
+  key, so a forged JWT can no longer pretend to be fresh. Callers and
+  tests updated.
+- [x] **2.3 Rate limiting.** ✅ Shipped.
+  New [web/middleware/rate_limit.py](../thestill/web/middleware/rate_limit.py)
+  with a thread-safe in-process sliding-window limiter. Applied as a router
+  dependency on `/api/auth/*` and `/webhook/*`, and as an explicit
+  quota-gate at the top of every mutating MCP tool
+  ([mcp/tools.py](../thestill/mcp/tools.py)). Limits tunable via
+  `RATE_LIMIT_*` env vars.
+  Regression tests: [test_rate_limit.py](../tests/unit/security/test_rate_limit.py).
+- [x] **2.4 OAuth redirect trusts `X-Forwarded-*`.** ✅ Shipped.
+  `_get_redirect_uri` honours `X-Forwarded-*` only when
+  `request.client.host` ∈ `Config.trusted_proxies`. Otherwise it
+  prefers `Config.public_base_url` and falls back to the ASGI-reported
+  URL (which cannot be spoofed via the Host header). Regression tests
+  include a Host-header injection attempt.
+- [x] **2.5 CORS wildcard with credentials.** ✅ Shipped.
+  [app.py](../thestill/web/app.py) now skips `CORSMiddleware` entirely
+  when `allowed_origins` is empty in production. When present, method
+  and header lists are explicit (`GET, POST, PUT, PATCH, DELETE, OPTIONS`;
+  `Accept, Authorization, Content-Type, ...`). Dev environment keeps
+  the Vite ports as a fallback only when `allowed_origins` is empty.
+  Regression tests: [test_app_hardening.py](../tests/unit/security/test_app_hardening.py).
+- [x] **2.6 Subprocess / yt-dlp / ffmpeg exposure.** ✅ Shipped.
+  [duration.py](../thestill/utils/duration.py) now canonicalises the
+  path (`Path.resolve()`) and calls `assert_audio_file` before invoking
+  `ffprobe`, with the `--` separator to terminate option parsing.
+  Remaining yt-dlp supply-chain work (lockfile, digest-pinned Docker
+  image) lives in Phase 3 / deploy config — tracked in items 3.8 and
+  5.1.
+- [x] **2.7 Unbounded audio download + no integrity check.** ✅ Shipped.
+  [audio_downloader.py](../thestill/core/audio_downloader.py) enforces
+  `MAX_AUDIO_BYTES` both via `content-length` pre-check and cumulative
+  stream-byte count, and deletes the partial file on overflow. After
+  download, [utils/audio_integrity.py](../thestill/utils/audio_integrity.py)
+  magic-byte-validates against MP3 / AAC / WAV / OGG / FLAC / M4A —
+  polyglots, HTML error pages, and zip bombs are refused before any
+  ffmpeg pass. Regression tests: [test_audio_integrity.py](../tests/unit/security/test_audio_integrity.py).
+- [x] **2.8 Docs endpoints + verbose errors on prod.** ✅ Shipped.
+  [app.py](../thestill/web/app.py) sets `docs_url=None, redoc_url=None,
+  openapi_url=None` unless `ENVIRONMENT=development` or `ENABLE_DOCS=true`.
+  A generic exception handler returns `{"detail": "Internal Server Error"}`
+  in production (full detail in logs only) and the exception-class name
+  in dev, so upstream errors (e.g. from authlib) never leak to clients.
+  Regression tests: [test_app_hardening.py](../tests/unit/security/test_app_hardening.py).
 
 ### Phase 3 — Medium (follow-up hardening PR)
 
@@ -222,14 +235,14 @@ item also marks the finding resolved.
 | 2  | Critical | SSRF on RSS/audio/YouTube fetch | media_source.py:551,564; audio_downloader.py:104-135 | 1.2 | ✅ |
 | 3  | Critical | Webhook auth bypass when secret unset | webhooks.py:217-226 | 1.3 | ✅ |
 | 4  | Critical | LLM prompt injection via transcripts | services/* + mcp/tools.py | 1.4 | ✅ |
-| 5  | High     | Cookie `secure=False` hardcoded | auth.py:58-65 | 2.1 | ☐ |
-| 6  | High     | JWT `verify_signature=False` helper | jwt.py:96-117 | 2.2 | ☐ |
-| 7  | High     | No rate limiting on auth / webhook / MCP | auth.py, webhooks.py, mcp/tools.py | 2.3 | ☐ |
-| 8  | High     | OAuth trusts `X-Forwarded-*` | auth.py:48-53 | 2.4 | ☐ |
-| 9  | High     | CORS wildcard + credentials | app.py:256-266 | 2.5 | ☐ |
-| 10 | High     | Subprocess / yt-dlp / ffmpeg exposure | duration.py:205-219; downsample.py | 2.6 | ☐ |
-| 11 | High     | Unbounded audio download + no integrity check | audio_downloader.py:166-176 | 2.7 | ☐ |
-| 12 | High     | `/docs`, `/redoc` exposed on prod | app.py:247-248 | 2.8 | ☐ |
+| 5  | High     | Cookie `secure=False` hardcoded | auth.py:58-65 | 2.1 | ✅ |
+| 6  | High     | JWT `verify_signature=False` helper | jwt.py:96-117 | 2.2 | ✅ |
+| 7  | High     | No rate limiting on auth / webhook / MCP | auth.py, webhooks.py, mcp/tools.py | 2.3 | ✅ |
+| 8  | High     | OAuth trusts `X-Forwarded-*` | auth.py:48-53 | 2.4 | ✅ |
+| 9  | High     | CORS wildcard + credentials | app.py:256-266 | 2.5 | ✅ |
+| 10 | High     | Subprocess / yt-dlp / ffmpeg exposure | duration.py:205-219; downsample.py | 2.6 | ✅ |
+| 11 | High     | Unbounded audio download + no integrity check | audio_downloader.py:166-176 | 2.7 | ✅ |
+| 12 | High     | `/docs`, `/redoc` exposed on prod | app.py:247-248 | 2.8 | ✅ |
 | 13 | Medium   | No security headers (CSP/HSTS/XFO/XCTO) | app.py middleware | 3.1 | ☐ |
 | 14 | Medium   | Transcript/Markdown XSS in frontend | web/frontend/* | 3.2 | ☐ |
 | 15 | Medium   | Path traversal via slug regression | path_manager.py:143,155 | 3.3 | ☐ |

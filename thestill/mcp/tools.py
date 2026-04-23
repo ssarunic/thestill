@@ -45,6 +45,7 @@ from ..services import (
 from ..services.auth_service import AuthService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
+from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .middleware.stdio_adapter import log_mcp_stdio
 
 logger = structlog.get_logger(__name__)
@@ -383,6 +384,33 @@ def setup_tools(server: Server, storage_path: str):
             List of text content results
         """
         logger.info(f"Calling tool: {name} with args: {arguments}")
+
+        # spec #25, item 2.3: per-tool quota so a malicious or runaway
+        # MCP client cannot burn the downstream LLM / transcription
+        # budget. Read-only tools are exempt so ordinary inspection
+        # isn't throttled.
+        _MUTATING_TOOLS = {
+            "add_podcast",
+            "remove_podcast",
+            "refresh_feeds",
+            "download_episodes",
+            "downsample_audio",
+            "transcribe_episodes",
+            "clean_transcripts",
+            "process_episode",
+            "summarize_episodes",
+            "generate_digest",
+        }
+        if name in _MUTATING_TOOLS:
+            try:
+                enforce_mcp_mutation_quota(name)
+            except RateLimitExceeded as exc:
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps({"success": False, "error": str(exc), "retry_after_seconds": 60}),
+                    )
+                ]
 
         try:
             if name == "add_podcast":

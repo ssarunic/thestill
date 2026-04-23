@@ -93,21 +93,24 @@ def decode_token(
         return None
 
 
-def get_token_expiry(token: str) -> Optional[datetime]:
+def _unsafe_peek_token_expiry(token: str) -> Optional[datetime]:
     """
-    Extract expiry time from a token without full validation.
+    Extract ``exp`` from a token without verifying the signature.
 
-    This is useful for checking if a token is close to expiry
-    without needing the secret key.
+    This is labelled ``_unsafe_`` because an attacker can forge arbitrary
+    claims — the returned datetime must NEVER be used for an auth
+    decision. Call sites are limited to:
 
-    Args:
-        token: The JWT token string
+    * observability logging (``token_expires_at=...`` fields);
+    * deciding whether to ATTEMPT a refresh — the refresh itself must
+      re-verify the token server-side.
 
-    Returns:
-        Expiry datetime if extractable, None otherwise
+    Anything that needs trustworthy expiry must call
+    :func:`get_token_expiry` with the secret key.
+
+    spec #25, item 2.2.
     """
     try:
-        # Decode without verification to get expiry
         payload = jwt.decode(token, options={"verify_signature": False})
         exp_timestamp = payload.get("exp")
         if exp_timestamp:
@@ -117,22 +120,38 @@ def get_token_expiry(token: str) -> Optional[datetime]:
         return None
 
 
-def is_token_expiring_soon(token: str, threshold_days: int = 7) -> bool:
+def get_token_expiry(token: str, secret_key: str, algorithm: str = "HS256") -> Optional[datetime]:
     """
-    Check if a token is expiring within the threshold period.
+    Extract expiry from a token **after verifying its signature**.
 
-    Useful for implementing silent token refresh.
-
-    Args:
-        token: The JWT token string
-        threshold_days: Number of days before expiry to consider "soon"
-
-    Returns:
-        True if token expires within threshold, False otherwise
+    Unlike :func:`_unsafe_peek_token_expiry`, this is safe to use for
+    auth decisions.  Returns ``None`` for any token that fails
+    validation, including expired tokens.
     """
-    expiry = get_token_expiry(token)
+    payload = decode_token(token, secret_key, algorithm=algorithm)
+    return payload.exp if payload else None
+
+
+def is_token_expiring_soon(
+    token: str,
+    secret_key: str,
+    *,
+    algorithm: str = "HS256",
+    threshold_days: int = 7,
+) -> bool:
+    """
+    Check if a signed, valid token is within ``threshold_days`` of
+    its expiry. Used to drive silent refresh.
+
+    spec #25, item 2.2: previously this function trusted unverified
+    ``exp`` claims, which let an attacker pretend their forged token
+    was fresh. Now we always verify the signature; an invalid or
+    already-expired token returns ``True`` so the caller refreshes
+    (or re-authenticates).
+    """
+    expiry = get_token_expiry(token, secret_key, algorithm=algorithm)
     if not expiry:
-        return True  # If we can't determine expiry, assume it's expiring
+        return True  # Invalid, expired, or missing exp — refresh path.
 
     threshold = datetime.now(timezone.utc) + timedelta(days=threshold_days)
     return expiry <= threshold
