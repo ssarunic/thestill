@@ -341,15 +341,18 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
         )
 
-    # Multi-user mode runs OAuth,
-    # which must build a non-spoofable callback URL. Refuse to boot if the
-    # operator forgot to tell us our public hostname AND didn't configure a
-    # trusted proxy.
-    if config_data.get("multi_user") and not config_data["public_base_url"] and not config_data["trusted_proxies"]:
+    # Multi-user mode runs OAuth, which must build a non-spoofable
+    # callback URL. Require PUBLIC_BASE_URL unconditionally — TRUSTED_PROXIES
+    # alone is not sufficient, because a misconfigured proxy that omits
+    # X-Forwarded-Host would silently let the attacker-controllable Host
+    # header re-enter the callback. PUBLIC_BASE_URL is the operator-declared
+    # ground truth; forwarded headers may override it per-request, but the
+    # baseline must always exist.
+    if config_data.get("multi_user") and not config_data["public_base_url"]:
         raise ValueError(
-            "MULTI_USER=true requires PUBLIC_BASE_URL (or a TRUSTED_PROXIES "
-            "allowlist). Without it the OAuth redirect URI would be derived "
-            "from the attacker-controllable Host header."
+            "MULTI_USER=true requires PUBLIC_BASE_URL. Without it the OAuth "
+            "redirect URI could be derived from the attacker-controllable "
+            "Host header when trusted proxies omit X-Forwarded-Host."
         )
 
     return Config(**config_data)

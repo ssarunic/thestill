@@ -21,6 +21,45 @@ import pytest
 from thestill.utils.config import Config
 
 
+# Every env var that can flip load_config's validation path. The
+# isolated_env fixture wipes these so a stale ./.env (or a CI workspace
+# shipping one) can't make a security test pass for the wrong reason.
+_SENSITIVE_ENV_KEYS = (
+    "ENVIRONMENT",
+    "COOKIE_SECURE",
+    "ALLOWED_ORIGINS",
+    "TRUSTED_PROXIES",
+    "PUBLIC_BASE_URL",
+    "ENABLE_DOCS",
+    "MULTI_USER",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "JWT_SECRET_KEY",
+    "MAX_AUDIO_BYTES",
+    "MAX_WEBHOOK_BODY_BYTES",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "MISTRAL_API_KEY",
+    "LLM_PROVIDER",
+)
+
+
+@pytest.fixture
+def isolated_env(monkeypatch, tmp_path):
+    """Run the body in a clean env + cwd so load_dotenv finds nothing."""
+    for key in _SENSITIVE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    # load_config() calls load_dotenv() which reads ./.env relative to
+    # cwd. chdir into a tmp dir so it finds none.
+    monkeypatch.chdir(tmp_path)
+    # LLM provider validation needs something; default to openai with a
+    # dummy key so tests that don't care about LLM config don't restate it.
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+    yield monkeypatch
+
+
 def _config_for(**overrides) -> Config:
     """Build a Config without running the full env-driven loader."""
     base = {
@@ -121,68 +160,51 @@ class TestCors:
 class TestCookieSecureEnforcement:
     """Post-review fix for spec #25 item 2.1."""
 
-    def test_production_requires_cookie_secure_true(self):
+    def test_production_requires_cookie_secure_true(self, isolated_env):
         """load_config must refuse COOKIE_SECURE=false when ENVIRONMENT=production."""
-        import os
-
         from thestill.utils.config import load_config
 
-        saved = {k: os.environ.get(k) for k in ("ENVIRONMENT", "COOKIE_SECURE", "OPENAI_API_KEY")}
-        try:
-            os.environ["ENVIRONMENT"] = "production"
-            os.environ["COOKIE_SECURE"] = "false"
-            os.environ["OPENAI_API_KEY"] = "dummy"
-            with pytest.raises(ValueError, match="COOKIE_SECURE"):
-                load_config()
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        isolated_env.setenv("ENVIRONMENT", "production")
+        isolated_env.setenv("COOKIE_SECURE", "false")
+        with pytest.raises(ValueError, match="COOKIE_SECURE"):
+            load_config()
 
-    def test_development_can_opt_out_of_secure_cookies(self):
-        import os
-
+    def test_development_can_opt_out_of_secure_cookies(self, isolated_env):
         from thestill.utils.config import load_config
 
-        saved = {k: os.environ.get(k) for k in ("ENVIRONMENT", "COOKIE_SECURE", "OPENAI_API_KEY")}
-        try:
-            os.environ["ENVIRONMENT"] = "development"
-            os.environ["COOKIE_SECURE"] = "false"
-            os.environ["OPENAI_API_KEY"] = "dummy"
-            cfg = load_config()
-            assert cfg.cookie_secure is False
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        isolated_env.setenv("ENVIRONMENT", "development")
+        isolated_env.setenv("COOKIE_SECURE", "false")
+        cfg = load_config()
+        assert cfg.cookie_secure is False
 
 
 class TestMultiUserOauthRequiresPublicBaseUrl:
     """Post-review fix for spec #25 item 2.4."""
 
-    def test_multi_user_without_public_base_url_fails_load(self):
-        import os
-
+    def test_multi_user_without_public_base_url_fails_load(self, isolated_env):
         from thestill.utils.config import load_config
 
-        saved = {
-            k: os.environ.get(k)
-            for k in ("MULTI_USER", "PUBLIC_BASE_URL", "TRUSTED_PROXIES", "OPENAI_API_KEY")
-        }
-        try:
-            os.environ["MULTI_USER"] = "true"
-            os.environ.pop("PUBLIC_BASE_URL", None)
-            os.environ.pop("TRUSTED_PROXIES", None)
-            os.environ["OPENAI_API_KEY"] = "dummy"
-            with pytest.raises(ValueError, match="PUBLIC_BASE_URL"):
-                load_config()
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        isolated_env.setenv("MULTI_USER", "true")
+        # Neither PUBLIC_BASE_URL nor TRUSTED_PROXIES set.
+        with pytest.raises(ValueError, match="PUBLIC_BASE_URL"):
+            load_config()
+
+    def test_multi_user_with_trusted_proxies_still_requires_public_base_url(self, isolated_env):
+        """TRUSTED_PROXIES alone is not sufficient — a proxy that omits
+        X-Forwarded-Host would let Host leak through, so PUBLIC_BASE_URL
+        must always be configured as the operator-declared baseline."""
+        from thestill.utils.config import load_config
+
+        isolated_env.setenv("MULTI_USER", "true")
+        isolated_env.setenv("TRUSTED_PROXIES", "10.0.0.1")
+        with pytest.raises(ValueError, match="PUBLIC_BASE_URL"):
+            load_config()
+
+    def test_multi_user_with_public_base_url_passes(self, isolated_env):
+        from thestill.utils.config import load_config
+
+        isolated_env.setenv("MULTI_USER", "true")
+        isolated_env.setenv("PUBLIC_BASE_URL", "https://thestill.example.com")
+        cfg = load_config()
+        assert cfg.multi_user is True
+        assert cfg.public_base_url == "https://thestill.example.com"

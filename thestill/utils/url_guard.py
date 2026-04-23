@@ -44,7 +44,7 @@ import os
 import socket
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -207,36 +207,68 @@ def guarded_get(url: str, **kwargs) -> requests.Response:
         return session.get(url, **kwargs)
 
 
+class TooManyRedirects(UnsafeURLError):
+    """Raised when a fetch exhausts :data:`_MAX_REDIRECTS` hops."""
+
+
 def guarded_redirect_fetch(
     url: str,
     get_fn: Callable[..., requests.Response],
+    *,
+    max_redirects: int = _MAX_REDIRECTS,
     **kwargs: Any,
 ) -> requests.Response:
     """
-    Issue a GET that refuses SSRF targets and re-validates one redirect hop.
+    Issue a GET that refuses SSRF targets and re-validates EVERY redirect hop.
 
     Uses the caller-supplied ``get_fn`` (typically ``requests.get`` imported
     into the caller's module) so test suites that patch HTTP at the caller
     namespace continue to work.  Fails closed: any :class:`UnsafeURLError`
     propagates.
 
+    Multi-hop redirects: we loop up to ``max_redirects`` hops, validating
+    every ``Location`` (resolved against the current URL via ``urljoin``
+    so relative redirects cannot rewrite the host). A chain that never
+    terminates on a non-3xx response raises :class:`TooManyRedirects`.
+
+    The previous single-hop version of this helper silently returned a
+    3xx response as if it were the final body — ``raise_for_status()``
+    does not treat 3xx as an error, so the caller ended up writing a
+    ``Location``-bearing HTTP body to disk. That regression is closed
+    here.
+
     Exists so ``audio_downloader`` and ``external_transcript_downloader``
     don't each re-implement the ``if status in 3xx: validate + refetch``
     dance.
     """
+    kwargs["allow_redirects"] = False
     validate_public_url(url)
-    kwargs.setdefault("allow_redirects", False)
-    response = get_fn(url, **kwargs)
-    if response.status_code in (301, 302, 303, 307, 308):
+    current_url = url
+    for _ in range(max_redirects + 1):
+        response = get_fn(current_url, **kwargs)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
         location = response.headers.get("Location", "")
-        validate_public_url(location)
-        response = get_fn(location, **kwargs)
-    return response
+        if not location:
+            raise UnsafeURLError(
+                f"redirect response {response.status_code} from {current_url!r} "
+                "lacked a Location header"
+            )
+        # RFC 7231: Location may be relative; resolve against the URL we
+        # just hit so an attacker cannot rewrite the host via "///evil".
+        next_url = urljoin(current_url, location)
+        validate_public_url(next_url)
+        current_url = next_url
+
+    raise TooManyRedirects(
+        f"too many redirects fetching {url!r} (cap={max_redirects})"
+    )
 
 
 __all__ = [
     "UnsafeURLError",
     "ResolvedHost",
+    "TooManyRedirects",
     "validate_public_url",
     "guarded_session",
     "guarded_get",

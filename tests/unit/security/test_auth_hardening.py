@@ -94,10 +94,8 @@ class TestRedirectUri:
         assert uri == "https://public.example.com/api/auth/google/callback"
 
     def test_fails_closed_without_public_base_url(self):
-        """Post-review hardening: no trusted proxy AND no public_base_url
-        must refuse the request rather than fall back to the (spoofable)
-        ASGI Host. The previous version of this test asserted the
-        vulnerable behaviour and was wrong."""
+        """No trusted proxy AND no public_base_url must refuse the request
+        rather than fall back to the (spoofable) ASGI Host."""
         state = _mk_state(trusted_proxies=[], public_base_url="")
         req = _mk_request(
             client_host="127.0.0.1",
@@ -109,3 +107,49 @@ class TestRedirectUri:
             auth_route._get_redirect_uri(req, state)
         assert exc_info.value.status_code == 500
         assert "PUBLIC_BASE_URL" in exc_info.value.detail
+
+    def test_trusted_proxy_missing_forwarded_host_falls_back_to_public_base_url(self):
+        """A trusted proxy that drops X-Forwarded-Host must NOT let
+        request.url.netloc (Host-derived) land in the OAuth redirect —
+        fall back to the configured canonical URL instead."""
+        state = _mk_state(
+            trusted_proxies=["10.0.0.1"],
+            public_base_url="https://thestill.example.com",
+        )
+        req = _mk_request(
+            client_host="10.0.0.1",
+            headers={"X-Forwarded-Proto": "https"},  # no X-Forwarded-Host
+            url_scheme="https",
+            url_netloc="evil.com",  # attacker-controlled Host
+        )
+        uri = auth_route._get_redirect_uri(req, state)
+        assert uri == "https://thestill.example.com/api/auth/google/callback"
+        assert "evil.com" not in uri
+
+    def test_trusted_proxy_missing_forwarded_proto_falls_back(self):
+        """Same as above but for X-Forwarded-Proto — both headers are required."""
+        state = _mk_state(
+            trusted_proxies=["10.0.0.1"],
+            public_base_url="https://thestill.example.com",
+        )
+        req = _mk_request(
+            client_host="10.0.0.1",
+            headers={"X-Forwarded-Host": "evil.com"},  # no X-Forwarded-Proto
+            url_scheme="https",
+            url_netloc="evil.com",
+        )
+        uri = auth_route._get_redirect_uri(req, state)
+        assert uri == "https://thestill.example.com/api/auth/google/callback"
+        assert "evil.com" not in uri
+
+    def test_trusted_proxy_missing_headers_and_no_public_base_url_fails(self):
+        state = _mk_state(trusted_proxies=["10.0.0.1"], public_base_url="")
+        req = _mk_request(
+            client_host="10.0.0.1",
+            headers={},  # proxy forwarded nothing
+            url_scheme="https",
+            url_netloc="evil.com",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            auth_route._get_redirect_uri(req, state)
+        assert exc_info.value.status_code == 500

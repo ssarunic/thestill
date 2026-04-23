@@ -52,27 +52,34 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     """
     Build the OAuth callback redirect URI.
 
-    ``X-Forwarded-*``
-    headers are only honoured when the immediate peer is an IP in
-    ``trusted_proxies``. If the peer is NOT a trusted proxy, we refuse
-    to derive the hostname from the request — ``request.url.netloc`` is
-    built from the attacker-controllable ``Host`` header and cannot be
-    trusted.  In that case we require ``public_base_url`` to be
-    configured; if it isn't, we fail the request with 500 rather than
-    build a spoofable URL.
+    ``X-Forwarded-*`` headers are honoured only when (a) the immediate
+    peer is in ``trusted_proxies`` AND (b) both ``X-Forwarded-Proto``
+    and ``X-Forwarded-Host`` were actually forwarded. A trusted proxy
+    that drops or forgets ``X-Forwarded-Host`` would otherwise let
+    Starlette derive the callback host from the attacker-controllable
+    ``Host`` header — refuse that path explicitly.
 
-    In single-user mode OAuth routes reject the request at a higher
-    layer, so the misconfiguration only surfaces where it matters.
+    When forwarded headers are incomplete, or the peer is untrusted,
+    fall back to ``public_base_url``. If that is also unset, raise 500.
     """
     client_host = request.client.host if request.client else ""
     trusted = trusted_proxy_set(state.config)
 
     if client_host in trusted:
-        scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
-        host = request.headers.get("X-Forwarded-Host", request.url.netloc)
-        return f"{scheme}://{host}/api/auth/google/callback"
+        fwd_proto = request.headers.get("X-Forwarded-Proto")
+        fwd_host = request.headers.get("X-Forwarded-Host")
+        if fwd_proto and fwd_host:
+            return f"{fwd_proto}://{fwd_host}/api/auth/google/callback"
+        # Trusted peer but no forwarded host. Do NOT read
+        # request.url.netloc — it's Host-spoofable. Fall through to
+        # the configured canonical URL.
+        logger.warning(
+            "oauth_trusted_proxy_missing_forwarded_headers",
+            client_host=client_host,
+            has_x_forwarded_proto=bool(fwd_proto),
+            has_x_forwarded_host=bool(fwd_host),
+        )
 
-    # Not behind a trusted proxy. Use the operator-configured canonical URL.
     if state.config.public_base_url:
         return f"{state.config.public_base_url}/api/auth/google/callback"
 
@@ -85,7 +92,7 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
         status_code=500,
         detail=(
             "OAuth redirect is not configured on this server. "
-            "Set PUBLIC_BASE_URL (or add this host to TRUSTED_PROXIES)."
+            "Set PUBLIC_BASE_URL explicitly."
         ),
     )
 
