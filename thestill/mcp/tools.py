@@ -1675,52 +1675,14 @@ def _get_transcriber(config):
     """
     Initialize and return a transcriber based on config settings.
 
-    Args:
-        config: Configuration object
-
-    Returns:
-        Transcriber instance or None if not configured
+    Thin wrapper around the shared transcriber factory. MCP keeps the
+    `None`-on-failure contract so tool handlers can return JSON error
+    responses instead of crashing stdout (which carries JSON-RPC).
     """
-    from ..utils.console import ConsoleOutput
-
-    # Use quiet console for MCP to prevent stdout pollution (MCP uses stdout for JSON-RPC)
-    quiet_console = ConsoleOutput(quiet=True)
+    from ..core.transcriber_factory import create_transcriber
 
     try:
-        if config.transcription_provider.lower() == "google":
-            from ..core.google_transcriber import GoogleCloudTranscriber
-
-            if not config.google_app_credentials and not config.google_cloud_project_id:
-                logger.warning("Google Cloud credentials not configured")
-                return None
-
-            return GoogleCloudTranscriber(
-                credentials_path=config.google_app_credentials or None,
-                project_id=config.google_cloud_project_id or None,
-                storage_bucket=config.google_storage_bucket or None,
-                enable_diarization=config.enable_diarization,
-                min_speakers=config.min_speakers,
-                max_speakers=config.max_speakers,
-                parallel_chunks=config.max_workers,
-                console=quiet_console,
-            )
-        elif config.enable_diarization:
-            from ..core.whisper_transcriber import WhisperXTranscriber
-
-            return WhisperXTranscriber(
-                model_name=config.whisper_model,
-                device=config.whisper_device,
-                enable_diarization=True,
-                hf_token=config.huggingface_token,
-                min_speakers=config.min_speakers,
-                max_speakers=config.max_speakers,
-                diarization_model=config.diarization_model,
-                console=quiet_console,
-            )
-        else:
-            from ..core.whisper_transcriber import WhisperTranscriber
-
-            return WhisperTranscriber(config.whisper_model, config.whisper_device, console=quiet_console)
+        return create_transcriber(config)
     except Exception as e:
         logger.error(f"Failed to initialize transcriber: {e}")
         return None

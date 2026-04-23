@@ -27,7 +27,10 @@ Two Pass-2 pipelines coexist during the spec #18 transition window:
 - ``segmented`` — the structure-preserving pipeline of spec #18
   (``TranscriptSegmenter`` + ``SegmentedTranscriptCleaner``). Produces a
   JSON sidecar of per-segment cleaned text alongside the blended
-  Markdown render.
+  Markdown render. The JSON sidecar is canonical and preserves every
+  segment kind (including full ad text); the Markdown is an
+  ads-stripped projection fed to the summariser. Callers that want the
+  "with ads" view render from the JSON on demand.
 
 Which pipeline runs as the **primary** producer of
 ``clean_transcript_path`` is selected by ``THESTILL_CLEANUP_PIPELINE``
@@ -47,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.annotated_transcript import AnnotatedTranscript
+from ..models.annotated_transcript import AnnotatedTranscript, SegmentKind
 from ..models.transcript import Transcript
 from ..utils.console import ConsoleOutput
 from ..utils.path_manager import CleanupPipelineName
@@ -64,6 +67,13 @@ logger = get_logger(__name__)
 # these constants give call sites string values that match the Literal.
 _PRIMARY_SEGMENTED: CleanupPipelineName = "segmented"
 _PRIMARY_LEGACY: CleanupPipelineName = "legacy"
+
+# Kinds stripped from the canonical blended-Markdown projection that
+# feeds the summariser. The JSON sidecar always carries every kind
+# (including full ad text) — the web viewer filters for display
+# instead. Adding a kind here is the one edit required when a new
+# kind should be hidden from summarisation.
+_ADS_STRIPPED_KINDS: frozenset[SegmentKind] = frozenset({"ad_break"})
 
 
 class TranscriptCleaningProcessor:
@@ -432,7 +442,17 @@ class TranscriptCleaningProcessor:
                 episode_facts=episode_facts,
                 language=language,
             )
-            return cleaned_annotated.to_blended_markdown(), cleaned_annotated
+            # Record the duration of the audio we just transcribed. The
+            # viewer uses this to detect drift when the live URL later
+            # returns a DAI-mutated file of a different length.
+            cleaned_annotated.transcript_source_duration_s = transcript_model.get_duration()
+            # Ads are tagged on the JSON sidecar (the canonical artefact)
+            # and stripped from the Markdown projection — the summariser
+            # has always read ads-free Markdown and continues to. The
+            # web viewer renders from the JSON when it wants the full
+            # transcript with ads visible.
+            markdown = cleaned_annotated.to_blended_markdown(exclude_kinds=_ADS_STRIPPED_KINDS)
+            return markdown, cleaned_annotated
 
         raise ValueError(f"unknown pipeline: {pipeline!r}")
 

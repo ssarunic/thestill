@@ -28,7 +28,6 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
-from .core.elevenlabs_transcriber import ElevenLabsTranscriber
 from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
@@ -1319,93 +1318,51 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     config = ctx.obj.config
     preprocessor = ctx.obj.audio_preprocessor
 
-    # Initialize the appropriate transcriber based on config settings
-    transcriber = None
-    if config.transcription_provider.lower() == "google":
-        click.echo("🎤 Using Google Cloud Speech-to-Text")
-        if not config.google_app_credentials and not config.google_cloud_project_id:
-            click.echo("❌ Google Cloud credentials not configured", err=True)
-            click.echo("   Set GOOGLE_APP_CREDENTIALS and GOOGLE_CLOUD_PROJECT_ID in .env", err=True)
-            ctx.exit(1)
+    # Initialize the appropriate transcriber based on config settings.
+    # Construction is delegated to core.transcriber_factory so CLI, web, and
+    # MCP stay in lockstep; the CLI layers provider-specific UX (echoes,
+    # webhook-server startup, pending-ops inspection) on top.
+    from .core.transcriber_factory import create_transcriber
+    from .utils.exceptions import ThestillError
 
-        try:
-            transcriber = GoogleCloudTranscriber(
-                credentials_path=config.google_app_credentials or None,
-                project_id=config.google_cloud_project_id or None,
-                storage_bucket=config.google_storage_bucket or None,
-                enable_diarization=config.enable_diarization,
-                min_speakers=config.min_speakers,
-                max_speakers=config.max_speakers,
-                parallel_chunks=config.max_workers,
-                path_manager=config.path_manager,
-                console=ctx.obj.console,
-            )
+    provider = config.transcription_provider.lower()
+    provider_intros = {
+        "google": "🎤 Using Google Cloud Speech-to-Text",
+        "elevenlabs": "🎤 Using ElevenLabs Speech-to-Text",
+        "dalston": "🎤 Using Dalston Speech-to-Text",
+        "parakeet": "🎤 Using NVIDIA Parakeet Speech-to-Text",
+    }
+    if provider in provider_intros:
+        click.echo(provider_intros[provider])
+    elif config.enable_diarization:
+        click.echo("🎤 Using WhisperX with speaker diarization enabled")
+    else:
+        click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
 
-            # Check for pending operations from previous runs
-            # Note: For chunked transcriptions, individual chunks are persisted as operations.
-            # These are handled by _transcribe_chunked when the episode is processed again.
-            # We only need to handle --cancel-pending here to clean up operations.
-            pending_ops = transcriber.list_pending_operations()
-            if pending_ops:
-                # Group by episode to show user-friendly count
-                episodes_with_pending = set((op.podcast_slug, op.episode_slug) for op in pending_ops)
-                click.echo(
-                    f"\n⏳ Found {len(pending_ops)} pending chunk operation(s) for {len(episodes_with_pending)} episode(s)"
-                )
-                for podcast_slug, episode_slug in sorted(episodes_with_pending):
-                    chunk_count = sum(
-                        1 for op in pending_ops if op.podcast_slug == podcast_slug and op.episode_slug == episode_slug
-                    )
-                    click.echo(f"   • {podcast_slug}/{episode_slug} ({chunk_count} chunk(s))")
+    # Credential / config validation with a friendly exit for the CLI.
+    try:
+        from .core.transcriber_factory import validate_transcription_provider
 
-                if cancel_pending:
-                    # Cancel mode: download completed, cancel still-running
-                    click.echo("\n⏹ Cancelling pending operations...")
-                    results = transcriber.reset_pending_operations()
+        validate_transcription_provider(config)
+    except ThestillError as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
 
-                    completed_count = sum(1 for op, data in results if data is not None)
-                    cancelled_count = sum(1 for op, data in results if data is None and op.state.value == "pending")
-                    failed_count = sum(1 for op, data in results if op.state.value == "failed")
-
-                    if completed_count > 0:
-                        click.echo(f"   Downloaded {completed_count} completed chunk(s)")
-                    if cancelled_count > 0:
-                        click.echo(f"   Cancelled {cancelled_count} in-progress chunk(s)")
-                    if failed_count > 0:
-                        click.echo(f"   {failed_count} chunk(s) had failed")
-                    click.echo("   Note: Cancelled episodes will restart from scratch on next run")
-                    click.echo("")
-                else:
-                    # Normal mode: pending operations will be resumed when their episodes are processed
-                    click.echo("   These will be resumed when the episode is transcribed again.")
-                    click.echo("   (Use --cancel-pending to discard and start fresh)")
-                    click.echo("")
-
-        except ImportError as e:
-            click.echo(f"❌ {e}", err=True)
-            click.echo("   Install with: pip install google-cloud-speech google-cloud-storage", err=True)
-            ctx.exit(1)
-    elif config.transcription_provider.lower() == "elevenlabs":
-        click.echo("🎤 Using ElevenLabs Speech-to-Text")
-        if not config.elevenlabs_api_key:
-            click.echo("❌ ElevenLabs API key not configured", err=True)
-            click.echo("   Set ELEVENLABS_API_KEY in .env", err=True)
-            ctx.exit(1)
-
-        # Start background webhook server for async transcription callbacks
-        # Do this BEFORE creating transcriber so we know if webhook mode is available
+    # ElevenLabs: start the webhook server before constructing the transcriber
+    # so the transcriber can be told whether to wait for callbacks vs poll.
+    elevenlabs_use_async = False
+    elevenlabs_wait_for_webhook = False
+    if provider == "elevenlabs":
         from .web import BackgroundWebhookServer, ExistingServerInfo, webhook_server_context
 
         webhook_server = webhook_server_context(
             config=config,
             port=config.webhook_server_port,
         )
-        # Store in ctx.obj for cleanup at end of command
         ctx.obj.webhook_server_context = webhook_server
         server = webhook_server.__enter__()
         ctx.obj.started_webhook_server = isinstance(server, BackgroundWebhookServer)
 
-        # Determine if we have a working webhook server
         webhook_available = isinstance(server, (BackgroundWebhookServer, ExistingServerInfo))
 
         if isinstance(server, BackgroundWebhookServer):
@@ -1421,72 +1378,71 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 err=True,
             )
 
-        transcriber = ElevenLabsTranscriber(
-            api_key=config.elevenlabs_api_key,
-            base_url=config.elevenlabs_base_url or None,
-            model=config.elevenlabs_model,
-            enable_diarization=config.enable_diarization,
-            num_speakers=config.max_speakers,  # ElevenLabs uses num_speakers instead of min/max
-            path_manager=config.path_manager,
-            use_async=True,  # Enable async mode for webhook callbacks
-            async_threshold_mb=config.elevenlabs_async_threshold_mb,  # 0 = always async
-            tag_audio_events=True,  # Tag audio events like laughter, applause, etc.
-            wait_for_webhook=webhook_available,  # Don't poll if webhook server is available
-        )
-        # Store webhook mode flag for handling transcription results
+        elevenlabs_use_async = True
+        elevenlabs_wait_for_webhook = webhook_available
         ctx.obj.using_webhook_mode = webhook_available
-    elif config.transcription_provider.lower() == "dalston":
-        click.echo("🎤 Using Dalston Speech-to-Text")
-        if not config.dalston_base_url:
-            click.echo("❌ Dalston server URL not configured", err=True)
-            click.echo("   Set DALSTON_BASE_URL in .env (e.g., http://localhost:8000)", err=True)
-            ctx.exit(1)
 
-        try:
-            from .core.dalston_transcriber import DalstonTranscriber
-
-            transcriber = DalstonTranscriber(
-                base_url=config.dalston_base_url,
-                api_key=config.dalston_api_key or None,
-                model=config.dalston_model or None,
-                enable_diarization=config.enable_diarization,
-                num_speakers=config.max_speakers,
-                path_manager=config.path_manager,
-            )
-            click.echo(f"   Server: {config.dalston_base_url}")
-            if config.dalston_model:
-                click.echo(f"   Model: {config.dalston_model}")
-        except ImportError as e:
-            click.echo(f"❌ {e}", err=True)
-            click.echo(
-                "   Install with: pip install git+https://github.com/ssarunic/dalston.git#subdirectory=sdk",
-                err=True,
-            )
-            ctx.exit(1)
-    elif config.transcription_provider.lower() == "parakeet":
-        click.echo("🎤 Using NVIDIA Parakeet Speech-to-Text")
-        from .core.parakeet_transcriber import ParakeetTranscriber
-
-        transcriber = ParakeetTranscriber(config.whisper_device, console=ctx.obj.console)
-    elif config.enable_diarization:
-        click.echo("🎤 Using WhisperX with speaker diarization enabled")
-        from .core.whisper_transcriber import WhisperXTranscriber
-
-        transcriber = WhisperXTranscriber(
-            model_name=config.whisper_model,
-            device=config.whisper_device,
-            enable_diarization=True,
-            hf_token=config.huggingface_token,
-            min_speakers=config.min_speakers,
-            max_speakers=config.max_speakers,
-            diarization_model=config.diarization_model,
+    try:
+        transcriber = create_transcriber(
+            config,
+            path_manager=config.path_manager,
             console=ctx.obj.console,
+            elevenlabs_use_async=elevenlabs_use_async,
+            elevenlabs_async_threshold_mb=config.elevenlabs_async_threshold_mb,
+            elevenlabs_tag_audio_events=True,
+            elevenlabs_wait_for_webhook=elevenlabs_wait_for_webhook,
         )
-    else:
-        click.echo(f"🎤 Using Whisper model: {config.whisper_model}")
-        from .core.whisper_transcriber import WhisperTranscriber
+    except ImportError as e:
+        click.echo(f"❌ {e}", err=True)
+        install_hints = {
+            "google": "   Install with: pip install google-cloud-speech google-cloud-storage",
+            "dalston": ("   Install with: pip install " "git+https://github.com/ssarunic/dalston.git#subdirectory=sdk"),
+        }
+        if provider in install_hints:
+            click.echo(install_hints[provider], err=True)
+        ctx.exit(1)
 
-        transcriber = WhisperTranscriber(config.whisper_model, config.whisper_device, console=ctx.obj.console)
+    # Provider-specific post-construction UX.
+    if provider == "dalston":
+        click.echo(f"   Server: {config.dalston_base_url}")
+        if config.dalston_model:
+            click.echo(f"   Model: {config.dalston_model}")
+    elif provider == "google":
+        # For chunked transcriptions, individual chunks are persisted as
+        # operations and picked up by _transcribe_chunked on the next run.
+        # Here we only surface their presence and handle --cancel-pending.
+        pending_ops = transcriber.list_pending_operations()
+        if pending_ops:
+            episodes_with_pending = set((op.podcast_slug, op.episode_slug) for op in pending_ops)
+            click.echo(
+                f"\n⏳ Found {len(pending_ops)} pending chunk operation(s) for {len(episodes_with_pending)} episode(s)"
+            )
+            for podcast_slug, episode_slug in sorted(episodes_with_pending):
+                chunk_count = sum(
+                    1 for op in pending_ops if op.podcast_slug == podcast_slug and op.episode_slug == episode_slug
+                )
+                click.echo(f"   • {podcast_slug}/{episode_slug} ({chunk_count} chunk(s))")
+
+            if cancel_pending:
+                click.echo("\n⏹ Cancelling pending operations...")
+                results = transcriber.reset_pending_operations()
+
+                completed_count = sum(1 for op, data in results if data is not None)
+                cancelled_count = sum(1 for op, data in results if data is None and op.state.value == "pending")
+                failed_count = sum(1 for op, data in results if op.state.value == "failed")
+
+                if completed_count > 0:
+                    click.echo(f"   Downloaded {completed_count} completed chunk(s)")
+                if cancelled_count > 0:
+                    click.echo(f"   Cancelled {cancelled_count} in-progress chunk(s)")
+                if failed_count > 0:
+                    click.echo(f"   {failed_count} chunk(s) had failed")
+                click.echo("   Note: Cancelled episodes will restart from scratch on next run")
+                click.echo("")
+            else:
+                click.echo("   These will be resumed when the episode is transcribed again.")
+                click.echo("   (Use --cancel-pending to discard and start fresh)")
+                click.echo("")
 
     # Mode 1: Standalone file transcription
     if audio_path:

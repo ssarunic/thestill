@@ -181,7 +181,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # Fail fast on misconfigured transcription provider. In slim Docker
         # deployments this catches the .env.example default
         # (TRANSCRIPTION_PROVIDER=whisper) before any episode is processed.
-        from ..core.task_handlers import validate_transcription_provider
+        from ..core.transcriber_factory import validate_transcription_provider
 
         validate_transcription_provider(config)
 

@@ -222,6 +222,60 @@ class TestPatchApplication:
         assert result.segments[0].kind == "ad_break"
         assert result.segments[0].sponsor == "Acme"
 
+    def test_ad_break_patch_preserves_full_cleaned_text(self) -> None:
+        """Tag-not-obfuscate: the LLM keeps the real ad text in
+        ``cleaned_text`` so the JSON sidecar carries it; the renderer
+        decides whether to show or hide ads via ``exclude_kinds``."""
+        provider = FakeProvider()
+        full_ad_copy = "Support for the show comes from Acme. Visit acme.com and use promo code SHOW for 20% off."
+        provider.patch_factory = lambda ids: [
+            CleanupPatch(id=ids[0], cleaned_text=full_ad_copy, kind="ad_break", sponsor="Acme"),
+        ]
+        cleaner = SegmentedTranscriptCleaner(provider)
+
+        result = cleaner.clean(
+            _annotated([_segment(seg_id=0, text="support for the show comes from acme")]),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="en",
+        )
+
+        assert result.segments[0].text == full_ad_copy
+        assert result.segments[0].kind == "ad_break"
+        # The canonical Markdown projection strips ads; JSON preserves them.
+        stripped = result.to_blended_markdown(exclude_kinds={"ad_break"})
+        assert "acme.com" not in stripped
+        assert "promo code SHOW" not in stripped
+
+    def test_extended_segment_kinds_are_accepted(self) -> None:
+        """The cleaner accepts 'music', 'intro', 'outro' tags and stores
+        the full cleaned_text for each. Downstream consumers filter."""
+        provider = FakeProvider()
+        provider.patch_factory = lambda ids: [
+            CleanupPatch(id=ids[0], cleaned_text="theme song", kind="music"),
+            CleanupPatch(id=ids[1], cleaned_text="welcome to the show", kind="intro"),
+            CleanupPatch(id=ids[2], cleaned_text="thanks for listening", kind="outro"),
+        ]
+        cleaner = SegmentedTranscriptCleaner(provider)
+
+        result = cleaner.clean(
+            _annotated(
+                [
+                    _segment(seg_id=0, text="music plays"),
+                    _segment(seg_id=1, text="welcome"),
+                    _segment(seg_id=2, text="goodbye"),
+                ]
+            ),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="en",
+        )
+
+        assert [s.kind for s in result.segments] == ["music", "intro", "outro"]
+        assert result.segments[0].text == "theme song"
+        assert result.segments[1].text == "welcome to the show"
+        assert result.segments[2].text == "thanks for listening"
+
     def test_source_segment_ids_and_word_span_are_preserved(self) -> None:
         """The patch invariant: LLM patches must not touch source anchors.
 

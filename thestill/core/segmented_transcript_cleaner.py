@@ -65,12 +65,21 @@ class CleanupPatch(BaseModel):
     """
 
     id: int = Field(..., description="Positional id of the target segment being patched.")
-    cleaned_text: str = Field(..., description="Corrected text for the segment. May be empty for filler.")
-    kind: Literal["content", "filler", "ad_break"] = Field(
+    cleaned_text: str = Field(
+        ...,
+        description="Corrected text for the segment. Empty only for 'filler'. "
+        "For 'ad_break', 'music', 'intro', 'outro' keep the full cleaned text — "
+        "downstream consumers filter by kind, they do not rely on the LLM to "
+        "redact.",
+    )
+    kind: Literal["content", "filler", "ad_break", "music", "intro", "outro"] = Field(
         default="content",
-        description="Segment kind after cleanup. 'filler' drops the segment from "
-        "blended-Markdown output; 'ad_break' replaces the content with the "
-        "legacy ad-break marker.",
+        description="Segment tag. 'content' is the default narrative bucket. "
+        "'filler' is um/uh/you-know-style noise and is dropped from rendered "
+        "output. 'ad_break' tags sponsor reads; 'music' tags theme or "
+        "interstitial music; 'intro' and 'outro' tag pre-/post-roll segments "
+        "that are not the main discussion. Rendering policy (keep / drop / "
+        "annotate) lives at the consumer layer — tag, do not redact.",
     )
     sponsor: Optional[str] = Field(
         default=None,
@@ -339,9 +348,10 @@ class SegmentedTranscriptCleaner:
             "OUTPUT SHAPE:\n"
             "Return a JSON object with a 'patches' array. Each patch has:\n"
             "- 'id': integer, copied from the target segment's id field.\n"
-            "- 'cleaned_text': string, the corrected text. Empty string for "
-            "  filler-only segments.\n"
-            "- 'kind': 'content' (default), 'filler', or 'ad_break'.\n"
+            "- 'cleaned_text': string, the corrected text. Empty string only "
+            "  for filler-only segments.\n"
+            "- 'kind': 'content' (default), 'filler', 'ad_break', 'music', "
+            "  'intro', or 'outro'.\n"
             "- 'sponsor': string, the sponsor name when kind='ad_break'; "
             "  null otherwise.\n\n"
             "CLEANUP RULES:\n"
@@ -356,13 +366,20 @@ class SegmentedTranscriptCleaner:
             "4. AD DETECTION — when a segment is clearly a sponsor read "
             "   ('Support for the show comes from', 'promo code', "
             "   'visit [sponsor].com'), mark it kind='ad_break' and populate "
-            "   sponsor from the known sponsors list when possible. The "
-            "   cleaned_text for ad_break segments should be a one-line "
-            "   description — the renderer will replace it with the ad marker.\n"
-            "5. ENTITY REPAIR — fix proper nouns using the Keywords list. "
+            "   sponsor from the known sponsors list when possible. KEEP the "
+            "   full cleaned ad text in cleaned_text — downstream consumers "
+            "   filter by kind, they do not rely on you to redact. Tagging, "
+            "   not obfuscation, is the contract.\n"
+            "5. SEGMENT TAGS — also use kind='music' for theme/interstitial "
+            "   music spans that the transcriber still produced text for, "
+            "   kind='intro' for pre-roll show openings (cold opens, "
+            "   credits, 'welcome to the show'), and kind='outro' for "
+            "   post-roll sign-offs and plugs. Keep cleaned_text populated "
+            "   in every case — the UI toggles visibility per kind.\n"
+            "6. ENTITY REPAIR — fix proper nouns using the Keywords list. "
             "   Names mangled at episode end often map to the Production "
             "   Team list. Flag uncertain names with '[?]'.\n"
-            "6. NO HALLUCINATION — if you cannot correct a word, keep it as-is.\n\n"
+            "7. NO HALLUCINATION — if you cannot correct a word, keep it as-is.\n\n"
             f"FACTS CONTEXT:\n{facts_block}"
         )
 

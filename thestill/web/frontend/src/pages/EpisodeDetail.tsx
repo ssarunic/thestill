@@ -1,4 +1,4 @@
-import { useState, useCallback, lazy, Suspense } from 'react'
+import { useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
@@ -353,6 +353,7 @@ export default function EpisodeDetail() {
                 transcriptLoading={transcriptLoading}
                 episodeState={episode?.state}
                 episodeId={episode?.id ?? null}
+                audioUrl={episode?.audio_url ?? null}
                 onSegmentSeek={handleSegmentSeek}
                 subTab={transcriptSubTab}
                 onSubTabChange={setTranscriptSubTab}
@@ -379,9 +380,72 @@ interface TranscriptPanelProps {
   transcriptLoading: boolean
   episodeState: string | undefined
   episodeId: string | null
+  audioUrl: string | null
   onSegmentSeek: (seconds: number) => void
   subTab: TranscriptSubTab
   onSubTabChange: (next: TranscriptSubTab) => void
+}
+
+// Passively probe an audio URL for its duration without playing it. We
+// rely on the browser requesting only the MP3 metadata (preload:'metadata')
+// so the full file isn't downloaded. `null` while unknown.
+function useAudioDuration(url: string | null): number | null {
+  const [duration, setDuration] = useState<number | null>(null)
+  useEffect(() => {
+    setDuration(null)
+    if (!url) return
+    const audio = new Audio()
+    audio.preload = 'metadata'
+    audio.src = url
+    const onMeta = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration)
+      }
+    }
+    audio.addEventListener('loadedmetadata', onMeta)
+    return () => {
+      audio.removeEventListener('loadedmetadata', onMeta)
+      // Cancel any in-flight metadata fetch when the component unmounts
+      // or the url changes — avoids leaving zombie network requests.
+      audio.src = ''
+    }
+  }, [url])
+  return duration
+}
+
+// VBR MP3 duration differs by 1–3s between decoders, and hosts occasionally
+// rotate small sting/bumper audio. Anything under this threshold is almost
+// certainly noise, not a real ad shift worth alarming the user about.
+// A real pre/mid-roll ad is ≥15s, so 15s is the smallest "caught every
+// real issue, ignored every false positive" threshold in practice.
+const DRIFT_THRESHOLD_SECONDS = 15
+
+// Decide whether to show a drift warning. Three states:
+// - 'aligned': source duration matches live audio within threshold
+// - 'drifted': they disagree — timestamps may not land where expected
+// - 'unknown': transcript predates source-duration recording, OR live
+//   audio metadata hasn't resolved yet; we don't warn on unknown to avoid
+//   false positives on legacy transcripts where drift may also be fine
+function classifyDrift(
+  sourceDuration: number | null | undefined,
+  liveDuration: number | null,
+): { state: 'aligned' | 'drifted' | 'unknown'; deltaSeconds: number | null } {
+  if (sourceDuration == null) return { state: 'unknown', deltaSeconds: null }
+  if (liveDuration == null) return { state: 'unknown', deltaSeconds: null }
+  const delta = liveDuration - sourceDuration
+  if (Math.abs(delta) < DRIFT_THRESHOLD_SECONDS) {
+    return { state: 'aligned', deltaSeconds: delta }
+  }
+  return { state: 'drifted', deltaSeconds: delta }
+}
+
+function formatDeltaSeconds(seconds: number): string {
+  const abs = Math.abs(seconds)
+  const mm = Math.floor(abs / 60)
+  const ss = Math.round(abs % 60)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  const sign = seconds >= 0 ? '+' : '−'
+  return `${sign}${mm > 0 ? `${mm}m ` : ''}${pad(ss)}s`
 }
 
 function TranscriptPanel({
@@ -389,6 +453,7 @@ function TranscriptPanel({
   transcriptLoading,
   episodeState,
   episodeId,
+  audioUrl,
   onSegmentSeek,
   subTab,
   onSubTabChange,
@@ -396,6 +461,11 @@ function TranscriptPanel({
   const hasSegments = !!transcriptData?.segments
   const hasLegacy = !!transcriptData?.content && transcriptData.content.length > 0
   const hasShadow = !!transcriptData?.shadow
+  const liveAudioDuration = useAudioDuration(audioUrl)
+  const drift = classifyDrift(
+    transcriptData?.segments?.transcript_source_duration_s,
+    liveAudioDuration,
+  )
 
   // Clamp the selected sub-tab to one that's actually available. Avoids
   // flashing an empty panel when the user previously viewed a segmented
@@ -413,6 +483,36 @@ function TranscriptPanel({
 
   return (
     <div>
+      {drift.state === 'drifted' && drift.deltaSeconds != null && (
+        <div
+          role="status"
+          className="mb-4 flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <svg
+            className="mt-0.5 w-5 h-5 shrink-0 text-amber-600"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+            />
+          </svg>
+          <div>
+            <p className="font-medium">Timestamps may have drifted</p>
+            <p className="mt-0.5 text-amber-800/90">
+              The audio served for this episode is {formatDeltaSeconds(drift.deltaSeconds)}{' '}
+              {drift.deltaSeconds > 0 ? 'longer' : 'shorter'} than when it was transcribed
+              (likely dynamic ads inserted by the host). Clicking a segment will seek
+              to the displayed time, but the audio at that position may not match.
+            </p>
+          </div>
+        </div>
+      )}
       {showToggle && (
         <div className="flex gap-1 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
           {hasSegments && (

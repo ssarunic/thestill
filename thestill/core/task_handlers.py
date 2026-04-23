@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
 
 from structlog import get_logger
 
-from thestill.utils.exceptions import FatalError, ThestillError, TransientError
+from thestill.utils.exceptions import FatalError, TransientError
 
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
@@ -43,6 +43,7 @@ from .audio_preprocessor import AudioPreprocessor
 from .error_classifier import classify_and_raise
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .queue_manager import Task, TaskStage
+from .transcriber_factory import create_transcriber
 
 if TYPE_CHECKING:
     from ..web.dependencies import AppState
@@ -314,7 +315,11 @@ def handle_transcribe(
     with _handler_error_context(f"transcribing {episode.title}"):
         # Create transcriber based on config (with progress callback if available)
         logger.debug(f"Creating transcriber, provider={config.transcription_provider}")
-        transcriber = _create_transcriber(config, config.path_manager, progress_callback)
+        transcriber = create_transcriber(
+            config,
+            config.path_manager,
+            progress_callback=progress_callback,
+        )
         logger.debug(f"Transcriber created: {type(transcriber).__name__}")
 
         # Determine output path
@@ -572,175 +577,6 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         )
 
         logger.info(f"Summarization completed for episode: {episode.title}")
-
-
-def validate_transcription_provider(config) -> None:
-    """
-    Fail fast if the configured transcription provider cannot be used.
-
-    This check runs at startup so misconfigured deployments surface the
-    problem before any episode is processed. It verifies two things per
-    provider:
-
-    1. The Python module(s) backing the provider are importable. This
-       catches the slim-Docker-image case where `TRANSCRIPTION_PROVIDER`
-       points at a local-transcription provider (whisper / whisperx /
-       parakeet) but the `local-transcription` optional-dependencies
-       extra is not installed.
-    2. Required runtime config is present. This catches the "module is
-       installed but the user forgot to set DALSTON_BASE_URL /
-       ELEVENLABS_API_KEY / GOOGLE_APP_CREDENTIALS" case that otherwise
-       only surfaces at first-transcribe.
-
-    The check uses importlib.util.find_spec rather than a real import
-    so it is cheap, has no side effects, and does not defeat Phase A's
-    lazy-import refactor. It never connects to external services.
-
-    Args:
-        config: Application configuration (thestill.utils.config.Config).
-
-    Raises:
-        ThestillError: With a specific remediation message when the
-            configured provider cannot be used.
-    """
-    import importlib.util
-
-    provider = (config.transcription_provider or "").lower()
-
-    def _require_modules(modules: list[str], extra: str) -> None:
-        missing = [m for m in modules if importlib.util.find_spec(m) is None]
-        if missing:
-            raise ThestillError(
-                f"TRANSCRIPTION_PROVIDER={provider!r} requires {', '.join(missing)} "
-                f"which is not installed. Install with: pip install '.[{extra}]' "
-                f"— or switch TRANSCRIPTION_PROVIDER to a cloud provider "
-                f"(dalston, google, elevenlabs).",
-                provider=provider,
-                missing_modules=missing,
-                remediation_extra=extra,
-            )
-
-    def _require_config(field: str, env_var: str, provider_label: str) -> None:
-        if not getattr(config, field, None):
-            raise ThestillError(
-                f"TRANSCRIPTION_PROVIDER={provider!r} requires {env_var} to be set. "
-                f"Add {env_var}=... to your .env file.",
-                provider=provider,
-                missing_config=env_var,
-                provider_label=provider_label,
-            )
-
-    if provider == "dalston":
-        _require_config("dalston_base_url", "DALSTON_BASE_URL", "Dalston")
-    elif provider == "google":
-        _require_config("google_app_credentials", "GOOGLE_APP_CREDENTIALS", "Google Cloud Speech")
-        _require_config("google_cloud_project_id", "GOOGLE_CLOUD_PROJECT_ID", "Google Cloud Speech")
-    elif provider == "elevenlabs":
-        _require_config("elevenlabs_api_key", "ELEVENLABS_API_KEY", "ElevenLabs")
-    elif provider == "parakeet":
-        _require_modules(["torch", "transformers", "librosa"], "local-transcription")
-    elif provider in ("whisper", "whisperx", ""):
-        # Empty string is the fallback branch in _create_transcriber, which
-        # uses WhisperTranscriber / WhisperXTranscriber.
-        required = ["torch", "whisper"]
-        if config.enable_diarization:
-            required.append("whisperx")
-        _require_modules(required, "local-transcription")
-    else:
-        raise ThestillError(
-            f"Unknown TRANSCRIPTION_PROVIDER={provider!r}. "
-            f"Valid values: dalston, google, elevenlabs, whisper, whisperx, parakeet.",
-            provider=provider,
-        )
-
-    logger.info(
-        "transcription_provider_validated",
-        provider=provider,
-        diarization=config.enable_diarization,
-    )
-
-
-def _create_transcriber(
-    config,
-    path_manager,
-    progress_callback: ProgressCallback | None = None,
-):
-    """
-    Create transcriber based on configuration.
-
-    Args:
-        config: Application configuration
-        path_manager: Path manager for file access
-        progress_callback: Optional callback for progress reporting
-
-    Returns:
-        Configured transcriber instance
-    """
-    validate_transcription_provider(config)
-
-    if config.transcription_provider.lower() == "google":
-        from .google_transcriber import GoogleCloudTranscriber
-
-        # Use quiet console to avoid broken pipe errors in web worker context
-        return GoogleCloudTranscriber(
-            credentials_path=config.google_app_credentials or None,
-            project_id=config.google_cloud_project_id or None,
-            storage_bucket=config.google_storage_bucket or None,
-            enable_diarization=config.enable_diarization,
-            min_speakers=config.min_speakers,
-            max_speakers=config.max_speakers,
-            parallel_chunks=config.max_workers,
-            path_manager=path_manager,
-            console=ConsoleOutput(quiet=True),
-        )
-    elif config.transcription_provider.lower() == "elevenlabs":
-        from .elevenlabs_transcriber import ElevenLabsTranscriber
-
-        return ElevenLabsTranscriber(
-            api_key=config.elevenlabs_api_key,
-            base_url=config.elevenlabs_base_url or None,
-            model=config.elevenlabs_model,
-            enable_diarization=config.enable_diarization,
-            num_speakers=config.max_speakers,
-            path_manager=path_manager,
-            use_async=False,  # Synchronous mode for background tasks
-        )
-    elif config.transcription_provider.lower() == "dalston":
-        from .dalston_transcriber import DalstonTranscriber
-
-        return DalstonTranscriber(
-            base_url=config.dalston_base_url or None,
-            api_key=config.dalston_api_key or None,
-            model=config.dalston_model or None,
-            enable_diarization=config.enable_diarization,
-            num_speakers=config.max_speakers,
-            path_manager=path_manager,
-        )
-    elif config.enable_diarization:
-        from .whisper_transcriber import WhisperXTranscriber
-
-        # Use quiet console to avoid broken pipe errors in web worker context
-        # (stdout may not be connected when running as background task)
-        return WhisperXTranscriber(
-            model_name=config.whisper_model,
-            device=config.whisper_device,
-            enable_diarization=True,
-            hf_token=config.huggingface_token,
-            min_speakers=config.min_speakers,
-            max_speakers=config.max_speakers,
-            diarization_model=config.diarization_model,
-            progress_callback=progress_callback,
-            console=ConsoleOutput(quiet=True),
-        )
-    else:
-        from .whisper_transcriber import WhisperTranscriber
-
-        # Use quiet console to avoid broken pipe errors in web worker context
-        return WhisperTranscriber(
-            config.whisper_model,
-            config.whisper_device,
-            console=ConsoleOutput(quiet=True),
-        )
 
 
 def create_task_handlers(

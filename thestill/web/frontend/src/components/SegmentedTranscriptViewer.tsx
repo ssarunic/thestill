@@ -7,7 +7,11 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react'
-import type { AnnotatedSegment, AnnotatedTranscriptDump } from '../api/types'
+import type {
+  AnnotatedSegment,
+  AnnotatedTranscriptDump,
+  SegmentKind,
+} from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import {
   useAutoScrollFollow,
@@ -20,6 +24,98 @@ import { useToast } from './Toast'
 
 const FOLLOW_STORAGE_KEY = 'thestill:transcript:followPlayback'
 const SHOW_FILLER_STORAGE_KEY = 'thestill:transcript:showFiller'
+// Global preference, not per-episode: matches reader intent ("I never
+// want to see ads" carries across episodes).
+const HIDDEN_KINDS_STORAGE_KEY = 'thestill:transcriptViewer:hiddenKinds'
+
+type TogglableKind = Exclude<SegmentKind, 'filler' | 'content'>
+
+const TOGGLE_ORDER: TogglableKind[] = ['ad_break', 'music', 'intro', 'outro']
+
+const KIND_LABELS: Record<TogglableKind, string> = {
+  ad_break: 'Ads',
+  music: 'Music',
+  intro: 'Intro',
+  outro: 'Outro',
+}
+
+interface BlockStyle {
+  border: string
+  bg: string
+  bgActive: string
+  text: string
+  accent: string
+  hoverRing: string
+}
+
+const BLOCK_STYLES: Record<TogglableKind, BlockStyle> = {
+  ad_break: {
+    border: 'border-amber-400',
+    bg: 'bg-amber-50/70',
+    bgActive: 'bg-amber-100/80 shadow-sm',
+    text: 'text-amber-800',
+    accent: 'text-amber-700/80',
+    hoverRing:
+      'hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+  },
+  music: {
+    border: 'border-slate-300',
+    bg: 'bg-slate-50/70',
+    bgActive: 'bg-slate-100/80 shadow-sm',
+    text: 'text-slate-700',
+    accent: 'text-slate-500',
+    hoverRing:
+      'hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400',
+  },
+  intro: {
+    border: 'border-slate-300',
+    bg: 'bg-slate-50/70',
+    bgActive: 'bg-slate-100/80 shadow-sm',
+    text: 'text-slate-700',
+    accent: 'text-slate-500',
+    hoverRing:
+      'hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400',
+  },
+  outro: {
+    border: 'border-slate-300',
+    bg: 'bg-slate-50/70',
+    bgActive: 'bg-slate-100/80 shadow-sm',
+    text: 'text-slate-700',
+    accent: 'text-slate-500',
+    hoverRing:
+      'hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400',
+  },
+}
+
+function loadHiddenKinds(): Set<TogglableKind> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_KINDS_STORAGE_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(
+      parsed.filter((value): value is TogglableKind =>
+        typeof value === 'string' && (TOGGLE_ORDER as string[]).includes(value),
+      ),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function saveHiddenKinds(kinds: Set<TogglableKind>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      HIDDEN_KINDS_STORAGE_KEY,
+      JSON.stringify(Array.from(kinds)),
+    )
+  } catch {
+    // localStorage may be disabled (private mode, quota exceeded) — the
+    // preference silently reverts to the session default.
+  }
+}
 
 interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
@@ -113,8 +209,9 @@ function TimestampLink({ seconds, className, onCopy }: TimestampLinkProps) {
   )
 }
 
-interface AdBreakProps {
+interface BlockSegmentProps {
   segment: AnnotatedSegment
+  kind: TogglableKind
   offset: number
   isActive: boolean
   onSeek?: (seconds: number) => void
@@ -122,10 +219,14 @@ interface AdBreakProps {
   onCopyTimestamp: (seconds: number) => void
   searchQuery: string
   dimmed: boolean
+  // When true, collapse to a compact "[00:02] AD BREAK — NAVAN" chip.
+  // When false, render the full cleaned ad body with a subtle coloured rail.
+  collapsed: boolean
 }
 
-const AdBreak = memo(function AdBreak({
+const BlockSegment = memo(function BlockSegment({
   segment,
+  kind,
   offset,
   isActive,
   onSeek,
@@ -133,36 +234,76 @@ const AdBreak = memo(function AdBreak({
   onCopyTimestamp,
   searchQuery,
   dimmed,
-}: AdBreakProps) {
-  const sponsor = segment.sponsor ? ` — ${segment.sponsor}` : ''
+  collapsed,
+}: BlockSegmentProps) {
+  const style = BLOCK_STYLES[kind]
+  const baseLabel = kind === 'ad_break' ? 'Ad break' : KIND_LABELS[kind]
+  const sponsorSuffix =
+    kind === 'ad_break' && segment.sponsor ? ` — ${segment.sponsor}` : ''
   const absoluteSeconds = segment.start + offset
-  const activeRing = isActive ? 'bg-amber-100/80 shadow-sm' : ''
   const dimClass = dimmed ? 'opacity-70' : ''
   const interactive = seekableProps(
-    `Seek to ${formatTimestamp(absoluteSeconds)} — ad break${sponsor}`,
+    `Seek to ${formatTimestamp(absoluteSeconds)} — ${baseLabel}${sponsorSuffix}`,
     onSeek,
     absoluteSeconds,
   )
-  const seekableClasses = onSeek
-    ? 'cursor-pointer hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400'
-    : ''
+  const seekableClasses = onSeek ? `cursor-pointer ${style.hoverRing}` : ''
+
+  if (collapsed) {
+    const activeRing = isActive ? style.bgActive : ''
+    return (
+      <div
+        {...interactive}
+        ref={registerRef}
+        data-testid={`segment-${kind}-${segment.id}`}
+        data-active={isActive ? 'true' : 'false'}
+        data-collapsed="true"
+        className={`my-3 border-l-4 ${style.border} ${style.bg} px-4 py-2 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
+      >
+        <div className={`flex items-center gap-3 ${style.text}`}>
+          <TimestampLink
+            seconds={absoluteSeconds}
+            onCopy={onCopyTimestamp}
+            className={`font-mono text-[11px] tabular-nums ${style.accent}`}
+          />
+          <span className="text-xs font-semibold uppercase tracking-wider">
+            {baseLabel}
+            {highlightMatches(sponsorSuffix, searchQuery)}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  // Expanded: full ad copy reads like body text but keeps the kind's
+  // accent colour on the left rail so the reader still clocks it as
+  // sponsored content. No label chip — the user reads the ad body directly.
+  const containerActive = isActive ? style.bgActive : 'hover:bg-gray-50/70'
   return (
     <div
       {...interactive}
       ref={registerRef}
+      data-testid={`segment-${kind}-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
-      className={`my-5 border-l-4 border-amber-400 bg-amber-50/70 px-4 py-3 rounded-r-md transition-shadow ${activeRing} ${dimClass} ${seekableClasses}`}
+      data-collapsed="false"
+      className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
-      <div className="flex items-center gap-3 text-amber-800">
+      <p
+        className={`text-gray-800 pl-4 border-l-2 ${style.border} text-base leading-[1.7] !mb-0`}
+      >
         <TimestampLink
           seconds={absoluteSeconds}
           onCopy={onCopyTimestamp}
-          className="font-mono text-[11px] tabular-nums text-amber-700/80"
+          className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${style.accent}`}
         />
-        <span className="text-xs font-semibold uppercase tracking-wider">
-          Ad break{highlightMatches(sponsor, searchQuery)}
-        </span>
-      </div>
+        {segment.text
+          ? highlightMatches(segment.text, searchQuery)
+          : (
+            <span className="text-gray-400 italic">
+              (empty {baseLabel.toLowerCase()})
+            </span>
+          )}
+      </p>
     </div>
   )
 })
@@ -212,6 +353,7 @@ const ContentSegment = memo(function ContentSegment({
     <div
       {...interactive}
       ref={registerRef}
+      data-testid={`segment-content-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
@@ -239,6 +381,44 @@ const ContentSegment = memo(function ContentSegment({
   )
 })
 
+interface ToggleBarProps {
+  presentKinds: TogglableKind[]
+  hiddenKinds: Set<TogglableKind>
+  onToggle: (kind: TogglableKind) => void
+}
+
+function ToggleBar({ presentKinds, hiddenKinds, onToggle }: ToggleBarProps) {
+  if (presentKinds.length === 0) return null
+  return (
+    <div
+      role="group"
+      aria-label="Segment kind filters"
+      className="inline-flex flex-wrap items-center gap-1.5"
+    >
+      <span className="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Show</span>
+      {presentKinds.map((kind) => {
+        const isVisible = !hiddenKinds.has(kind)
+        return (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={isVisible}
+            onClick={() => onToggle(kind)}
+            className={
+              'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ' +
+              (isVisible
+                ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                : 'bg-gray-100 text-gray-500 border border-gray-200 line-through')
+            }
+          >
+            {KIND_LABELS[kind]}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 // Rows are either a normal segment render or a placeholder for a run of
 // non-matching segments collapsed under a single "N hidden" pill.
 type RenderRow =
@@ -253,6 +433,7 @@ export default function SegmentedTranscriptViewer({
   const offset = transcript.playback_time_offset_seconds ?? 0
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
   const [showFiller, setShowFiller] = usePersistedBoolean(SHOW_FILLER_STORAGE_KEY, false)
+  const [hiddenKinds, setHiddenKinds] = useState<Set<TogglableKind>>(loadHiddenKinds)
   const [searchInput, setSearchInput] = useState('')
   const searchQuery = useDeferredValue(searchInput.trim())
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0)
@@ -261,13 +442,36 @@ export default function SegmentedTranscriptViewer({
   )
   const { showToast } = useToast()
 
-  const renderedSegments = useMemo(
-    () =>
-      showFiller
-        ? transcript.segments
-        : transcript.segments.filter((seg) => seg.kind !== 'filler'),
-    [showFiller, transcript.segments],
-  )
+  const toggleKind = useCallback((kind: TogglableKind) => {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      saveHiddenKinds(next)
+      return next
+    })
+  }, [])
+
+  // Togglable kinds are always in the rendered list — toggling the pill
+  // flips them between compact chip and full-text; it never drops them.
+  const { presentKinds, renderedSegments } = useMemo(() => {
+    const present = new Set<TogglableKind>()
+    const visible: AnnotatedSegment[] = []
+    for (const seg of transcript.segments) {
+      if (seg.kind === 'filler') {
+        if (showFiller) visible.push(seg)
+        continue
+      }
+      if (seg.kind !== 'content') {
+        present.add(seg.kind as TogglableKind)
+      }
+      visible.push(seg)
+    }
+    return {
+      presentKinds: TOGGLE_ORDER.filter((kind) => present.has(kind)),
+      renderedSegments: visible,
+    }
+  }, [transcript.segments, showFiller])
 
   const currentTime = usePlayerTime()
   const { track } = usePlayer()
@@ -275,19 +479,19 @@ export default function SegmentedTranscriptViewer({
 
   const activeSegmentId = useMemo(() => {
     if (!isCurrentEpisode) return null
-    // Search the full (unfiltered) list so filler gaps don't flicker the
-    // highlight, then walk back to the nearest non-filler segment when
-    // filler is hidden.
+    // Search the full (unfiltered) list so filler gaps and hidden kinds
+    // don't flicker the highlight, then walk back to the nearest visible
+    // segment so the outline lands on something the reader can see.
     const idx = findActiveSegmentIndex(transcript.segments, currentTime, offset)
     if (idx < 0) return null
-    if (showFiller) return transcript.segments[idx].id
+    const visibleIds = new Set(renderedSegments.map((s) => s.id))
     for (let i = idx; i >= 0; i -= 1) {
-      if (transcript.segments[i].kind !== 'filler') {
+      if (visibleIds.has(transcript.segments[i].id)) {
         return transcript.segments[i].id
       }
     }
     return null
-  }, [isCurrentEpisode, transcript.segments, currentTime, offset, showFiller])
+  }, [isCurrentEpisode, transcript.segments, currentTime, offset, renderedSegments])
 
   const follow = useAutoScrollFollow({
     activeKey: activeSegmentId,
@@ -334,13 +538,11 @@ export default function SegmentedTranscriptViewer({
     return { matchingIds: ids, matchOrder: order }
   }, [searchQuery, renderedSegments])
 
-  // Reset nav + expand state when the match set changes.
   useEffect(() => {
     setCurrentMatchIndex(0)
     setExpandedHiddenGroups(new Set())
   }, [searchQuery])
 
-  // Scroll the first match into view when a fresh search has results.
   useEffect(() => {
     if (!searchQuery || matchOrder.length === 0) return
     follow.scrollToKey(matchOrder[0])
@@ -405,21 +607,9 @@ export default function SegmentedTranscriptViewer({
   if (transcript.segments.length === 0) {
     return (
       <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
-        <p className="text-gray-600 font-medium">No content segments available</p>
+        <p className="text-gray-600 font-medium">No segments available</p>
         <p className="text-sm text-gray-400 mt-1">
           This transcript has no segments yet.
-        </p>
-      </div>
-    )
-  }
-
-  if (renderedSegments.length === 0) {
-    return (
-      <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
-        <p className="text-gray-600 font-medium">No content segments visible</p>
-        <p className="text-sm text-gray-400 mt-1">
-          Every segment in this transcript was marked as filler. Toggle{' '}
-          <em>Show filler</em> above to reveal them.
         </p>
       </div>
     )
@@ -478,6 +668,11 @@ export default function SegmentedTranscriptViewer({
             </button>
           </div>
         )}
+        <ToggleBar
+          presentKinds={presentKinds}
+          hiddenKinds={hiddenKinds}
+          onToggle={toggleKind}
+        />
         <label className="inline-flex items-center gap-2 text-xs text-gray-600 select-none cursor-pointer">
           <input
             type="checkbox"
@@ -498,56 +693,72 @@ export default function SegmentedTranscriptViewer({
         </label>
       </div>
 
-      <div className="transcript-content leading-relaxed space-y-[3px]">
-        {renderRows.map((row) => {
-          if (row.type === 'hidden') {
+      {renderedSegments.length === 0 ? (
+        <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
+          <p className="text-gray-600 font-medium">No content segments visible</p>
+          <p className="text-sm text-gray-400 mt-1">
+            Every segment in this transcript was marked as filler. Toggle{' '}
+            <em>Show filler</em> above to reveal them.
+          </p>
+        </div>
+      ) : (
+        <div className="transcript-content leading-relaxed space-y-[3px]">
+          {renderRows.map((row) => {
+            if (row.type === 'hidden') {
+              return (
+                <button
+                  key={`hidden-${row.firstId}`}
+                  type="button"
+                  onClick={() => expandHiddenGroup(row.firstId)}
+                  className="my-2 w-full inline-flex items-center justify-center gap-2 rounded-md border border-dashed border-gray-200 bg-gray-50/60 py-1.5 px-3 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                  <span>
+                    {row.count} segment{row.count === 1 ? '' : 's'} hidden
+                  </span>
+                  <span className="opacity-60">· Click to show</span>
+                </button>
+              )
+            }
+            const { segment, expandedFromHidden } = row
+            const isActive = segment.id === activeSegmentId
+            if (segment.kind === 'content' || segment.kind === 'filler') {
+              return (
+                <ContentSegment
+                  key={segment.id}
+                  segment={segment}
+                  offset={offset}
+                  isActive={isActive}
+                  onSeek={onSeekRequest}
+                  registerRef={follow.registerRef(segment.id)}
+                  onCopyTimestamp={handleCopyTimestamp}
+                  searchQuery={searchQuery}
+                  dimmed={expandedFromHidden}
+                  isFiller={segment.kind === 'filler'}
+                />
+              )
+            }
+            const togglableKind = segment.kind as TogglableKind
             return (
-              <button
-                key={`hidden-${row.firstId}`}
-                type="button"
-                onClick={() => expandHiddenGroup(row.firstId)}
-                className="my-2 w-full inline-flex items-center justify-center gap-2 rounded-md border border-dashed border-gray-200 bg-gray-50/60 py-1.5 px-3 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-                <span>
-                  {row.count} segment{row.count === 1 ? '' : 's'} hidden
-                </span>
-                <span className="opacity-60">· Click to show</span>
-              </button>
+              <BlockSegment
+                key={segment.id}
+                segment={segment}
+                kind={togglableKind}
+                offset={offset}
+                isActive={isActive}
+                onSeek={onSeekRequest}
+                registerRef={follow.registerRef(segment.id)}
+                onCopyTimestamp={handleCopyTimestamp}
+                searchQuery={searchQuery}
+                dimmed={expandedFromHidden}
+                collapsed={hiddenKinds.has(togglableKind)}
+              />
             )
-          }
-          const { segment, expandedFromHidden } = row
-          const isActive = segment.id === activeSegmentId
-          return segment.kind === 'ad_break' ? (
-            <AdBreak
-              key={segment.id}
-              segment={segment}
-              offset={offset}
-              isActive={isActive}
-              onSeek={onSeekRequest}
-              registerRef={follow.registerRef(segment.id)}
-              onCopyTimestamp={handleCopyTimestamp}
-              searchQuery={searchQuery}
-              dimmed={expandedFromHidden}
-            />
-          ) : (
-            <ContentSegment
-              key={segment.id}
-              segment={segment}
-              offset={offset}
-              isActive={isActive}
-              onSeek={onSeekRequest}
-              registerRef={follow.registerRef(segment.id)}
-              onCopyTimestamp={handleCopyTimestamp}
-              searchQuery={searchQuery}
-              dimmed={expandedFromHidden}
-              isFiller={segment.kind === 'filler'}
-            />
-          )
-        })}
-      </div>
+          })}
+        </div>
+      )}
 
       {followPlayback && follow.userScrolledAway && activeSegmentId != null && (
         <button

@@ -203,7 +203,7 @@ export type TranscriptType = 'cleaned' | 'raw'
 // models in thestill/models/annotated_transcript.py. Keep the field
 // list in lock-step with the Python side — they are the contract the
 // SegmentedTranscriptViewer renders from.
-export type SegmentKind = 'content' | 'filler' | 'ad_break'
+export type SegmentKind = 'content' | 'filler' | 'ad_break' | 'music' | 'intro' | 'outro'
 
 export interface WordSpan {
   start_segment_id: number
@@ -231,6 +231,10 @@ export interface AnnotatedTranscriptDump {
   segments: AnnotatedSegment[]
   playback_time_offset_seconds: number
   algorithm_version: string
+  // Duration of the audio file that was transcribed. Compared against
+  // the live audio element's duration to detect DAI-induced drift.
+  // `null` for legacy transcripts cleaned before we recorded this.
+  transcript_source_duration_s: number | null
 }
 
 export interface ShadowTranscript {
