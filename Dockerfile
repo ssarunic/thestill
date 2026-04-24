@@ -24,7 +24,7 @@ RUN npm run build
 FROM mwader/static-ffmpeg:8.1 AS ffmpeg-src
 
 # ---------- Stage 3: build the Python wheel ----------
-FROM python:3.12-slim AS python-builder
+FROM python:3.14-slim AS python-builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 RUN apt-get update \
@@ -37,7 +37,7 @@ COPY --from=frontend-builder /src/thestill/web/static ./thestill/web/static
 RUN pip wheel --wheel-dir /wheels .
 
 # ---------- Stage 4: runtime base ----------
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 # Re-declare with defaults so `docker build` works without --build-arg.
 # Top-level ARGs before the first FROM don't propagate into stages.
 ARG THESTILL_UID=1000
