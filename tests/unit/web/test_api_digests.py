@@ -121,7 +121,7 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
 
     # Mock path manager
     state.path_manager = MagicMock()
-    state.path_manager.digests_dir = Path(tempfile.mkdtemp())
+    state.path_manager.digests_dir.return_value = Path(tempfile.mkdtemp())
 
     return state
 
@@ -228,7 +228,7 @@ class TestGetDigestContent:
         """Get digest content returns markdown content."""
         # Create a test file
         content = "# Test Digest\n\nThis is test content."
-        digest_file = mock_app_state.path_manager.digests_dir / sample_digest.file_path
+        digest_file = mock_app_state.path_manager.digests_dir() / sample_digest.file_path
         digest_file.write_text(content)
 
         response = client.get("/api/digests/test-digest-id/content")
@@ -339,7 +339,7 @@ class TestDeleteDigest:
     def test_delete_digest_success(self, client, mock_app_state, sample_digest):
         """Delete digest removes record and file."""
         # Create a test file
-        digest_file = mock_app_state.path_manager.digests_dir / sample_digest.file_path
+        digest_file = mock_app_state.path_manager.digests_dir() / sample_digest.file_path
         digest_file.write_text("test content")
 
         response = client.delete("/api/digests/test-digest-id")
