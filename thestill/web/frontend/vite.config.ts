@@ -18,11 +18,16 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Vendor chunks - separate large dependencies for better caching
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-query': ['@tanstack/react-query'],
-          'vendor-markdown': ['react-markdown', 'remark-gfm'],
+        manualChunks: (id) => {
+          if (!id.includes('node_modules')) return
+          if (id.includes('react-markdown') || id.includes('remark-gfm')) return 'vendor-markdown'
+          if (id.includes('@tanstack/react-query')) return 'vendor-query'
+          if (
+            id.includes('/react/') ||
+            id.includes('/react-dom/') ||
+            id.includes('/react-router/') ||
+            id.includes('/react-router-dom/')
+          ) return 'vendor-react'
         },
       },
     },

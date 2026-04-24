@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
   type KeyboardEvent,
+  type ReactElement,
 } from 'react'
 import type {
   AnnotatedSegment,
@@ -168,7 +169,7 @@ function highlightMatches(text: string, query: string) {
   if (!query) return text
   const needle = query.toLowerCase()
   const hay = text.toLowerCase()
-  const out: (string | JSX.Element)[] = []
+  const out: (string | ReactElement)[] = []
   let cursor = 0
   let idx = hay.indexOf(needle, cursor)
   if (idx === -1) return text

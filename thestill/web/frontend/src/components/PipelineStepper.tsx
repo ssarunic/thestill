@@ -1,7 +1,8 @@
+import type { ReactElement } from 'react'
 import type { PipelineStage } from '../api/types'
 
 // Pipeline stages configuration
-const STAGES: { key: PipelineStage; label: string; icon: JSX.Element }[] = [
+const STAGES: { key: PipelineStage; label: string; icon: ReactElement }[] = [
   {
     key: 'download',
     label: 'Download',
