@@ -44,3 +44,9 @@ updates:
     labels:
       - dependencies
       - docker
+    ignore:
+      # Blocked on pydub / audioop. pydub 0.25.1 still imports audioop,
+      # which was removed from CPython stdlib in 3.13. Unblock by adding
+      # `audioop-lts; python_version>=3.13` to pyproject.toml first.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
