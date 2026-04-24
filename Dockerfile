@@ -12,7 +12,7 @@ ARG THESTILL_UID=1000
 ARG THESTILL_GID=1000
 
 # ---------- Stage 1: build the React SPA ----------
-FROM node:20-slim AS frontend-builder
+FROM node:25-slim AS frontend-builder
 WORKDIR /src/thestill/web/frontend
 COPY thestill/web/frontend/package.json thestill/web/frontend/package-lock.json ./
 RUN npm ci
