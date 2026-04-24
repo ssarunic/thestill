@@ -20,6 +20,8 @@ Includes pipeline operations: refresh, download, downsample, transcribe, clean.
 """
 
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +47,27 @@ from ..services import (
 from ..services.auth_service import AuthService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
+from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .middleware.stdio_adapter import log_mcp_stdio
 
 logger = structlog.get_logger(__name__)
+
+# Tools that consume downstream cost (LLM / transcription / disk). Read-only
+# inspection tools are exempt so ordinary clients can poll freely.
+_MUTATING_TOOLS = frozenset(
+    {
+        "add_podcast",
+        "remove_podcast",
+        "refresh_feeds",
+        "download_episodes",
+        "downsample_audio",
+        "transcribe_episodes",
+        "clean_transcripts",
+        "process_episode",
+        "summarize_episodes",
+        "generate_digest",
+    }
+)
 
 
 def setup_tools(server: Server, storage_path: str):
@@ -60,6 +80,13 @@ def setup_tools(server: Server, storage_path: str):
     """
     # Load full config for database path and other settings
     config = load_config()
+
+    # Per-session MCP quota key.
+    # stdio transport has one client per server process, so process identity
+    # IS session identity. When the server moves to HTTP/SSE transport,
+    # swap this for the real per-connection id exposed by the MCP runtime.
+    _session_key = os.getenv("MCP_SESSION_KEY") or f"pid-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    logger.info("mcp_session_key_initialized", session_key=_session_key)
 
     # Initialize shared components
     path_manager = PathManager(storage_path)
@@ -74,7 +101,10 @@ def setup_tools(server: Server, storage_path: str):
         max_per_host=config.refresh_max_per_host,
     )
     refresh_service = RefreshService(feed_manager, podcast_service)
-    audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
+    audio_downloader = AudioDownloader(
+        str(path_manager.original_audio_dir()),
+        max_bytes=config.max_audio_bytes,
+    )
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)
@@ -383,6 +413,17 @@ def setup_tools(server: Server, storage_path: str):
             List of text content results
         """
         logger.info(f"Calling tool: {name} with args: {arguments}")
+
+        if name in _MUTATING_TOOLS:
+            try:
+                enforce_mcp_mutation_quota(name, session_key=_session_key)
+            except RateLimitExceeded as exc:
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps({"success": False, "error": str(exc), "retry_after_seconds": 60}),
+                    )
+                ]
 
         try:
             if name == "add_podcast":

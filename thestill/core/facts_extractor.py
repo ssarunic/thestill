@@ -33,6 +33,7 @@ from structlog import get_logger
 from thestill.core.llm_provider import LLMProvider
 from thestill.core.transcript_formatter import TranscriptFormatter
 from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 logger = get_logger(__name__)
 
@@ -185,8 +186,8 @@ class FactsExtractor:
         if podcast_facts:
             podcast_context = self._render_podcast_facts_context(podcast_facts)
 
-        # Build the prompt
-        system_prompt = self._build_facts_extraction_system_prompt(language=language)
+        # Build the prompt.
+        system_prompt = self._build_facts_extraction_system_prompt(language=language) + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_facts_extraction_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_title=podcast_title,
@@ -295,8 +296,8 @@ class FactsExtractor:
         # Format transcript for analysis
         formatted_transcript = self.formatter.format_transcript(transcript_data)
 
-        # Build the prompt
-        system_prompt = self._build_podcast_facts_system_prompt()
+        # Build the prompt.
+        system_prompt = self._build_podcast_facts_system_prompt() + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_podcast_facts_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_title=podcast_title,
@@ -535,11 +536,12 @@ Return your analysis as JSON with this structure:
         if podcast_context:
             lines.extend(["", podcast_context])
 
+        # Transcript text is untrusted; fence it.
         lines.extend(
             [
                 "",
                 "TRANSCRIPT TO ANALYZE:",
-                formatted_transcript,
+                wrap_untrusted(formatted_transcript, label="TRANSCRIPT"),
             ]
         )
 
@@ -609,7 +611,8 @@ Return your analysis as JSON:
             f"Ad Sponsors: {episode_facts.ad_sponsors}",
             "",
             "TRANSCRIPT (for additional context):",
-            formatted_transcript[:50000],  # Limit transcript size for this call
+            # Transcript text is untrusted; fence it.
+            wrap_untrusted(formatted_transcript[:50000], label="TRANSCRIPT"),
         ]
 
         return "\n".join(lines)

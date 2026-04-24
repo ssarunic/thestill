@@ -21,6 +21,8 @@ from typing import Optional, Union
 
 from structlog import get_logger
 
+from .audio_integrity import InvalidAudioFile, assert_audio_file
+
 logger = get_logger(__name__)
 
 
@@ -201,6 +203,18 @@ def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:
         logger.warning(f"Audio file not found: {audio_path}")
         return None
 
+    # Canonicalise the path before shelling out, and validate the file
+    # actually starts with known audio magic bytes, so an RSS-provided
+    # filename with shell metacharacters (or a polyglot file) cannot
+    # influence what ffprobe interprets.
+    try:
+        assert_audio_file(audio_path)
+    except InvalidAudioFile as exc:
+        logger.warning(f"ffprobe skipped: integrity check failed for {audio_path}: {exc}")
+        return None
+
+    canonical = audio_path.resolve()
+
     try:
         result = subprocess.run(
             [
@@ -210,7 +224,8 @@ def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:
                 "-print_format",
                 "json",
                 "-show_format",
-                str(audio_path),
+                "--",  # terminate option parsing so filenames beginning with '-' are never interpreted as flags
+                str(canonical),
             ],
             capture_output=True,
             encoding="utf-8",

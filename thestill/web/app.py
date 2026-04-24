@@ -33,7 +33,7 @@ from typing import Optional
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
@@ -52,7 +52,7 @@ from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
-from .middleware import LoggingMiddleware
+from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
     api_commands,
     api_dashboard,
@@ -238,32 +238,86 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.stop()
         logger.info("task_worker_stopped")
 
-    # Create FastAPI application
+    # /docs and /redoc are off by default in production.
+    # Flip ENABLE_DOCS=true (or ENVIRONMENT=development) to re-enable them.
+    _is_dev = config.environment == "development"
+    docs_enabled = _is_dev or config.enable_docs
     app = FastAPI(
         title="Thestill",
         description="Automated podcast transcription and summarization pipeline",
         version="1.0.0",
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
+
+    # Sanitise the default exception response so we don't leak exception
+    # messages / tracebacks to clients in production. Logs keep full
+    # detail server-side.
+    @app.exception_handler(Exception)
+    async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
+        logger.exception("unhandled_exception", path=str(request.url.path), error_type=type(exc).__name__)
+        if _is_dev:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"{type(exc).__name__}: {exc}"},
+            )
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     # Add logging middleware for request/response tracking
     app.add_middleware(LoggingMiddleware)
 
-    # Add CORS middleware for frontend development
+    # spec #25 item 3.1: defence-in-depth response headers (CSP, HSTS,
+    # X-Frame-Options, X-Content-Type-Options, Referrer-Policy).
+    app.add_middleware(SecurityHeadersMiddleware, is_production=not _is_dev)
+
+    # spec #25 item 3.7: application-layer body-size cap. Webhooks get the
+    # tighter webhook cap; everything else falls back to the default
+    # (matches the webhook cap so nothing accidentally ships unlimited).
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",  # Vite dev server
-            "http://localhost:3000",  # Alternative dev port
+        BodySizeLimitMiddleware,
+        default_limit=config.max_webhook_body_bytes,
+        route_limits=[("/webhook/", config.max_webhook_body_bytes)],
+    )
+
+    # CORS: origins come from ALLOWED_ORIGINS env,
+    # methods and headers are explicit. In development we fall back to the
+    # Vite dev server ports so local work still functions.
+    cors_origins = list(config.allowed_origins)
+    if _is_dev and not cors_origins:
+        cors_origins = [
+            "http://localhost:5173",
+            "http://localhost:3000",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:3000",
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        ]
+    # Reject credentialed wildcard at startup (post-review hardening of
+    # ). Browsers spec-forbid Access-Control-Allow-Credentials
+    # with Access-Control-Allow-Origin: *, and Starlette would echo whatever
+    # origin asked, so ALLOWED_ORIGINS="*" is a footgun — refuse it.
+    if any(origin.strip() == "*" for origin in cors_origins):
+        raise ValueError(
+            "ALLOWED_ORIGINS='*' is not permitted: the web app issues "
+            "credentialed cookies, and wildcard origins with credentials "
+            "violate the CORS spec. Enumerate origins explicitly."
+        )
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "Accept",
+                "Accept-Language",
+                "Authorization",
+                "Content-Language",
+                "Content-Type",
+                "X-Requested-With",
+            ],
+            max_age=600,
+        )
 
     # Register routes
     # Health check at root level (infrastructure convention for load balancers)

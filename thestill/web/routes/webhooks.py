@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -40,11 +41,21 @@ from structlog import get_logger
 
 from ...webhook import get_tracker
 from ..dependencies import AppState, get_app_state
+from ..middleware import WEBHOOK_LIMIT, rate_limit_dependency
 from ..services import WebhookTranscriptProcessor
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+# Outside this window a signed webhook timestamp is considered a replay.
+_MAX_WEBHOOK_CLOCK_SKEW_SECONDS = 5 * 60
+# Dev-only escape hatch for running the service without the shared secret.
+# Production deploys must set ELEVENLABS_WEBHOOK_SECRET; anything else is
+# rejected with 401. Set this env var to "1" to opt out.
+_DEV_ALLOW_UNSIGNED_ENV = "DEV_ALLOW_UNSIGNED_WEBHOOKS"
+
+# Per-IP rate limit on webhook ingress. Replay guards and signature
+# verification sit inside the handler; the limiter is the outer moat.
+router = APIRouter(dependencies=[Depends(rate_limit_dependency(WEBHOOK_LIMIT, "webhook"))])
 
 
 def _get_webhook_secret(state: AppState) -> str:
@@ -97,61 +108,63 @@ def _verify_signature(
     """
     Verify ElevenLabs webhook signature using HMAC-SHA256.
 
-    The ElevenLabs-Signature header format: t=<timestamp>,v1=<signature>
+    The ElevenLabs-Signature header format: ``t=<unix-ts>,v1=<signature>``.
+    Returns ``True`` only if:
 
-    Args:
-        payload: Raw request body bytes
-        signature_header: Value of ElevenLabs-Signature header
-        secret: HMAC shared secret from ElevenLabs dashboard
+    * ``secret`` is non-empty,
+    * the header parses cleanly into a timestamp and at least one
+      ``v<N>`` signature,
+    * HMAC-SHA256 over ``"<ts>.<body>"`` matches the supplied signature
+      under constant-time comparison, and
+    * the timestamp is within ``_MAX_WEBHOOK_CLOCK_SKEW_SECONDS`` of now.
 
-    Returns:
-        True if signature is valid, False otherwise
+    The caller is responsible for deciding what to do when this returns
+    ``False`` (always a 401).  Missing-secret handling is NOT the
+    business of this function: the route rejects such requests before
+    calling in.
     """
-    if not secret:
-        logger.warning("No webhook secret configured, skipping signature verification")
-        return True
-
-    if not signature_header:
-        logger.warning("No signature header present")
+    if not secret or not signature_header:
         return False
 
     try:
-        # Parse signature header: t=<timestamp>,v<N>=<signature>
-        # ElevenLabs uses versioned signatures (v0, v1, etc.) - we detect which version is present
-        logger.debug(f"Signature header received: {signature_header}")
         parts = dict(part.split("=", 1) for part in signature_header.split(","))
-        timestamp = parts.get("t", "")
-
-        # Find the signature version dynamically - check for v0, v1, v2, etc.
-        received_signature = None
-        signature_version = None
-        for version in range(10):  # Support v0 through v9
-            version_key = f"v{version}"
-            if version_key in parts:
-                received_signature = parts[version_key]
-                signature_version = version_key
-                logger.debug(f"Found signature version: {signature_version}")
-                break
-
-        if not timestamp or not received_signature:
-            logger.warning(f"Invalid signature header format: {signature_header}")
-            logger.warning(f"Parsed parts: {parts}")
-            return False
-
-        # Compute expected signature: HMAC-SHA256(timestamp.payload)
-        signed_payload = f"{timestamp}.".encode() + payload
-        expected_signature = hmac.new(
-            secret.encode(),
-            signed_payload,
-            hashlib.sha256,
-        ).hexdigest()
-
-        # Compare signatures (constant-time comparison)
-        return hmac.compare_digest(expected_signature, received_signature)
-
-    except Exception as e:
-        logger.error(f"Signature verification error: {e}")
+    except ValueError:
+        logger.warning("webhook_signature_header_unparseable", header=signature_header)
         return False
+
+    timestamp = parts.get("t", "")
+    received_signature: Optional[str] = None
+    for version in range(10):  # v0…v9
+        if f"v{version}" in parts:
+            received_signature = parts[f"v{version}"]
+            break
+
+    if not timestamp or not received_signature:
+        logger.warning("webhook_signature_header_missing_fields", header=signature_header)
+        return False
+
+    # Timestamp freshness check (replay defence). ElevenLabs sends Unix
+    # seconds; we accept a small skew on either side.
+    try:
+        ts_int = int(timestamp)
+    except ValueError:
+        logger.warning("webhook_signature_timestamp_not_int", timestamp=timestamp)
+        return False
+    if abs(int(time.time()) - ts_int) > _MAX_WEBHOOK_CLOCK_SKEW_SECONDS:
+        logger.warning(
+            "webhook_signature_timestamp_out_of_window",
+            ts=ts_int,
+            window_seconds=_MAX_WEBHOOK_CLOCK_SKEW_SECONDS,
+        )
+        return False
+
+    signed_payload = f"{timestamp}.".encode() + payload
+    expected_signature = hmac.new(
+        secret.encode(),
+        signed_payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, received_signature)
 
 
 def _save_webhook_result(webhook_dir: Path, transcription_id: str, data: Dict[str, Any]) -> Path:
@@ -213,17 +226,26 @@ async def elevenlabs_webhook(
     # Get raw body for signature verification
     body = await request.body()
 
-    # Layer 1: Verify HMAC signature (proves it's from ElevenLabs)
+    # Layer 1: Verify HMAC signature (proves it's from ElevenLabs).
+    # fail closed — no secret configured means no
+    # authenticated webhook source, so we refuse the request. The only
+    # escape hatch is an explicit DEV_ALLOW_UNSIGNED_WEBHOOKS=1 env var
+    # for local testing; production must set ELEVENLABS_WEBHOOK_SECRET.
     webhook_secret = _get_webhook_secret(state)
-    if webhook_secret:
-        logger.info(f"Signature verification enabled (secret length: {len(webhook_secret)})")
-        logger.info(f"Received signature header: {elevenlabs_signature}")
-        if not _verify_signature(body, elevenlabs_signature or "", webhook_secret):
-            logger.error("Invalid webhook signature - request rejected")
-            raise HTTPException(status_code=401, detail="Invalid signature")
-        logger.info("Signature verification passed")
+    if not webhook_secret:
+        if os.getenv(_DEV_ALLOW_UNSIGNED_ENV) == "1":
+            logger.warning("webhook_signature_skipped_dev_override")
+        else:
+            logger.error("webhook_rejected_no_secret_configured")
+            raise HTTPException(
+                status_code=401,
+                detail="Webhook signature verification is not configured on this server.",
+            )
     else:
-        logger.warning("No ELEVENLABS_WEBHOOK_SECRET configured - signature verification skipped")
+        if not _verify_signature(body, elevenlabs_signature or "", webhook_secret):
+            logger.error("webhook_signature_invalid")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+        logger.debug("webhook_signature_ok")
 
     # Parse payload
     try:

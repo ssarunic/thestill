@@ -184,6 +184,8 @@ def configure_structlog() -> None:
     else:
         # Shared processors for console/json/ecs/cloudwatch formats
         # Order matters: processors run sequentially on each log message
+        from .utils.log_safety import log_safety_processor
+
         shared_processors: List[Any] = [
             # 1. Merge context variables: Automatically includes correlation IDs
             #    (request_id, command_id, mcp_request_id, task_id, etc.) that were
@@ -196,6 +198,11 @@ def configure_structlog() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             # 4. Include stack traces for exc_info=True logs
             structlog.processors.StackInfoRenderer(),
+            # 5. Redact sensitive keys (token, secret, password, ...) and
+            #    neuter control characters so an RSS title carrying "\r\n"
+            #    can't forge a JSON log line. Runs after the synthetic
+            #    fields (level, timestamp) so they aren't scrubbed.
+            log_safety_processor,
         ]
 
         # Add format-specific renderer

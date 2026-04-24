@@ -155,7 +155,10 @@ def main(ctx, config, quiet):
             max_workers=config_obj.refresh_max_workers,
             max_per_host=config_obj.refresh_max_per_host,
         )
-        audio_downloader = AudioDownloader(str(path_manager.original_audio_dir()))
+        audio_downloader = AudioDownloader(
+            str(path_manager.original_audio_dir()),
+            max_bytes=config_obj.max_audio_bytes,
+        )
         audio_preprocessor = AudioPreprocessor(console=console)
         external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager)
 

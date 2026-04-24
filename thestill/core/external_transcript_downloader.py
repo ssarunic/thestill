@@ -28,6 +28,7 @@ from structlog import get_logger
 from ..models.podcast import TranscriptLink
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..utils.path_manager import PathManager
+from ..utils.url_guard import UnsafeURLError, guarded_redirect_fetch
 
 logger = get_logger(__name__)
 
@@ -142,11 +143,23 @@ class ExternalTranscriptDownloader:
         # Download
         logger.debug(f"Downloading {extension} transcript from {link.url}")
 
-        response = requests.get(
-            str(link.url),
-            timeout=DOWNLOAD_TIMEOUT,
-            headers={"User-Agent": "Thestill/1.0 podcast transcription pipeline"},
-        )
+        # Transcript URLs come from RSS and are
+        # attacker-controllable; reject SSRF targets and re-validate any
+        # 3xx redirect hop.
+        try:
+            response = guarded_redirect_fetch(
+                str(link.url),
+                requests.get,
+                timeout=DOWNLOAD_TIMEOUT,
+                headers={"User-Agent": "Thestill/1.0 podcast transcription pipeline"},
+            )
+        except UnsafeURLError as exc:
+            logger.warning(
+                "external_transcript_download_blocked",
+                url=str(link.url),
+                reason=str(exc),
+            )
+            return None
         response.raise_for_status()
 
         # Save to file

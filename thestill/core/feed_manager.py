@@ -29,6 +29,7 @@ from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
 from ..utils.timing import log_phase_timing
+from ..utils.url_guard import UnsafeURLError, guarded_get
 from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = get_logger(__name__)
@@ -157,6 +158,16 @@ class PodcastFeedManager:
             The newly added Podcast object, or None if failed or already exists.
         """
         try:
+            # spec #25 item 3.4: refuse anything but http(s) before we hand
+            # the string to feedparser / yt-dlp. The SSRF guard blocks these
+            # schemes downstream too, but failing fast here gives users a
+            # clear error and covers the yt-dlp path that bypasses
+            # requests.
+            parsed = urlparse(url)
+            if parsed.scheme.lower() not in ("http", "https"):
+                logger.warning("add_podcast_rejected_scheme", url=url, scheme=parsed.scheme)
+                return None
+
             # Detect source type and extract metadata
             source = self.media_source_factory.detect_source(url)
             metadata = source.extract_metadata(url)
@@ -841,7 +852,21 @@ class PodcastFeedManager:
                         logger.error("Podcast not found", podcast_rss_url=podcast_rss_url)
                         return
 
-                    parsed_feed = feedparser.parse(str(podcast.rss_url))
+                    # Do NOT let feedparser fetch the URL
+                    # directly — it uses urllib internally and bypasses our
+                    # SSRF guard. Fetch through the guarded session and hand
+                    # feedparser the already-validated body.
+                    try:
+                        rss_response = guarded_get(str(podcast.rss_url))
+                        rss_response.raise_for_status()
+                        parsed_feed = feedparser.parse(rss_response.content)
+                    except UnsafeURLError as exc:
+                        logger.warning(
+                            "feedparser_fetch_blocked_unsafe_url",
+                            podcast_rss_url=str(podcast.rss_url),
+                            error=str(exc),
+                        )
+                        return
                     for entry in parsed_feed.entries:
                         entry_external_id = entry.get("guid", entry.get("id", ""))
                         if entry_external_id == episode_external_id:

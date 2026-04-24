@@ -14,6 +14,12 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 import requests
 
+# Every mocked download must produce bytes that survive the magic-byte
+# integrity check added in spec #25 item 2.7. Prefix an ID3 header so the
+# fake MP3 body is accepted, and pad to satisfy the minimum-size check.
+_MP3_HEADER = b"ID3\x04\x00\x00\x00\x00\x00\x00"
+_MP3_PAD = b"\x00" * 64
+
 from thestill.core.audio_downloader import AudioDownloader, DownloadError
 from thestill.models.podcast import Episode, Podcast
 
@@ -91,7 +97,7 @@ class TestDownloadEpisode:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.headers = {"content-length": "1024"}
-        mock_response.iter_content = Mock(return_value=[b"chunk1", b"chunk2", b"chunk3"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER, _MP3_PAD])
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
@@ -112,7 +118,7 @@ class TestDownloadEpisode:
         # Verify file content
         with open(full_path, "rb") as f:
             content = f.read()
-            assert content == b"chunk1chunk2chunk3"
+            assert content == _MP3_HEADER + _MP3_PAD
 
         # Verify network call
         mock_get.assert_called_once()
@@ -198,7 +204,7 @@ class TestDownloadEpisode:
         # Setup mock to fail first time, succeed second time
         mock_response = Mock()
         mock_response.headers = {"content-length": "100"}
-        mock_response.iter_content = Mock(return_value=[b"chunk1", b"chunk2"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER, _MP3_PAD])
         mock_response.raise_for_status = Mock()
 
         mock_get.side_effect = [
@@ -223,7 +229,7 @@ class TestDownloadEpisode:
         # Setup mock to fail twice, succeed on third attempt
         mock_response = Mock()
         mock_response.headers = {"content-length": "100"}
-        mock_response.iter_content = Mock(return_value=[b"data"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER + _MP3_PAD])
         mock_response.raise_for_status = Mock()
 
         mock_get.side_effect = [
@@ -299,7 +305,7 @@ class TestDownloadEpisode:
             # Setup mock
             mock_response = Mock()
             mock_response.headers = {"content-length": "100"}
-            mock_response.iter_content = Mock(return_value=[b"data"])
+            mock_response.iter_content = Mock(return_value=[_MP3_HEADER + _MP3_PAD])
             mock_response.raise_for_status = Mock()
             mock_get.return_value = mock_response
 
@@ -315,7 +321,7 @@ class TestDownloadEpisode:
         # Setup mock without content-length
         mock_response = Mock()
         mock_response.headers = {}  # No content-length
-        mock_response.iter_content = Mock(return_value=[b"chunk1", b"chunk2"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER, _MP3_PAD])
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
@@ -545,7 +551,7 @@ class TestEdgeCases:
         # Setup mock
         mock_response = Mock()
         mock_response.headers = {"content-length": "100"}
-        mock_response.iter_content = Mock(return_value=[b"data"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER + _MP3_PAD])
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
@@ -582,7 +588,7 @@ class TestEdgeCases:
         # Setup mock
         mock_response = Mock()
         mock_response.headers = {"content-length": "100"}
-        mock_response.iter_content = Mock(return_value=[b"data"])
+        mock_response.iter_content = Mock(return_value=[_MP3_HEADER + _MP3_PAD])
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 

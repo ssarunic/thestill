@@ -31,6 +31,7 @@ from structlog import get_logger
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.language_config import resolve_language_spec
+from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 logger = get_logger(__name__)
 
@@ -162,8 +163,9 @@ class TranscriptCleaner:
         - Ad break detection and marking
         - Final formatting
         """
-        # Build prompts
-        system_prompt = self._build_cleanup_system_prompt(language=language)
+        # Build prompts (system prompt carries the untrusted-content preamble;
+        # ).
+        system_prompt = self._build_cleanup_system_prompt(language=language) + UNTRUSTED_CONTENT_PREAMBLE
         user_prompt = self._build_cleanup_user_prompt(
             formatted_transcript=formatted_transcript,
             podcast_facts=podcast_facts,
@@ -177,11 +179,11 @@ class TranscriptCleaner:
         # Calculate effective chunk size based on OUTPUT token limit
         # For transcript cleaning, output ≈ input size, so we need to ensure
         # each chunk's output fits within the model's output token limit.
-        #
+
         # Key insight: Even if a model supports 65K output tokens, LLMs tend to
         # produce better quality and more reliable outputs with smaller chunks.
         # We cap at ~16K output tokens (~64K chars) for reliability.
-        #
+
         # Use ~4 chars per token estimate, with 80% safety margin for output.
         practical_output_limit = min(max_output_tokens, 16384)  # Cap at 16K tokens
         max_output_chars = int(practical_output_limit * 4 * 0.8)
@@ -472,9 +474,9 @@ IMPORTANT:
             lines.append(f"Ad Sponsors: {', '.join(episode_facts.ad_sponsors)}")
         lines.append("")
 
-        # Add transcript
+        # Transcript content is untrusted; fence it.
         lines.append("TRANSCRIPT TO CLEAN:")
-        lines.append(formatted_transcript)
+        lines.append(wrap_untrusted(formatted_transcript, label="TRANSCRIPT"))
 
         return "\n".join(lines)
 

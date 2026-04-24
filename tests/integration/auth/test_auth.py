@@ -141,10 +141,10 @@ class TestJwtUtilities:
         assert payload is None
 
     def test_get_token_expiry(self):
-        """get_token_expiry extracts expiry from token."""
+        """get_token_expiry extracts expiry from a signed, valid token."""
         token = create_access_token("user-123", "secret", expires_days=30)
 
-        expiry = get_token_expiry(token)
+        expiry = get_token_expiry(token, "secret")
 
         assert expiry is not None
         assert expiry > datetime.now(timezone.utc)
@@ -154,7 +154,15 @@ class TestJwtUtilities:
 
     def test_get_token_expiry_invalid_token(self):
         """get_token_expiry returns None for invalid token."""
-        expiry = get_token_expiry("not-a-valid-token")
+        expiry = get_token_expiry("not-a-valid-token", "secret")
+
+        assert expiry is None
+
+    def test_get_token_expiry_wrong_secret(self):
+        """get_token_expiry must reject tokens signed with a different key."""
+        token = create_access_token("user-123", "secret", expires_days=30)
+
+        expiry = get_token_expiry(token, "wrong-secret")
 
         assert expiry is None
 
@@ -162,7 +170,7 @@ class TestJwtUtilities:
         """is_token_expiring_soon returns False for fresh token."""
         token = create_access_token("user-123", "secret", expires_days=30)
 
-        result = is_token_expiring_soon(token, threshold_days=7)
+        result = is_token_expiring_soon(token, "secret", threshold_days=7)
 
         assert result is False
 
@@ -171,9 +179,16 @@ class TestJwtUtilities:
         # Create token expiring in 3 days
         token = create_access_token("user-123", "secret", expires_days=3)
 
-        result = is_token_expiring_soon(token, threshold_days=7)
+        result = is_token_expiring_soon(token, "secret", threshold_days=7)
 
         assert result is True
+
+    def test_is_token_expiring_soon_forged_expiry(self):
+        """Unverified tokens cannot pretend to be fresh (spec #25, item 2.2)."""
+        import jwt as _jwt
+
+        forged = _jwt.encode({"sub": "x", "exp": 9999999999}, "wrong-secret", algorithm="HS256")
+        assert is_token_expiring_soon(forged, "secret", threshold_days=7) is True
 
 
 class TestSqliteUserRepository:
