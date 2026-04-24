@@ -6,7 +6,7 @@ export default function RefreshButton() {
   const { data: status } = useRefreshStatus()
   const { mutate: startRefresh, isPending } = useStartRefresh()
   const { showToast } = useToast()
-  const prevStatusRef = useRef<string | undefined>()
+  const prevStatusRef = useRef<string | undefined>(undefined)
 
   const isRunning = status?.status === 'running'
   const isDisabled = isPending || isRunning
