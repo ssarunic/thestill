@@ -20,7 +20,6 @@ import pytest
 
 from thestill.utils.config import Config
 
-
 # Every env var that can flip load_config's validation path. The
 # isolated_env fixture wipes these so a stale ./.env (or a CI workspace
 # shipping one) can't make a security test pass for the wrong reason.
@@ -47,11 +46,16 @@ _SENSITIVE_ENV_KEYS = (
 
 @pytest.fixture
 def isolated_env(monkeypatch, tmp_path):
-    """Run the body in a clean env + cwd so load_dotenv finds nothing."""
+    """Run the body in a clean env so load_config picks up no real .env."""
     for key in _SENSITIVE_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    # load_config() calls load_dotenv() which reads ./.env relative to
-    # cwd. chdir into a tmp dir so it finds none.
+    # load_config()'s _resolve_env_file walks upward from the package
+    # directory (not just CWD), so chdir alone isn't enough — it always
+    # finds the repo's real .env. Override with THESTILL_ENV_FILE
+    # pointing at an empty tmp file so no real config bleeds in.
+    empty_env = tmp_path / ".env"
+    empty_env.touch()
+    monkeypatch.setenv("THESTILL_ENV_FILE", str(empty_env))
     monkeypatch.chdir(tmp_path)
     # LLM provider validation needs something; default to openai with a
     # dummy key so tests that don't care about LLM config don't restate it.
