@@ -24,6 +24,8 @@ Design principles:
 - Cache-friendly: no database triggers or cascades
 """
 
+import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -33,9 +35,15 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from structlog import get_logger
 
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
 logger = get_logger(__name__)
+
+
+def _slugify_category(name: str) -> str:
+    """Hyphenated slug used for category URL identifiers (only at seed time)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
@@ -55,6 +63,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             db_path: Path to SQLite database file (e.g., "./data/podcasts.db")
         """
         self.db_path = Path(db_path)
+        # Category lookup cache: populated lazily after migrations run.
+        # Keys are normalized (lowercase, alphanumeric-only) so lookups
+        # tolerate whitespace/casing differences in incoming RSS data.
+        self._cat_id_to_pair: Dict[int, Tuple[Optional[str], Optional[str]]] = {}
+        self._cat_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
+        self._cat_top_norm_to_id: Dict[str, int] = {}
         self._ensure_database_exists()
         logger.info(f"Initialized SQLite repository: {self.db_path}")
 
@@ -77,6 +91,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             # Run migrations for existing databases
             self._run_migrations(conn)
+
+            # Load the category cache after migrations have seeded the table.
+            self._load_categories_cache(conn)
+
+            # Sync the top_podcasts tables from data/top_podcasts_<region>.json
+            # (no-op when each region's source file is unchanged since last init).
+            self._seed_top_podcasts(conn)
 
             logger.debug("Database schema initialized")
 
@@ -121,18 +142,106 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN description_html TEXT NOT NULL DEFAULT ''")
             logger.info("Migration complete: description_html column added to episodes")
 
-        # Migration: Add category columns to podcasts table (idempotent)
-        if "primary_category" not in podcast_columns:
-            logger.info("Migrating database: adding category columns to podcasts table")
+        # Migration: legacy free-text category columns. Older databases may
+        # still have these from before the categories-normalization change.
+        # We add them on first ever creation only if NEITHER the FK columns
+        # NOR the legacy columns exist (truly fresh DBs go through
+        # _create_schema and already have the FK columns; this block exists
+        # solely to keep databases that were created mid-history bootable
+        # so the normalization migration below can backfill from them).
+        if "primary_category" not in podcast_columns and "primary_category_id" not in podcast_columns:
+            logger.info("Migrating database: adding legacy category columns (will be normalized below)")
             conn.execute("ALTER TABLE podcasts ADD COLUMN primary_category TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN primary_subcategory TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN secondary_category TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN secondary_subcategory TEXT NULL")
-            logger.info("Migration complete: category columns added to podcasts")
+            podcast_columns |= {
+                "primary_category",
+                "primary_subcategory",
+                "secondary_category",
+                "secondary_subcategory",
+            }
 
-        # Always ensure category indexes exist (for both migrated and new databases)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_podcasts_primary_category ON podcasts(primary_category)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_podcasts_secondary_category ON podcasts(secondary_category)")
+        # Spec #20 Migration: normalize categories into a lookup table.
+        # 1. Create categories table (top-level + subcategories) if missing.
+        # 2. Seed it from data/podcast_categories.json (Apple's official taxonomy).
+        # 3. Add primary_category_id / secondary_category_id FK columns to podcasts.
+        # 4. Backfill FKs from the legacy free-text columns (best-effort match).
+        # 5. Drop the four legacy free-text columns and their indexes.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categories'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating categories table")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    parent_id INTEGER NULL,
+                    apple_genre_id INTEGER NULL,
+                    FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_top_unique
+                    ON categories(name) WHERE parent_id IS NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_sub_unique
+                    ON categories(parent_id, name) WHERE parent_id IS NOT NULL;
+                """
+            )
+
+        # Seed categories table if it's empty.
+        cursor = conn.execute("SELECT COUNT(*) AS n FROM categories")
+        if cursor.fetchone()["n"] == 0:
+            logger.info("Seeding categories table from Apple Podcasts taxonomy")
+            self._seed_categories(conn)
+
+        # Refresh column info (may have changed above).
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns = {row["name"] for row in cursor.fetchall()}
+
+        if "primary_category_id" not in podcast_columns:
+            logger.info("Migrating database: adding category FK columns to podcasts")
+            conn.execute(
+                "ALTER TABLE podcasts ADD COLUMN primary_category_id INTEGER NULL "
+                "REFERENCES categories(id) ON DELETE SET NULL"
+            )
+            conn.execute(
+                "ALTER TABLE podcasts ADD COLUMN secondary_category_id INTEGER NULL "
+                "REFERENCES categories(id) ON DELETE SET NULL"
+            )
+            podcast_columns |= {"primary_category_id", "secondary_category_id"}
+
+            # Backfill FKs from the legacy free-text columns if those still exist.
+            if "primary_category" in podcast_columns:
+                self._backfill_category_fks(conn)
+        elif "primary_category" in podcast_columns:
+            # Crash-recovery: a previous run added the FK columns but never
+            # got to backfill before crashing. Without this guard, the FK
+            # columns stay NULL and the legacy columns get dropped below —
+            # silent permanent data loss. Re-run the backfill now.
+            logger.info("Resuming interrupted migration: backfilling category FKs from legacy columns")
+            self._backfill_category_fks(conn)
+
+        # FK indexes (partial, since most podcasts may have NULL secondary).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_podcasts_primary_category_id "
+            "ON podcasts(primary_category_id) WHERE primary_category_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_podcasts_secondary_category_id "
+            "ON podcasts(secondary_category_id) WHERE secondary_category_id IS NOT NULL"
+        )
+
+        # Drop the four legacy free-text columns and their indexes (SQLite >=3.35).
+        if "primary_category" in podcast_columns:
+            logger.info("Migrating database: dropping legacy free-text category columns")
+            conn.execute("DROP INDEX IF EXISTS idx_podcasts_primary_category")
+            conn.execute("DROP INDEX IF EXISTS idx_podcasts_secondary_category")
+            conn.execute("ALTER TABLE podcasts DROP COLUMN primary_category")
+            conn.execute("ALTER TABLE podcasts DROP COLUMN primary_subcategory")
+            conn.execute("ALTER TABLE podcasts DROP COLUMN secondary_category")
+            conn.execute("ALTER TABLE podcasts DROP COLUMN secondary_subcategory")
+            logger.info("Migration complete: categories normalized")
 
         # Migration: Create podcast_followers table if it doesn't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='podcast_followers'")
@@ -258,10 +367,411 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: digests tables created for THES-153")
 
+        # Spec #21 Migration: top_podcasts + rankings + meta tables (idempotent).
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='top_podcasts'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating top_podcasts tables")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS top_podcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    artist TEXT NULL,
+                    rss_url TEXT NOT NULL UNIQUE,
+                    apple_url TEXT NULL,
+                    youtube_url TEXT NULL,
+                    apple_track_id TEXT NULL,
+                    category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
+                    first_seen_at TIMESTAMP NOT NULL,
+                    last_seen_at TIMESTAMP NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_top_podcasts_category
+                    ON top_podcasts(category_id) WHERE category_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS top_podcast_rankings (
+                    top_podcast_id INTEGER NOT NULL,
+                    region TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    source_genre TEXT NULL,
+                    scraped_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (region, top_podcast_id),
+                    FOREIGN KEY (top_podcast_id) REFERENCES top_podcasts(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_top_podcast_rankings_region_rank
+                    ON top_podcast_rankings(region, rank);
+                CREATE INDEX IF NOT EXISTS idx_top_podcast_rankings_podcast
+                    ON top_podcast_rankings(top_podcast_id);
+
+                CREATE TABLE IF NOT EXISTS top_podcasts_meta (
+                    region TEXT PRIMARY KEY NOT NULL,
+                    source_path TEXT NOT NULL,
+                    source_mtime REAL NOT NULL,
+                    row_count INTEGER NOT NULL,
+                    seeded_at TIMESTAMP NOT NULL
+                );
+                """
+            )
+            logger.info("Migration complete: top_podcasts tables created")
+
+    # ------------------------------------------------------------------
+    # Category helpers
+    # ------------------------------------------------------------------
+
+    def _seed_categories(self, conn: sqlite3.Connection) -> None:
+        """Populate the categories table from Apple's official taxonomy.
+
+        Idempotent: callers must check the table is empty first. We insert
+        each top-level category, capture its id, then insert its
+        subcategories with parent_id pointing at the parent row.
+        """
+        for top_name, sub_names in APPLE_PODCAST_TAXONOMY.items():
+            genre_id = APPLE_GENRE_IDS.get(top_name)
+            cursor = conn.execute(
+                "INSERT INTO categories (name, slug, parent_id, apple_genre_id) " "VALUES (?, ?, NULL, ?)",
+                (top_name, _slugify_category(top_name), genre_id),
+            )
+            parent_id = cursor.lastrowid
+            for sub_name in sorted(sub_names):
+                conn.execute(
+                    "INSERT INTO categories (name, slug, parent_id, apple_genre_id) " "VALUES (?, ?, ?, NULL)",
+                    (sub_name, _slugify_category(sub_name), parent_id),
+                )
+
+    def _backfill_category_fks(self, conn: sqlite3.Connection) -> None:
+        """One-time migration step: resolve legacy free-text category columns
+        to category FK ids and populate primary_category_id / secondary_category_id.
+
+        Best-effort match: tolerant of casing and whitespace. Strings that
+        don't match the canonical taxonomy are stored as NULL (Q4-iii).
+        Logs a structured warning summarising any mismatches.
+        """
+        # Build a transient lookup dict using only the just-seeded rows.
+        cursor = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id")
+        rows = cursor.fetchall()
+        top_norm_to_id: Dict[str, int] = {}
+        sub_norm_to_id: Dict[Tuple[int, str], int] = {}
+        for row in rows:
+            norm = normalize_category_name(row["name"])
+            if row["parent_id"] is None:
+                top_norm_to_id[norm] = row["id"]
+            else:
+                sub_norm_to_id[(row["parent_id"], norm)] = row["id"]
+
+        def resolve(top: Optional[str], sub: Optional[str]) -> Optional[int]:
+            if not top:
+                return None
+            top_id = top_norm_to_id.get(normalize_category_name(top))
+            if top_id is None:
+                return None
+            if not sub:
+                return top_id
+            sub_id = sub_norm_to_id.get((top_id, normalize_category_name(sub)))
+            return sub_id if sub_id is not None else top_id
+
+        cursor = conn.execute(
+            "SELECT id, primary_category, primary_subcategory, "
+            "       secondary_category, secondary_subcategory FROM podcasts"
+        )
+        unresolved: List[str] = []
+        updates: List[Tuple[Optional[int], Optional[int], str]] = []
+        for row in cursor.fetchall():
+            primary_id = resolve(row["primary_category"], row["primary_subcategory"])
+            secondary_id = resolve(row["secondary_category"], row["secondary_subcategory"])
+            if row["primary_category"] and primary_id is None:
+                unresolved.append(f"primary={row['primary_category']!r}")
+            if row["secondary_category"] and secondary_id is None:
+                unresolved.append(f"secondary={row['secondary_category']!r}")
+            updates.append((primary_id, secondary_id, row["id"]))
+
+        if updates:
+            conn.executemany(
+                "UPDATE podcasts SET primary_category_id = ?, secondary_category_id = ? WHERE id = ?",
+                updates,
+            )
+        logger.info(
+            "category backfill complete",
+            podcasts_updated=len(updates),
+            unresolved_count=len(unresolved),
+            unresolved_sample=unresolved[:10] if unresolved else None,
+        )
+
+    def _load_categories_cache(self, conn: sqlite3.Connection) -> None:
+        """Load the categories table into in-memory dicts for hot-path lookup.
+
+        The taxonomy is small (~100 rows) and effectively read-only at runtime
+        in the current single-user model, so a one-shot read on init is fine.
+        """
+        cursor = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id")
+        rows = cursor.fetchall()
+        # First pass: collect top-level rows so subcategory rows can resolve their parent name.
+        top_id_to_name: Dict[int, str] = {}
+        self._cat_top_norm_to_id = {}
+        sub_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
+        for row in rows:
+            if row["parent_id"] is None:
+                top_id_to_name[row["id"]] = row["name"]
+                self._cat_top_norm_to_id[normalize_category_name(row["name"])] = row["id"]
+        # Second pass: subcategories.
+        self._cat_id_to_pair = {}
+        for row in rows:
+            if row["parent_id"] is None:
+                self._cat_id_to_pair[row["id"]] = (row["name"], None)
+            else:
+                top_name = top_id_to_name.get(row["parent_id"])
+                if top_name is None:
+                    # Orphan subcategory — defensive, shouldn't happen with FK constraint.
+                    continue
+                self._cat_id_to_pair[row["id"]] = (top_name, row["name"])
+                key = (
+                    normalize_category_name(top_name),
+                    normalize_category_name(row["name"]),
+                )
+                sub_pair_to_id[key] = row["id"]
+        # Build the (top_norm, sub_norm or None) → id lookup.
+        self._cat_pair_to_id = {(norm, None): cid for norm, cid in self._cat_top_norm_to_id.items()}
+        self._cat_pair_to_id.update(sub_pair_to_id)
+
+    def _resolve_category_strings_to_id(self, top: Optional[str], sub: Optional[str]) -> Optional[int]:
+        """Return the most-specific category FK id matching the inputs.
+
+        - (None, _) → None
+        - (top, None) or (top, unknown_sub) → id of the top-level row, or
+          None if the top-level itself doesn't match the taxonomy.
+        - (top, sub) → id of the subcategory row if both match, else top id,
+          else None. (Best-effort matching per Q4-iii.)
+        """
+        if not top:
+            return None
+        top_norm = normalize_category_name(top)
+        top_id = self._cat_top_norm_to_id.get(top_norm)
+        if top_id is None:
+            return None
+        if not sub:
+            return top_id
+        sub_id = self._cat_pair_to_id.get((top_norm, normalize_category_name(sub)))
+        return sub_id if sub_id is not None else top_id
+
+    def _resolve_category_id_to_pair(self, cat_id: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
+        """Return (top_name, sub_name) for a category FK id; both None if unknown."""
+        if cat_id is None:
+            return (None, None)
+        return self._cat_id_to_pair.get(cat_id, (None, None))
+
+    # ------------------------------------------------------------------
+    # Top-podcasts (chart) seeding
+    # ------------------------------------------------------------------
+
+    # Where the per-region chart JSONs live. Each file is named
+    # data/top_podcasts_<region>.json and is produced by
+    # scripts/build_top_podcasts.py. The seeder discovers regions by glob —
+    # adding a new region is just dropping a new JSON file in the same dir.
+    _TOP_PODCASTS_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+    _TOP_PODCASTS_GLOB = "top_podcasts_*.json"
+
+    def _seed_top_podcasts(self, conn: sqlite3.Connection) -> None:
+        """Sync the top_podcasts + top_podcast_rankings tables from per-region JSON.
+
+        Two-table model: ``top_podcasts`` is one row per unique podcast
+        (deduped by ``rss_url`` across all regions); ``top_podcast_rankings``
+        is one thin row per (region, podcast) chart appearance.
+
+        Smart-refresh: each region's import is gated on the JSON file's mtime
+        versus the mtime stored in ``top_podcasts_meta``. Unchanged regions
+        are skipped, so re-opening the DB is cheap and regenerating any
+        ``data/top_podcasts_<region>.json`` automatically propagates next
+        time the repo is constructed.
+
+        Each region is reseeded atomically: drop that region's rankings,
+        upsert the metadata rows, insert fresh rankings. Per-row category
+        names are resolved to FK ids via the in-memory cache populated
+        earlier in __init__.
+        """
+        json_files = sorted(self._TOP_PODCASTS_DIR.glob(self._TOP_PODCASTS_GLOB))
+        if not json_files:
+            return
+
+        meta = {
+            row["region"]: row["source_mtime"]
+            for row in conn.execute("SELECT region, source_mtime FROM top_podcasts_meta").fetchall()
+        }
+
+        for path in json_files:
+            region = path.stem.removeprefix("top_podcasts_").lower()
+            if not region:
+                continue
+            mtime = path.stat().st_mtime
+            if region in meta and abs(meta[region] - mtime) < 1e-6:
+                continue  # unchanged — skip
+
+            try:
+                rows = json.loads(path.read_text())
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "skipping malformed top-podcasts file",
+                    region=region,
+                    path=str(path),
+                    error=str(exc),
+                )
+                continue
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+
+            # 1. Drop this region's old rankings.
+            conn.execute("DELETE FROM top_podcast_rankings WHERE region = ?", (region,))
+
+            # 2. Dedupe by rss_url within the region — Apple sometimes lists
+            #    the same canonical feed under two track_ids (republished
+            #    podcasts), but we want one chart slot per podcast. Keep
+            #    the better (lower) rank when collapsing duplicates.
+            best_by_rss: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+            for i, row in enumerate(rows, start=1):
+                rss_url = (row.get("rss_url") or "").strip()
+                if not rss_url:
+                    continue
+                rank = row.get("rank") or i
+                existing = best_by_rss.get(rss_url)
+                if existing is None or rank < existing[0]:
+                    best_by_rss[rss_url] = (rank, row)
+
+            # 3. Upsert podcast metadata + insert rankings.
+            inserted = 0
+            for rss_url, (rank, row) in best_by_rss.items():
+                category_id = self._resolve_category_strings_to_id(row.get("category"), row.get("subcategory"))
+                # Upsert metadata. ``last_seen_at`` is bumped on every refresh;
+                # ``first_seen_at`` is preserved on conflict.
+                conn.execute(
+                    """
+                    INSERT INTO top_podcasts (
+                        name, artist, rss_url, apple_url, youtube_url,
+                        apple_track_id, category_id, first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(rss_url) DO UPDATE SET
+                        name = excluded.name,
+                        artist = excluded.artist,
+                        apple_url = excluded.apple_url,
+                        youtube_url = excluded.youtube_url,
+                        apple_track_id = excluded.apple_track_id,
+                        category_id = excluded.category_id,
+                        last_seen_at = excluded.last_seen_at
+                    """,
+                    (
+                        row.get("name") or "",
+                        row.get("artist"),
+                        rss_url,
+                        row.get("apple_url"),
+                        row.get("youtube_url"),
+                        row.get("track_id"),
+                        category_id,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                # Resolve podcast id (UNIQUE on rss_url makes this O(1)).
+                pid = conn.execute("SELECT id FROM top_podcasts WHERE rss_url = ?", (rss_url,)).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO top_podcast_rankings (
+                        top_podcast_id, region, rank, source_genre, scraped_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (pid, region, rank, row.get("source_genre"), now_iso),
+                )
+                inserted += 1
+
+            conn.execute(
+                """
+                INSERT INTO top_podcasts_meta (region, source_path, source_mtime, row_count, seeded_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(region) DO UPDATE SET
+                    source_path = excluded.source_path,
+                    source_mtime = excluded.source_mtime,
+                    row_count = excluded.row_count,
+                    seeded_at = excluded.seeded_at
+                """,
+                (region, str(path), mtime, inserted, now_iso),
+            )
+            logger.info(
+                "seeded top podcasts",
+                region=region,
+                rows=inserted,
+                source=path.name,
+            )
+
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
         conn.executescript(
             """
+            -- ========================================================================
+            -- CATEGORIES TABLE (Apple Podcasts taxonomy)
+            -- ========================================================================
+            -- Self-referential lookup: top-level categories have parent_id NULL
+            -- and a populated apple_genre_id; subcategory rows have parent_id
+            -- pointing at their top-level. Seeded from data/podcast_categories.json.
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                parent_id INTEGER NULL,
+                apple_genre_id INTEGER NULL,
+                FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
+            -- Partial unique indexes: SQLite UNIQUE constraints treat NULLs as
+            -- distinct, so a single UNIQUE(name, parent_id) won't prevent
+            -- duplicate top-level rows where parent_id IS NULL. Split into two
+            -- partial indexes so both top-levels and subcategories are unique.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_top_unique
+                ON categories(name) WHERE parent_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_sub_unique
+                ON categories(parent_id, name) WHERE parent_id IS NOT NULL;
+
+            -- ========================================================================
+            -- TOP PODCASTS (Apple chart snapshots, normalized into 2 tables)
+            -- ========================================================================
+            -- ``top_podcasts`` is one row per unique podcast (deduped on rss_url),
+            -- holding the metadata that's the same regardless of which region's
+            -- chart it appears in. ``top_podcast_rankings`` is the per-region
+            -- chart fact table — adding/removing a region only touches rankings.
+            -- ``top_podcasts_meta`` caches per-region JSON-file mtime so re-init
+            -- is a no-op when the source file is unchanged.
+            CREATE TABLE IF NOT EXISTS top_podcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                artist TEXT NULL,
+                rss_url TEXT NOT NULL UNIQUE,
+                apple_url TEXT NULL,
+                youtube_url TEXT NULL,
+                apple_track_id TEXT NULL,
+                category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
+                first_seen_at TIMESTAMP NOT NULL,
+                last_seen_at TIMESTAMP NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_top_podcasts_category
+                ON top_podcasts(category_id) WHERE category_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS top_podcast_rankings (
+                top_podcast_id INTEGER NOT NULL,
+                region TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                source_genre TEXT NULL,
+                scraped_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (region, top_podcast_id),
+                FOREIGN KEY (top_podcast_id) REFERENCES top_podcasts(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_top_podcast_rankings_region_rank
+                ON top_podcast_rankings(region, rank);
+            CREATE INDEX IF NOT EXISTS idx_top_podcast_rankings_podcast
+                ON top_podcast_rankings(top_podcast_id);
+
+            CREATE TABLE IF NOT EXISTS top_podcasts_meta (
+                region TEXT PRIMARY KEY NOT NULL,
+                source_path TEXT NOT NULL,
+                source_mtime REAL NOT NULL,
+                row_count INTEGER NOT NULL,
+                seeded_at TIMESTAMP NOT NULL
+            );
+
             -- ========================================================================
             -- PODCASTS TABLE
             -- ========================================================================
@@ -275,10 +785,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 description TEXT NOT NULL DEFAULT '',
                 image_url TEXT NULL,
                 language TEXT NOT NULL DEFAULT 'en',
-                primary_category TEXT NULL,
-                primary_subcategory TEXT NULL,
-                secondary_category TEXT NULL,
-                secondary_subcategory TEXT NULL,
+                primary_category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
+                secondary_category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
                 -- THES-143: Essential metadata
                 author TEXT NULL,
                 explicit INTEGER NULL,  -- Boolean: 0=false, 1=true, NULL=unknown
@@ -299,7 +807,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE UNIQUE INDEX IF NOT EXISTS idx_podcasts_rss_url ON podcasts(rss_url);
             CREATE INDEX IF NOT EXISTS idx_podcasts_updated_at ON podcasts(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
-            -- Note: Category indexes are created in _run_migrations to support existing DBs
+            -- Note: category FK indexes are created in _run_migrations so legacy
+            -- databases (which lack the FK columns until migration runs) don't
+            -- choke on a CREATE INDEX referencing a not-yet-added column.
 
             -- ========================================================================
             -- EPISODES TABLE
@@ -551,7 +1061,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -569,6 +1079,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             explicit = None
             if row["explicit"] is not None:
                 explicit = row["explicit"] == 1
+            primary_top, primary_sub = self._resolve_category_id_to_pair(row["primary_category_id"])
+            secondary_top, secondary_sub = self._resolve_category_id_to_pair(row["secondary_category_id"])
             podcasts.append(
                 Podcast(
                     id=row["id"],
@@ -579,10 +1091,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     description=row["description"],
                     image_url=row["image_url"],
                     language=row["language"] if row["language"] else "en",
-                    primary_category=row["primary_category"],
-                    primary_subcategory=row["primary_subcategory"],
-                    secondary_category=row["secondary_category"],
-                    secondary_subcategory=row["secondary_subcategory"],
+                    primary_category=primary_top,
+                    primary_subcategory=primary_sub,
+                    secondary_category=secondary_top,
+                    secondary_subcategory=secondary_sub,
                     author=row["author"],
                     explicit=explicit,
                     show_type=row["show_type"],
@@ -604,7 +1116,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -625,7 +1137,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -645,7 +1157,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -665,7 +1177,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -688,7 +1200,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -712,7 +1224,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
@@ -750,23 +1262,27 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             now = datetime.now(timezone.utc)
 
+            # Resolve string categories on the model into FK ids before write.
+            primary_cat_id = self._resolve_category_strings_to_id(podcast.primary_category, podcast.primary_subcategory)
+            secondary_cat_id = self._resolve_category_strings_to_id(
+                podcast.secondary_category, podcast.secondary_subcategory
+            )
+
             # Upsert podcast
             conn.execute(
                 """
                 INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, language,
-                                      primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                                      primary_category_id, secondary_category_id,
                                       author, explicit, show_type, website_url, is_complete, copyright, last_processed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rss_url) DO UPDATE SET
                     title = excluded.title,
                     slug = excluded.slug,
                     description = excluded.description,
                     image_url = excluded.image_url,
                     language = excluded.language,
-                    primary_category = excluded.primary_category,
-                    primary_subcategory = excluded.primary_subcategory,
-                    secondary_category = excluded.secondary_category,
-                    secondary_subcategory = excluded.secondary_subcategory,
+                    primary_category_id = excluded.primary_category_id,
+                    secondary_category_id = excluded.secondary_category_id,
                     author = excluded.author,
                     explicit = excluded.explicit,
                     show_type = excluded.show_type,
@@ -786,10 +1302,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     podcast.description,
                     podcast.image_url,
                     podcast.language,
-                    podcast.primary_category,
-                    podcast.primary_subcategory,
-                    podcast.secondary_category,
-                    podcast.secondary_subcategory,
+                    primary_cat_id,
+                    secondary_cat_id,
                     podcast.author,
                     1 if podcast.explicit is True else (0 if podcast.explicit is False else None),
                     podcast.show_type,
@@ -835,7 +1349,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT id, title, slug, description, image_url, language,
-                       primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                       primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified
                 FROM podcasts WHERE rss_url = ?
@@ -843,6 +1357,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (str(podcast.rss_url),),
             )
             existing = cursor.fetchone()
+
+            primary_cat_id = self._resolve_category_strings_to_id(podcast.primary_category, podcast.primary_subcategory)
+            secondary_cat_id = self._resolve_category_strings_to_id(
+                podcast.secondary_category, podcast.secondary_subcategory
+            )
 
             if existing:
                 # Compare fields to see if anything changed
@@ -856,10 +1375,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     or existing["description"] != podcast.description
                     or existing["image_url"] != podcast.image_url
                     or existing["language"] != podcast.language
-                    or existing["primary_category"] != podcast.primary_category
-                    or existing["primary_subcategory"] != podcast.primary_subcategory
-                    or existing["secondary_category"] != podcast.secondary_category
-                    or existing["secondary_subcategory"] != podcast.secondary_subcategory
+                    or existing["primary_category_id"] != primary_cat_id
+                    or existing["secondary_category_id"] != secondary_cat_id
                     or existing["author"] != podcast.author
                     or existing["explicit"] != explicit_int
                     or existing["show_type"] != podcast.show_type
@@ -877,7 +1394,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         """
                         UPDATE podcasts
                         SET title = ?, slug = ?, description = ?, image_url = ?, language = ?,
-                            primary_category = ?, primary_subcategory = ?, secondary_category = ?, secondary_subcategory = ?,
+                            primary_category_id = ?, secondary_category_id = ?,
                             author = ?, explicit = ?, show_type = ?, website_url = ?, is_complete = ?, copyright = ?,
                             last_processed = ?, etag = ?, last_modified = ?, updated_at = ?
                         WHERE rss_url = ?
@@ -888,10 +1405,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                             podcast.description,
                             podcast.image_url,
                             podcast.language,
-                            podcast.primary_category,
-                            podcast.primary_subcategory,
-                            podcast.secondary_category,
-                            podcast.secondary_subcategory,
+                            primary_cat_id,
+                            secondary_cat_id,
                             podcast.author,
                             explicit_int,
                             podcast.show_type,
@@ -913,10 +1428,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute(
                     """
                     INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, image_url, language,
-                                          primary_category, primary_subcategory, secondary_category, secondary_subcategory,
+                                          primary_category_id, secondary_category_id,
                                           author, explicit, show_type, website_url, is_complete, copyright,
                                           last_processed, etag, last_modified)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         podcast.id,
@@ -928,10 +1443,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         podcast.description,
                         podcast.image_url,
                         podcast.language,
-                        podcast.primary_category,
-                        podcast.primary_subcategory,
-                        podcast.secondary_category,
-                        podcast.secondary_subcategory,
+                        primary_cat_id,
+                        secondary_cat_id,
                         podcast.author,
                         1 if podcast.explicit is True else (0 if podcast.explicit is False else None),
                         podcast.show_type,
@@ -1033,10 +1546,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     p.description,
                     p.image_url,
                     p.language,
-                    p.primary_category,
-                    p.primary_subcategory,
-                    p.secondary_category,
-                    p.secondary_subcategory,
+                    self._resolve_category_strings_to_id(p.primary_category, p.primary_subcategory),
+                    self._resolve_category_strings_to_id(p.secondary_category, p.secondary_subcategory),
                     p.author,
                     1 if p.explicit is True else (0 if p.explicit is False else None),
                     p.show_type,
@@ -1056,7 +1567,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                     UPDATE podcasts
                     SET title = ?, slug = ?, description = ?, image_url = ?, language = ?,
-                        primary_category = ?, primary_subcategory = ?, secondary_category = ?, secondary_subcategory = ?,
+                        primary_category_id = ?, secondary_category_id = ?,
                         author = ?, explicit = ?, show_type = ?, website_url = ?, is_complete = ?, copyright = ?,
                         last_processed = ?, etag = ?, last_modified = ?, updated_at = ?
                     WHERE id = ?
@@ -1122,14 +1633,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """
         now = datetime.now(timezone.utc)
 
-        # Check if episode exists (by podcast_id + external_id)
+        # Check if episode exists (by podcast_id + external_id).
+        # IMPORTANT: every column the UPDATE below writes must also be SELECTed
+        # and compared in the `changed` check, otherwise updates to those
+        # fields are silently dropped when no other field happens to differ.
         cursor = conn.execute(
             """
             SELECT id, title, slug, description, description_html, pub_date, audio_url, duration, image_url,
                    explicit, episode_type, episode_number, season_number, website_url,
                    audio_file_size, audio_mime_type,
                    audio_path, downsampled_audio_path, raw_transcript_path,
-                   clean_transcript_path, summary_path
+                   clean_transcript_path, clean_transcript_json_path, summary_path,
+                   playback_time_offset_seconds
             FROM episodes
             WHERE podcast_id = ? AND external_id = ?
             """,
@@ -1162,7 +1677,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 or existing["downsampled_audio_path"] != episode.downsampled_audio_path
                 or existing["raw_transcript_path"] != episode.raw_transcript_path
                 or existing["clean_transcript_path"] != episode.clean_transcript_path
+                or existing["clean_transcript_json_path"] != episode.clean_transcript_json_path
                 or existing["summary_path"] != episode.summary_path
+                or existing["playback_time_offset_seconds"] != episode.playback_time_offset_seconds
             )
 
             if changed:
@@ -1442,9 +1959,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
-                       p.language as p_language, p.primary_category as p_primary_category,
-                       p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
-                       p.secondary_subcategory as p_secondary_subcategory,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
@@ -1492,9 +2009,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
-                       p.language as p_language, p.primary_category as p_primary_category,
-                       p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
-                       p.secondary_subcategory as p_secondary_subcategory,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
@@ -1540,9 +2057,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
-                       p.language as p_language, p.primary_category as p_primary_category,
-                       p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
-                       p.secondary_subcategory as p_secondary_subcategory,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
@@ -1587,9 +2104,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 f"""
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
-                       p.language as p_language, p.primary_category as p_primary_category,
-                       p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
-                       p.secondary_subcategory as p_secondary_subcategory,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
@@ -1723,9 +2240,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             query = f"""
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
-                       p.language as p_language, p.primary_category as p_primary_category,
-                       p.primary_subcategory as p_primary_subcategory, p.secondary_category as p_secondary_category,
-                       p.secondary_subcategory as p_secondary_subcategory,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
                        p.last_processed, p.updated_at as p_updated_at, e.*
@@ -1767,6 +2284,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             if row["explicit"] is not None:
                 explicit = row["explicit"] == 1
 
+            primary_top, primary_sub = self._resolve_category_id_to_pair(row["primary_category_id"])
+            secondary_top, secondary_sub = self._resolve_category_id_to_pair(row["secondary_category_id"])
+
             return Podcast(
                 id=row["id"],
                 created_at=datetime.fromisoformat(row["created_at"]),
@@ -1776,10 +2296,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 description=row["description"],
                 image_url=row["image_url"],
                 language=row["language"] if row["language"] else "en",
-                primary_category=row["primary_category"],
-                primary_subcategory=row["primary_subcategory"],
-                secondary_category=row["secondary_category"],
-                secondary_subcategory=row["secondary_subcategory"],
+                primary_category=primary_top,
+                primary_subcategory=primary_sub,
+                secondary_category=secondary_top,
+                secondary_subcategory=secondary_sub,
                 # THES-142: New fields
                 author=row["author"],
                 explicit=explicit,
@@ -1803,6 +2323,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if row["p_explicit"] is not None:
             explicit = row["p_explicit"] == 1
 
+        primary_top, primary_sub = self._resolve_category_id_to_pair(row["p_primary_category_id"])
+        secondary_top, secondary_sub = self._resolve_category_id_to_pair(row["p_secondary_category_id"])
+
         return Podcast(
             id=row["p_id"],
             created_at=datetime.fromisoformat(row["p_created_at"]),
@@ -1812,10 +2335,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             description=row["p_description"],
             image_url=row["p_image_url"],
             language=row["p_language"] if row["p_language"] else "en",
-            primary_category=row["p_primary_category"],
-            primary_subcategory=row["p_primary_subcategory"],
-            secondary_category=row["p_secondary_category"],
-            secondary_subcategory=row["p_secondary_subcategory"],
+            primary_category=primary_top,
+            primary_subcategory=primary_sub,
+            secondary_category=secondary_top,
+            secondary_subcategory=secondary_sub,
             # THES-142: New fields
             author=row["p_author"],
             explicit=explicit,
@@ -1940,6 +2463,63 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.failed_at.isoformat() if episode.failed_at else None,
             ),
         )
+
+    # ============================================================================
+    # Top podcasts (chart) lookups
+    # ============================================================================
+
+    def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
+        """Return True if the given RSS URL is in the top chart for ``region``.
+
+        Used by the free-tier subscription gate: non-paying users may only
+        subscribe to podcasts that appear on their region's top chart.
+        Index-backed via ``top_podcasts.rss_url`` UNIQUE + the (region, podcast_id)
+        primary key on ``top_podcast_rankings`` — single round-trip, no scan.
+        """
+        if not rss_url or not region:
+            return False
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM top_podcast_rankings r
+                JOIN top_podcasts p ON p.id = r.top_podcast_id
+                WHERE r.region = ? AND p.rss_url = ?
+                LIMIT 1
+                """,
+                (region.lower(), rss_url),
+            ).fetchone()
+        return row is not None
+
+    def get_top_podcasts(self, region: str, limit: int = 500, category: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List the top chart for a region, optionally filtered by category name.
+
+        Returns plain dicts (not Podcast models) since the chart entries may
+        not correspond to a subscribed Podcast row.
+        """
+        if not region:
+            return []
+        params: List[Any] = [region.lower()]
+        category_filter = ""
+        if category:
+            category_filter = " AND c.name = ?"
+            params.append(category)
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
+                       c.name AS category, r.source_genre
+                FROM top_podcast_rankings r
+                JOIN top_podcasts p ON p.id = r.top_podcast_id
+                LEFT JOIN categories c ON c.id = p.category_id
+                WHERE r.region = ?{category_filter}
+                ORDER BY r.rank ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     # ============================================================================
     # TranscriptLink Methods (Podcasting 2.0 <podcast:transcript> support)
@@ -2120,8 +2700,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 """
                 SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description,
-                       p.image_url, p.language, p.primary_category, p.primary_subcategory,
-                       p.secondary_category, p.secondary_subcategory, p.last_processed, p.updated_at
+                       p.image_url, p.language,
+                       p.primary_category_id, p.secondary_category_id,
+                       p.last_processed, p.updated_at
                 FROM podcasts p
                 INNER JOIN episodes e ON e.podcast_id = p.id
                 WHERE e.id = ?

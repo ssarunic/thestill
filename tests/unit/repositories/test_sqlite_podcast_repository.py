@@ -772,6 +772,38 @@ def test_save_episode_updates_when_changed(temp_db, sample_podcast, sample_episo
     assert episode_after.raw_transcript_path == "new_transcript.json"
 
 
+def test_save_episode_persists_clean_transcript_json_path_change(temp_db, sample_podcast, sample_episode):
+    """save_episode() must persist clean_transcript_json_path even when it is
+    the only changed field. Regression for an earlier bug where the SELECT
+    used by change-detection omitted that column, so the UPDATE was skipped
+    and the spec-#18 sidecar path was silently dropped.
+    """
+    temp_db.save_podcast(sample_podcast)
+    sample_episode.podcast_id = sample_podcast.id
+    temp_db.save_episode(sample_episode)
+
+    sample_episode.clean_transcript_json_path = "/tmp/sidecar.json"
+    temp_db.save_episode(sample_episode)
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.clean_transcript_json_path == "/tmp/sidecar.json"
+
+
+def test_save_episode_persists_playback_offset_change(temp_db, sample_podcast, sample_episode):
+    """playback_time_offset_seconds must round-trip through save_episode().
+    Same regression class as the json-path bug above.
+    """
+    temp_db.save_podcast(sample_podcast)
+    sample_episode.podcast_id = sample_podcast.id
+    temp_db.save_episode(sample_episode)
+
+    sample_episode.playback_time_offset_seconds = 42.5
+    temp_db.save_episode(sample_episode)
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.playback_time_offset_seconds == 42.5
+
+
 # ============================================================================
 # save_episodes() Tests - Batch episode updates
 # ============================================================================
