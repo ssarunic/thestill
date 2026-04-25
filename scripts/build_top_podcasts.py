@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,6 +33,11 @@ import yt_dlp
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 CATEGORIES_FILE = DATA_DIR / "podcast_categories.json"
+
+# Reuse the canonical name-normalization from the package so this script and the
+# DB resolver match exactly. ROOT must be on sys.path before importing.
+sys.path.insert(0, str(ROOT))
+from thestill.utils.podcast_categories import normalize_category_name as normalize_name  # noqa: E402
 
 TARGET_COUNT = 500
 COLLECT_OVERFETCH = 540  # over-collect so we can trim to TARGET_COUNT after dropping RSS-less rows
@@ -104,11 +108,6 @@ def lookup_podcast(track_id: str) -> dict[str, Any] | None:
     if not results:
         return None
     return results[0]
-
-
-def normalize_name(name: str) -> str:
-    """Lowercase, strip punctuation/whitespace for fuzzy comparison."""
-    return re.sub(r"[^a-z0-9]+", "", name.lower())
 
 
 def name_similarity(a: str, b: str) -> float:

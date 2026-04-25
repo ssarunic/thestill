@@ -25,7 +25,6 @@ Design principles:
 """
 
 import json
-import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -36,14 +35,14 @@ from structlog import get_logger
 
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
+from ..utils.slug import generate_slug
 from .podcast_repository import EpisodeRepository, PodcastRepository
 
 logger = get_logger(__name__)
 
-
-def _slugify_category(name: str) -> str:
-    """Hyphenated slug used for category URL identifiers (only at seed time)."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+# Float round-trip tolerance for SQLite REAL mtime comparison: ``stat().st_mtime``
+# is float64 but SQLite REAL → Python float can drift below microsecond precision.
+_MTIME_EPSILON = 1e-6
 
 
 class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
@@ -63,12 +62,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             db_path: Path to SQLite database file (e.g., "./data/podcasts.db")
         """
         self.db_path = Path(db_path)
-        # Category lookup cache: populated lazily after migrations run.
-        # Keys are normalized (lowercase, alphanumeric-only) so lookups
-        # tolerate whitespace/casing differences in incoming RSS data.
+        # Category lookup caches: populated after migrations seed the table.
+        # ``_cat_pair_to_id`` keys are normalized (lowercase, alphanumeric-only)
+        # so RSS-derived strings with whitespace/casing differences still match.
+        # Top-level rows are stored under ``(top_norm, None)``; subcategories
+        # under ``(top_norm, sub_norm)`` — a single dict covers both lookups.
         self._cat_id_to_pair: Dict[int, Tuple[Optional[str], Optional[str]]] = {}
         self._cat_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
-        self._cat_top_norm_to_id: Dict[str, int] = {}
         self._ensure_database_exists()
         logger.info(f"Initialized SQLite repository: {self.db_path}")
 
@@ -195,6 +195,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Seeding categories table from Apple Podcasts taxonomy")
             self._seed_categories(conn)
 
+        # Load the cache now (before backfill below) so the backfill can reuse
+        # the runtime resolver instead of re-implementing it. Re-loaded again at
+        # the end of _ensure_database_exists in case migrations after this
+        # point change anything (currently they don't, but the call is cheap).
+        self._load_categories_cache(conn)
+
         # Refresh column info (may have changed above).
         cursor = conn.execute("PRAGMA table_info(podcasts)")
         podcast_columns = {row["name"] for row in cursor.fetchall()}
@@ -215,10 +221,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             if "primary_category" in podcast_columns:
                 self._backfill_category_fks(conn)
         elif "primary_category" in podcast_columns:
-            # Crash-recovery: a previous run added the FK columns but never
-            # got to backfill before crashing. Without this guard, the FK
-            # columns stay NULL and the legacy columns get dropped below —
-            # silent permanent data loss. Re-run the backfill now.
+            # Crash-recovery: FK columns + legacy columns coexisting means a
+            # previous migration died between ADD COLUMN and backfill. Without
+            # this branch the legacy columns get dropped below with FKs still NULL.
             logger.info("Resuming interrupted migration: backfilling category FKs from legacy columns")
             self._backfill_category_fks(conn)
 
@@ -428,13 +433,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             genre_id = APPLE_GENRE_IDS.get(top_name)
             cursor = conn.execute(
                 "INSERT INTO categories (name, slug, parent_id, apple_genre_id) " "VALUES (?, ?, NULL, ?)",
-                (top_name, _slugify_category(top_name), genre_id),
+                (top_name, generate_slug(top_name), genre_id),
             )
             parent_id = cursor.lastrowid
             for sub_name in sorted(sub_names):
                 conn.execute(
                     "INSERT INTO categories (name, slug, parent_id, apple_genre_id) " "VALUES (?, ?, ?, NULL)",
-                    (sub_name, _slugify_category(sub_name), parent_id),
+                    (sub_name, generate_slug(sub_name), parent_id),
                 )
 
     def _backfill_category_fks(self, conn: sqlite3.Connection) -> None:
@@ -443,31 +448,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         Best-effort match: tolerant of casing and whitespace. Strings that
         don't match the canonical taxonomy are stored as NULL (Q4-iii).
-        Logs a structured warning summarising any mismatches.
+        Requires ``_load_categories_cache`` to have run already so the runtime
+        resolver can be reused (one source of truth for the matching rules).
         """
-        # Build a transient lookup dict using only the just-seeded rows.
-        cursor = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id")
-        rows = cursor.fetchall()
-        top_norm_to_id: Dict[str, int] = {}
-        sub_norm_to_id: Dict[Tuple[int, str], int] = {}
-        for row in rows:
-            norm = normalize_category_name(row["name"])
-            if row["parent_id"] is None:
-                top_norm_to_id[norm] = row["id"]
-            else:
-                sub_norm_to_id[(row["parent_id"], norm)] = row["id"]
-
-        def resolve(top: Optional[str], sub: Optional[str]) -> Optional[int]:
-            if not top:
-                return None
-            top_id = top_norm_to_id.get(normalize_category_name(top))
-            if top_id is None:
-                return None
-            if not sub:
-                return top_id
-            sub_id = sub_norm_to_id.get((top_id, normalize_category_name(sub)))
-            return sub_id if sub_id is not None else top_id
-
         cursor = conn.execute(
             "SELECT id, primary_category, primary_subcategory, "
             "       secondary_category, secondary_subcategory FROM podcasts"
@@ -475,8 +458,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         unresolved: List[str] = []
         updates: List[Tuple[Optional[int], Optional[int], str]] = []
         for row in cursor.fetchall():
-            primary_id = resolve(row["primary_category"], row["primary_subcategory"])
-            secondary_id = resolve(row["secondary_category"], row["secondary_subcategory"])
+            primary_id = self._resolve_category_strings_to_id(row["primary_category"], row["primary_subcategory"])
+            secondary_id = self._resolve_category_strings_to_id(row["secondary_category"], row["secondary_subcategory"])
             if row["primary_category"] and primary_id is None:
                 unresolved.append(f"primary={row['primary_category']!r}")
             if row["secondary_category"] and secondary_id is None:
@@ -498,38 +481,28 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     def _load_categories_cache(self, conn: sqlite3.Connection) -> None:
         """Load the categories table into in-memory dicts for hot-path lookup.
 
-        The taxonomy is small (~100 rows) and effectively read-only at runtime
-        in the current single-user model, so a one-shot read on init is fine.
+        The taxonomy is small (~100 rows) and effectively read-only at runtime,
+        so a one-shot read on init is fine. The ``ORDER BY parent_id IS NOT NULL``
+        sort guarantees top-level rows arrive before any of their subcategories,
+        so we can build everything in a single pass.
         """
-        cursor = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id")
-        rows = cursor.fetchall()
-        # First pass: collect top-level rows so subcategory rows can resolve their parent name.
+        rows = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id").fetchall()
+        self._cat_id_to_pair = {}
+        self._cat_pair_to_id = {}
         top_id_to_name: Dict[int, str] = {}
-        self._cat_top_norm_to_id = {}
-        sub_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
         for row in rows:
             if row["parent_id"] is None:
                 top_id_to_name[row["id"]] = row["name"]
-                self._cat_top_norm_to_id[normalize_category_name(row["name"])] = row["id"]
-        # Second pass: subcategories.
-        self._cat_id_to_pair = {}
-        for row in rows:
-            if row["parent_id"] is None:
                 self._cat_id_to_pair[row["id"]] = (row["name"], None)
+                self._cat_pair_to_id[(normalize_category_name(row["name"]), None)] = row["id"]
             else:
                 top_name = top_id_to_name.get(row["parent_id"])
                 if top_name is None:
-                    # Orphan subcategory — defensive, shouldn't happen with FK constraint.
-                    continue
+                    continue  # orphan subcategory — defensive, FK should prevent
                 self._cat_id_to_pair[row["id"]] = (top_name, row["name"])
-                key = (
-                    normalize_category_name(top_name),
-                    normalize_category_name(row["name"]),
-                )
-                sub_pair_to_id[key] = row["id"]
-        # Build the (top_norm, sub_norm or None) → id lookup.
-        self._cat_pair_to_id = {(norm, None): cid for norm, cid in self._cat_top_norm_to_id.items()}
-        self._cat_pair_to_id.update(sub_pair_to_id)
+                self._cat_pair_to_id[(normalize_category_name(top_name), normalize_category_name(row["name"]))] = row[
+                    "id"
+                ]
 
     def _resolve_category_strings_to_id(self, top: Optional[str], sub: Optional[str]) -> Optional[int]:
         """Return the most-specific category FK id matching the inputs.
@@ -543,7 +516,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if not top:
             return None
         top_norm = normalize_category_name(top)
-        top_id = self._cat_top_norm_to_id.get(top_norm)
+        top_id = self._cat_pair_to_id.get((top_norm, None))
         if top_id is None:
             return None
         if not sub:
@@ -600,7 +573,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             if not region:
                 continue
             mtime = path.stat().st_mtime
-            if region in meta and abs(meta[region] - mtime) < 1e-6:
+            if region in meta and abs(meta[region] - mtime) < _MTIME_EPSILON:
                 continue  # unchanged — skip
 
             try:
@@ -637,9 +610,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             inserted = 0
             for rss_url, (rank, row) in best_by_rss.items():
                 category_id = self._resolve_category_strings_to_id(row.get("category"), row.get("subcategory"))
-                # Upsert metadata. ``last_seen_at`` is bumped on every refresh;
+                # Upsert metadata + grab the id in one round-trip via RETURNING
+                # (SQLite >= 3.35). ``last_seen_at`` is bumped every refresh;
                 # ``first_seen_at`` is preserved on conflict.
-                conn.execute(
+                pid = conn.execute(
                     """
                     INSERT INTO top_podcasts (
                         name, artist, rss_url, apple_url, youtube_url,
@@ -653,6 +627,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         apple_track_id = excluded.apple_track_id,
                         category_id = excluded.category_id,
                         last_seen_at = excluded.last_seen_at
+                    RETURNING id
                     """,
                     (
                         row.get("name") or "",
@@ -665,9 +640,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         now_iso,
                         now_iso,
                     ),
-                )
-                # Resolve podcast id (UNIQUE on rss_url makes this O(1)).
-                pid = conn.execute("SELECT id FROM top_podcasts WHERE rss_url = ?", (rss_url,)).fetchone()["id"]
+                ).fetchone()[0]
                 conn.execute(
                     """
                     INSERT INTO top_podcast_rankings (
