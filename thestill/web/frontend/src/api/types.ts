@@ -337,6 +337,7 @@ export interface TopPodcast {
   youtube_url: string | null
   category: string | null
   source_genre: string | null
+  is_following: boolean
 }
 
 export interface TopPodcastsResponse {

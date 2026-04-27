@@ -24,9 +24,20 @@ This package contains FastAPI routers for different endpoint groups:
 - api_podcasts: Podcast and episode listing/details (slug-based URLs)
 - api_episodes: Cross-podcast episode operations
 - api_commands: Command execution (refresh, download, etc.)
+- api_top_podcasts: Region-scoped top-chart browsing
 """
 
-from . import api_commands, api_dashboard, api_episodes, api_podcasts, api_status, auth, health, webhooks
+from . import (
+    api_commands,
+    api_dashboard,
+    api_episodes,
+    api_podcasts,
+    api_status,
+    api_top_podcasts,
+    auth,
+    health,
+    webhooks,
+)
 
 __all__ = [
     "health",
@@ -37,4 +48,5 @@ __all__ = [
     "api_podcasts",
     "api_episodes",
     "api_commands",
+    "api_top_podcasts",
 ]

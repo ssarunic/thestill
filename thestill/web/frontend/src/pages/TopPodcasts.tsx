@@ -3,31 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { addPodcast, getTopPodcasts } from '../api/client'
 import type { TopPodcast } from '../api/types'
-
-const FLAG: Record<string, string> = {
-  us: '🇺🇸',
-  gb: '🇬🇧',
-  ca: '🇨🇦',
-  au: '🇦🇺',
-  ie: '🇮🇪',
-  de: '🇩🇪',
-  fr: '🇫🇷',
-  es: '🇪🇸',
-  it: '🇮🇹',
-  nl: '🇳🇱',
-  se: '🇸🇪',
-  no: '🇳🇴',
-  dk: '🇩🇰',
-  fi: '🇫🇮',
-  jp: '🇯🇵',
-  br: '🇧🇷',
-  mx: '🇲🇽',
-  in: '🇮🇳',
-}
-
-function flagFor(code: string) {
-  return FLAG[code] ?? '🌐'
-}
+import { flagFor } from '../utils/regions'
 
 export default function TopPodcasts() {
   const { user } = useAuth()

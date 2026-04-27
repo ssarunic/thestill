@@ -1090,3 +1090,301 @@ def test_get_all_episodes_state_filter_summarized(temp_db, sample_podcast):
     assert total == 1
     assert len(results) == 1
     assert results[0][1].title == "Summarized"
+
+
+# ============================================================================
+# get_top_podcasts: q + is_following extension (spec #27)
+# ============================================================================
+#
+# These tests reach into the raw tables. The repo's seeder normally fills
+# them from data/top_podcasts_<region>.json on init; we don't want test
+# coverage to drift with that real-world data, so we wipe and seed inline.
+
+
+def _seed_top_chart(repo, region, entries, *, user_id=None, follow_rss_urls=()):
+    """Insert chart rows + (optionally) a user that follows specific feeds.
+
+    Each entry: {rank, name, artist, rss_url, category_name?}.
+    Categories are pre-seeded by ``_seed_categories`` during DB init, so we
+    look up an existing one by name when ``category_name`` is provided.
+    """
+    import sqlite3
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(str(repo.db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Wipe so each test starts from a known state.
+        conn.execute("DELETE FROM podcast_followers")
+        conn.execute("DELETE FROM top_podcast_rankings")
+        conn.execute("DELETE FROM top_podcasts")
+        conn.execute("DELETE FROM podcasts")
+        conn.execute("DELETE FROM users")
+
+        if user_id:
+            conn.execute(
+                "INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)",
+                (user_id, f"{user_id}@example.com", now),
+            )
+
+        for entry in entries:
+            category_id = None
+            if entry.get("category_name"):
+                row = conn.execute(
+                    "SELECT id FROM categories WHERE name = ? LIMIT 1",
+                    (entry["category_name"],),
+                ).fetchone()
+                category_id = row[0] if row else None
+
+            top_id = conn.execute(
+                """
+                INSERT INTO top_podcasts
+                    (name, artist, rss_url, category_id, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (entry["name"], entry.get("artist"), entry["rss_url"], category_id, now, now),
+            ).lastrowid
+
+            conn.execute(
+                """
+                INSERT INTO top_podcast_rankings
+                    (top_podcast_id, region, rank, source_genre, scraped_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (top_id, region, entry["rank"], entry.get("source_genre"), now),
+            )
+
+            if entry["rss_url"] in follow_rss_urls:
+                podcast_uuid = f"00000000-0000-0000-0000-{top_id:012d}"
+                conn.execute(
+                    """
+                    INSERT INTO podcasts (id, created_at, rss_url, title, slug, description)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (podcast_uuid, now, entry["rss_url"], entry["name"], f"slug-{top_id}", ""),
+                )
+                if user_id:
+                    follower_uuid = f"11111111-0000-0000-0000-{top_id:012d}"
+                    conn.execute(
+                        """
+                        INSERT INTO podcast_followers (id, user_id, podcast_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (follower_uuid, user_id, podcast_uuid, now),
+                    )
+        conn.commit()
+
+
+def test_get_top_podcasts_q_matches_name(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [
+            {"rank": 1, "name": "The Rest Is History", "artist": "Goalhanger", "rss_url": "https://r/1"},
+            {"rank": 2, "name": "Crime Junkie", "artist": "audiochuck", "rss_url": "https://r/2"},
+        ],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="rest")
+
+    assert len(rows) == 1
+    assert rows[0]["name"] == "The Rest Is History"
+
+
+def test_get_top_podcasts_q_matches_artist(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [
+            {"rank": 1, "name": "Smartless", "artist": "Wondery", "rss_url": "https://r/1"},
+            {"rank": 2, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/2"},
+        ],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="wonder")
+
+    assert len(rows) == 1
+    assert rows[0]["artist"] == "Wondery"
+
+
+def test_get_top_podcasts_q_case_insensitive(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "NPR News Now", "artist": "NPR", "rss_url": "https://r/1"}],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="npr NEWS")
+
+    assert len(rows) == 1
+
+
+def test_get_top_podcasts_q_no_match(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="zyxw")
+
+    assert rows == []
+
+
+def test_get_top_podcasts_q_respects_limit(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": i, "name": f"Pod {i}", "artist": None, "rss_url": f"https://r/{i}"} for i in range(1, 6)],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="pod", limit=2)
+
+    assert len(rows) == 2
+    assert rows[0]["rank"] == 1
+    assert rows[1]["rank"] == 2
+
+
+def test_get_top_podcasts_q_preserves_rank_order(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [
+            {"rank": 3, "name": "Pod Three", "artist": None, "rss_url": "https://r/3"},
+            {"rank": 1, "name": "Pod One", "artist": None, "rss_url": "https://r/1"},
+        ],
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="pod")
+
+    assert [r["rank"] for r in rows] == [1, 3]
+
+
+def test_get_top_podcasts_is_following_true(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts("us", user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert rows[0]["is_following"] is True
+
+
+def test_get_top_podcasts_is_following_false_other_user(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts("us", user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    assert rows[0]["is_following"] is False
+
+
+def test_get_top_podcasts_is_following_false_anonymous(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts("us")
+
+    assert rows[0]["is_following"] is False
+
+
+def test_get_top_podcasts_is_following_no_podcast_row(temp_db):
+    """A top podcast with no matching ``podcasts`` row is never followed."""
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "Untracked", "artist": None, "rss_url": "https://r/1"}],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    )
+
+    rows = temp_db.get_top_podcasts("us", user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert rows[0]["is_following"] is False
+
+
+def test_get_top_podcasts_unknown_region_returns_empty(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+    )
+
+    rows = temp_db.get_top_podcasts("zz")
+
+    assert rows == []
+
+
+def test_get_top_podcasts_q_combined_with_is_following(temp_db):
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [
+            {"rank": 1, "name": "The Rest Is History", "artist": "Goalhanger", "rss_url": "https://r/1"},
+            {"rank": 2, "name": "Crime Junkie", "artist": "audiochuck", "rss_url": "https://r/2"},
+        ],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts("us", q="rest", user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert len(rows) == 1
+    assert rows[0]["is_following"] is True
+
+
+def test_get_top_podcasts_category_q_user_id_combined(temp_db):
+    """Pin parameter ordering — every optional filter active simultaneously.
+
+    The repo binds params in a specific order (user_id, region, category, q×2,
+    limit). If a future refactor swaps any of those, this exercises every
+    branch at once and would catch the off-by-one before HTTP tests do.
+    """
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [
+            {
+                "rank": 1,
+                "name": "Pod History",
+                "artist": "Wondery",
+                "rss_url": "https://r/1",
+                "category_name": "History",
+            },
+            {
+                "rank": 2,
+                "name": "Pod Comedy",
+                "artist": "Wondery",
+                "rss_url": "https://r/2",
+                "category_name": "Comedy",
+            },
+        ],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts(
+        "us",
+        category="History",
+        q="pod",
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        limit=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Pod History"
+    assert rows[0]["category"] == "History"
+    assert rows[0]["is_following"] is True

@@ -75,16 +75,49 @@ async def list_top_podcasts(
     request: Request,
     region: Optional[str] = Query(None, description="ISO 3166-1 alpha-2; defaults to user's region"),
     limit: int = Query(50, ge=1, le=_MAX_LIMIT),
+    q: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=100,
+        description="Case-insensitive substring matched against name and artist",
+    ),
     state: AppState = Depends(get_app_state),
 ):
-    """Return the top-podcast chart for the resolved region."""
+    """Return the top-podcast chart for the resolved region.
+
+    When ``q`` is provided, the chart is filtered by case-insensitive substring
+    match against ``name`` and ``artist``; rank order is preserved. Each row
+    carries an ``is_following`` flag — true iff the resolved user follows a
+    podcast with the same ``rss_url``. Anonymous callers always see ``false``.
+    """
     user = get_current_user(request, state)
     user_region = user.region.lower() if user and user.region else None
+    user_id = user.id if user else None
+
+    # Treat whitespace-only `q` as if it were absent. FastAPI's `min_length=1`
+    # rejects the empty string before we get here, but `q="  "` would otherwise
+    # trigger an always-empty SQL filter.
+    q_clean: Optional[str] = q.strip() if q else None
+    if not q_clean:
+        q_clean = None
 
     available = state.repository.get_top_podcast_regions()
     resolved = _resolve_region(region, user_region, available)
 
-    rows = state.repository.get_top_podcasts(resolved, limit=limit)
+    rows = state.repository.get_top_podcasts(
+        resolved,
+        limit=limit,
+        q=q_clean,
+        user_id=user_id,
+    )
+
+    logger.debug(
+        "top_podcasts_served",
+        region=resolved,
+        user_id=user_id,
+        q=q_clean,
+        count=len(rows),
+    )
 
     return api_response(
         {
