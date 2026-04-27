@@ -8,8 +8,17 @@ TARGET_COUNT unique podcasts are collected, then enriches each with:
 - Apple Podcast URL
 - YouTube channel URL  (best-effort, via yt-dlp search heuristic)
 - Category / Subcategory (Apple's primary genre + first subgenre)
+- Release cadence + duration (parsed from RSS feed):
+  * episodes_per_month     — release frequency, windowed over last 90 days
+                              (falls back to lifetime cadence if newer)
+  * avg_episode_minutes    — mean episode length in the same window
+  * audio_hours_per_month  = episodes_per_month × avg_minutes / 60
+  * window_days            — actual window used (90 or shorter for new shows)
+  * episodes_in_window     — sample size
 
-Writes JSON + CSV to data/top_podcasts.{json,csv}.
+Writes JSON + CSV to data/top_podcasts.{json,csv} and prints summary
+aggregates (total audio hours/month, transcription cost estimate at
+TRANSCRIBE_COST_PER_HOUR).
 
 Run with the project venv:
     ./venv/bin/python scripts/build_top_podcasts.py
@@ -20,13 +29,16 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import statistics
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+import feedparser
 import requests
 import yt_dlp
 
@@ -50,7 +62,18 @@ HTTP_BACKOFF = 1.5
 
 YT_WORKERS = 12
 LOOKUP_WORKERS = 16
+RSS_WORKERS = 12
 YT_NAME_MATCH_THRESHOLD = 0.55
+
+# Cadence/duration window. 90 days is long enough to smooth weekly vs biweekly
+# noise but short enough to reflect the show's *current* schedule (a podcast
+# that went on hiatus 6 months ago shouldn't look active).
+CADENCE_WINDOW_DAYS = 90
+DAYS_PER_MONTH = 30.0  # the avg-month convention used for episodes_per_month
+
+# Used for cost estimates printed at the end. Keep audio hours as the
+# durable measure; this £/hr factor will drift as we gather real data.
+TRANSCRIBE_COST_PER_HOUR_GBP = 0.15
 
 
 def http_get_json(url: str) -> dict[str, Any] | None:
@@ -316,6 +339,146 @@ def enrich_with_lookup(items: list[dict[str, Any]], top_level_names: set[str]) -
     return enriched
 
 
+def parse_itunes_duration(raw: Any) -> float | None:
+    """Parse an itunes:duration value into seconds.
+
+    Apple permits three forms:
+      * ``HH:MM:SS`` or ``H:MM:SS``
+      * ``MM:SS`` or ``M:SS``
+      * a bare integer string of seconds (e.g. ``"3360"``)
+    Returns None on anything else (None, empty, garbage).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if ":" in s:
+        parts = s.split(":")
+        try:
+            nums = [float(p) for p in parts]
+        except ValueError:
+            return None
+        if len(nums) == 3:
+            h, m, sec = nums
+            return h * 3600 + m * 60 + sec
+        if len(nums) == 2:
+            m, sec = nums
+            return m * 60 + sec
+        if len(nums) == 1:
+            return nums[0]
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def fetch_feed_stats(rss_url: str) -> dict[str, Any]:
+    """Pull cadence + average duration from a podcast's RSS feed.
+
+    Returns a dict with episodes_per_month, avg_episode_minutes,
+    audio_hours_per_month, window_days, episodes_in_window. All fields are
+    None when the feed can't be fetched or has no parseable episodes.
+    """
+    blank = {
+        "episodes_per_month": None,
+        "avg_episode_minutes": None,
+        "audio_hours_per_month": None,
+        "window_days": None,
+        "episodes_in_window": 0,
+    }
+    try:
+        resp = requests.get(
+            rss_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml, application/xml, */*"},
+            timeout=HTTP_TIMEOUT,
+            allow_redirects=True,
+        )
+        if resp.status_code != 200 or not resp.content:
+            return blank
+        # Pass bytes directly; feedparser handles encoding.
+        feed = feedparser.parse(resp.content)
+    except (requests.RequestException, ValueError):
+        return blank
+    entries = feed.entries or []
+    if not entries:
+        return blank
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=CADENCE_WINDOW_DAYS)
+
+    # Collect (pub_date, duration_seconds) per episode that has a valid date.
+    episode_facts: list[tuple[datetime, float | None]] = []
+    for entry in entries:
+        pub_struct = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+        if not pub_struct:
+            continue
+        try:
+            pub_dt = datetime(*pub_struct[:6], tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        duration = parse_itunes_duration(getattr(entry, "itunes_duration", None))
+        episode_facts.append((pub_dt, duration))
+
+    if not episode_facts:
+        return blank
+
+    # Window = last CADENCE_WINDOW_DAYS, OR the show's full life if newer.
+    earliest_pub = min(p for p, _ in episode_facts)
+    actual_window_days = min(CADENCE_WINDOW_DAYS, max(1.0, (now - earliest_pub).total_seconds() / 86400))
+    window_cutoff = now - timedelta(days=actual_window_days)
+    in_window = [(p, d) for p, d in episode_facts if p >= window_cutoff]
+
+    # If a podcast hasn't released anything in the window, treat as inactive.
+    # episodes_per_month = 0 with a flag (window_days reflects the recent
+    # gap; consumer can decide to skip it from polling cost calcs).
+    if not in_window:
+        return {
+            "episodes_per_month": 0.0,
+            "avg_episode_minutes": None,
+            "audio_hours_per_month": 0.0,
+            "window_days": round(actual_window_days, 1),
+            "episodes_in_window": 0,
+        }
+
+    eps_in_window = len(in_window)
+    eps_per_month = round(eps_in_window * DAYS_PER_MONTH / actual_window_days, 2)
+
+    durations = [d for _, d in in_window if d is not None and d > 0]
+    if durations:
+        avg_minutes = round(statistics.mean(durations) / 60.0, 2)
+        audio_hours_per_month = round(eps_per_month * avg_minutes / 60.0, 2)
+    else:
+        avg_minutes = None
+        audio_hours_per_month = None
+
+    return {
+        "episodes_per_month": eps_per_month,
+        "avg_episode_minutes": avg_minutes,
+        "audio_hours_per_month": audio_hours_per_month,
+        "window_days": round(actual_window_days, 1),
+        "episodes_in_window": eps_in_window,
+    }
+
+
+def enrich_with_feed_stats(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Run fetch_feed_stats for every item in parallel."""
+    out: list[dict[str, Any]] = []
+
+    def worker(item: dict[str, Any]) -> dict[str, Any]:
+        stats = fetch_feed_stats(item["rss_url"])
+        return {**item, **stats}
+
+    with ThreadPoolExecutor(max_workers=RSS_WORKERS) as pool:
+        futures = [pool.submit(worker, it) for it in items]
+        for i, fut in enumerate(as_completed(futures), start=1):
+            out.append(fut.result())
+            if i % 25 == 0:
+                print(f"  rss progress: {i}/{len(items)}", flush=True)
+    return out
+
+
 def enrich_with_youtube(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run yt-dlp YouTube search for every item in parallel."""
     out: list[dict[str, Any]] = []
@@ -371,10 +534,15 @@ def main() -> int:
     enriched = enriched[:TARGET_COUNT]
     print(f"      kept {len(enriched)} with RSS feeds", flush=True)
 
-    print("[3/4] YouTube channel search (best-effort)...", flush=True)
+    print("[3/5] YouTube channel search (best-effort)...", flush=True)
     enriched = enrich_with_youtube(enriched)
 
-    print("[4/4] writing output files...", flush=True)
+    print("[4/5] RSS feed cadence + duration...", flush=True)
+    enriched = enrich_with_feed_stats(enriched)
+    # enrich_with_feed_stats also runs in a ThreadPoolExecutor — restore order.
+    enriched.sort(key=lambda e: order.get(e["track_id"], 10**9))
+
+    print("[5/5] writing output files...", flush=True)
     out_json.write_text(json.dumps(enriched, indent=2, ensure_ascii=False))
 
     fields = [
@@ -387,6 +555,11 @@ def main() -> int:
         "category",
         "subcategory",
         "source_genre",
+        "episodes_per_month",
+        "avg_episode_minutes",
+        "audio_hours_per_month",
+        "window_days",
+        "episodes_in_window",
         "track_id",
     ]
     with out_csv.open("w", newline="", encoding="utf-8") as fh:
@@ -404,19 +577,69 @@ def main() -> int:
                     "category": row.get("category", ""),
                     "subcategory": row.get("subcategory", ""),
                     "source_genre": row.get("source_genre", "") or "OVERALL",
+                    "episodes_per_month": row.get("episodes_per_month"),
+                    "avg_episode_minutes": row.get("avg_episode_minutes"),
+                    "audio_hours_per_month": row.get("audio_hours_per_month"),
+                    "window_days": row.get("window_days"),
+                    "episodes_in_window": row.get("episodes_in_window"),
                     "track_id": row["track_id"],
                 }
             )
 
+    # ---- Coverage + cost summary ----
     with_yt = sum(1 for r in enriched if r.get("youtube_url"))
     with_apple = sum(1 for r in enriched if r.get("apple_url"))
     with_cat = sum(1 for r in enriched if r.get("category"))
+    with_cadence = sum(1 for r in enriched if r.get("episodes_per_month") is not None)
+    with_duration = sum(1 for r in enriched if r.get("avg_episode_minutes") is not None)
+
+    audio_hours_values = [r["audio_hours_per_month"] for r in enriched if r.get("audio_hours_per_month") is not None]
+    total_hours = sum(audio_hours_values) if audio_hours_values else 0.0
+    avg_hours_per_podcast = total_hours / len(audio_hours_values) if audio_hours_values else 0.0
+    median_hours_per_podcast = statistics.median(audio_hours_values) if audio_hours_values else 0.0
+
+    eps_values = [r["episodes_per_month"] for r in enriched if r.get("episodes_per_month") is not None]
+    total_eps_per_month = sum(eps_values) if eps_values else 0.0
+
+    inactive = sum(1 for r in enriched if r.get("episodes_per_month") == 0)
+
     print(
-        f"done. {len(enriched)} rows | RSS: {len(enriched)} | "
-        f"Apple: {with_apple} | YouTube: {with_yt} | category: {with_cat}",
+        f"\ndone. {len(enriched)} rows | RSS: {len(enriched)} | Apple: {with_apple} | "
+        f"YouTube: {with_yt} | category: {with_cat} | "
+        f"cadence: {with_cadence} | duration: {with_duration}",
         flush=True,
     )
-    print(f"wrote {out_json}", flush=True)
+    print(f"\n=== Cadence & cost summary ({REGION.upper()}) ===", flush=True)
+    print(f"  inactive podcasts (no episodes in {CADENCE_WINDOW_DAYS}d): {inactive}", flush=True)
+    print(f"  total episodes/month across catalog:   {total_eps_per_month:>10.0f}", flush=True)
+    print(f"  total audio hours/month:               {total_hours:>10.1f}", flush=True)
+    print(f"  avg audio hours/month per podcast:     {avg_hours_per_podcast:>10.2f}", flush=True)
+    print(f"  median audio hours/month per podcast:  {median_hours_per_podcast:>10.2f}", flush=True)
+    est_total = total_hours * TRANSCRIBE_COST_PER_HOUR_GBP
+    est_avg = avg_hours_per_podcast * TRANSCRIBE_COST_PER_HOUR_GBP
+    print(
+        f"  est. transcription cost @ £{TRANSCRIBE_COST_PER_HOUR_GBP:.2f}/hr:",
+        flush=True,
+    )
+    print(f"    total/month:        £{est_total:>10.2f}", flush=True)
+    print(f"    avg per podcast:    £{est_avg:>10.2f}", flush=True)
+
+    # Top 10 by audio volume — useful for "which podcasts dominate cost"
+    top_volume = sorted(
+        (r for r in enriched if r.get("audio_hours_per_month") is not None),
+        key=lambda r: r["audio_hours_per_month"],
+        reverse=True,
+    )[:10]
+    if top_volume:
+        print("\n  top 10 by audio hours/month:", flush=True)
+        for r in top_volume:
+            print(
+                f"    {r['audio_hours_per_month']:>6.1f}h  "
+                f"({r['episodes_per_month']:>4.1f} eps × {r['avg_episode_minutes']:>5.1f} min)  "
+                f"{r['name'][:60]}",
+                flush=True,
+            )
+    print(f"\nwrote {out_json}", flush=True)
     print(f"wrote {out_csv}", flush=True)
     return 0
 
