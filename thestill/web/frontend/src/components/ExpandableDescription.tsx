@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import DOMPurify from 'dompurify'
+import { sanitizeUntrustedHtml } from '../utils/sanitize'
 
 interface ExpandableDescriptionProps {
   html: string
@@ -25,11 +25,9 @@ export default function ExpandableDescription({
     ? html
     : html.replace(/\n\n+/g, '<br><br>').replace(/\n/g, '<br>')
 
-  // Sanitize HTML - allow safe tags only
-  const cleanHtml = DOMPurify.sanitize(processedHtml, {
-    ALLOWED_TAGS: ['p', 'br', 'strong', 'b', 'em', 'i', 'a', 'ul', 'ol', 'li'],
-    ALLOWED_ATTR: ['href', 'target', 'rel'],
-  })
+  // Sanitize via the shared helper — strict allowlist + forced
+  // noopener/noreferrer on links (spec #25 item 3.2).
+  const cleanHtml = sanitizeUntrustedHtml(processedHtml)
 
   useEffect(() => {
     // Reset measurement when content changes
