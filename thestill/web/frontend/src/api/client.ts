@@ -74,11 +74,21 @@ export async function getPodcasts(limit = 12, offset = 0): Promise<PodcastsRespo
 export async function getTopPodcasts(
   region?: string,
   limit = 50,
+  q?: string,
+  signal?: AbortSignal,
 ): Promise<TopPodcastsResponse> {
   const params = new URLSearchParams()
   if (region) params.set('region', region)
   params.set('limit', String(limit))
-  return fetchApi<TopPodcastsResponse>(`/top-podcasts?${params.toString()}`)
+  if (q) params.set('q', q)
+  const response = await fetch(`${API_BASE}/top-podcasts?${params.toString()}`, {
+    credentials: 'include',
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
 }
 
 export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResponse> {

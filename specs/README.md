@@ -47,6 +47,7 @@ describing current phase and gates.
 | 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
 | 25 | [security-audit-and-hardening](25-security-audit-and-hardening.md) | 📋 Planned (2026-04-23) | Close 27 findings from the first-pass security audit across XXE, SSRF, webhook auth, JWT, CORS, subprocess, resource limits, and supply chain |
 | 26 | [pre-deploy-security-checklist](26-pre-deploy-security-checklist.md) | 📋 Planned (2026-04-23) | LLM-runnable + runtime smoke-test checklist that must return GO before any deploy; regression harness for spec #25 |
+| 27 | [add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) | 📝 Draft | Search-or-paste Add Podcast modal that filters regional top-500 live; preconditions a future free-tier gate without forcing it |
 
 ## Completed
 

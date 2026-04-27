@@ -2488,35 +2488,69 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             ).fetchone()
         return row is not None
 
-    def get_top_podcasts(self, region: str, limit: int = 500, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List the top chart for a region, optionally filtered by category name.
+    def get_top_podcasts(
+        self,
+        region: str,
+        *,
+        limit: int = 500,
+        category: Optional[str] = None,
+        q: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List the top chart for a region, optionally filtered by category and/or query.
 
-        Returns plain dicts (not Podcast models) since the chart entries may
-        not correspond to a subscribed Podcast row.
+        Returns plain dicts (not Podcast models) since chart entries may not
+        correspond to a subscribed ``Podcasts`` row.
+
+        ``q`` is a case-insensitive substring matched against ``name`` and
+        ``artist``. Rank order is preserved — top-ranked matches come first
+        regardless of where the substring lands.
+
+        ``user_id`` enables the ``is_following`` flag per row: a chart entry
+        is "followed" iff a ``podcasts`` row with the same ``rss_url`` exists
+        AND the given user follows it. Pass ``None`` (anonymous) to make every
+        row report ``is_following=False`` without special-casing — the
+        ``LEFT JOIN`` simply misses for ``user_id IS NULL``.
         """
         if not region:
             return []
-        params: List[Any] = [region.lower()]
+
+        # `user_id` is bound first because the LEFT JOIN's `pf.user_id = ?`
+        # appears in the FROM clause, before WHERE-clause params.
+        params: List[Any] = [user_id, region.lower()]
         category_filter = ""
         if category:
             category_filter = " AND c.name = ?"
             params.append(category)
+
+        query_filter = ""
+        if q:
+            query_filter = " AND (LOWER(p.name) LIKE ? OR LOWER(p.artist) LIKE ?)"
+            like = f"%{q.lower()}%"
+            params.extend([like, like])
+
         params.append(limit)
+
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
-                       c.name AS category, r.source_genre
+                       c.name AS category, r.source_genre,
+                       CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id
                 LEFT JOIN categories c ON c.id = p.category_id
-                WHERE r.region = ?{category_filter}
+                LEFT JOIN podcasts up ON up.rss_url = p.rss_url
+                LEFT JOIN podcast_followers pf
+                       ON pf.podcast_id = up.id AND pf.user_id = ?
+                WHERE r.region = ?{category_filter}{query_filter}
                 ORDER BY r.rank ASC
                 LIMIT ?
                 """,
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+
+        return [{**dict(row), "is_following": bool(row["is_following"])} for row in rows]
 
     # ============================================================================
     # TranscriptLink Methods (Podcasting 2.0 <podcast:transcript> support)
