@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,24 +44,10 @@ class YouTubeDownloader:
 
     @staticmethod
     def is_youtube_url(url: str) -> bool:
-        """
-        Check if URL is a YouTube video or playlist.
+        """Check if URL is a YouTube video, channel, or playlist."""
+        from ..utils.url_patterns import is_youtube_url as _is_youtube
 
-        Args:
-            url: URL to check
-
-        Returns:
-            True if URL is a YouTube URL, False otherwise
-        """
-        youtube_patterns = [
-            r"youtube\.com/watch",
-            r"youtube\.com/playlist",
-            r"youtube\.com/@[\w-]+",
-            r"youtube\.com/channel/",
-            r"youtube\.com/c/",
-            r"youtu\.be/",
-        ]
-        return any(re.search(pattern, url) for pattern in youtube_patterns)
+        return _is_youtube(url)
 
     def extract_playlist_info(self, url: str) -> Optional[Dict[str, Any]]:
         """

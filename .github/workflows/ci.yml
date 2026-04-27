@@ -58,6 +58,29 @@ jobs:
       - name: Build (tsc + vite)
         run: npm run build
 
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans full history, not just the diff. Shallow clones
+          # miss anything older than HEAD~1 — pull everything.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
+
+      - name: Run gitleaks
+        # ``--redact`` masks any matched secret in logs so a false positive
+        # doesn't leak the real value into PR job logs.
+        run: gitleaks detect --source . --no-banner --redact --verbose
+
   docker:
     name: Docker build (slim)
     runs-on: ubuntu-latest

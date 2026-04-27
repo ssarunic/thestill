@@ -65,3 +65,10 @@ repos:
       - id: check-added-large-files
         args: ['--maxkb=10000']
       - id: check-merge-conflict
+
+  # gitleaks - Secret scanning (spec #25 item 5.2)
+  # Catches accidentally committed API keys, tokens, JWTs, etc.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
