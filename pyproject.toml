@@ -22,7 +22,7 @@ description = "Automated podcast transcription and summarization pipeline"
 authors = [{name = "Sasa Sarunic", email = "ssarunic@gmail.com"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
