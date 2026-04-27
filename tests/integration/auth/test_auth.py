@@ -208,7 +208,7 @@ class TestSqliteUserRepository:
         import sqlite3
 
         conn = sqlite3.connect(db_path)
-        conn.execute(
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -220,8 +220,13 @@ class TestSqliteUserRepository:
                 last_login_at TIMESTAMP NULL,
                 region TEXT NULL,
                 region_locked INTEGER NOT NULL DEFAULT 0
-            )
-        """
+            );
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
         )
         conn.commit()
         conn.close()
@@ -298,6 +303,45 @@ class TestSqliteUserRepository:
         deleted = repo.delete("nonexistent")
         assert deleted is False
 
+    # ---- Spec #25 item 4.2: JWT revocation deny-list ----
+
+    def test_revoke_then_is_revoked(self, repo):
+        from datetime import datetime, timedelta, timezone
+
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        assert repo.is_token_revoked("jti-1") is False
+        repo.revoke_token("jti-1", future)
+        assert repo.is_token_revoked("jti-1") is True
+
+    def test_revoke_idempotent(self, repo):
+        from datetime import datetime, timedelta, timezone
+
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        repo.revoke_token("dup-jti", future)
+        # Second insert must not raise (UNIQUE constraint suppressed via ON CONFLICT).
+        repo.revoke_token("dup-jti", future)
+        assert repo.is_token_revoked("dup-jti") is True
+
+    def test_revoke_empty_jti_is_noop(self, repo):
+        """Legacy tokens with no jti — revoke is a silent no-op."""
+        from datetime import datetime, timezone
+
+        repo.revoke_token("", datetime.now(timezone.utc))
+        assert repo.is_token_revoked("") is False
+
+    def test_prune_expired_revocations(self, repo):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        repo.revoke_token("expired-jti", now - timedelta(days=1))
+        repo.revoke_token("active-jti", now + timedelta(days=1))
+
+        pruned = repo.prune_expired_revocations()
+
+        assert pruned == 1
+        assert repo.is_token_revoked("active-jti") is True
+        assert repo.is_token_revoked("expired-jti") is False
+
 
 class TestAuthServiceSingleUser:
     """Tests for AuthService in single-user mode."""
@@ -314,7 +358,7 @@ class TestAuthServiceSingleUser:
         import sqlite3
 
         conn = sqlite3.connect(db_path)
-        conn.execute(
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -326,8 +370,13 @@ class TestAuthServiceSingleUser:
                 last_login_at TIMESTAMP NULL,
                 region TEXT NULL,
                 region_locked INTEGER NOT NULL DEFAULT 0
-            )
-        """
+            );
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
         )
         conn.commit()
         conn.close()
@@ -399,3 +448,52 @@ class TestAuthServiceSingleUser:
         """Google OAuth raises error in single-user mode."""
         with pytest.raises(RuntimeError, match="single-user mode"):
             auth_service.get_google_auth_url("http://localhost/callback")
+
+    # ---- Spec #25 item 4.2: JWT revocation deny-list ----
+    # End-to-end revocation lives here because we need a working
+    # ``auth_service`` (which has both create_jwt and revoke_token).
+
+    def test_token_carries_jti(self, auth_service):
+        user = auth_service.get_or_create_default_user()
+        token = auth_service.create_jwt(user)
+        payload = auth_service.verify_jwt(token)
+        assert payload is not None
+        assert payload.jti  # non-empty
+        # Two separately-issued tokens must not share a jti.
+        token2 = auth_service.create_jwt(user)
+        payload2 = auth_service.verify_jwt(token2)
+        assert payload2.jti != payload.jti
+
+    def test_revoke_token_makes_verify_return_none(self, auth_service):
+        user = auth_service.get_or_create_default_user()
+        token = auth_service.create_jwt(user)
+        # Sanity: token verifies before revocation.
+        assert auth_service.verify_jwt(token) is not None
+        # Revoke. Future verify must reject.
+        assert auth_service.revoke_token(token) is True
+        assert auth_service.verify_jwt(token) is None
+
+    def test_revoke_does_not_affect_other_tokens(self, auth_service):
+        user = auth_service.get_or_create_default_user()
+        token_a = auth_service.create_jwt(user)
+        token_b = auth_service.create_jwt(user)
+        auth_service.revoke_token(token_a)
+        assert auth_service.verify_jwt(token_a) is None
+        assert auth_service.verify_jwt(token_b) is not None
+
+    def test_revoke_already_revoked_is_idempotent(self, auth_service):
+        user = auth_service.get_or_create_default_user()
+        token = auth_service.create_jwt(user)
+        assert auth_service.revoke_token(token) is True
+        # Second call must not raise — duplicate insert is suppressed.
+        assert auth_service.revoke_token(token) is True
+
+    def test_revoke_unparseable_token_returns_false(self, auth_service):
+        assert auth_service.revoke_token("not-a-jwt") is False
+
+    def test_get_user_from_token_rejects_revoked(self, auth_service):
+        user = auth_service.get_or_create_default_user()
+        token = auth_service.create_jwt(user)
+        auth_service.revoke_token(token)
+        # Goes through verify_jwt → returns None → user lookup is skipped.
+        assert auth_service.get_user_from_token(token) is None

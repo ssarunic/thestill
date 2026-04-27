@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27; Pack B — items 3.8, 5.1 — shipped 2026-04-27)
+**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27; Pack B — items 3.8, 5.1 — shipped 2026-04-27; Pack D — item 4.2 — shipped 2026-04-27)
 **Created**: 2026-04-23
-**Updated**: 2026-04-27 (Pack B: 3.8 uv.lock + hash-locked CI/Docker installs + fast-patch policy, 5.1 Dockerfile @sha256 digest pins on every FROM)
+**Updated**: 2026-04-27 (Pack D: 4.2 JWT revocation via server-side jti deny-list)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -274,9 +274,19 @@ phase, items can land in any order.
   per-process random fallback is gone — silently invalidating every issued
   token on restart was strictly worse than a clear startup failure.
   Regression tests: [test_auth_hardening.py](../tests/unit/security/test_auth_hardening.py).
-- [ ] **4.2 JWT revocation path.**
-  Short TTL (≤ 1 h) + refresh tokens, or a server-side `jti` deny-list.
-  Logout must invalidate on the server.
+- [x] **4.2 JWT revocation path.** ✅ Shipped (Pack D).
+  Server-side ``jti`` deny-list, the simpler of the two options the spec
+  listed (no refresh-token rotation flow needed). Every issued token now
+  carries a ``jti`` (UUID4); ``/api/auth/logout`` writes that jti to a
+  new ``revoked_tokens`` table; ``AuthService.verify_jwt`` rejects any
+  token whose jti is on the deny-list, even if the signature is valid
+  and the token hasn't expired. Lazy prune on each revoke keeps the
+  table compact (a revoked-then-expired token is rejected by signature
+  check anyway). Legacy tokens minted before this change carry no jti
+  and silently no-op on revoke; they keep working until natural expiry.
+  Regression tests in [test_auth.py](../tests/integration/auth/test_auth.py)
+  — 10 new cases covering jti uniqueness, revoke→reject path,
+  isolation between tokens, idempotent re-revoke, prune correctness.
 - [x] **4.3 Centralize URL regex patterns.** ✅ Shipped (Pack A).
   New [utils/url_patterns.py](../thestill/utils/url_patterns.py) holds
   every URL classification/extraction regex pre-compiled with bounded
@@ -342,7 +352,7 @@ item also marks the finding resolved.
 | 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ✅ |
 | 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ✅ |
 | 22 | Low      | Per-restart JWT secret in single-user | auth_service.py:103 | 4.1 | ✅ |
-| 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ☐ |
+| 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ✅ |
 | 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ✅ |
 | 25 | Low      | Webhook payloads unencrypted on disk | webhooks.py:171-180 | 4.4 | ✅ |
 | 26 | Info     | Dockerfile base-image not digest-pinned | Dockerfile | 5.1 | ✅ |

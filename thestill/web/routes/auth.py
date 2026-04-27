@@ -283,17 +283,24 @@ async def google_callback(
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    """
-    Log out the current user.
+async def logout(
+    request: Request,
+    response: Response,
+    state: AppState = Depends(get_app_state),
+):
+    """Log out the current user.
 
-    Clears the authentication cookie.
-
-    Returns:
-        Success message.
+    Clears the auth cookie *and* revokes the token's ``jti`` server-side
+    (spec #25 item 4.2) so it can't be reused even if the client keeps
+    a copy. A token without a jti (legacy) silently no-ops on revoke;
+    the client cookie still clears so the user is logged out either way.
     """
+    token = _get_token_from_request(request)
+    revoked = False
+    if token:
+        revoked = state.auth_service.revoke_token(token)
     _clear_auth_cookie(response)
-    logger.info("User logged out")
+    logger.info("user_logged_out", token_revoked=revoked)
     return api_response({"message": "Logged out successfully"})
 
 
