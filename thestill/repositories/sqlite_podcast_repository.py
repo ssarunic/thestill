@@ -328,6 +328,24 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE podcasts ADD COLUMN last_modified TEXT NULL")
             logger.info("Migration complete: spec #19 conditional-GET columns added to podcasts")
 
+        # Migration: Create revoked_tokens table for JWT revocation
+        # deny-list (spec #25 item 4.2, idempotent).
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='revoked_tokens'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating revoked_tokens table")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS revoked_tokens (
+                    jti TEXT PRIMARY KEY NOT NULL,
+                    expires_at TIMESTAMP NOT NULL,
+                    revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at
+                    ON revoked_tokens(expires_at);
+                """
+            )
+            logger.info("Migration complete: revoked_tokens table created")
+
         # Migration: Add region columns to users table (idempotent).
         # `region` is an ISO 3166-1 alpha-2 country code (lowercase) or NULL.
         # `region_locked` is 1 once the user has explicitly chosen one — used
@@ -916,6 +934,23 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
             CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
+
+            -- ========================================================================
+            -- REVOKED TOKENS TABLE (spec #25 item 4.2 — JWT revocation deny-list)
+            -- ========================================================================
+            -- Every issued JWT carries a `jti`; on logout the jti lands here
+            -- with the token's original `exp`. Auth verification rejects any
+            -- token whose jti appears here. The expires_at column lets us
+            -- prune entries that have aged past their original expiry — a
+            -- revoked-then-expired token is rejected by the signature check
+            -- anyway, so keeping the row would just bloat the table.
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at
+                ON revoked_tokens(expires_at);
 
             -- ========================================================================
             -- PODCAST FOLLOWERS TABLE (User-Podcast following relationship)

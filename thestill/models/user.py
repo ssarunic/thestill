@@ -56,18 +56,22 @@ class User(BaseModel):
 
 
 class TokenPayload(BaseModel):
-    """
-    JWT token payload claims.
+    """JWT token payload claims.
 
     Attributes:
-        sub: Subject - the user ID
-        exp: Expiration time
-        iat: Issued at time
+        sub: Subject — the user ID.
+        exp: Expiration time.
+        iat: Issued at time.
+        jti: JWT ID (random UUID per token). Used by the server-side
+            revocation deny-list (spec #25 item 4.2) so logout can
+            actually invalidate. May be empty string for legacy tokens
+            minted before that change.
     """
 
     sub: str  # user_id
     exp: datetime
     iat: datetime
+    jti: str = ""
 
 
 class PodcastFollower(BaseModel):

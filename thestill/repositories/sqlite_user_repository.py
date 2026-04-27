@@ -199,6 +199,58 @@ class SqliteUserRepository(UserRepository):
                 logger.debug(f"Updated last login for user {user_id}")
             return updated
 
+    # ----- JWT revocation deny-list (spec #25 item 4.2) -----
+
+    def revoke_token(self, jti: str, expires_at: datetime) -> None:
+        """Persist a jti to the revocation deny-list.
+
+        Idempotent via ``ON CONFLICT DO NOTHING`` — the same jti hitting
+        the table twice is a no-op rather than a constraint error,
+        which matters for callers that don't pre-check.
+        """
+        if not jti:
+            return  # Legacy tokens with no jti can't be revoked precisely.
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO revoked_tokens (jti, expires_at)
+                VALUES (?, ?)
+                ON CONFLICT(jti) DO NOTHING
+                """,
+                (jti, expires_at.isoformat()),
+            )
+            logger.info("token_revoked", jti=jti, expires_at=expires_at.isoformat())
+
+    def is_token_revoked(self, jti: str) -> bool:
+        """Return True iff ``jti`` is currently on the deny-list.
+
+        Empty-string jti (legacy tokens) returns False — those tokens
+        can't be precisely revoked. The signature/exp checks are still
+        in force, so the worst case is a long-lived legacy token until
+        it expires naturally.
+        """
+        if not jti:
+            return False
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM revoked_tokens WHERE jti = ?",
+                (jti,),
+            ).fetchone()
+            return row is not None
+
+    def prune_expired_revocations(self) -> int:
+        """Drop revoked rows whose ``expires_at`` is past."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM revoked_tokens WHERE expires_at < ?",
+                (now,),
+            )
+            count = cursor.rowcount
+            if count:
+                logger.debug("pruned_expired_revocations", count=count)
+            return count
+
     def delete(self, user_id: str) -> bool:
         """Delete user by ID."""
         with self._get_connection() as conn:

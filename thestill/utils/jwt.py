@@ -18,6 +18,7 @@ JWT utilities for token encoding and decoding.
 Uses PyJWT for secure token handling with proper error management.
 """
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -35,17 +36,12 @@ def create_access_token(
     algorithm: str = "HS256",
     expires_days: int = 30,
 ) -> str:
-    """
-    Create a signed JWT access token.
+    """Create a signed JWT access token.
 
-    Args:
-        user_id: The user's unique identifier (UUID)
-        secret_key: Secret key for signing the token
-        algorithm: JWT signing algorithm (default: HS256)
-        expires_days: Token expiration in days (default: 30)
-
-    Returns:
-        Encoded JWT token string
+    Spec #25 item 4.2: every issued token now carries a ``jti`` (random
+    UUID4). Combined with the server-side revocation deny-list this is
+    what makes logout actually invalidate a token — without ``jti`` we'd
+    have nothing stable to deny by.
     """
     now = datetime.now(timezone.utc)
     expire = now + timedelta(days=expires_days)
@@ -54,6 +50,7 @@ def create_access_token(
         "sub": user_id,
         "iat": now,
         "exp": expire,
+        "jti": str(uuid.uuid4()),
     }
 
     token = jwt.encode(payload, secret_key, algorithm=algorithm)
@@ -84,6 +81,10 @@ def decode_token(
             sub=payload["sub"],
             exp=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
             iat=datetime.fromtimestamp(payload["iat"], tz=timezone.utc),
+            # ``jti`` was added by spec #25 item 4.2. Tokens minted before
+            # that change won't have it; treat the absent case as empty
+            # string (auth_service's revocation check just won't match).
+            jti=payload.get("jti", ""),
         )
     except jwt.ExpiredSignatureError:
         logger.debug("Token has expired")

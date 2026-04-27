@@ -20,6 +20,7 @@ supporting both single-user and multi-user authentication modes.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Optional
 
 from ..models.user import User
@@ -128,3 +129,28 @@ class UserRepository(ABC):
             True if user was deleted, False if not found
         """
         pass
+
+    # ----- JWT revocation deny-list (spec #25 item 4.2) -----
+
+    @abstractmethod
+    def revoke_token(self, jti: str, expires_at: datetime) -> None:
+        """Add a token's ``jti`` to the revocation deny-list.
+
+        ``expires_at`` is the token's original ``exp`` so the row can
+        be pruned once the token would have expired anyway. Idempotent
+        — re-revoking the same jti is a no-op.
+        """
+
+    @abstractmethod
+    def is_token_revoked(self, jti: str) -> bool:
+        """Return True if ``jti`` is on the revocation deny-list."""
+
+    @abstractmethod
+    def prune_expired_revocations(self) -> int:
+        """Drop revoked-token rows whose ``expires_at`` has passed.
+
+        Returns the number of rows deleted. Safe to call lazily — a
+        revoked-then-expired token is rejected by the signature check
+        anyway, so the row's only purpose was to plug the window
+        between revocation and expiry.
+        """

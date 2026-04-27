@@ -279,20 +279,47 @@ class AuthService:
         )
 
     def verify_jwt(self, token: str) -> Optional[TokenPayload]:
-        """
-        Verify and decode a JWT token.
+        """Verify signature, exp, and revocation status of a JWT.
 
-        Args:
-            token: The JWT token to verify
-
-        Returns:
-            TokenPayload if valid, None if invalid or expired
+        Spec #25 item 4.2: any jti present in the revocation deny-list
+        is rejected even if the signature is valid and the token hasn't
+        expired. Logout adds to the deny-list, so this is what makes
+        logout actually invalidate.
         """
-        return decode_token(
+        payload = decode_token(
             token=token,
             secret_key=self.jwt_secret_key,
             algorithm=self.jwt_algorithm,
         )
+        if payload is None:
+            return None
+        if payload.jti and self.user_repository.is_token_revoked(payload.jti):
+            logger.debug("token_rejected_revoked", jti=payload.jti, sub=payload.sub)
+            return None
+        return payload
+
+    def revoke_token(self, token: str) -> bool:
+        """Add the token's ``jti`` to the deny-list.
+
+        Returns True iff a jti was actually persisted; False when the
+        token doesn't decode, has no jti (legacy), or signature check
+        fails. The ``decode_token`` call here intentionally bypasses
+        ``verify_jwt`` so that we don't recursively check revocation
+        — we want to revoke even an *already* revoked token without
+        raising. Lazy prune keeps the deny-list compact.
+        """
+        payload = decode_token(
+            token=token,
+            secret_key=self.jwt_secret_key,
+            algorithm=self.jwt_algorithm,
+        )
+        if payload is None or not payload.jti:
+            return False
+        self.user_repository.revoke_token(payload.jti, payload.exp)
+        # Cheap to do here — the deny-list is small and a revoke event
+        # is the natural moment to garbage-collect.
+        self.user_repository.prune_expired_revocations()
+        return True
 
     def get_user_from_token(self, token: str) -> Optional[User]:
         """
