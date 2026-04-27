@@ -18,20 +18,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Spec #25 item 3.8: install from the committed uv.lock so CI runs
+      # the exact version set we tested with. ``pip install`` against
+      # ``>=`` floors would silently pull whatever PyPI has each run,
+      # which is the supply-chain ambush vector this lockfile closes.
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
 
-      - name: Install package with dev extras
-        run: pip install -e ".[dev]"
+      - name: Install (frozen) with dev extras
+        run: uv sync --frozen --extra dev
 
       - name: pytest
         # Skip tests/integration/pipeline/: they claim to be mocked but actually
         # hit example.com over the network and fail; unrelated to CI setup.
         # Track separately; fix and re-enable here when mocking is repaired.
-        run: pytest -q --tb=short --ignore=tests/integration/pipeline
+        run: uv run pytest -q --tb=short --ignore=tests/integration/pipeline
 
   frontend:
     name: Frontend build + tests

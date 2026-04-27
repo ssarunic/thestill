@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27)
+**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27; Pack B — items 3.8, 5.1 — shipped 2026-04-27)
 **Created**: 2026-04-23
-**Updated**: 2026-04-27 (Pack C: 3.2 sanitiseUntrustedHtml + XSS regression suite, 3.3 path_manager slug regex + resolve guard)
+**Updated**: 2026-04-27 (Pack B: 3.8 uv.lock + hash-locked CI/Docker installs + fast-patch policy, 5.1 Dockerfile @sha256 digest pins on every FROM)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -225,10 +225,34 @@ phase, items can land in any order.
   initial implementation tried `raise HTTPException` from middleware,
   which Starlette's `BaseHTTPMiddleware` doesn't auto-convert.
   Regression tests: [test_body_size.py](../tests/unit/security/test_body_size.py).
-- [ ] **3.8 yt-dlp supply-chain.** (Deferred — needs tooling choice.)
-  Hash-lock dependencies via `uv lock` / `pip-compile --generate-hashes`.
-  Add automated update PRs via Dependabot/Renovate. Document a fast-patch
-  policy: critical yt-dlp CVEs within 48 h.
+- [x] **3.8 yt-dlp supply-chain.** ✅ Shipped (Pack B).
+  Three controls now wrap the Python dep tree:
+  1. **Lockfile**: [uv.lock](../uv.lock) pins every transitive dep with
+     a sha256 hash. ``requires-python`` bumped from ``>=3.9`` to
+     ``>=3.10`` (matches reality — ``dalston-sdk`` requires 3.10+ and
+     CI/Docker run 3.12).
+  2. **Hash-locked installs**: CI uses ``uv sync --frozen --extra dev``
+     ([ci.yml](../.github/workflows/ci.yml)); Dockerfile builder stage
+     uses ``uv export --frozen`` → ``pip wheel --require-hashes``
+     ([Dockerfile](../Dockerfile)). A compromised PyPI publish between
+     Dependabot bumps fails install instead of silently swapping in.
+  3. **Upgrade automation**: Dependabot already configured
+     ([dependabot.yml](../.github/dependabot.yml)) — weekly grouped
+     minor/patch PRs for pip + npm + docker.
+  4. **Fast-patch policy**: documented in [docs/security.md](../docs/security.md)
+     with detection sources, response steps, and a 48 h timing budget
+     for critical yt-dlp CVEs.
+- [x] **5.1 Docker base-image pin.** ✅ Shipped (Pack B).
+  All four ``FROM`` lines in [Dockerfile](../Dockerfile) now carry
+  ``@sha256:…`` digests:
+  - ``node:22-slim@sha256:d415caa…`` (frontend-builder)
+  - ``mwader/static-ffmpeg:8.1@sha256:6fb8488…`` (ffmpeg-src)
+  - ``python:3.12-slim@sha256:46cb7cc…`` (python-builder + base)
+  Dependabot's docker ecosystem
+  ([dependabot.yml](../.github/dependabot.yml)) now has digests to
+  bump weekly. Same Dependabot config also explicitly blocks the
+  Python major bump (3.12 → 3.13) until ``pydub``'s ``audioop``
+  dependency is resolved.
 - [x] **3.9 Log injection via CRLF.** ✅ Shipped (safe batch).
   Solved inside [utils/log_safety.py](../thestill/utils/log_safety.py):
   the `log_safety_processor` walks every event dict and escapes control
@@ -275,8 +299,8 @@ phase, items can land in any order.
 
 ### Phase 5 — Info / best practice
 
-- [ ] **5.1 Docker base-image pin.**
-  Pin `python:3.12-slim` by digest (`@sha256:…`); rebuild weekly in CI.
+- [x] **5.1 Docker base-image pin.** ✅ Shipped (Pack B). See above —
+  closed alongside 3.8 in the same PR.
 - [x] **5.2 Secret scanning pre-commit.** ✅ Shipped (Pack A).
   [.pre-commit-config.yaml](../.pre-commit-config.yaml) gains a
   ``gitleaks`` hook (v8.21.2). [.github/workflows/ci.yml](../.github/workflows/ci.yml)
@@ -315,13 +339,13 @@ item also marks the finding resolved.
 | 17 | Medium   | Secrets in error paths / logs | auth_service.py:201; auth.py:200; logging_middleware.py:76 | 3.5 | ✅ |
 | 18 | Medium   | SQLite queue race / duplicate processing | queue_manager.py, task_manager.py | 3.6 | ☐ |
 | 19 | Medium   | No request body size limit | app.py | 3.7 | ✅ |
-| 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ☐ |
+| 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ✅ |
 | 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ✅ |
 | 22 | Low      | Per-restart JWT secret in single-user | auth_service.py:103 | 4.1 | ✅ |
 | 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ☐ |
 | 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ✅ |
 | 25 | Low      | Webhook payloads unencrypted on disk | webhooks.py:171-180 | 4.4 | ✅ |
-| 26 | Info     | Dockerfile base-image not digest-pinned | Dockerfile | 5.1 | ☐ |
+| 26 | Info     | Dockerfile base-image not digest-pinned | Dockerfile | 5.1 | ✅ |
 | 27 | Info     | No secret-scanning pre-commit | .pre-commit-config.yaml | 5.2 | ✅ |
 
 ## Gates
