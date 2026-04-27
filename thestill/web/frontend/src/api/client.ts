@@ -41,6 +41,7 @@ import type {
   CreateDigestResponse,
   DigestPreviewResponse,
   DigestStatus,
+  TopPodcastsResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -67,6 +68,17 @@ export async function getRecentActivity(limit = 10, offset = 0): Promise<Activit
 // Podcasts API
 export async function getPodcasts(limit = 12, offset = 0): Promise<PodcastsResponse> {
   return fetchApi<PodcastsResponse>(`/podcasts?limit=${limit}&offset=${offset}`)
+}
+
+// Top Podcasts API
+export async function getTopPodcasts(
+  region?: string,
+  limit = 50,
+): Promise<TopPodcastsResponse> {
+  const params = new URLSearchParams()
+  if (region) params.set('region', region)
+  params.set('limit', String(limit))
+  return fetchApi<TopPodcastsResponse>(`/top-podcasts?${params.toString()}`)
 }
 
 export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResponse> {

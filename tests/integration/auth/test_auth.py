@@ -217,7 +217,9 @@ class TestSqliteUserRepository:
                 picture TEXT NULL,
                 google_id TEXT UNIQUE,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_login_at TIMESTAMP NULL
+                last_login_at TIMESTAMP NULL,
+                region TEXT NULL,
+                region_locked INTEGER NOT NULL DEFAULT 0
             )
         """
         )
@@ -321,7 +323,9 @@ class TestAuthServiceSingleUser:
                 picture TEXT NULL,
                 google_id TEXT UNIQUE,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_login_at TIMESTAMP NULL
+                last_login_at TIMESTAMP NULL,
+                region TEXT NULL,
+                region_locked INTEGER NOT NULL DEFAULT 0
             )
         """
         )

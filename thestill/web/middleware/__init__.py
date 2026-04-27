@@ -26,7 +26,7 @@ from thestill.web.middleware.rate_limit import (
     rate_limit_dependency,
 )
 from thestill.web.middleware.rate_limit import reset_for_testing as reset_rate_limits_for_testing
-from thestill.web.middleware.rate_limit import trusted_proxy_set
+from thestill.web.middleware.rate_limit import resolve_client_ip, trusted_proxy_set
 from thestill.web.middleware.security_headers import SecurityHeadersMiddleware
 
 __all__ = [
@@ -41,5 +41,6 @@ __all__ = [
     "enforce_mcp_mutation_quota",
     "rate_limit_dependency",
     "reset_rate_limits_for_testing",
+    "resolve_client_ip",
     "trusted_proxy_set",
 ]

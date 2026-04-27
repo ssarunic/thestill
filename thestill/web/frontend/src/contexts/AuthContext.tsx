@@ -8,6 +8,8 @@ export interface User {
   picture: string | null
   created_at: string
   last_login_at: string | null
+  region: string | null
+  region_locked: boolean
 }
 
 // Auth status response from /auth/status
@@ -25,6 +27,7 @@ interface AuthContextType {
   login: () => void
   logout: () => Promise<void>
   refreshAuth: () => Promise<void>
+  updateRegion: (region: string | null) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -38,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshAuth = useCallback(async () => {
     try {
-      const response = await fetch(`${AUTH_BASE}/status`)
+      const response = await fetch(`${AUTH_BASE}/status`, { credentials: 'include' })
       if (!response.ok) {
         throw new Error('Failed to fetch auth status')
       }
@@ -51,6 +54,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null)
     } finally {
       setIsLoading(false)
+    }
+  }, [])
+
+  const updateRegion = useCallback(async (region: string | null) => {
+    const response = await fetch(`${AUTH_BASE}/me`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ region }),
+    })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      throw new Error(body.detail || `Failed to update region (${response.status})`)
+    }
+    const body = await response.json()
+    if (body?.user) {
+      setUser(body.user as User)
     }
   }, [])
 
@@ -89,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         refreshAuth,
+        updateRegion,
       }}
     >
       {children}

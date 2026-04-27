@@ -31,10 +31,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from structlog import get_logger
 
 from ..dependencies import AppState, get_app_state
-from ..middleware import AUTH_LIMIT, rate_limit_dependency, trusted_proxy_set
+from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
 from ..responses import api_response
 
 logger = get_logger(__name__)
@@ -90,10 +91,7 @@ def _get_redirect_uri(request: Request, state: AppState) -> str:
     )
     raise HTTPException(
         status_code=500,
-        detail=(
-            "OAuth redirect is not configured on this server. "
-            "Set PUBLIC_BASE_URL explicitly."
-        ),
+        detail=("OAuth redirect is not configured on this server. " "Set PUBLIC_BASE_URL explicitly."),
     )
 
 
@@ -158,6 +156,11 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     """
     Get authentication status and configuration.
 
+    Side-effect: when the resolved user has no region yet and has not
+    explicitly locked one, attempts an IP-based geolocation and persists
+    the result. Failures are silent — the user simply ends up with a
+    null region and the UI falls back to its default.
+
     Returns:
         Auth mode configuration and current user if authenticated.
     """
@@ -166,6 +169,9 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     # Get current user
     token = _get_token_from_request(request)
     user = state.auth_service.get_current_user(token)
+
+    if user is not None:
+        await state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
 
     return api_response(
         {
@@ -255,6 +261,10 @@ async def google_callback(
             redirect_uri=redirect_uri,
         )
 
+        # Best-effort region inference on first login. Failures are silent
+        # and leave region NULL — the user can still pick one in settings.
+        await app_state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
+
         # Redirect to home page with auth cookie
         response = RedirectResponse(url="/", status_code=302)
         _set_auth_cookie(response, jwt_token, app_state)
@@ -315,3 +325,39 @@ async def get_current_user(request: Request, state: AppState = Depends(get_app_s
             "user": user.model_dump(exclude={"google_id"}),
         }
     )
+
+
+class UpdateMeRequest(BaseModel):
+    """Body for PATCH /api/auth/me. Only ``region`` is mutable today."""
+
+    region: Optional[str] = Field(
+        default=None,
+        description="ISO 3166-1 alpha-2 country code (case-insensitive). "
+        "Pass null to clear; either way the locked flag is set so future "
+        "logins won't overwrite the choice.",
+    )
+
+
+@router.patch("/me")
+async def update_current_user(
+    payload: UpdateMeRequest,
+    request: Request,
+    state: AppState = Depends(get_app_state),
+):
+    """Update the current user's profile.
+
+    Currently only ``region`` is mutable. Setting it always locks future
+    IP-based inference; the only way to re-enable inference is to clear
+    region directly in the database.
+    """
+    token = _get_token_from_request(request)
+    user = state.auth_service.get_current_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        updated = state.auth_service.set_user_region(user, payload.region)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return api_response({"user": updated.model_dump(exclude={"google_id"})})

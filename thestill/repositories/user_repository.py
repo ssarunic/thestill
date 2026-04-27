@@ -88,6 +88,22 @@ class UserRepository(ABC):
         pass
 
     @abstractmethod
+    def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
+        """
+        Update the user's region and lock flag.
+
+        Args:
+            user_id: Internal UUID of the user
+            region: ISO 3166-1 alpha-2 country code (lowercase) or None to clear
+            locked: True if this is an explicit user choice (suppresses future
+                IP-based inference); False if it's an inferred guess
+
+        Returns:
+            True if user was found and updated, False otherwise
+        """
+        pass
+
+    @abstractmethod
     def update_last_login(self, user_id: str) -> bool:
         """
         Update the last_login_at timestamp for a user.

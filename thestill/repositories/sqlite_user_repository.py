@@ -80,7 +80,8 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at
+                SELECT id, email, name, picture, google_id, created_at, last_login_at,
+                       region, region_locked
                 FROM users
                 WHERE id = ?
                 """,
@@ -95,7 +96,8 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at
+                SELECT id, email, name, picture, google_id, created_at, last_login_at,
+                       region, region_locked
                 FROM users
                 WHERE email = ?
                 """,
@@ -110,7 +112,8 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at
+                SELECT id, email, name, picture, google_id, created_at, last_login_at,
+                       region, region_locked
                 FROM users
                 WHERE google_id = ?
                 """,
@@ -125,12 +128,19 @@ class SqliteUserRepository(UserRepository):
         Save or update a user.
 
         Uses UPSERT (INSERT ... ON CONFLICT) for atomic create-or-update.
+
+        ``region`` / ``region_locked`` are intentionally NOT updated by this
+        path — preserving the user's stored region across logins. Use
+        ``update_region`` to mutate region state explicitly.
         """
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO users (id, email, name, picture, google_id, created_at, last_login_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users (
+                    id, email, name, picture, google_id,
+                    created_at, last_login_at, region, region_locked
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     name = excluded.name,
                     picture = excluded.picture,
@@ -145,11 +155,30 @@ class SqliteUserRepository(UserRepository):
                     user.google_id,
                     user.created_at.isoformat(),
                     user.last_login_at.isoformat() if user.last_login_at else None,
+                    user.region,
+                    1 if user.region_locked else 0,
                 ),
             )
 
             logger.debug(f"Saved user: {user.email}")
             return user
+
+    def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
+        """Update region + lock flag. Region is normalised to lowercase."""
+        normalised = region.lower() if region else None
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET region = ?, region_locked = ?
+                WHERE id = ?
+                """,
+                (normalised, 1 if locked else 0, user_id),
+            )
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.debug("user_region_updated", user_id=user_id, region=normalised, locked=locked)
+            return updated
 
     def update_last_login(self, user_id: str) -> bool:
         """Update the last_login_at timestamp for a user."""
@@ -195,4 +224,6 @@ class SqliteUserRepository(UserRepository):
             google_id=row["google_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
             last_login_at=datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None,
+            region=row["region"],
+            region_locked=bool(row["region_locked"]),
         )

@@ -328,6 +328,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE podcasts ADD COLUMN last_modified TEXT NULL")
             logger.info("Migration complete: spec #19 conditional-GET columns added to podcasts")
 
+        # Migration: Add region columns to users table (idempotent).
+        # `region` is an ISO 3166-1 alpha-2 country code (lowercase) or NULL.
+        # `region_locked` is 1 once the user has explicitly chosen one — used
+        # to suppress further IP-based inference on subsequent logins.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if cursor.fetchone() is not None:
+            cursor = conn.execute("PRAGMA table_info(users)")
+            user_columns = {row["name"] for row in cursor.fetchall()}
+            if "region" not in user_columns:
+                logger.info("Migrating database: adding region columns to users table")
+                conn.execute("ALTER TABLE users ADD COLUMN region TEXT NULL")
+                conn.execute("ALTER TABLE users ADD COLUMN region_locked INTEGER NOT NULL DEFAULT 0")
+                logger.info("Migration complete: region columns added to users")
+
         # THES-153 Migration: Create digests tables if they don't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
         if cursor.fetchone() is None:
@@ -892,8 +906,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 google_id TEXT UNIQUE,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_login_at TIMESTAMP NULL,
+                region TEXT NULL,
+                region_locked INTEGER NOT NULL DEFAULT 0,
                 CHECK (length(id) = 36),
-                CHECK (length(email) > 0)
+                CHECK (length(email) > 0),
+                CHECK (region IS NULL OR length(region) = 2),
+                CHECK (region_locked IN (0, 1))
             );
 
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -1081,6 +1099,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 )
             )
         return podcasts, dedup
+
+    def get_top_podcast_regions(self) -> List[str]:
+        """Return the list of regions that currently have top-podcast data."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT region FROM top_podcasts_meta ORDER BY region")
+            return [row["region"] for row in cursor.fetchall()]
 
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""

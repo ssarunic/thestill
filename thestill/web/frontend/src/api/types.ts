@@ -327,6 +327,28 @@ export interface AddPodcastTaskStatus {
   error: string | null
 }
 
+// Top Podcasts API Types
+export interface TopPodcast {
+  rank: number
+  name: string
+  artist: string | null
+  rss_url: string
+  apple_url: string | null
+  youtube_url: string | null
+  category: string | null
+  source_genre: string | null
+}
+
+export interface TopPodcastsResponse {
+  status: string
+  timestamp: string
+  region: string
+  available_regions: string[]
+  user_region: string | null
+  count: number
+  top_podcasts: TopPodcast[]
+}
+
 // Pipeline Task Types (Queue-based)
 export type PipelineStage = 'download' | 'downsample' | 'transcribe' | 'clean' | 'summarize'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
