@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27; Pack B — items 3.8, 5.1 — shipped 2026-04-27; Pack D — item 4.2 — shipped 2026-04-27)
+**Status**: ✅ Complete (all actionable findings closed; spec #28 Postgres migration will eventually replace SQLite-specific 3.6 hardening)
 **Created**: 2026-04-23
-**Updated**: 2026-04-27 (Pack D: 4.2 JWT revocation via server-side jti deny-list)
+**Updated**: 2026-04-27 (Pack E: 3.6 SQLite queue race — WAL + busy_timeout + conditional UPDATE + two-worker regression test)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -209,13 +209,25 @@ phase, items can land in any order.
   OAuth error paths in [auth.py](../thestill/web/routes/auth.py) were
   already fixed in Phase 2 item 2.8.
   Regression tests: [test_log_safety.py](../tests/unit/security/test_log_safety.py).
-- [ ] **3.6 SQLite task-queue race.** (Deferred — touches background
-  pipeline; wants a two-worker integration test.)
-  [queue_manager.py](../thestill/core/queue_manager.py) and
-  [task_manager.py](../thestill/web/task_manager.py). Use
-  `BEGIN IMMEDIATE` + conditional `UPDATE ... WHERE status='pending'`
-  for claim-next-job. Enable WAL + `busy_timeout`. Test with two workers
-  claiming the same row.
+- [x] **3.6 SQLite task-queue race.** ✅ Shipped (Pack E).
+  [queue_manager.py](../thestill/core/queue_manager.py) ``_get_connection``
+  now sets ``PRAGMA journal_mode=WAL`` (concurrent readers + one writer
+  instead of stall-everyone) and ``PRAGMA busy_timeout=5000`` (contended
+  ``BEGIN IMMEDIATE`` waits up to 5s instead of failing immediately
+  with ``database is locked``). ``get_next_task`` already used
+  ``BEGIN IMMEDIATE``; the UPDATE was tightened to
+  ``WHERE id = ? AND status IN ('pending', 'retry_scheduled')`` so a
+  second writer that slipped through the lock window sees ``rowcount=0``
+  and rolls back instead of double-claiming.
+  Regression test:
+  [test_queue_manager_concurrency.py](../tests/unit/core/test_queue_manager_concurrency.py)
+  — two threads with separate ``QueueManager`` instances drain 50
+  pre-seeded tasks; asserts no overlap between claim sets, full
+  coverage, and that both workers actually competed (proves the race
+  was exercised). Wall-clock ~0.2s.
+  Future: spec #28 (Postgres migration) will replace this with
+  ``SELECT ... FOR UPDATE SKIP LOCKED`` and the SQLite-specific
+  hardening becomes irrelevant.
 - [x] **3.7 Request body size cap.** ✅ Shipped (safe batch).
   New [web/middleware/body_size.py](../thestill/web/middleware/body_size.py)
   rejects POST/PUT/PATCH with `Content-Length` above the per-route cap
@@ -347,7 +359,7 @@ item also marks the finding resolved.
 | 15 | Medium   | Path traversal via slug regression | path_manager.py:143,155 | 3.3 | ✅ |
 | 16 | Medium   | Non-http feed URL schemes accepted | feed_manager.py:152 | 3.4 | ✅ |
 | 17 | Medium   | Secrets in error paths / logs | auth_service.py:201; auth.py:200; logging_middleware.py:76 | 3.5 | ✅ |
-| 18 | Medium   | SQLite queue race / duplicate processing | queue_manager.py, task_manager.py | 3.6 | ☐ |
+| 18 | Medium   | SQLite queue race / duplicate processing | queue_manager.py, task_manager.py | 3.6 | ✅ |
 | 19 | Medium   | No request body size limit | app.py | 3.7 | ✅ |
 | 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ✅ |
 | 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ✅ |
