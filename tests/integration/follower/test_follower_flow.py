@@ -275,7 +275,7 @@ class TestSingleUserModeCompatibility:
             storage_path=Path(temp_db).parent,
             database_path=temp_db,
             multi_user=False,
-            jwt_secret_key="",  # Will be auto-generated
+            jwt_secret_key="test-secret-key-for-test-suite",
         )
 
     @pytest.fixture

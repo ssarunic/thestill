@@ -94,14 +94,18 @@ class AuthService:
                 )
 
         if not self.jwt_secret_key:
-            if self.multi_user:
-                raise ValueError(
-                    "JWT_SECRET_KEY is required for multi-user mode. Generate one with: openssl rand -hex 32"
-                )
-            else:
-                # For single-user mode, generate a random secret if not provided
-                logger.warning("JWT_SECRET_KEY not set, generating random key for this session")
-                self.jwt_secret_key = secrets.token_hex(32)
+            # Spec #25 item 4.1: require JWT_SECRET_KEY in every mode.
+            # The previous single-user fallback generated a random key per
+            # process, which silently invalidated every issued token on
+            # restart and made stolen-token forensics impossible. A clear
+            # startup failure with a one-line remediation is strictly
+            # better than that "works but quietly broken" mode.
+            mode = "multi-user" if self.multi_user else "single-user"
+            raise ValueError(
+                f"JWT_SECRET_KEY is required for {mode} mode. "
+                "Generate one with: openssl rand -hex 32  "
+                "(then set JWT_SECRET_KEY=<value> in your .env)"
+            )
 
     def get_or_create_default_user(self) -> User:
         """

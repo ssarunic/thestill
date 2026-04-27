@@ -153,3 +153,40 @@ class TestRedirectUri:
         with pytest.raises(HTTPException) as exc_info:
             auth_route._get_redirect_uri(req, state)
         assert exc_info.value.status_code == 500
+
+
+# Spec #25 item 4.1: JWT_SECRET_KEY must be required at startup in every
+# mode. Older single-user behaviour silently generated a per-process key.
+class TestJwtSecretKeyRequired:
+    def _config(self, *, multi_user: bool, jwt_secret_key: str):
+        from pathlib import Path
+
+        from thestill.utils.config import Config
+
+        return Config(
+            storage_path=Path("/tmp"),
+            multi_user=multi_user,
+            jwt_secret_key=jwt_secret_key,
+            google_client_id="x" if multi_user else "",
+            google_client_secret="x" if multi_user else "",
+        )
+
+    def test_single_user_missing_secret_raises(self):
+        from thestill.services.auth_service import AuthService
+
+        config = self._config(multi_user=False, jwt_secret_key="")
+        with pytest.raises(ValueError, match="JWT_SECRET_KEY is required"):
+            AuthService(config, MagicMock())
+
+    def test_multi_user_missing_secret_raises(self):
+        from thestill.services.auth_service import AuthService
+
+        config = self._config(multi_user=True, jwt_secret_key="")
+        with pytest.raises(ValueError, match="JWT_SECRET_KEY is required"):
+            AuthService(config, MagicMock())
+
+    def test_secret_present_succeeds(self):
+        from thestill.services.auth_service import AuthService
+
+        config = self._config(multi_user=False, jwt_secret_key="x" * 64)
+        AuthService(config, MagicMock())  # should not raise

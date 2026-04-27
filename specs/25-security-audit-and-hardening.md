@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23)
+**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27)
 **Created**: 2026-04-23
-**Updated**: 2026-04-23 (Phase 3 Medium findings 3.1, 3.4, 3.5, 3.7, 3.9 closed; 3.2/3.3/3.6/3.8 deferred)
+**Updated**: 2026-04-27 (Pack A: 4.1 JWT enforcement, 4.3 URL regex centralisation + ReDoS tests, 4.4 webhook chmod 0600, 5.2 gitleaks pre-commit + CI)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -221,29 +221,47 @@ phase, items can land in any order.
 
 ### Phase 4 — Low (opportunistic)
 
-- [ ] **4.1 Per-restart JWT secret in single-user mode.**
-  [auth_service.py:103](../thestill/services/auth_service.py#L103).
-  Require `JWT_SECRET_KEY` env var; fail startup if missing.
+- [x] **4.1 Per-restart JWT secret in single-user mode.** ✅ Shipped (Pack A).
+  [auth_service.py](../thestill/services/auth_service.py) `_validate_config`
+  now raises ``ValueError`` in every mode when ``JWT_SECRET_KEY`` is unset,
+  with a remediation message pointing at ``openssl rand -hex 32``. The old
+  per-process random fallback is gone — silently invalidating every issued
+  token on restart was strictly worse than a clear startup failure.
+  Regression tests: [test_auth_hardening.py](../tests/unit/security/test_auth_hardening.py).
 - [ ] **4.2 JWT revocation path.**
   Short TTL (≤ 1 h) + refresh tokens, or a server-side `jti` deny-list.
   Logout must invalidate on the server.
-- [ ] **4.3 Centralize URL regex patterns.**
-  [media_source.py:223](../thestill/core/media_source.py#L223),
-  [youtube_downloader.py:57-65](../thestill/core/youtube_downloader.py#L57-L65).
-  Move patterns to one module; ban unbounded alternation/backrefs; unit
-  tests guard against ReDoS.
-- [ ] **4.4 Webhook payloads on disk.**
-  [webhooks.py:171-180](../thestill/web/routes/webhooks.py#L171-L180).
-  `chmod 0600` on write; document sensitivity; consider at-rest
-  encryption for multi-tenant deployments.
+- [x] **4.3 Centralize URL regex patterns.** ✅ Shipped (Pack A).
+  New [utils/url_patterns.py](../thestill/utils/url_patterns.py) holds
+  every URL classification/extraction regex pre-compiled with bounded
+  quantifiers (e.g. Apple ID is `\\d{1,12}` — Apple IDs are 10 digits, the
+  bound caps DoS via massive numeric inputs). Patterns auto-discoverable
+  via ``ALL_PATTERNS``. Migrated call sites:
+  [youtube_downloader.py](../thestill/core/youtube_downloader.py) and
+  [media_source.py](../thestill/core/media_source.py).
+  Regression tests: [test_url_patterns.py](../tests/unit/security/test_url_patterns.py)
+  — 101 cases, every pattern×pathological-input pair must terminate
+  inside 500 ms.
+- [x] **4.4 Webhook payloads on disk.** ✅ Shipped (Pack A).
+  [webhooks.py](../thestill/web/routes/webhooks.py) ``_save_webhook_result``
+  now ``os.chmod(file_path, 0o600)`` after writing — owner-only on every
+  POSIX filesystem that honours mode bits. Failures (FAT, network mounts,
+  some Windows configs) are logged as warnings rather than raising; the
+  payload is still saved.
+  Regression test in [test_webhook_auth.py](../tests/unit/security/test_webhook_auth.py).
+  Follow-up: at-rest encryption for multi-tenant hosted deployments.
 
 ### Phase 5 — Info / best practice
 
 - [ ] **5.1 Docker base-image pin.**
   Pin `python:3.12-slim` by digest (`@sha256:…`); rebuild weekly in CI.
-- [ ] **5.2 Secret scanning pre-commit.**
-  Add `gitleaks` or `trufflehog` to
-  [.pre-commit-config.yaml](../.pre-commit-config.yaml) and as a CI job.
+- [x] **5.2 Secret scanning pre-commit.** ✅ Shipped (Pack A).
+  [.pre-commit-config.yaml](../.pre-commit-config.yaml) gains a
+  ``gitleaks`` hook (v8.21.2). [.github/workflows/ci.yml](../.github/workflows/ci.yml)
+  also runs the same gitleaks binary against full history (``fetch-depth: 0``)
+  on every push and PR, with ``--redact`` so any false positive doesn't
+  leak the real value into CI logs. Pre-flight scan on the existing
+  ``main`` was clean (342 commits, 0 leaks).
 - [ ] **5.3 PostgreSQL password policy (future).**
   Placeholder: if we ever migrate off SQLite, enforce a password policy
   and disallow empty passwords in startup validation.
@@ -277,12 +295,12 @@ item also marks the finding resolved.
 | 19 | Medium   | No request body size limit | app.py | 3.7 | ✅ |
 | 20 | Medium   | yt-dlp supply-chain / RCE surface | pyproject.toml | 3.8 | ☐ |
 | 21 | Medium   | Log injection via CRLF in feed titles | logger.* call sites | 3.9 | ✅ |
-| 22 | Low      | Per-restart JWT secret in single-user | auth_service.py:103 | 4.1 | ☐ |
+| 22 | Low      | Per-restart JWT secret in single-user | auth_service.py:103 | 4.1 | ✅ |
 | 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ☐ |
-| 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ☐ |
-| 25 | Low      | Webhook payloads unencrypted on disk | webhooks.py:171-180 | 4.4 | ☐ |
+| 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ✅ |
+| 25 | Low      | Webhook payloads unencrypted on disk | webhooks.py:171-180 | 4.4 | ✅ |
 | 26 | Info     | Dockerfile base-image not digest-pinned | Dockerfile | 5.1 | ☐ |
-| 27 | Info     | No secret-scanning pre-commit | .pre-commit-config.yaml | 5.2 | ☐ |
+| 27 | Info     | No secret-scanning pre-commit | .pre-commit-config.yaml | 5.2 | ✅ |
 
 ## Gates
 

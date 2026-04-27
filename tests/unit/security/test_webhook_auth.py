@@ -22,7 +22,6 @@ import pytest
 
 from thestill.web.routes import webhooks as webhook_route
 
-
 SECRET = "shared-secret"
 BODY = b'{"hello":"world"}'
 
@@ -98,3 +97,19 @@ class TestNoSecretFailClosedConstant:
         # Between 1 minute and 15 minutes — tight enough to block replay, loose
         # enough to survive normal clock drift.
         assert 60 <= webhook_route._MAX_WEBHOOK_CLOCK_SKEW_SECONDS <= 900
+
+
+# Spec #25 item 4.4: webhook payloads on disk should be owner-only.
+class TestWebhookPayloadFileMode:
+    def test_saved_file_is_chmod_0600(self, tmp_path):
+        import os
+        import stat
+
+        path = webhook_route._save_webhook_result(
+            webhook_dir=tmp_path,
+            transcription_id="abc123",
+            data={"foo": "bar"},
+        )
+        assert path.exists()
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600, f"expected 0o600, got {oct(mode)}"

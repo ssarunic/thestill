@@ -341,7 +341,7 @@ class TestAuthServiceSingleUser:
             storage_path=Path(db_path).parent,
             database_path=db_path,
             multi_user=False,
-            jwt_secret_key="",  # Will be auto-generated
+            jwt_secret_key="test-secret-key-for-test-suite",
         )
 
     @pytest.fixture

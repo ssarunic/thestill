@@ -168,16 +168,12 @@ def _verify_signature(
 
 
 def _save_webhook_result(webhook_dir: Path, transcription_id: str, data: Dict[str, Any]) -> Path:
-    """
-    Save webhook result to disk for later processing.
+    """Save webhook result to disk for later processing.
 
-    Args:
-        webhook_dir: Directory to save webhook data
-        transcription_id: ElevenLabs transcription ID
-        data: Full webhook payload
-
-    Returns:
-        Path to saved file
+    Spec #25 item 4.4: webhook payloads can contain transcript text and
+    provider-side identifiers that we don't want world-readable on a
+    shared host. The file is chmod'd to 0600 immediately after write so
+    a same-host process running as a different user can't read it.
     """
     webhook_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,6 +184,15 @@ def _save_webhook_result(webhook_dir: Path, transcription_id: str, data: Dict[st
 
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+    # Owner-only after-the-fact. Some filesystems (FAT, network mounts)
+    # silently ignore chmod — that's a deployment concern, not something
+    # we can fix here. ``os.chmod`` is a no-op on platforms that don't
+    # support it (e.g. some Windows configs).
+    try:
+        os.chmod(file_path, 0o600)
+    except (OSError, NotImplementedError) as exc:
+        logger.warning("webhook_payload_chmod_failed", path=str(file_path), error=str(exc))
 
     logger.info(f"Saved webhook result: {file_path}")
     return file_path

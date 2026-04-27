@@ -28,7 +28,6 @@ Benefits:
 """
 
 import json
-import re
 import urllib.request
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -47,6 +46,7 @@ from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
 from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
+from ..utils.url_patterns import APPLE_PODCAST_ID_RE, extract_apple_podcast_id, looks_like_rss
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -222,9 +222,9 @@ class RSSMediaSource(MediaSource):
         if "podcasts.apple.com" in url or "itunes.apple.com" in url:
             return True
 
-        # Check for common RSS patterns
-        rss_patterns = [r"\.xml$", r"\.rss$", r"/feed/?$", r"/rss/?$", r"/podcast/?$"]
-        if any(re.search(pattern, url, re.IGNORECASE) for pattern in rss_patterns):
+        # Check for common RSS feed URL shapes — this is a hint, not a
+        # safety check (the SSRF guard runs before any fetch).
+        if looks_like_rss(url):
             return True
 
         # Default: Assume it's RSS if not YouTube or other known sources
@@ -882,12 +882,10 @@ class RSSMediaSource(MediaSource):
                 return None
 
             # Extract podcast ID from URL
-            id_match = re.search(r"id(\d+)", url)
-            if not id_match:
+            podcast_id = extract_apple_podcast_id(url)
+            if not podcast_id:
                 logger.warning(f"Could not extract podcast ID from Apple URL: {url}")
                 return None
-
-            podcast_id = id_match.group(1)
 
             # Use iTunes Lookup API to get RSS feed
             lookup_url = f"https://itunes.apple.com/lookup?id={podcast_id}"
@@ -932,8 +930,9 @@ class RSSMediaSource(MediaSource):
             with urllib.request.urlopen(request) as response:  # noqa: S310 — URL is SSRF-validated above
                 page_content = response.read().decode("utf-8", errors="ignore")
 
-                # Extract all potential IDs from the page content
-                id_matches = re.findall(r"id(\d+)", page_content)
+                # Extract all potential IDs from the page content. Bound is
+                # 12 digits (Apple IDs are 10) — see utils.url_patterns.
+                id_matches = APPLE_PODCAST_ID_RE.findall(page_content)
 
                 # Try each ID found on the page
                 for potential_id in set(id_matches):  # Use set to avoid duplicates
