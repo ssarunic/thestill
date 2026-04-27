@@ -118,7 +118,7 @@ class _SlidingWindow:
 _LIMITER = _SlidingWindow()
 
 
-def _resolve_client_ip(request: Request) -> str:
+def resolve_client_ip(request: Request) -> str:
     """
     Identify the real client behind any trusted reverse proxy.
 
@@ -165,7 +165,7 @@ def trusted_proxy_set(config) -> frozenset:
 
 def _client_key(request: Request, prefix: str) -> str:
     """Derive a per-real-client key for HTTP endpoints."""
-    return f"{prefix}:{_resolve_client_ip(request)}"
+    return f"{prefix}:{resolve_client_ip(request)}"
 
 
 def rate_limit_dependency(

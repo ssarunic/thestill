@@ -60,6 +60,7 @@ from .routes import (
     api_episodes,
     api_podcasts,
     api_status,
+    api_top_podcasts,
     auth,
     health,
     webhooks,
@@ -329,6 +330,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_status.router, prefix="/api/status", tags=["status"])
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+    app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])

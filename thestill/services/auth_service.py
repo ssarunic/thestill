@@ -32,6 +32,7 @@ from structlog import get_logger
 from ..models.user import TokenPayload, User
 from ..repositories.user_repository import UserRepository
 from ..utils.config import Config
+from ..utils.geoip import lookup_country_from_ip
 from ..utils.jwt import create_access_token, decode_token
 
 logger = get_logger(__name__)
@@ -304,6 +305,57 @@ class AuthService:
             return None
 
         return self.user_repository.get_by_id(payload.sub)
+
+    async def maybe_infer_region(self, user: User, client_ip: Optional[str]) -> Optional[str]:
+        """Infer and persist the user's region from their IP, if appropriate.
+
+        No-ops when the user has already locked a region, when ``client_ip``
+        is missing/private/unroutable, or when the lookup fails. On success
+        the user row is updated and the resolved code is returned. The
+        ``region_locked`` flag stays False so that an explicit user choice
+        later can still freely override (and lock).
+        """
+        if user.region_locked:
+            return user.region
+        if user.region:
+            # Already inferred previously; don't keep re-querying ipinfo on
+            # every login while the user still hasn't picked one explicitly.
+            return user.region
+
+        country = await lookup_country_from_ip(client_ip)
+        if not country:
+            return None
+
+        self.user_repository.update_region(user.id, country, locked=False)
+        user.region = country
+        # Refresh single-user-mode cache so subsequent calls see it.
+        if self._default_user and self._default_user.id == user.id:
+            self._default_user.region = country
+        logger.info("user_region_inferred", user_id=user.id, region=country)
+        return country
+
+    def set_user_region(self, user: User, region: Optional[str]) -> User:
+        """Persist an explicit user-chosen region and lock further inference.
+
+        Passing ``None`` clears the region but still locks; callers that
+        want to fall back to inference should re-introduce that path
+        deliberately rather than relying on a clear-and-unlock here.
+        """
+        normalised: Optional[str] = None
+        if region is not None:
+            cleaned = region.strip().lower()
+            if len(cleaned) != 2 or not cleaned.isalpha():
+                raise ValueError("region must be a 2-letter ISO 3166-1 alpha-2 code")
+            normalised = cleaned
+
+        self.user_repository.update_region(user.id, normalised, locked=True)
+        user.region = normalised
+        user.region_locked = True
+        if self._default_user and self._default_user.id == user.id:
+            self._default_user.region = normalised
+            self._default_user.region_locked = True
+        logger.info("user_region_set", user_id=user.id, region=normalised)
+        return user
 
     def get_current_user(self, token: Optional[str] = None) -> Optional[User]:
         """

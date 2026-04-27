@@ -36,6 +36,12 @@ class User(BaseModel):
         google_id: Google's unique user ID (null for default single-user)
         created_at: When the user account was created
         last_login_at: When the user last logged in
+        region: ISO 3166-1 alpha-2 country code (lowercase). Used to filter
+            region-scoped content like top podcasts. None until inferred from
+            IP or explicitly set by the user.
+        region_locked: True once the user has explicitly picked a region. While
+            False, the server may overwrite ``region`` from an IP-based guess
+            on each login; once True, automatic inference is suppressed.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -45,6 +51,8 @@ class User(BaseModel):
     google_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_login_at: Optional[datetime] = None
+    region: Optional[str] = None
+    region_locked: bool = False
 
 
 class TokenPayload(BaseModel):
