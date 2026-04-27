@@ -18,8 +18,17 @@ Centralized path management for all file artifacts in the thestill pipeline.
 This module provides a single source of truth for constructing file paths
 across the entire application, preventing scattered path logic and reducing
 errors when directory structures change.
+
+Spec #25 item 3.3: every method that accepts an external string and
+builds a path now (a) validates slug-shaped inputs against ``_SLUG_RE``
+and (b) resolves the final path and asserts it stays under
+``storage_path``. The two checks are belt-and-braces — the regex blocks
+the obvious ``../`` cases at input time, the resolve guards against any
+sneaky variant (URL-encoded traversal, NFC/NFD Unicode tricks, symlinks
+inside the data dir).
 """
 
+import re
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -27,6 +36,26 @@ from typing import Literal, Optional
 # ``PathManager`` free of upward dependencies on ``core``. The processor
 # validates its own env-flag input against the same names.
 CleanupPipelineName = Literal["segmented", "legacy"]
+
+
+# Slugs originate from ``utils.slug.generate_slug`` which uses
+# python-slugify and emits lowercase ``[a-z0-9-]+``. The regex below
+# additionally forbids leading hyphens and bounds length — both
+# defence-in-depth against future slug-source changes.
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
+
+
+def _validate_slug(slug: str, *, name: str) -> str:
+    """Refuse slugs that don't match the canonical shape.
+
+    ``name`` is the parameter name in the caller and is included in the
+    raised message so the failing field is obvious (``podcast_slug`` vs
+    ``episode_slug`` etc.). ``ValueError`` is raised loud so callers
+    can't silently coerce malicious input.
+    """
+    if not isinstance(slug, str) or not _SLUG_RE.fullmatch(slug):
+        raise ValueError(f"invalid {name}={slug!r}: must match [a-z0-9][a-z0-9-]{{0,99}}")
+    return slug
 
 
 class PathManager:
@@ -62,6 +91,11 @@ class PathManager:
             storage_path: Base directory for all data storage (default: ./data)
         """
         self.storage_path = Path(storage_path)
+        # Cache the resolved root once. ``Path.resolve()`` consults the
+        # filesystem each call (in case ``..`` segments need expanding);
+        # caching is safe because ``storage_path`` is set once at init
+        # and the data root is not expected to move under us.
+        self._storage_root_resolved = self.storage_path.resolve()
 
         # Define all subdirectories
         self._original_audio = "original_audio"
@@ -77,6 +111,29 @@ class PathManager:
         self._external_transcripts = "external_transcripts"
         self._digests = "digests"
         self._feeds_file = "feeds.json"
+
+    def _assert_inside_root(self, path: Path) -> Path:
+        """Resolve ``path`` and refuse if it escapes ``storage_path``.
+
+        Belt-and-braces — slug regex catches the obvious ``../`` at the
+        input boundary; this catches any sneaky variant the regex misses
+        (URL-encoded sequences, NFC/NFD Unicode normalisation tricks,
+        symlinks pointing outside ``data/``). Returns the *un-resolved*
+        path so callers see the same shape as before — only the check
+        is new.
+        """
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            # ``resolve(strict=False)`` should not actually raise, but
+            # treat any filesystem-side failure as a refusal: better to
+            # fail loud than to assume safety.
+            raise ValueError(f"could not resolve path {path!r}: {exc}") from exc
+        if not resolved.is_relative_to(self._storage_root_resolved):
+            raise ValueError(
+                f"path {path!r} (resolves to {resolved!r}) escapes storage root " f"{self._storage_root_resolved!r}"
+            )
+        return path
 
     # Directory path methods
 
@@ -183,7 +240,8 @@ class PathManager:
         Returns:
             Full path: raw_transcripts/{podcast_slug}/{episode_filename}
         """
-        return self.raw_transcripts_dir() / podcast_slug / episode_filename
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.raw_transcripts_dir() / podcast_slug / episode_filename)
 
     def clean_transcript_file(self, filename: str) -> Path:
         """
@@ -214,7 +272,8 @@ class PathManager:
         Returns:
             Full path: clean_transcripts/{podcast_slug}/{episode_filename}
         """
-        return self.clean_transcripts_dir() / podcast_slug / episode_filename
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.clean_transcripts_dir() / podcast_slug / episode_filename)
 
     def clean_transcript_json_file(self, podcast_slug: str, episode_filename: str) -> Path:
         """Full path to the structured ``AnnotatedTranscript`` JSON sidecar.
@@ -231,10 +290,11 @@ class PathManager:
         Returns:
             Full path: clean_transcripts/{podcast_slug}/{base}.json
         """
+        _validate_slug(podcast_slug, name="podcast_slug")
         base = episode_filename
         if base.endswith(".md"):
             base = base[:-3]
-        return self.clean_transcripts_dir() / podcast_slug / f"{base}.json"
+        return self._assert_inside_root(self.clean_transcripts_dir() / podcast_slug / f"{base}.json")
 
     def clean_transcript_shadow_file(
         self,
@@ -269,10 +329,13 @@ class PathManager:
         """
         if pipeline not in ("legacy", "segmented"):
             raise ValueError(f"pipeline must be 'legacy' or 'segmented', got {pipeline!r}")
+        _validate_slug(podcast_slug, name="podcast_slug")
         base = episode_filename
         if base.endswith(".md"):
             base = base[:-3]
-        return self.clean_transcripts_dir() / podcast_slug / "debug" / f"{base}.shadow_{pipeline}.md"
+        return self._assert_inside_root(
+            self.clean_transcripts_dir() / podcast_slug / "debug" / f"{base}.shadow_{pipeline}.md"
+        )
 
     def summary_file(self, filename: str) -> Path:
         """
@@ -312,7 +375,9 @@ class PathManager:
         Returns:
             Full path: external_transcripts/{podcast_slug}/{episode_slug}.{extension}
         """
-        return self.external_transcripts_dir() / podcast_slug / f"{episode_slug}.{extension}"
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_slug(episode_slug, name="episode_slug")
+        return self._assert_inside_root(self.external_transcripts_dir() / podcast_slug / f"{episode_slug}.{extension}")
 
     def external_transcript_dir_for_podcast(self, podcast_slug: str) -> Path:
         """
@@ -324,7 +389,8 @@ class PathManager:
         Returns:
             Full path: external_transcripts/{podcast_slug}/
         """
-        return self.external_transcripts_dir() / podcast_slug
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.external_transcripts_dir() / podcast_slug)
 
     def evaluation_file(self, filename: str) -> Path:
         """
@@ -351,7 +417,8 @@ class PathManager:
         Returns:
             Full path: evaluations/raw/{podcast_slug}/{episode_filename}
         """
-        return self.evaluations_dir() / "raw" / podcast_slug / episode_filename
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.evaluations_dir() / "raw" / podcast_slug / episode_filename)
 
     def clean_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
         """
@@ -366,7 +433,8 @@ class PathManager:
         Returns:
             Full path: evaluations/clean/{podcast_slug}/{episode_filename}
         """
-        return self.evaluations_dir() / "clean" / podcast_slug / episode_filename
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.evaluations_dir() / "clean" / podcast_slug / episode_filename)
 
     def podcast_facts_file(self, podcast_slug: str) -> Path:
         """
@@ -378,7 +446,8 @@ class PathManager:
         Returns:
             Full path to the facts file in podcast_facts directory
         """
-        return self.podcast_facts_dir() / f"{podcast_slug}.facts.md"
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.podcast_facts_dir() / f"{podcast_slug}.facts.md")
 
     def episode_facts_file(self, podcast_slug: str, episode_slug: str) -> Path:
         """
@@ -393,7 +462,9 @@ class PathManager:
         Returns:
             Full path to the facts file: episode_facts/{podcast_slug}/{episode_slug}.facts.md
         """
-        return self.episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md"
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_slug(episode_slug, name="episode_slug")
+        return self._assert_inside_root(self.episode_facts_dir() / podcast_slug / f"{episode_slug}.facts.md")
 
     def debug_feed_file(self, podcast_slug: str) -> Path:
         """
@@ -408,7 +479,8 @@ class PathManager:
         Returns:
             Full path to the RSS file in debug_feeds directory
         """
-        return self.debug_feeds_dir() / f"{podcast_slug}.xml"
+        _validate_slug(podcast_slug, name="podcast_slug")
+        return self._assert_inside_root(self.debug_feeds_dir() / f"{podcast_slug}.xml")
 
     def pending_operation_file(self, operation_id: str) -> Path:
         """
@@ -441,7 +513,9 @@ class PathManager:
         Returns:
             Full path to the chunks directory for this episode
         """
-        return self.raw_transcripts_dir() / podcast_slug / "chunks" / episode_slug
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_slug(episode_slug, name="episode_slug")
+        return self._assert_inside_root(self.raw_transcripts_dir() / podcast_slug / "chunks" / episode_slug)
 
     def feeds_file(self) -> Path:
         """

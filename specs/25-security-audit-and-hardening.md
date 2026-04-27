@@ -1,8 +1,8 @@
 # Security Audit and Hardening
 
-**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27)
+**Status**: 🚧 Active development (Phases 1, 2 shipped; Phase 3 safe batch shipped 2026-04-23; Pack A — items 4.1, 4.3, 4.4, 5.2 — shipped 2026-04-27; Pack C — items 3.2, 3.3 — shipped 2026-04-27)
 **Created**: 2026-04-23
-**Updated**: 2026-04-27 (Pack A: 4.1 JWT enforcement, 4.3 URL regex centralisation + ReDoS tests, 4.4 webhook chmod 0600, 5.2 gitleaks pre-commit + CI)
+**Updated**: 2026-04-27 (Pack C: 3.2 sanitiseUntrustedHtml + XSS regression suite, 3.3 path_manager slug regex + resolve guard)
 **Priority**: High (Critical/High findings must land before any public/multi-user deployment; Medium/Low can follow)
 
 ## Overview
@@ -158,16 +158,38 @@ phase, items can land in any order.
   is emitted in production only, so local http dev doesn't get pinned
   to a TLS cert the box doesn't have.
   Regression tests: [test_security_headers.py](../tests/unit/security/test_security_headers.py).
-- [ ] **3.2 Markdown/transcript XSS in frontend.** (Deferred — needs live
-  React audit against the Vite dev server.)
-  Audit [web/frontend/](../thestill/web/frontend/) renderers. Ensure no
-  `dangerouslySetInnerHTML` without DOMPurify with a conservative
-  allowlist (no `<script>`, no `on*` handlers, no `javascript:` URIs).
-  Test with a transcript containing `<img src=x onerror=alert(1)>`.
-- [ ] **3.3 Path-traversal regression surface.**
-  [path_manager.py:143,155](../thestill/utils/path_manager.py#L143). At
-  every path build from a DB slug, assert `^[a-z0-9][a-z0-9-]*$` AND
-  `path.resolve().is_relative_to(data_root)`. Fail loud.
+- [x] **3.2 Markdown/transcript XSS in frontend.** ✅ Shipped (Pack C).
+  Audit found a single ``dangerouslySetInnerHTML`` site
+  ([ExpandableDescription.tsx](../thestill/web/frontend/src/components/ExpandableDescription.tsx))
+  and four ``ReactMarkdown`` sites — none of which use ``rehype-raw``,
+  so React Markdown's default HTML escaping holds. Hardening:
+  centralised the existing DOMPurify call in
+  [utils/sanitize.ts](../thestill/web/frontend/src/utils/sanitize.ts)
+  (``sanitizeUntrustedHtml``) so future callers can't forget. The
+  helper installs an ``afterSanitizeAttributes`` hook that forces
+  ``target="_blank" rel="noopener noreferrer"`` on every surviving
+  ``<a>``, blocking ``window.opener`` nudges even when the URL itself
+  passes filtering. Strict allowlist ([p, br, strong, b, em, i, a, ul,
+  ol, li]; href/target/rel only).
+  Regression tests:
+  [sanitize.test.ts](../thestill/web/frontend/src/utils/sanitize.test.ts)
+  — 14 cases covering ``<script>``, ``<img onerror>`` (the spec's
+  payload), ``<iframe>``, ``javascript:`` and ``data:`` URIs, ``style``
+  attribute, ``<svg>/foreignObject``, plus the anchor hardening hooks.
+- [x] **3.3 Path-traversal regression surface.** ✅ Shipped (Pack C).
+  [path_manager.py](../thestill/utils/path_manager.py) gains
+  ``_validate_slug`` (matches ``^[a-z0-9][a-z0-9-]{0,99}$``) and
+  ``_assert_inside_root`` (resolves the final path, asserts
+  ``is_relative_to(storage_path.resolve())``). Both are wired into every
+  method that accepts a ``podcast_slug``, ``episode_slug``, or builds
+  through them: facts files, transcript files, evaluation files,
+  external transcripts, debug feeds, chunks. The two checks are
+  belt-and-braces: regex catches obvious ``../`` at input time; resolve
+  catches URL-encoded variants, NFC/NFD Unicode tricks, and symlinks.
+  Regression tests in
+  [test_path_manager.py](../tests/unit/services/test_path_manager.py)
+  — 23 new cases covering 12 malformed slugs (``../etc``, ``foo/bar``,
+  ``foo\x00null``, etc.), 7 valid slugs, and the resolve-guard.
 - [x] **3.4 Feed URL scheme validation.** ✅ Shipped (safe batch).
   [feed_manager.py](../thestill/core/feed_manager.py) `add_podcast`
   parses with `urllib.parse` and refuses anything outside `{http, https}`
@@ -287,8 +309,8 @@ item also marks the finding resolved.
 | 11 | High     | Unbounded audio download + no integrity check | audio_downloader.py:166-176 | 2.7 | ✅ |
 | 12 | High     | `/docs`, `/redoc` exposed on prod | app.py:247-248 | 2.8 | ✅ |
 | 13 | Medium   | No security headers (CSP/HSTS/XFO/XCTO) | app.py middleware | 3.1 | ✅ |
-| 14 | Medium   | Transcript/Markdown XSS in frontend | web/frontend/* | 3.2 | ☐ |
-| 15 | Medium   | Path traversal via slug regression | path_manager.py:143,155 | 3.3 | ☐ |
+| 14 | Medium   | Transcript/Markdown XSS in frontend | web/frontend/* | 3.2 | ✅ |
+| 15 | Medium   | Path traversal via slug regression | path_manager.py:143,155 | 3.3 | ✅ |
 | 16 | Medium   | Non-http feed URL schemes accepted | feed_manager.py:152 | 3.4 | ✅ |
 | 17 | Medium   | Secrets in error paths / logs | auth_service.py:201; auth.py:200; logging_middleware.py:76 | 3.5 | ✅ |
 | 18 | Medium   | SQLite queue race / duplicate processing | queue_manager.py, task_manager.py | 3.6 | ☐ |

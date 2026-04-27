@@ -488,3 +488,83 @@ class TestRequireFileExists:
             # Should raise for non-existent directory
             with pytest.raises(FileNotFoundError, match="Directory not found"):
                 pm.require_file_exists(audio_dir, "Directory not found")
+
+
+# Spec #25 item 3.3: every method that takes a slug-shaped input must
+# validate it (regex) AND assert the resolved path stays inside the
+# storage root.
+
+
+class TestSlugValidation:
+    """Regex rejects malformed slug inputs at the boundary."""
+
+    @pytest.fixture
+    def pm(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield PathManager(storage_path=tmpdir)
+
+    @pytest.mark.parametrize(
+        "bad_slug",
+        [
+            "",
+            "../etc",
+            "../../etc/passwd",
+            "foo/bar",
+            "foo\\bar",
+            "Foo",  # uppercase forbidden
+            "foo bar",  # space forbidden
+            "-leading-hyphen",  # leading hyphen forbidden
+            "foo.txt",  # dot forbidden
+            "foo\x00null",  # null byte
+            "foo\nnewline",
+            "a" * 101,  # over 100 chars
+        ],
+    )
+    def test_rejects_malformed_slugs(self, pm, bad_slug):
+        with pytest.raises(ValueError, match="invalid podcast_slug"):
+            pm.podcast_facts_file(bad_slug)
+
+    @pytest.mark.parametrize(
+        "good_slug",
+        [
+            "a",
+            "abc",
+            "the-daily",
+            "a-b-c",
+            "podcast-123",
+            "1-cool-show",
+            "x" * 100,  # exactly the upper bound
+        ],
+    )
+    def test_accepts_valid_slugs(self, pm, good_slug):
+        path = pm.podcast_facts_file(good_slug)
+        assert good_slug in str(path)
+
+    def test_validates_episode_slug_too(self, pm):
+        with pytest.raises(ValueError, match="invalid episode_slug"):
+            pm.episode_facts_file("good-podcast", "../bad-episode")
+
+
+class TestResolveGuard:
+    """Even past the regex, the resolve check refuses paths escaping root."""
+
+    def test_traversal_slug_refused(self, tmp_path):
+        root = tmp_path / "data"
+        root.mkdir()
+        pm = PathManager(storage_path=str(root))
+        with pytest.raises(ValueError):
+            pm.podcast_facts_file("../escape")
+
+    def test_returned_path_resolves_under_storage_root(self, tmp_path):
+        root = tmp_path / "data"
+        root.mkdir()
+        pm = PathManager(storage_path=str(root))
+        path = pm.episode_facts_file("podcast-x", "episode-y")
+        assert path.resolve().is_relative_to(root.resolve())
+
+    def test_external_transcript_file_validates_both_slugs(self, tmp_path):
+        pm = PathManager(storage_path=str(tmp_path))
+        with pytest.raises(ValueError, match="invalid podcast_slug"):
+            pm.external_transcript_file("../bad", "ok-episode", "srt")
+        with pytest.raises(ValueError, match="invalid episode_slug"):
+            pm.external_transcript_file("ok-podcast", "../bad", "srt")
