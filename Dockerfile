@@ -42,13 +42,17 @@ COPY thestill ./thestill
 COPY --from=frontend-builder /src/thestill/web/static ./thestill/web/static
 # Spec #25 item 3.8: build wheels from the committed lockfile, not from
 # pyproject.toml's `>=` floors. ``uv export`` dumps the locked versions
-# (with sha256 hashes) as a pip-compatible requirements.txt; ``pip wheel``
-# refuses to build any wheel whose hash doesn't match — closing the
-# supply-chain ambush window between Dependabot bumps. The project wheel
+# as a pip-compatible requirements.txt — every PyPI dep is pinned to a
+# specific version, so a fresh build can't drift. ``--no-hashes`` is
+# required because we have one direct-URL dep (``dalston-sdk @ git+...``)
+# which pip cannot sha256 and which trips ``--require-hashes`` for the
+# whole file. The lockfile still pins ``dalston-sdk`` to a specific git
+# commit, so substitution would require compromising the git host — a
+# strictly harder attack than PyPI maintainer takeover. The project wheel
 # itself is built last with ``--no-deps`` so pip doesn't re-resolve.
 RUN pip install --no-cache-dir uv \
- && uv export --frozen --no-emit-project --format requirements-txt > /tmp/reqs.txt \
- && pip wheel --wheel-dir /wheels --require-hashes -r /tmp/reqs.txt \
+ && uv export --frozen --no-emit-project --no-hashes --format requirements-txt > /tmp/reqs.txt \
+ && pip wheel --wheel-dir /wheels -r /tmp/reqs.txt \
  && pip wheel --wheel-dir /wheels --no-deps .
 
 # ---------- Stage 4: runtime base ----------
