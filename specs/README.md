@@ -45,9 +45,7 @@ describing current phase and gates.
 | 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 🚧 Active development | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 | 22 | [floating-media-player](22-floating-media-player.md) | 🚧 Active development | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
 | 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
-| 25 | [security-audit-and-hardening](25-security-audit-and-hardening.md) | 📋 Planned (2026-04-23) | Close 27 findings from the first-pass security audit across XXE, SSRF, webhook auth, JWT, CORS, subprocess, resource limits, and supply chain |
 | 26 | [pre-deploy-security-checklist](26-pre-deploy-security-checklist.md) | 📋 Planned (2026-04-23) | LLM-runnable + runtime smoke-test checklist that must return GO before any deploy; regression harness for spec #25 |
-| 27 | [add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) | 📝 Draft | Search-or-paste Add Podcast modal that filters regional top-500 live; preconditions a future free-tier gate without forcing it |
 
 ## Completed
 
@@ -56,6 +54,8 @@ Shipped work. Kept for historical context and rollback reference.
 | ID | Spec | Completed | Summary |
 |---:|---|---|---|
 | 13 | [multi-user-shared-podcasts](13-multi-user-shared-podcasts.md) | 2026-01-21 | Phase 1 (follow/unfollow) shipped: shared processing across users |
+| 25 | [security-audit-and-hardening](25-security-audit-and-hardening.md) | 2026-04-27 | All 27 findings closed across phases 1–5 (XXE, SSRF, webhook auth, JWT, CORS, supply chain, race conditions, etc.) |
+| 27 | [add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) | 2026-04-27 | Search-or-paste Add Podcast modal filtering regional top-500 live; data path pre-shapes a future free-tier gate |
 | 14 | [dry-refactoring-plan](14-dry-refactoring-plan.md) | 2026-01-13 | Eliminated ~210 lines of duplication across 6 refactoring phases |
 | 15 | [mistral-llm-provider](15-mistral-llm-provider.md) | 2026-01-12 | Added Mistral AI as fifth LLM provider with full feature parity |
 | 16 | [full-pipeline-and-failure-handling](16-full-pipeline-and-failure-handling.md) | 2026-01-07 | Full-pipeline execution + transient/fatal error split + DLQ |

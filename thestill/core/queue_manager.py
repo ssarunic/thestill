@@ -204,10 +204,24 @@ class QueueManager:
 
     @contextmanager
     def _get_connection(self):
-        """Get database connection with proper setup."""
+        """Get database connection with proper setup.
+
+        Spec #25 item 3.6 — concurrency hardening for the task queue:
+        - ``journal_mode=WAL`` lets readers and one writer proceed
+          concurrently instead of stalling everyone behind a single
+          rollback-journal write lock. WAL is set per-DB persistently
+          on first use.
+        - ``busy_timeout=5000`` (ms) makes a contended ``BEGIN IMMEDIATE``
+          wait up to 5s for the other writer to commit, instead of
+          immediately failing with ``database is locked``. With multiple
+          workers competing for the next task this is the difference
+          between "graceful serialisation" and "spurious crashes".
+        """
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
 
         try:
             yield conn
@@ -441,15 +455,30 @@ class QueueManager:
 
                 task_id = row["id"]
 
-                # Atomically mark as processing
-                conn.execute(
+                # Spec #25 item 3.6 — defence-in-depth conditional UPDATE.
+                # ``BEGIN IMMEDIATE`` already serialises writers, but the
+                # ``status IN (...)`` predicate makes a double-claim
+                # structurally impossible: any second writer that somehow
+                # got past the SELECT (e.g. WAL read snapshots predating
+                # the first writer's commit) sees ``rowcount == 0`` and
+                # rolls back instead of stomping on the in-flight task.
+                cursor = conn.execute(
                     """
                     UPDATE tasks
                     SET status = 'processing', started_at = ?, updated_at = ?
                     WHERE id = ?
-                """,
+                      AND status IN ('pending', 'retry_scheduled')
+                    """,
                     (now, now, task_id),
                 )
+
+                if cursor.rowcount == 0:
+                    # Another worker raced ahead and claimed the same row
+                    # between our SELECT and UPDATE. Drop our intended
+                    # claim and let the caller poll again.
+                    conn.rollback()
+                    logger.debug("task_claim_lost_race", task_id=task_id)
+                    return None
 
                 conn.commit()
 
