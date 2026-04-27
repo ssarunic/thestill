@@ -1,0 +1,26 @@
+{
+  "source": "https://podcasters.apple.com/support/1691-apple-podcasts-categories",
+  "fetched_on": "2026-04-25",
+  "note": "Apple Podcasts official category taxonomy. genre_id values match Apple's iTunes podcast genre IDs and can be used with https://itunes.apple.com/us/rss/toppodcasts/limit=200/genre={genre_id}/json.",
+  "categories": [
+    {"name": "Arts", "genre_id": 1301, "subcategories": ["Books", "Design", "Fashion & Beauty", "Food", "Performing Arts", "Visual Arts"]},
+    {"name": "Business", "genre_id": 1321, "subcategories": ["Careers", "Entrepreneurship", "Investing", "Management", "Marketing", "Non-Profit"]},
+    {"name": "Comedy", "genre_id": 1303, "subcategories": ["Comedy Interviews", "Improv", "Stand-Up"]},
+    {"name": "Education", "genre_id": 1304, "subcategories": ["Courses", "How To", "Language Learning", "Self-Improvement"]},
+    {"name": "Fiction", "genre_id": 1483, "subcategories": ["Comedy Fiction", "Drama", "Science Fiction"]},
+    {"name": "Government", "genre_id": 1511, "subcategories": []},
+    {"name": "History", "genre_id": 1487, "subcategories": []},
+    {"name": "Health & Fitness", "genre_id": 1512, "subcategories": ["Alternative Health", "Fitness", "Medicine", "Mental Health", "Nutrition", "Sexuality"]},
+    {"name": "Kids & Family", "genre_id": 1305, "subcategories": ["Education for Kids", "Parenting", "Pets & Animals", "Stories for Kids"]},
+    {"name": "Leisure", "genre_id": 1502, "subcategories": ["Animation & Manga", "Automotive", "Aviation", "Crafts", "Games", "Hobbies", "Home & Garden", "Video Games"]},
+    {"name": "Music", "genre_id": 1310, "subcategories": ["Music Commentary", "Music History", "Music Interviews"]},
+    {"name": "News", "genre_id": 1489, "subcategories": ["Business News", "Daily News", "Entertainment News", "News Commentary", "Politics", "Sports News", "Tech News"]},
+    {"name": "Religion & Spirituality", "genre_id": 1314, "subcategories": ["Buddhism", "Christianity", "Hinduism", "Islam", "Judaism", "Religion", "Spirituality"]},
+    {"name": "Science", "genre_id": 1533, "subcategories": ["Astronomy", "Chemistry", "Earth Sciences", "Life Sciences", "Mathematics", "Natural Sciences", "Nature", "Physics", "Social Sciences"]},
+    {"name": "Society & Culture", "genre_id": 1324, "subcategories": ["Documentary", "Personal Journals", "Philosophy", "Places & Travel", "Relationships"]},
+    {"name": "Sports", "genre_id": 1545, "subcategories": ["Baseball", "Basketball", "Cricket", "Fantasy Sports", "American Football", "Golf", "Hockey", "Rugby", "Running", "Football (Soccer)", "Swimming", "Tennis", "Volleyball", "Wilderness", "Wrestling"]},
+    {"name": "Technology", "genre_id": 1318, "subcategories": []},
+    {"name": "True Crime", "genre_id": 1488, "subcategories": []},
+    {"name": "TV & Film", "genre_id": 1309, "subcategories": ["After Shows", "Film History", "Film Interviews", "Film Reviews", "TV Reviews"]}
+  ]
+}

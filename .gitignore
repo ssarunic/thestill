@@ -172,7 +172,15 @@ Thumbs.db
 
 # Project specific
 credentials/
-data/
+# Top-level data tree is runtime/scraped artifacts — ignored except for the
+# Apple Podcasts category taxonomy, which is a checked-in code artifact (the
+# loader in thestill/utils/podcast_categories.py reads it at import time).
+# Re-include only works because we use `/data/*` (not bare `data/`), since
+# git can't re-include a file under an excluded directory.
+/data/*
+!/data/podcast_categories.json
+# Other nested `data/` dirs in the tree (e.g., frontend artifacts) stay ignored.
+thestill/web/frontend/data/
 *.mp3
 *.m4a
 *.wav
