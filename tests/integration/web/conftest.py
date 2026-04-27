@@ -113,13 +113,15 @@ def app_state(app_config: Config) -> AppState:
 def client(app_config: Config, app_state: AppState) -> Iterator[TestClient]:
     """FastAPI TestClient with ``app.state.app_state`` pre-stamped.
 
-    Constructed without ``with`` so the lifespan never runs. Routes that
-    require ``app_state`` (which is most of them) get it via ``request.app.state``.
+    Constructed without ``with`` so the lifespan never runs — startup
+    validates the configured transcription provider, which would require
+    optional ``torch``/``whisper`` deps that the slim CI image deliberately
+    omits. Routes that need ``app_state`` (which is most of them) get it
+    via ``request.app.state`` regardless of lifespan.
     """
     app = create_app(app_config)
     app.state.app_state = app_state
-    with TestClient(app) as test_client:
-        yield test_client
+    yield TestClient(app)
 
 
 def seed_top_chart(app_state: AppState, region: str, entries: list[dict]) -> None:
