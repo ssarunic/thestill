@@ -99,16 +99,20 @@ def is_entity_branch_stage(stage: TaskStage) -> bool:
     return stage in _NON_USER_FAILING_STAGES
 
 
-# Spec #28 §0.5 — dependency graph replacing the linear chain. ``CLEAN``
-# fans out to two independent successors; everything else is linear (or
-# terminal). Each branch progresses on its own and a failure in one does
-# not block the other (see ``_NON_USER_FAILING_STAGES``).
+# Spec #28 §0.5 — fully linear chain. The entity branch was originally
+# designed to fan out from CLEAN in parallel with SUMMARIZE, but the
+# worker's per-episode mutex serialised them anyway and the spec design
+# evolved to want SUMMARIZE durable on disk before entity extraction
+# runs (so a future GLiNER variant can feed off summary text). Keeping
+# the chain literally linear makes the dependency explicit, leaves the
+# failure-isolation rule for entity stages unchanged, and matches what
+# users see in the queue viewer (one stage at a time per episode).
 STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.DOWNLOAD: [TaskStage.DOWNSAMPLE],
     TaskStage.DOWNSAMPLE: [TaskStage.TRANSCRIBE],
     TaskStage.TRANSCRIBE: [TaskStage.CLEAN],
-    TaskStage.CLEAN: [TaskStage.SUMMARIZE, TaskStage.EXTRACT_ENTITIES],
-    TaskStage.SUMMARIZE: [],
+    TaskStage.CLEAN: [TaskStage.SUMMARIZE],
+    TaskStage.SUMMARIZE: [TaskStage.EXTRACT_ENTITIES],
     TaskStage.EXTRACT_ENTITIES: [TaskStage.RESOLVE_ENTITIES],
     TaskStage.RESOLVE_ENTITIES: [TaskStage.WRITE_CORPUS],
     TaskStage.WRITE_CORPUS: [TaskStage.REINDEX],
@@ -119,11 +123,9 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
 def get_next_stages(current_stage: TaskStage) -> List[TaskStage]:
     """Return the stages that should be enqueued after ``current_stage``.
 
-    Replaces the original linear ``get_next_stage(stage) -> Optional[TaskStage]``
-    (spec #28 §0.5) so a single completion can fan out to multiple
-    successors — specifically, ``CLEAN`` enqueues both ``SUMMARIZE``
-    (existing path) and ``EXTRACT_ENTITIES`` (entity branch). Empty list
-    means the chain terminates here.
+    A list (not an Optional) so the same primitive could later support
+    fan-out if the design ever needs it; today every entry is at most
+    one successor. Empty list means the chain terminates.
     """
     return list(STAGE_SUCCESSORS.get(current_stage, []))
 

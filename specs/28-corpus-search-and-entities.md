@@ -506,28 +506,36 @@ qmd indexes them and so power users can `obsidian://open` them.
 
 ### Pipeline integration
 
-The new work runs as an **asynchronous branch** off `clean-transcript`,
-not as a blocking link in the existing chain. `summarize` — the existing
-shipping product — must not wait on a GLiNER bug or a qmd outage.
+The new work extends the existing chain linearly — entity stages run
+**after** `summarize` completes, never in parallel:
 
 ```
-download → downsample → transcribe → clean-transcript ┬─→ summarize          (existing critical path)
-                                                       │
-                                                       └─→ extract-entities → resolve-entities → write-corpus → reindex
-                                                          (entity branch, independent failure domain)
+download → downsample → transcribe → clean-transcript → summarize → extract-entities → resolve-entities → write-corpus → reindex
+                                                                    └────────── entity continuation, independent failure domain ──────────┘
 ```
 
-When `clean-transcript` completes, the dispatcher enqueues **both**
-`summarize` and `extract-entities` for the episode. They progress in
-parallel under the existing per-stage worker pools (spec
-[#20](20-parallel-task-queues.md)). A failure in the entity branch flags
-`episodes.entity_extraction_status = 'failed'` and routes to the DLQ
-without affecting the summary product. A failure in `summarize` does not
-block the entity branch either.
+The original draft of this spec called for a fan-out at `clean-transcript`
+running summarize and extract-entities in parallel. We dropped that:
 
-Re-running entity extraction on already-summarised episodes is supported
-and idempotent; the two branches share `clean-transcript` as their only
-upstream dependency.
+1. The worker's per-episode mutex serialises same-episode work across
+   stages anyway, so the "parallel branches" never actually ran in
+   parallel.
+2. A future GLiNER variant may consume summary text. Letting summary
+   land on disk before extraction starts removes a coordination
+   problem we'd otherwise have to solve.
+3. Linear is what users see in the queue viewer — explicit ordering
+   beats serendipitous ordering.
+
+A failure in any entity stage flags `episodes.entity_extraction_status
+= 'failed'` and routes the task to the DLQ **without** marking the
+episode as failed in the user-facing sense (`failed_at_stage` stays
+unset). A failure in `summarize` stops the chain before entity work
+starts — which is the right behaviour, since there's no summary to
+feed downstream.
+
+Re-running entity extraction on already-summarised episodes is
+supported and idempotent: `thestill rebuild-entities` walks the
+existing summaries and re-runs the entity continuation for each.
 
 - **`extract-entities`**: runs GLiNER over each cleaned transcript segment,
   produces `entity_mentions` rows with `entity_id = NULL`,
@@ -571,14 +579,13 @@ ALTER TABLE tasks DROP CONSTRAINT tasks_stage_check;  -- (handled via SQLite tab
 -- New CHECK includes: extract-entities, resolve-entities, write-corpus, reindex
 ```
 
-The dispatcher's "what runs next" logic moves from a single linear
-`get_next_stage(current)` to a small **dependency graph** — same primitive
-as today's chain, just expressed as `prerequisites_complete(stage,
-episode_id)`. After `clean`, the dispatcher fans out to both `summarize`
-and `extract-entities` (independent branches). Within the entity branch,
-ordering is linear: `extract-entities → resolve-entities → write-corpus
-→ reindex`. The `summarize` branch keeps its existing single-stage
-shape.
+The dispatcher's "what runs next" logic moves from a single
+`get_next_stage(current) -> Optional[TaskStage]` to a `STAGE_SUCCESSORS`
+map plus `get_next_stages(current) -> List[TaskStage]`. The list shape
+is forward-compatible with future fan-out, but every entry today is at
+most one successor — the chain is fully linear:
+`download → downsample → transcribe → clean → summarize →
+extract-entities → resolve-entities → write-corpus → reindex`.
 
 Each new stage gets a handler in the queue dispatcher and a row in the
 processing-status grid in the web UI (spec [#09](09-single-user-web-ui.md))
@@ -721,11 +728,11 @@ small, all upfront.
   new `entity_extraction_status` column on `episodes` (with
   `skipped_legacy` allowed).
 - **0.5 — Queue migration.** Rebuild `tasks` table with extended `stage`
-  CHECK. Replace linear `get_next_stage()` with
-  `prerequisites_complete(stage, episode_id)` so `clean=complete` can
-  fan out to **both** `summarize` and `extract-entities`. Register
-  placeholder handlers; failures isolated to the entity branch
-  (Strategy §6).
+  CHECK. Replace linear `get_next_stage()` with `STAGE_SUCCESSORS` +
+  `get_next_stages()` (returns a list, forward-compatible with future
+  fan-out though every entry is one-successor today). Linear chain:
+  `summarize → extract-entities → … → reindex`. Register placeholder
+  handlers; failures isolated to the entity continuation (Strategy §6).
 - **0.6** Add `data/corpus/` directory with `.gitkeep`s; document layout
   in [01-architecture.md](01-architecture.md).
 - **0.7** Define `EntityRecord`, `EntityMention`, `CitationRow`,
@@ -921,9 +928,9 @@ end-to-end.
 
 | Test | Scope |
 |---|---|
-| `test_pipeline_extract_to_index.py` | Take a fixture cleaned transcript, run `clean → extract-entities → resolve-entities → write-corpus → reindex` end-to-end through the queue dispatcher (not by calling handlers directly). Assert `entity_mentions` rows exist with `resolution_status='resolved'`, the rendered Markdown + sidecar are present, and `qmd query` over HTTP returns the new content. |
-| `test_queue_branch_fanout.py` | An episode reaching `clean=complete` enqueues **both** `summarize` and `extract-entities` (parallel branches). A forced failure in `extract-entities` does **not** mark `summarize` as failed and vice versa. `episodes.entity_extraction_status` reflects the entity-branch state independently of the summary stage. |
-| `test_queue_stage_progression.py` | Within the entity branch, completion of `extract-entities` advances to `resolve-entities`, then `write-corpus`, `reindex`. Failure in any entity-branch stage routes to DLQ with a typed reason and does not contaminate the summarize branch. Stage labels appear in `/api/tasks` payloads. |
+| `test_pipeline_extract_to_index.py` | Take a fixture cleaned transcript, run `clean → summarize → extract-entities → resolve-entities → write-corpus → reindex` end-to-end through the queue dispatcher (not by calling handlers directly). Assert `entity_mentions` rows exist with `resolution_status='resolved'`, the rendered Markdown + sidecar are present, and `qmd query` over HTTP returns the new content. |
+| `test_queue_linear_chain.py` | An episode reaching `summarize=complete` enqueues `extract-entities` next (linear chain, never parallel). A forced failure in `extract-entities` does NOT touch `failed_at_stage` — only `entity_extraction_status` flips to `'failed'`. The episode card stays green. |
+| `test_queue_stage_progression.py` | Each entity stage advances to the next in order: `summarize` → `extract-entities` → `resolve-entities` → `write-corpus` → `reindex`. Failure in any entity stage routes to DLQ with a typed reason and does not flip the user-facing episode state. Stage labels appear in `/api/tasks` payloads. |
 | `test_legacy_episode_skipped.py` | Episode with `clean_transcript_json_path = NULL` reaches `extract-entities`; handler emits zero mentions and sets `entity_extraction_status = 'skipped_legacy'`. Subsequent stages (`resolve-entities`, `write-corpus`, `reindex`) are no-ops for that episode. |
 | `test_search_service_hybrid.py` | Spin up qmd against a 10-episode fixture corpus, run `search_corpus` in lexical/semantic/hybrid modes, assert each returns sensible top-3 with playable timestamps. |
 | `test_qmd_hit_to_segment.py` | Given a fixed `<id>.md` + `<id>.segmap.json` and a qmd hit at byte offset X, `qmd_client` resolves to the correct `segment_id`/`start_ms`/`end_ms`. Hit at offset 0 (frontmatter) → dropped. |
