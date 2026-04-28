@@ -11,9 +11,9 @@ Tests:
 
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
+from typing import List
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,12 +28,25 @@ from thestill.utils.exceptions import FatalError
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "entity_extractor" / "sample_episode_okrs.json"
 
 
-class _StubGLiNER:
-    def predict_entities(self, text, labels, threshold=0.5):
+class StubGLiNER:
+    """Local copy of the stub used in ``test_entity_extractor.py``.
+
+    Pytest's ``conftest.py`` doesn't share importable classes (only
+    fixtures), and this project doesn't use ``__init__.py`` in the
+    tests tree, so the alternative is restructuring or duplication.
+    Duplication wins.
+    """
+
+    def predict_entities(self, text: str, labels: List[str], threshold: float = 0.5):
         if "OKR" in text:
             idx = text.find("OKR")
             return [{"text": "OKR", "label": "topic", "start": idx, "end": idx + 3, "score": 0.9}]
         return []
+
+    def inference(self, texts, labels: List[str], threshold: float = 0.5, **_):
+        if isinstance(texts, str):
+            return self.predict_entities(texts, labels, threshold)
+        return [self.predict_entities(t, labels, threshold) for t in texts]
 
 
 def _build_state(tmp_path, episode, podcast, sidecar_relpath: str | None):
@@ -45,12 +58,16 @@ def _build_state(tmp_path, episode, podcast, sidecar_relpath: str | None):
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(FIXTURE.read_text(), encoding="utf-8")
 
-    state.path_manager.clean_transcripts_dir.return_value = tmp_path
-    state.repository.get_episode.return_value = (podcast, episode)
+    # The handler resolves the sidecar via
+    # ``path_manager.clean_transcript_file(rel_path)``, which on the
+    # real PathManager joins under ``clean_transcripts_dir``. Mock it
+    # to return the matching tmp_path-relative file.
+    def _clean_transcript_file(rel: str):
+        return tmp_path / rel
 
-    extractor = EntityExtractor()
-    extractor._model = _StubGLiNER()
-    state.entity_extractor = extractor
+    state.path_manager.clean_transcript_file.side_effect = _clean_transcript_file
+    state.repository.get_episode.return_value = (podcast, episode)
+    state.entity_extractor = EntityExtractor(preloaded_model=StubGLiNER())
     return state
 
 

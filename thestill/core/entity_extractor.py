@@ -172,11 +172,16 @@ class EntityExtractor:
         model: str = DEFAULT_GLINER_MODEL,
         labels_to_types: Optional[dict] = None,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+        preloaded_model: Optional["GLiNER"] = None,
     ):
+        """``preloaded_model`` is a test seam — pass a stub or a
+        pre-warmed real model and ``_load_model`` becomes a no-op.
+        Production callers don't pass it.
+        """
         self.model_name = model
         self.labels_to_types = dict(labels_to_types or DEFAULT_LABELS_TO_TYPES)
         self.confidence_threshold = confidence_threshold
-        self._model: Optional["GLiNER"] = None
+        self._model: Optional["GLiNER"] = preloaded_model
 
     # ------------------------------------------------------------------
     # Public API
@@ -225,22 +230,57 @@ class EntityExtractor:
 
     def _collect_predictions(self, segments: Iterable[AnnotatedSegment]) -> List[_SegmentPrediction]:
         labels = list(self.labels_to_types.keys())
+        # Spec §"Strategy" — only ``content`` carries narrative
+        # entities. Skipping ad_break/intro/outro/filler/music avoids
+        # polluting the index with sponsor and music-cue noise the
+        # spec explicitly excludes.
+        targets = [s for s in segments if s.kind == "content" and s.text.strip()]
+        if not targets:
+            return []
+
+        # GLiNER's ``inference`` runs a single padded forward pass
+        # over multiple texts (replacing the deprecated
+        # ``batch_predict_entities``) — ~2x faster on CPU than one
+        # call per segment for typical episode sizes (50-150 content
+        # segments). Falls back to per-segment on environments where
+        # the batch API misbehaves (e.g. flashdeberta + GLiNER
+        # incompatibility, see GLiNER#263).
+        try:
+            batch_results = self._model.inference(
+                [s.text for s in targets],
+                labels,
+                threshold=self.confidence_threshold,
+            )
+        except Exception:
+            logger.exception("gliner_batch_inference_failed_falling_back")
+            return self._collect_predictions_per_segment(targets, labels)
+
         results: List[_SegmentPrediction] = []
-        for segment in segments:
-            # Spec §"Strategy" — only ``content`` carries narrative
-            # entities. Skipping ad_break/intro/outro/filler/music
-            # avoids polluting the index with sponsor and music-cue
-            # noise the spec explicitly excludes.
-            if segment.kind != "content":
-                continue
-            if not segment.text.strip():
-                continue
-            try:
-                raw = self._model.predict_entities(
-                    segment.text,
-                    labels,
-                    threshold=self.confidence_threshold,
+        for segment, hits in zip(targets, batch_results):
+            for hit in hits:
+                surface = hit["text"]
+                if surface.lower().strip() in _PRONOUN_STOPLIST:
+                    continue
+                results.append(
+                    _SegmentPrediction(
+                        segment=segment,
+                        surface_form=surface,
+                        label=hit["label"],
+                        confidence=float(hit["score"]),
+                        char_start=int(hit["start"]),
+                        char_end=int(hit["end"]),
+                    )
                 )
+        return results
+
+    def _collect_predictions_per_segment(
+        self, targets: List[AnnotatedSegment], labels: List[str]
+    ) -> List[_SegmentPrediction]:
+        """Fallback path when the batch API errors. Same output shape."""
+        results: List[_SegmentPrediction] = []
+        for segment in targets:
+            try:
+                raw = self._model.predict_entities(segment.text, labels, threshold=self.confidence_threshold)
             except Exception:  # pragma: no cover — model-runtime
                 logger.exception(
                     "gliner_predict_failed",

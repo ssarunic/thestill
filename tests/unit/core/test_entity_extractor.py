@@ -14,8 +14,8 @@ These tests use a stub GLiNER instance to avoid loading the real
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import List, Tuple
 from unittest.mock import patch
 
 from thestill.core.entity_extractor import EntityExtractor, _excerpt_around
@@ -25,33 +25,39 @@ from thestill.models.entities import EntityMention, ResolutionStatus
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "entity_extractor" / "sample_episode_okrs.json"
 
 
-class _StubGLiNER:
-    """Minimal stand-in: emits a fake hit for each known surface form found."""
+class StubGLiNER:
+    """Minimal stand-in for ``gliner.GLiNER`` used across both
+    extractor and handler tests. Real GLiNER loads ~400MB of weights
+    we don't want in unit tests. The class is duplicated in
+    ``test_handle_extract_entities.py`` because pytest's
+    ``conftest.py`` doesn't share importable classes — sharing via a
+    ``_test_stubs.py`` module would require restructuring the test
+    layout (no ``__init__.py`` files today). Two ~20-line copies is a
+    smaller cost than that restructuring.
+    """
 
-    SURFACE_FORMS = (("OKR", "topic", 0.85), ("Melissa", "person", 0.92))
+    SURFACE_FORMS: Tuple[Tuple[str, str, float], ...] = (
+        ("OKR", "topic", 0.85),
+        ("Melissa", "person", 0.92),
+    )
 
-    def predict_entities(self, text, labels, threshold=0.5):
+    def predict_entities(self, text: str, labels: List[str], threshold: float = 0.5):
         results = []
         for surface, label, score in self.SURFACE_FORMS:
             idx = text.find(surface)
             if idx == -1:
                 continue
-            results.append(
-                {
-                    "text": surface,
-                    "label": label,
-                    "start": idx,
-                    "end": idx + len(surface),
-                    "score": score,
-                }
-            )
+            results.append({"text": surface, "label": label, "start": idx, "end": idx + len(surface), "score": score})
         return results
+
+    def inference(self, texts, labels: List[str], threshold: float = 0.5, **_):
+        if isinstance(texts, str):
+            return self.predict_entities(texts, labels, threshold)
+        return [self.predict_entities(t, labels, threshold) for t in texts]
 
 
 def _stub_extractor() -> EntityExtractor:
-    extractor = EntityExtractor()
-    extractor._model = _StubGLiNER()
-    return extractor
+    return EntityExtractor(preloaded_model=StubGLiNER())
 
 
 class TestExtractorContract:
@@ -151,29 +157,36 @@ class TestRealFixture:
             assert m.end_ms > m.start_ms
 
 
+class _PronounStub(StubGLiNER):
+    """Variant that emits only pronoun hits — tests the stoplist filter."""
+
+    SURFACE_FORMS = (
+        ("You", "person", 0.7),
+        ("I", "person", 0.6),
+        ("we", "person", 0.5),
+    )
+
+
 class TestStoplist:
     """Pronouns are filtered at extraction time so the resolution stage
     isn't drowned in 44x "you" rows that never resolve."""
 
     def test_pronouns_filtered(self):
-        text = "You said it, I agree, we all do."
         transcript = AnnotatedTranscript.model_validate(
             {
                 "episode_id": "ep-1",
-                "segments": [{"id": 0, "start": 0.0, "end": 5.0, "text": text, "kind": "content"}],
+                "segments": [
+                    {
+                        "id": 0,
+                        "start": 0.0,
+                        "end": 5.0,
+                        "text": "You said it, I agree, we all do.",
+                        "kind": "content",
+                    }
+                ],
             }
         )
-
-        class _PronounGLiNER:
-            def predict_entities(self, text, labels, threshold=0.5):
-                return [
-                    {"text": "You", "label": "person", "start": 0, "end": 3, "score": 0.7},
-                    {"text": "I", "label": "person", "start": 13, "end": 14, "score": 0.6},
-                    {"text": "we", "label": "person", "start": 24, "end": 26, "score": 0.5},
-                ]
-
-        extractor = EntityExtractor()
-        extractor._model = _PronounGLiNER()
+        extractor = EntityExtractor(preloaded_model=_PronounStub())
         assert extractor.extract(transcript, episode_id="ep-1") == []
 
 
@@ -194,14 +207,20 @@ class TestExcerpt:
 
 
 class TestLazyModelLoad:
-    def test_load_model_raises_helpful_error_when_gliner_missing(self):
+    def test_extract_raises_helpful_error_when_gliner_missing(self):
+        # The handler-level error path: an extractor without a
+        # preloaded model tries to import gliner; if the import fails
+        # we emit a typed RuntimeError pointing the user at the extra.
         extractor = EntityExtractor()
+        transcript = AnnotatedTranscript.model_validate({"episode_id": "ep-1", "segments": []})
         with patch.dict("sys.modules", {"gliner": None}):
             try:
-                extractor._load_model()
+                extractor.extract(transcript, episode_id="ep-1")
             except RuntimeError as exc:
                 assert "entities extra" in str(exc)
                 return
-        # If we got here without raising, gliner was actually installed
-        # and the test is moot — just pass.
-        assert extractor._model is not None or True
+        # gliner was actually installed in this env — the test cannot
+        # exercise the import-failure path. Skip rather than false-pass.
+        import pytest
+
+        pytest.skip("gliner is installed; cannot exercise the missing-import path")

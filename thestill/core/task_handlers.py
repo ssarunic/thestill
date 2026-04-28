@@ -27,6 +27,7 @@ Usage:
 """
 
 import json
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
@@ -618,6 +619,8 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
     ``episodes.entity_extraction_status='failed'`` rather than the
     user-visible ``failed_at_stage``.
     """
+    from ..models.entities import EntityExtractionStatus
+
     logger.info("entity_extraction_started", episode_id=task.episode_id)
 
     podcast, episode = _get_episode_or_fail(task, state)
@@ -629,7 +632,7 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         # never raise.
         state.repository.update_entity_extraction_status(
             episode_id=episode.id,
-            status="skipped_legacy",
+            status=EntityExtractionStatus.SKIPPED_LEGACY.value,
         )
         logger.info(
             "entity_extraction_skipped_legacy",
@@ -638,13 +641,13 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         )
         return
 
-    sidecar_path = state.path_manager.clean_transcripts_dir() / episode.clean_transcript_json_path
+    sidecar_path = state.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
     if not sidecar_path.exists():
-        raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar_path} " f"(episode {episode.id})")
+        raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar_path} (episode {episode.id})")
 
     state.repository.update_entity_extraction_status(
         episode_id=episode.id,
-        status="pending",
+        status=EntityExtractionStatus.PENDING.value,
     )
 
     with _handler_error_context(f"extracting entities for {episode.title}"):
@@ -655,17 +658,16 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         extractor = _get_or_create_entity_extractor(state)
         mentions = extractor.extract(transcript, episode_id=episode.id)
 
-        # Idempotent re-extract: wipe + write atomically. ``insert_mentions``
-        # uses its own transaction; ``delete_mentions_for_episode`` likewise.
-        # The brief gap between them is harmless because no consumer reads
-        # ``entity_mentions`` during ``extract-entities`` — resolution runs
-        # in the next stage.
+        # Idempotent re-extract: wipe + write. The brief gap between
+        # the two transactions is harmless because no consumer reads
+        # ``entity_mentions`` during ``extract-entities`` — resolution
+        # runs in the next stage.
         repo.delete_mentions_for_episode(episode.id)
         inserted = repo.insert_mentions(mentions)
 
         state.repository.update_entity_extraction_status(
             episode_id=episode.id,
-            status="complete",
+            status=EntityExtractionStatus.COMPLETE.value,
         )
         logger.info(
             "entity_extraction_completed",
@@ -675,18 +677,26 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         )
 
 
+_extractor_init_lock = threading.Lock()
+
+
 def _get_or_create_entity_extractor(state: "AppState"):
     """Lazy-init the process-scope ``EntityExtractor``.
 
     Loading GLiNER costs ~5-10s and ~400MB of RAM, so we defer until
     the first ``extract-entities`` call and cache the instance on
     ``AppState``. Subsequent tasks reuse the warm model.
-    """
-    if state.entity_extractor is not None:
-        return state.entity_extractor
-    from .entity_extractor import EntityExtractor
 
-    state.entity_extractor = EntityExtractor()
+    The lock prevents two concurrent ``extract-entities`` tasks (when
+    ``EXTRACT_ENTITIES_PARALLEL_JOBS > 1``) from both creating fresh
+    extractors and double-loading the model — losing ~400MB to a GC'd
+    duplicate.
+    """
+    with _extractor_init_lock:
+        if state.entity_extractor is None:
+            from .entity_extractor import EntityExtractor
+
+            state.entity_extractor = EntityExtractor()
     return state.entity_extractor
 
 
