@@ -450,6 +450,105 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: top_podcasts tables created")
 
+        # spec #28 Migration: entity-layer schema (idempotent).
+        # Adds:
+        # - ``episodes.entity_extraction_status`` (per-episode status of
+        #   the entity branch — independent of the user-facing pipeline).
+        # - ``entities`` / ``entity_mentions`` / ``entity_cooccurrences``
+        #   tables. ``entity_mentions.entity_id`` is nullable on purpose —
+        #   ``extract-entities`` writes rows with ``resolution_status='pending'``
+        #   and a ``NULL`` FK, then ``resolve-entities`` fills it in.
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns = {row["name"] for row in cursor.fetchall()}
+        if "entity_extraction_status" not in episode_columns:
+            logger.info("Migrating database: adding spec #28 entity_extraction_status column to episodes")
+            conn.execute("ALTER TABLE episodes ADD COLUMN entity_extraction_status TEXT NULL")
+            logger.info("Migration complete: entity_extraction_status added to episodes")
+
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entities'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating spec #28 entity tables")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS entities (
+                    id              TEXT PRIMARY KEY NOT NULL,
+                    type            TEXT NOT NULL,
+                    canonical_name  TEXT NOT NULL,
+                    wikidata_qid    TEXT NULL,
+                    aliases         TEXT NOT NULL DEFAULT '[]',
+                    description     TEXT NULL,
+                    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CHECK (type IN ('person','company','product','topic'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+                CREATE INDEX IF NOT EXISTS idx_entities_wikidata
+                    ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS entity_mentions (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_id           TEXT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    resolution_status   TEXT NOT NULL DEFAULT 'pending',
+                    episode_id          TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    segment_id          INTEGER NOT NULL,
+                    start_ms            INTEGER NOT NULL,
+                    end_ms              INTEGER NOT NULL,
+                    speaker             TEXT NULL,
+                    role                TEXT NULL,
+                    surface_form        TEXT NOT NULL,
+                    quote_excerpt       TEXT NOT NULL,
+                    sentiment           REAL NULL,
+                    confidence          REAL NOT NULL,
+                    extractor           TEXT NOT NULL,
+                    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at         TIMESTAMP NULL,
+                    CHECK (resolution_status IN ('pending','resolved','unresolvable')),
+                    CHECK (role IS NULL OR role IN ('host','guest','mentioned','self'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_mentions_entity
+                    ON entity_mentions(entity_id, episode_id) WHERE entity_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_mentions_episode
+                    ON entity_mentions(episode_id);
+                CREATE INDEX IF NOT EXISTS idx_mentions_role
+                    ON entity_mentions(entity_id, role) WHERE entity_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_mentions_pending
+                    ON entity_mentions(resolution_status) WHERE resolution_status = 'pending';
+
+                CREATE TABLE IF NOT EXISTS entity_cooccurrences (
+                    entity_a_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    entity_b_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    episode_count   INTEGER NOT NULL,
+                    last_seen_at    TIMESTAMP NOT NULL,
+                    PRIMARY KEY (entity_a_id, entity_b_id),
+                    CHECK (entity_a_id < entity_b_id)
+                );
+                """
+            )
+            logger.info("Migration complete: spec #28 entity tables created")
+
+        # Migration: rewrite legacy http:// artwork URLs to https://
+        # The web UI's CSP only allows `img-src https:`, so any stored
+        # http:// image_url is silently blocked by the browser. Every
+        # CDN we've seen serves the same path over TLS, so an
+        # unconditional upgrade is safe and idempotent.
+        cursor = conn.execute("SELECT COUNT(*) AS n FROM podcasts WHERE image_url LIKE 'http://%'")
+        podcast_http_count = cursor.fetchone()["n"]
+        cursor = conn.execute("SELECT COUNT(*) AS n FROM episodes WHERE image_url LIKE 'http://%'")
+        episode_http_count = cursor.fetchone()["n"]
+        if podcast_http_count or episode_http_count:
+            logger.info(
+                "Migrating database: upgrading http:// artwork URLs to https://",
+                podcasts=podcast_http_count,
+                episodes=episode_http_count,
+            )
+            conn.execute(
+                "UPDATE podcasts SET image_url = 'https://' || substr(image_url, 8) " "WHERE image_url LIKE 'http://%'"
+            )
+            conn.execute(
+                "UPDATE episodes SET image_url = 'https://' || substr(image_url, 8) " "WHERE image_url LIKE 'http://%'"
+            )
+            logger.info("Migration complete: artwork URLs upgraded to https")
+
     # ------------------------------------------------------------------
     # Category helpers
     # ------------------------------------------------------------------
@@ -1974,6 +2073,44 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 logger.info(f"Cleared failure state for episode {episode_id}")
             else:
                 logger.warning(f"Failed to clear failure for episode {episode_id}: not found")
+            return updated
+
+    def update_entity_extraction_status(self, episode_id: str, status: str) -> bool:
+        """Set ``episodes.entity_extraction_status`` for one episode.
+
+        Spec #28 §6 ("Failure isolation rule"): the entity branch
+        progresses independently of the user-facing pipeline. A failure
+        here must NOT touch ``failed_at_stage`` (which would render the
+        episode card red); it lives in its own status column.
+
+        Allowed values: ``pending`` | ``complete`` | ``failed`` |
+        ``skipped_legacy``. Validation is the caller's responsibility —
+        the column has no CHECK constraint so we don't reject ``NULL``
+        explicitly here either.
+        """
+        now = datetime.now(timezone.utc)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET entity_extraction_status = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (status, now.isoformat(), episode_id),
+            )
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(
+                    "entity_extraction_status updated",
+                    episode_id=episode_id,
+                    status=status,
+                )
+            else:
+                logger.warning(
+                    "entity_extraction_status update missed: episode not found",
+                    episode_id=episode_id,
+                )
             return updated
 
     def get_failed_episodes(self, limit: int = 100) -> List[Tuple[Podcast, Episode]]:

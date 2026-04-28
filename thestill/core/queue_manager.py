@@ -54,13 +54,78 @@ logger = get_logger(__name__)
 
 
 class TaskStage(str, Enum):
-    """Pipeline stages that can be queued."""
+    """Pipeline stages that can be queued.
+
+    The four ``*_ENTITIES`` / corpus stages (spec #28) form an
+    asynchronous branch off ``CLEAN`` that runs in parallel with
+    ``SUMMARIZE`` — see ``STAGE_SUCCESSORS`` below for the dependency
+    graph and ``_NON_USER_FAILING_STAGES`` for the failure-isolation
+    contract.
+    """
 
     DOWNLOAD = "download"
     DOWNSAMPLE = "downsample"
     TRANSCRIBE = "transcribe"
     CLEAN = "clean"
     SUMMARIZE = "summarize"
+    EXTRACT_ENTITIES = "extract-entities"
+    RESOLVE_ENTITIES = "resolve-entities"
+    WRITE_CORPUS = "write-corpus"
+    REINDEX = "reindex"
+
+
+# Spec #28 §6 — the entity branch is a separate failure domain. A
+# failure on any of these stages must not mark the episode as failed in
+# the user-facing sense (``episodes.failed_at_stage``); only its
+# ``entity_extraction_status`` is bumped. ``task_worker._mark_episode_failed``
+# branches on this set.
+_NON_USER_FAILING_STAGES = frozenset(
+    {
+        TaskStage.EXTRACT_ENTITIES,
+        TaskStage.RESOLVE_ENTITIES,
+        TaskStage.WRITE_CORPUS,
+        TaskStage.REINDEX,
+    }
+)
+
+
+def is_entity_branch_stage(stage: TaskStage) -> bool:
+    """Return True if ``stage`` belongs to the spec #28 entity branch.
+
+    Used by the worker to decide whether a failure should propagate to
+    ``episodes.failed_at_stage`` (user-facing) or only to
+    ``episodes.entity_extraction_status`` (entity-only).
+    """
+    return stage in _NON_USER_FAILING_STAGES
+
+
+# Spec #28 §0.5 — dependency graph replacing the linear chain. ``CLEAN``
+# fans out to two independent successors; everything else is linear (or
+# terminal). Each branch progresses on its own and a failure in one does
+# not block the other (see ``_NON_USER_FAILING_STAGES``).
+STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
+    TaskStage.DOWNLOAD: [TaskStage.DOWNSAMPLE],
+    TaskStage.DOWNSAMPLE: [TaskStage.TRANSCRIBE],
+    TaskStage.TRANSCRIBE: [TaskStage.CLEAN],
+    TaskStage.CLEAN: [TaskStage.SUMMARIZE, TaskStage.EXTRACT_ENTITIES],
+    TaskStage.SUMMARIZE: [],
+    TaskStage.EXTRACT_ENTITIES: [TaskStage.RESOLVE_ENTITIES],
+    TaskStage.RESOLVE_ENTITIES: [TaskStage.WRITE_CORPUS],
+    TaskStage.WRITE_CORPUS: [TaskStage.REINDEX],
+    TaskStage.REINDEX: [],
+}
+
+
+def get_next_stages(current_stage: TaskStage) -> List[TaskStage]:
+    """Return the stages that should be enqueued after ``current_stage``.
+
+    Replaces the original linear ``get_next_stage(stage) -> Optional[TaskStage]``
+    (spec #28 §0.5) so a single completion can fan out to multiple
+    successors — specifically, ``CLEAN`` enqueues both ``SUMMARIZE``
+    (existing path) and ``EXTRACT_ENTITIES`` (entity branch). Empty list
+    means the chain terminates here.
+    """
+    return list(STAGE_SUCCESSORS.get(current_stage, []))
 
 
 class TaskStatus(str, Enum):
@@ -152,34 +217,6 @@ def calculate_backoff(retry_count: int) -> timedelta:
     return timedelta(seconds=delay * jitter)
 
 
-def get_next_stage(current_stage: TaskStage) -> Optional[TaskStage]:
-    """
-    Get the next pipeline stage after the current one.
-
-    Args:
-        current_stage: The stage that just completed
-
-    Returns:
-        Next stage in the pipeline, or None if at final stage
-    """
-    stage_order = [
-        TaskStage.DOWNLOAD,
-        TaskStage.DOWNSAMPLE,
-        TaskStage.TRANSCRIBE,
-        TaskStage.CLEAN,
-        TaskStage.SUMMARIZE,
-    ]
-
-    try:
-        current_index = stage_order.index(current_stage)
-        if current_index < len(stage_order) - 1:
-            return stage_order[current_index + 1]
-    except ValueError:
-        pass
-
-    return None
-
-
 class QueueManager:
     """
     SQLite-based task queue with abstracted interface.
@@ -232,12 +269,17 @@ class QueueManager:
         finally:
             conn.close()
 
+    # Spec #28 §0.5 — the canonical CHECK clause for ``tasks.stage``.
+    # Derived from ``TaskStage`` so adding a stage in the enum auto-updates
+    # both the fresh-DB ``CREATE TABLE`` and the rebuild migration's DDL.
+    _TASKS_STAGE_CHECK = "CHECK (stage IN ({values}))".format(values=", ".join(f"'{s.value}'" for s in TaskStage))
+
     def _ensure_table(self):
         """Create tasks table if not exists and run migrations."""
         with self._get_connection() as conn:
             # Create base table (may already exist from previous versions)
             conn.execute(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY NOT NULL,
                     episode_id TEXT NOT NULL,
@@ -251,7 +293,7 @@ class QueueManager:
                     completed_at TIMESTAMP NULL,
                     FOREIGN KEY (episode_id) REFERENCES episodes(id),
                     CHECK (length(id) = 36),
-                    CHECK (stage IN ('download', 'downsample', 'transcribe', 'clean', 'summarize'))
+                    {self._TASKS_STAGE_CHECK}
                 )
             """
             )
@@ -263,6 +305,26 @@ class QueueManager:
             self._migrate_add_column(conn, "tasks", "error_type", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "last_error", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "metadata", "TEXT NULL")
+
+            # Spec #28 §0.5 — rebuild the tasks table when it still has the
+            # legacy 5-stage CHECK constraint. SQLite has no
+            # ``ALTER TABLE ... DROP CONSTRAINT`` so the only way to widen
+            # a CHECK is the standard rebuild dance: create _new with the
+            # new constraint, copy rows, drop old, rename. ``CREATE TABLE
+            # IF NOT EXISTS`` above is a no-op for legacy databases and
+            # would not update the constraint by itself.
+            #
+            # Guard: read ``sqlite_master.sql`` for the existing table and
+            # check whether one of the new stage names is already present.
+            # If it is, we've already migrated; skip. The check is a string
+            # match on the DDL because SQLite gives us no introspection
+            # API for CHECK clauses.
+            cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'")
+            row = cursor.fetchone()
+            if row and row["sql"] and "extract-entities" not in row["sql"]:
+                logger.info("Migrating tasks table: rebuilding with extended stage CHECK constraint")
+                self._rebuild_tasks_with_extended_check(conn)
+                logger.info("Migration complete: tasks table rebuilt with spec #28 stages")
 
             # Indexes for efficient querying
             conn.execute(
@@ -301,6 +363,74 @@ class QueueManager:
             )
 
             logger.debug("Tasks table ensured")
+
+    def _rebuild_tasks_with_extended_check(self, conn: sqlite3.Connection) -> None:
+        """SQLite table rebuild: widen ``tasks.stage`` CHECK constraint.
+
+        The ``CREATE TABLE IF NOT EXISTS`` that runs on every startup is
+        a no-op when the table already exists, so it cannot widen the
+        old 5-stage CHECK on legacy databases. SQLite has no
+        ``ALTER TABLE ... DROP CONSTRAINT``, so the standard fix is to
+        copy into a new table with the desired constraint, drop the old
+        one, and rename. We do this inside the connection's existing
+        transaction so a partial failure rolls back cleanly.
+
+        After the rename the indexes are gone (they belonged to the old
+        table); the caller's index ``CREATE INDEX IF NOT EXISTS`` block
+        recreates them on the next pass.
+        """
+        # If a previous rebuild crashed between ``CREATE TABLE
+        # tasks_new_spec28`` and ``ALTER TABLE … RENAME``, the orphan
+        # table will still be on disk (DDL persists in WAL even if the
+        # whole transaction was meant to roll back). Drop it first so
+        # the rebuild is genuinely re-runnable.
+        conn.execute("DROP TABLE IF EXISTS tasks_new_spec28")
+        conn.execute(
+            f"""
+            CREATE TABLE tasks_new_spec28 (
+                id TEXT PRIMARY KEY NOT NULL,
+                episode_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER DEFAULT 0,
+                error_message TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP NULL,
+                completed_at TIMESTAMP NULL,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                next_retry_at TIMESTAMP NULL,
+                error_type TEXT NULL,
+                last_error TEXT NULL,
+                metadata TEXT NULL,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                CHECK (length(id) = 36),
+                {self._TASKS_STAGE_CHECK}
+            )
+            """
+        )
+        # Copy every column we explicitly enumerated in the new DDL —
+        # listing them by name keeps the migration robust against future
+        # column additions on either side.
+        conn.execute(
+            """
+            INSERT INTO tasks_new_spec28 (
+                id, episode_id, stage, status, priority, error_message,
+                created_at, updated_at, started_at, completed_at,
+                retry_count, max_retries, next_retry_at, error_type,
+                last_error, metadata
+            )
+            SELECT
+                id, episode_id, stage, status, priority, error_message,
+                created_at, updated_at, started_at, completed_at,
+                retry_count, max_retries, next_retry_at, error_type,
+                last_error, metadata
+            FROM tasks
+            """
+        )
+        conn.execute("DROP TABLE tasks")
+        conn.execute("ALTER TABLE tasks_new_spec28 RENAME TO tasks")
 
     def _migrate_add_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         """Add a column to a table if it doesn't exist (idempotent migration)."""

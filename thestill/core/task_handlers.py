@@ -585,6 +585,27 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         logger.info(f"Summarization completed for episode: {episode.title}")
 
 
+def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
+    """Spec #28 §0.5 — shared no-op handler for the entity branch.
+
+    Registered for all four entity-branch stages (extract-entities,
+    resolve-entities, write-corpus, reindex). Phase 1 will replace each
+    registration with a real handler (GLiNER extractor, ReFinED
+    resolver, corpus writer, qmd reindexer). Until then, the no-op
+    keeps the dependency-graph fan-out (``CLEAN`` → ``SUMMARIZE`` +
+    ``EXTRACT_ENTITIES``) chaining cleanly through to ``REINDEX``
+    without every cleaned episode hitting "no handler registered" →
+    DLQ. ``task.stage.value`` distinguishes the four call sites in
+    structured logs.
+    """
+    logger.info(
+        "entity_branch_placeholder",
+        stage=task.stage.value,
+        episode_id=task.episode_id,
+        note="phase_0_no_op",
+    )
+
+
 def create_task_handlers(
     state: "AppState",
 ) -> Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]]:
@@ -604,4 +625,8 @@ def create_task_handlers(
         TaskStage.TRANSCRIBE: lambda task, cb=None: handle_transcribe(task, state, cb),
         TaskStage.CLEAN: lambda task, cb=None: handle_clean(task, state),
         TaskStage.SUMMARIZE: lambda task, cb=None: handle_summarize(task, state),
+        TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.WRITE_CORPUS: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.REINDEX: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
     }

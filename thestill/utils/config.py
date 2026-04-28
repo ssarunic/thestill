@@ -73,6 +73,11 @@ class Config(BaseModel):
     transcribe_parallel_jobs: Optional[int] = None
     clean_parallel_jobs: Optional[int] = None
     summarize_parallel_jobs: Optional[int] = None
+    # Spec #28 entity-branch stages (run async off ``clean``).
+    extract_entities_parallel_jobs: Optional[int] = None
+    resolve_entities_parallel_jobs: Optional[int] = None
+    write_corpus_parallel_jobs: Optional[int] = None
+    reindex_parallel_jobs: Optional[int] = None
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
@@ -201,6 +206,10 @@ class Config(BaseModel):
             TaskStage.TRANSCRIBE: self.transcribe_parallel_jobs,
             TaskStage.CLEAN: self.clean_parallel_jobs,
             TaskStage.SUMMARIZE: self.summarize_parallel_jobs,
+            TaskStage.EXTRACT_ENTITIES: self.extract_entities_parallel_jobs,
+            TaskStage.RESOLVE_ENTITIES: self.resolve_entities_parallel_jobs,
+            TaskStage.WRITE_CORPUS: self.write_corpus_parallel_jobs,
+            TaskStage.REINDEX: self.reindex_parallel_jobs,
         }
         return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
 
@@ -338,9 +347,25 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "parallel_jobs": int(os.getenv("PARALLEL_JOBS", "1")),
         **{
-            f"{stage}_parallel_jobs": (int(os.getenv(f"{stage.upper()}_PARALLEL_JOBS")) or None)
-            for stage in ("download", "downsample", "transcribe", "clean", "summarize")
-            if os.getenv(f"{stage.upper()}_PARALLEL_JOBS")
+            # Spec #28: TaskStage values use hyphens (e.g. "extract-entities"),
+            # but Python field names and env var keys use underscores. The
+            # ``replace`` keeps both halves consistent without a separate
+            # mapping table.
+            f"{stage.replace('-', '_')}_parallel_jobs": (
+                int(os.getenv(f"{stage.replace('-', '_').upper()}_PARALLEL_JOBS")) or None
+            )
+            for stage in (
+                "download",
+                "downsample",
+                "transcribe",
+                "clean",
+                "summarize",
+                "extract-entities",
+                "resolve-entities",
+                "write-corpus",
+                "reindex",
+            )
+            if os.getenv(f"{stage.replace('-', '_').upper()}_PARALLEL_JOBS")
         },
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (

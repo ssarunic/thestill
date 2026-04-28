@@ -53,7 +53,7 @@ import structlog
 from thestill.utils.exceptions import FatalError, TransientError
 
 from .progress import ProgressCallback, ProgressUpdate
-from .queue_manager import QueueManager, Task, TaskStage, get_next_stage
+from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -393,44 +393,60 @@ class TaskWorker:
             # Clear correlation context
             structlog.contextvars.clear_contextvars()
 
-    def _maybe_enqueue_next_stage(self, task: Task) -> None:
-        """
-        If task has run_full_pipeline metadata, enqueue the next stage.
+    # Map stage (verb) to resulting episode state (past participle). Spec #28
+    # entity-branch stages are intentionally absent — they don't progress
+    # the user-facing ``EpisodeState`` machine, and ``target_state`` early-
+    # exit only applies to the user-facing chain that ends in
+    # ``summarize``→``summarized``. ``.get(...)`` returning ``None`` for
+    # entity-branch stages is the correct no-op behaviour here.
+    _STAGE_TO_STATE: Dict[str, str] = {
+        "download": "downloaded",
+        "downsample": "downsampled",
+        "transcribe": "transcribed",
+        "clean": "cleaned",
+        "summarize": "summarized",
+    }
 
-        Args:
-            task: The completed task
+    def _maybe_enqueue_next_stage(self, task: Task) -> None:
+        """If task has ``run_full_pipeline`` metadata, fan out successors.
+
+        Spec #28 §0.5 — replaces the linear ``get_next_stage`` walk with
+        a dependency-graph fan-out (``get_next_stages``). When ``CLEAN``
+        completes this enqueues both ``SUMMARIZE`` (existing user chain)
+        and ``EXTRACT_ENTITIES`` (entity branch); each successor then
+        progresses linearly via this same function.
+
+        ``target_state`` short-circuits only the user chain — once the
+        episode reaches the requested state we stop enqueueing further
+        user-facing stages, but in-flight entity-branch tasks are
+        unaffected (they don't appear in ``_STAGE_TO_STATE``).
         """
         if not task.metadata.get("run_full_pipeline"):
             return
 
-        next_stage = get_next_stage(task.stage)
-        if next_stage is None:
-            logger.info("pipeline_complete")
-            return
-
-        # Check if we've reached the target state
-        # Map stage (verb) to resulting episode state (past participle)
-        STAGE_TO_STATE = {
-            "download": "downloaded",
-            "downsample": "downsampled",
-            "transcribe": "transcribed",
-            "clean": "cleaned",
-            "summarize": "summarized",
-        }
         target_state = task.metadata.get("target_state", "summarized")
-        resulting_state = STAGE_TO_STATE.get(task.stage.value)
+        resulting_state = self._STAGE_TO_STATE.get(task.stage.value)
         if resulting_state == target_state:
             logger.info("pipeline_target_reached", target_state=target_state)
             return
 
-        # Enqueue next stage with same metadata
-        logger.info("chain_enqueueing_next_stage", next_stage=next_stage.value)
-        self.queue_manager.add_task(
-            episode_id=task.episode_id,
-            stage=next_stage,
-            priority=task.priority,
-            metadata=task.metadata,
-        )
+        successors = get_next_stages(task.stage)
+        if not successors:
+            logger.info("pipeline_branch_complete", stage=task.stage.value)
+            return
+
+        for next_stage in successors:
+            logger.info(
+                "chain_enqueueing_next_stage",
+                from_stage=task.stage.value,
+                next_stage=next_stage.value,
+            )
+            self.queue_manager.add_task(
+                episode_id=task.episode_id,
+                stage=next_stage,
+                priority=task.priority,
+                metadata=task.metadata,
+            )
 
     def _report_failure(self, task_id: str, error_msg: str) -> None:
         """Report task failure via progress store if available."""
@@ -447,19 +463,37 @@ class TaskWorker:
             )
 
     def _mark_episode_failed(self, task: Task, error_msg: str, failure_type: str) -> None:
-        """
-        Mark the episode as failed when a task reaches final failure.
+        """Persist a final task failure on the owning episode.
 
-        Args:
-            task: The failed task
-            error_msg: Human-readable error message
-            failure_type: 'transient' (exhausted retries) or 'fatal' (permanent)
+        Spec #28 §6 ("Failure isolation rule") — for entity-branch
+        stages we write to ``episodes.entity_extraction_status='failed'``
+        rather than ``failed_at_stage``. Setting ``failed_at_stage`` would
+        flip the episode's user-visible state to ``FAILED`` and render it
+        as a red card, even though the episode itself was downloaded,
+        transcribed and (likely) summarised successfully — only its
+        entity index is incomplete.
         """
         if not self.repository:
             logger.debug("No repository configured, skipping episode failure tracking")
             return
 
         try:
+            if is_entity_branch_stage(task.stage):
+                # Entity-branch failures live in their own status column;
+                # ``failed_at_stage`` and the episode-card UX stay
+                # untouched.
+                self.repository.update_entity_extraction_status(
+                    episode_id=task.episode_id,
+                    status="failed",
+                )
+                logger.info(
+                    "entity_branch_failed",
+                    stage=task.stage.value,
+                    failure_type=failure_type,
+                    episode_id=task.episode_id,
+                )
+                return
+
             self.repository.mark_episode_failed(
                 episode_id=task.episode_id,
                 failed_at_stage=task.stage.value,

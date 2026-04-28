@@ -32,7 +32,6 @@ from structlog import get_logger
 
 from ...core.queue_manager import QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
-from ...core.queue_manager import get_next_stage
 from ...models.podcast import EpisodeState
 from ...models.user import User
 from ..dependencies import AppState, get_app_state, require_auth
