@@ -121,9 +121,10 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
         className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
-        role="dialog"
-        aria-modal="true"
+        role={isOpen ? 'dialog' : undefined}
+        aria-modal={isOpen ? 'true' : undefined}
         aria-label="Navigation menu"
+        aria-hidden={!isOpen}
       >
         {/* Header with close button */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">

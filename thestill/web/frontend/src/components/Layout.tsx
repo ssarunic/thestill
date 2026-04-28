@@ -5,6 +5,7 @@ import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
 import { PlayerProvider, usePlayer } from '../contexts/PlayerContext'
+import { useEscapeUp } from '../hooks/useEscapeUp'
 
 interface NavItemProps {
   to: string
@@ -63,6 +64,8 @@ function LayoutContent() {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
   const screenSize = useScreenSize()
   const { track } = usePlayer()
+
+  useEscapeUp()
 
   // Close sidebar/drawer when screen size changes
   useEffect(() => {
