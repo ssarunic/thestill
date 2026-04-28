@@ -3,8 +3,21 @@ import { Link } from 'react-router-dom'
 import { useQueueTasks, useBumpQueueTask, useCancelQueueTask } from '../hooks/useApi'
 import type { PipelineStage, QueuedTaskWithContext, StageWorkerStatus } from '../api/types'
 
-// Pipeline order — lanes are always displayed in this order
-const STAGE_ORDER: PipelineStage[] = ['download', 'downsample', 'transcribe', 'clean', 'summarize']
+// Pipeline order — lanes are always displayed in this order. Spec #28
+// entity-branch stages run in parallel after `clean` (alongside
+// `summarize`) so they're listed after `summarize` in the lane order
+// to mirror the dependency-graph reading direction.
+const STAGE_ORDER: PipelineStage[] = [
+  'download',
+  'downsample',
+  'transcribe',
+  'clean',
+  'summarize',
+  'extract-entities',
+  'resolve-entities',
+  'write-corpus',
+  'reindex',
+]
 
 // Stage colors for badges and lane accents
 const stageColors: Record<PipelineStage, string> = {
@@ -13,6 +26,10 @@ const stageColors: Record<PipelineStage, string> = {
   transcribe: 'bg-purple-100 text-purple-700',
   clean: 'bg-amber-100 text-amber-700',
   summarize: 'bg-green-100 text-green-700',
+  'extract-entities': 'bg-rose-100 text-rose-700',
+  'resolve-entities': 'bg-pink-100 text-pink-700',
+  'write-corpus': 'bg-fuchsia-100 text-fuchsia-700',
+  reindex: 'bg-violet-100 text-violet-700',
 }
 
 const stageAccent: Record<PipelineStage, string> = {
@@ -21,6 +38,10 @@ const stageAccent: Record<PipelineStage, string> = {
   transcribe: 'border-purple-300',
   clean: 'border-amber-300',
   summarize: 'border-green-300',
+  'extract-entities': 'border-rose-300',
+  'resolve-entities': 'border-pink-300',
+  'write-corpus': 'border-fuchsia-300',
+  reindex: 'border-violet-300',
 }
 
 const stageLabel: Record<PipelineStage, string> = {
@@ -29,6 +50,10 @@ const stageLabel: Record<PipelineStage, string> = {
   transcribe: 'Transcribe',
   clean: 'Clean',
   summarize: 'Summarize',
+  'extract-entities': 'Extract entities',
+  'resolve-entities': 'Resolve',
+  'write-corpus': 'Write corpus',
+  reindex: 'Reindex',
 }
 
 function formatDuration(seconds: number): string {
@@ -400,13 +425,21 @@ export default function QueueViewer() {
   const totalCapacity = orderedStages.reduce((sum, s) => sum + s.capacity, 0)
   const totalActive = orderedStages.reduce((sum, s) => sum + s.active, 0)
 
-  // Stages advance sequentially, so collapse to the latest stage reached per episode.
+  // Collapse completed tasks to the latest stage reached per episode for the
+  // grouped completed view. Spec #28 entity-branch stages run in parallel
+  // with `summarize` (not after it), but the linearised rank order below
+  // is fine for UI sorting — when both branches have completed for the
+  // same episode, the entity-branch reindex (rank 8) is shown last.
   const stageRank: Record<PipelineStage, number> = {
     download: 0,
     downsample: 1,
     transcribe: 2,
     clean: 3,
     summarize: 4,
+    'extract-entities': 5,
+    'resolve-entities': 6,
+    'write-corpus': 7,
+    reindex: 8,
   }
   const latestCompletedByEpisode = new Map<string, QueuedTaskWithContext>()
   for (const task of completed_tasks) {

@@ -49,6 +49,11 @@ const stageColors: Record<PipelineStage, string> = {
   transcribe: 'bg-purple-600 hover:bg-purple-700',
   clean: 'bg-amber-600 hover:bg-amber-700',
   summarize: 'bg-green-600 hover:bg-green-700',
+  // Spec #28 entity branch
+  'extract-entities': 'bg-rose-600 hover:bg-rose-700',
+  'resolve-entities': 'bg-pink-600 hover:bg-pink-700',
+  'write-corpus': 'bg-fuchsia-600 hover:bg-fuchsia-700',
+  reindex: 'bg-violet-600 hover:bg-violet-700',
 }
 
 // Format seconds into human-readable time string

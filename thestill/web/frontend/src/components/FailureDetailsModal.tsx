@@ -26,6 +26,11 @@ const stageLabels: Record<string, string> = {
   transcribe: 'Transcription',
   clean: 'Cleaning',
   summarize: 'Summary',
+  // Spec #28 entity branch
+  'extract-entities': 'Extracting entities',
+  'resolve-entities': 'Resolving',
+  'write-corpus': 'Writing corpus',
+  reindex: 'Reindexing',
 }
 
 function formatDate(dateStr: string | null): string {
@@ -77,7 +82,7 @@ export default function FailureDetailsModal({
   const isFatal = failureType === 'fatal'
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 overflow-y-auto">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"

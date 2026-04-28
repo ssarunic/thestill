@@ -11,6 +11,14 @@ const stageColors: Record<string, string> = {
   transcribe: 'bg-purple-100 text-purple-700',
   clean: 'bg-amber-100 text-amber-700',
   summarize: 'bg-green-100 text-green-700',
+  // Spec #28 entity branch — entity-branch failures don't normally
+  // appear here (they go to ``entity_extraction_status='failed'``,
+  // not to the ``tasks`` DLQ), but a transient task-level failure
+  // would still surface in the queue's failed/dead lists.
+  'extract-entities': 'bg-rose-100 text-rose-700',
+  'resolve-entities': 'bg-pink-100 text-pink-700',
+  'write-corpus': 'bg-fuchsia-100 text-fuchsia-700',
+  reindex: 'bg-violet-100 text-violet-700',
 }
 
 // Error type colors

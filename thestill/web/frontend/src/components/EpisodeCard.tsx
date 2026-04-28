@@ -24,6 +24,11 @@ const stageLabels: Record<PipelineStage, string> = {
   transcribe: 'Transcribing',
   clean: 'Cleaning',
   summarize: 'Summarizing',
+  // Spec #28 entity branch (active-voice forms to match siblings)
+  'extract-entities': 'Extracting entities',
+  'resolve-entities': 'Resolving entities',
+  'write-corpus': 'Writing corpus',
+  reindex: 'Reindexing',
 }
 
 const stateColors: Record<string, string> = {
