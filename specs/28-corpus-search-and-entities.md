@@ -180,26 +180,42 @@ We build:
 - The MCP tools, REST endpoints, and CLI commands that surface them.
 - The web entity pages and command bar.
 
-We delegate to qmd, with **two distinct calls for two distinct latency
-budgets**:
+We delegate to qmd over a **single MCP `query` tool**, with the
+latency budget controlled by the **`searches[].type` payload** rather
+than by which tool we call. Pinned by the Phase 0.1 spike against
+qmd 2.1.0: the MCP server only exposes one search tool — `qmd search`
+(BM25-only) and `qmd query` (hybrid + reranker) are CLI-only paths.
+Inside the MCP `query` call:
 
-- **`qmd search`** — raw FTS5 BM25 over the corpus. No reranking, no
-  expansion, no LLM in the loop. This is the fast path for `mode=lexical`
-  and powers the ⌘K bar (O2's Cmd-F latency budget). Sub-50 ms on the
-  fixture corpus.
-- **`qmd query`** — full hybrid pipeline (BM25 + vector + RRF +
-  cross-encoder rerank + query expansion). Used only for `mode=semantic`
-  and `mode=hybrid` where the higher latency is acceptable for richer
-  recall. P50 in the hundreds of ms is fine here.
+- **`searches=[{type:"lex", query:"…"}]`** — raw FTS5 BM25, no
+  expansion, no embeddings, no rerank. This is the fast path for
+  `mode=lexical` and powers the ⌘K bar (O2's Cmd-F latency budget).
+  Sub-100 ms on the fixture corpus.
+- **`searches=[{type:"lex", …}, {type:"vec", …}]`** — full hybrid
+  (BM25 + vector + RRF + cross-encoder rerank + auto-expansion).
+  Used for `mode=semantic` and `mode=hybrid` where the higher
+  latency is acceptable for richer recall. P50 in the hundreds of ms
+  is fine here.
 
 Defaulting `search_corpus(mode)` to `hybrid` is correct for the LLM
-harness (Claude is rarely doing Cmd-F semantics), but the ⌘K bar in the
-web UI will pin `mode=lexical` so typing feels live. We never silently
-upgrade lexical to hybrid — the cost difference is too large.
+harness (Claude is rarely doing Cmd-F semantics), but the ⌘K bar in
+the web UI will pin `mode=lexical` so typing feels live. We never
+silently upgrade lexical to hybrid — the cost difference is too
+large.
 
-qmd runs as a sidecar daemon (`qmd mcp --http --port 8181`) pointed at
-`data/corpus/`. Our MCP server's `search_corpus` tool delegates over HTTP;
+qmd runs as a sidecar (`qmd mcp` over stdio per the 0.1 spike;
+`--http --port 8181` is also available if we move off stdio). Our
+MCP server's `search_corpus` tool delegates to qmd's `query` tool —
 the user only sees one MCP surface.
+
+**Why one tool, not two:** the spike confirmed the MCP `query`
+response shape is identical regardless of `searches[].type`, so the
+client side has one parser, one transport, one error path. A
+lex-only payload still skips the LLM expansion + embedding lookup
+inside qmd, so the latency-budget split is preserved by payload, not
+by tool. If a future benchmark shows MCP lex-only is measurably
+slower than the CLI's `qmd search`, we can add a CLI shell-out as a
+fast path later — the `mode=lexical` API surface stays the same.
 
 This split is reversible: if qmd's pace, runtime, or constraints become a
 problem, we replace it with the same recipe in pure Python (sqlite-vec +
@@ -551,9 +567,9 @@ existing summaries and re-runs the entity continuation for each.
   file (with `<!-- seg ... -->` anchors per Strategy §4) and the sidecar
   `<id>.segmap.json`, and updates affected
   `data/corpus/persons|companies|topics/*.md` pages.
-- **`reindex`**: invokes qmd's CLI to re-embed the changed paths. qmd's
-  HTTP server exposes only `/mcp` and `/health` — there is no remote
-  reindex endpoint. We shell out:
+- **`reindex`**: invokes qmd's CLI to re-embed the changed paths.
+  qmd's MCP server is read-only (no `update` or `embed` tools), so we
+  shell out:
 
   ```bash
   qmd update --collection thestill-corpus --paths <changed-files>
@@ -561,11 +577,11 @@ existing summaries and re-runs the entity continuation for each.
   ```
 
   Collection bootstrap (one-time) is `qmd collection add thestill-corpus
-  data/corpus --glob "**/*.md"`, run by `make qmd-up` in dev and by the
-  installer in deployed setups. Subsequent `update`/`embed` runs are
-  incremental — qmd's docid hashes detect unchanged files. The qmd HTTP
-  daemon at `:8181/mcp` is left running for reads; only the embed worker
-  is invoked for writes.
+  data/corpus --glob "**/*.md"`, run by `make qmd-up` in dev and by
+  the installer in deployed setups. Subsequent `update`/`embed` runs
+  are incremental — qmd's docid hashes detect unchanged files. The
+  qmd MCP daemon (stdio per the 0.1 spike) is left running for reads;
+  only the embed worker is invoked for writes.
 
 Each stage is an existing-style atomic processor, plugged into the same
 retry + DLQ + queue infrastructure as the other stages. No new pipeline
@@ -675,7 +691,7 @@ thestill/
 │   └── reindex.py                 # shells out to `qmd update`/`qmd embed` (new)
 ├── search/                         # new package
 │   ├── service.py                 # one impl, three surfaces
-│   ├── qmd_client.py              # thin HTTP client to qmd daemon
+│   ├── qmd_client.py              # thin MCP-stdio client to qmd daemon
 │   ├── ranking.py                 # blend qmd results with entity-scoped SQL
 │   └── citation.py                # shape rows into CitationRow
 ├── repositories/
@@ -830,14 +846,17 @@ layer for queries that aren't entity-scoped (O2, O3).
 - **2.4** Implement `core/reindex.py` shelling out to `qmd
   update --paths <...>` then `qmd embed`. Hooked as the `reindex`
   stage handler in the entity branch.
-- **2.5** Implement `search/qmd_client.py`. Two methods:
-  `search_lexical()` calling `qmd search` (raw BM25, fast),
-  `search_hybrid()` calling `qmd query` (full pipeline). Each maps
-  hits to `CitationRow` via the segmap sidecar. Hits with no
-  resolvable segment dropped (logged).
+- **2.5** Implement `search/qmd_client.py`. One method,
+  `search(searches, limit, collections, intent)`, that calls qmd's
+  MCP `query` tool over stdio. Mode is encoded in the `searches`
+  payload — lex-only for the fast path, lex+vec (or lex+vec+hyde)
+  for hybrid. Maps hits to `CitationRow` via the segmap sidecar by
+  parsing the leading `<line>:` token from `snippet` (Strategy §4).
+  Hits with no resolvable segment dropped (logged).
 - **2.6** Add `search_corpus(query, mode, filters?, limit?)` MCP tool.
-  Mode `lexical` → `search_lexical`; mode `semantic`|`hybrid` →
-  `search_hybrid`. Default mode is `hybrid`.
+  `mode=lexical` builds a single-element `[{type:"lex", …}]`
+  payload; `mode=semantic`|`hybrid` builds the full
+  lex+vec payload. Default mode is `hybrid`.
 - **2.7** REST mirror under `/api/search/...`.
 - **2.8** Re-run the 10 harness reference questions: now Claude can
   answer broader questions ("episodes about X" without naming an
@@ -914,8 +933,8 @@ Target: ≥ 90% line coverage on new packages (`thestill/search/`, new
 | `core/entity_resolver.py` | Mocked ReFinED returns QID → entity row created/merged, mention's `entity_id` filled and `resolution_status='resolved'`. ReFinED returns nothing → local alias slug used or `resolution_status='unresolvable'`. Two surface forms with same QID → one entity. Re-running resolution on already-resolved mentions is a no-op. |
 | `core/corpus_writer.py` | Rendered episode Markdown contains `<!-- seg id=N t=A-B spk=... -->` anchor as the first line of every segment block. `<id>.segmap.json` sidecar byte offsets match the rendered file exactly. Re-running on the same inputs is byte-identical (file diff = ∅, sidecar diff = ∅). Wiki-links present for every resolved mention. |
 | `core/reindex.py` | qmd CLI invoked with the right args (`update --paths`, then `embed`). Subprocess non-zero exit → typed error and queue retry. Stderr streamed to structlog. |
-| `search/qmd_client.py` | `mode=lexical` calls `qmd search` (no rerank, no expansion); `mode=hybrid` and `mode=semantic` call `qmd query`. Mock qmd HTTP responses → mapped to `CitationRow` correctly using sidecar binary search. Hit with no resolvable segment dropped (logged, not returned). Sidecar mtime change invalidates cache. qmd 5xx → typed error. qmd offline → typed error with retry hint. |
-| `search/service.py` | `search_corpus("foo", mode="hybrid")` calls qmd `query`; `search_corpus("foo", mode="lexical")` calls qmd `search`; `find_mentions("musk")` runs SQL only, never calls qmd. Filters compose correctly. Pagination boundary cases. Lexical mode is never silently upgraded to hybrid. |
+| `search/qmd_client.py` | `mode=lexical` builds a single-element `[{type:"lex", …}]` payload; `mode=hybrid` and `mode=semantic` build a `[{type:"lex"}, {type:"vec"}]` payload. Both call MCP `query` (one transport). Mock MCP responses → mapped to `CitationRow` correctly using sidecar binary search on the leading `<line>:` token in `snippet`. Hit with no resolvable segment dropped (logged, not returned). Sidecar mtime change invalidates cache. qmd MCP error → typed error. qmd offline → typed error with retry hint. |
+| `search/service.py` | `search_corpus("foo", mode="hybrid")` sends a lex+vec payload; `search_corpus("foo", mode="lexical")` sends a lex-only payload; `find_mentions("musk")` runs SQL only, never calls qmd. Filters compose correctly. Pagination boundary cases. Lexical mode is never silently upgraded to hybrid (the payload type is the contract). |
 | `repositories/sqlite_entity_repository.py` | All CRUD on `entities`, `entity_mentions`. Co-occurrence rebuild produces canonical (a < b) ordering. Cascade deletes work. |
 | `mcp/tools/*` | Each tool: input schema rejects malformed input; output schema validates against returned rows; PII never logged. |
 
@@ -928,7 +947,7 @@ end-to-end.
 
 | Test | Scope |
 |---|---|
-| `test_pipeline_extract_to_index.py` | Take a fixture cleaned transcript, run `clean → summarize → extract-entities → resolve-entities → write-corpus → reindex` end-to-end through the queue dispatcher (not by calling handlers directly). Assert `entity_mentions` rows exist with `resolution_status='resolved'`, the rendered Markdown + sidecar are present, and `qmd query` over HTTP returns the new content. |
+| `test_pipeline_extract_to_index.py` | Take a fixture cleaned transcript, run `clean → summarize → extract-entities → resolve-entities → write-corpus → reindex` end-to-end through the queue dispatcher (not by calling handlers directly). Assert `entity_mentions` rows exist with `resolution_status='resolved'`, the rendered Markdown + sidecar are present, and the qmd MCP `query` tool returns the new content. |
 | `test_queue_linear_chain.py` | An episode reaching `summarize=complete` enqueues `extract-entities` next (linear chain, never parallel). A forced failure in `extract-entities` does NOT touch `failed_at_stage` — only `entity_extraction_status` flips to `'failed'`. The episode card stays green. |
 | `test_queue_stage_progression.py` | Each entity stage advances to the next in order: `summarize` → `extract-entities` → `resolve-entities` → `write-corpus` → `reindex`. Failure in any entity stage routes to DLQ with a typed reason and does not flip the user-facing episode state. Stage labels appear in `/api/tasks` payloads. |
 | `test_legacy_episode_skipped.py` | Episode with `clean_transcript_json_path = NULL` reaches `extract-entities`; handler emits zero mentions and sets `entity_extraction_status = 'skipped_legacy'`. Subsequent stages (`resolve-entities`, `write-corpus`, `reindex`) are no-ops for that episode. |
