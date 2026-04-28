@@ -46,6 +46,7 @@ describing current phase and gates.
 | 22 | [floating-media-player](22-floating-media-player.md) | 🚧 Active development | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
 | 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
 | 26 | [pre-deploy-security-checklist](26-pre-deploy-security-checklist.md) | 📋 Planned (2026-04-23) | LLM-runnable + runtime smoke-test checklist that must return GO before any deploy; regression harness for spec #25 |
+| 28 | [corpus-search-and-entities](28-corpus-search-and-entities.md) | 📝 Draft | Native person/company/topic entity index over real podcast corpus, validated via SQL-only MCP alpha first; qmd hybrid search and web UI layered on after O1+O5 prove out; entity branch runs async beside `summarize` so a failure in extraction never blocks the existing product |
 
 ## Completed
 
