@@ -3,15 +3,14 @@ import { Link } from 'react-router-dom'
 import { useDLQTasks, useRetryDLQTask, useSkipDLQTask, useRetryAllDLQTasks } from '../hooks/useApi'
 import type { DLQTask, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
+import { STAGE_BADGE_COLOR } from '../constants/stages'
 
-// Stage colors for badges
-const stageColors: Record<string, string> = {
-  download: 'bg-blue-100 text-blue-700',
-  downsample: 'bg-indigo-100 text-indigo-700',
-  transcribe: 'bg-purple-100 text-purple-700',
-  clean: 'bg-amber-100 text-amber-700',
-  summarize: 'bg-green-100 text-green-700',
-}
+// Spec #28 entity-branch failures don't normally appear here — they go
+// to ``entity_extraction_status='failed'``, not the ``tasks`` DLQ — but
+// a transient task-level failure would still surface in the queue's
+// failed/dead lists, so the entity-branch entries in STAGE_BADGE_COLOR
+// matter for that path.
+const stageColors = STAGE_BADGE_COLOR
 
 // Error type colors
 const errorTypeColors: Record<string, string> = {

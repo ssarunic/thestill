@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import type { FailureType } from '../api/types'
+import { STAGE_LABEL_FAILURE as stageLabels } from '../constants/stages'
 
 interface FailureDetailsModalProps {
   isOpen: boolean
@@ -17,15 +18,6 @@ interface FailureDetailsModalProps {
   maxRetries?: number
   onRetry?: () => void
   isRetrying?: boolean
-}
-
-// Stage labels
-const stageLabels: Record<string, string> = {
-  download: 'Download',
-  downsample: 'Downsample',
-  transcribe: 'Transcription',
-  clean: 'Cleaning',
-  summarize: 'Summary',
 }
 
 function formatDate(dateStr: string | null): string {
@@ -77,7 +69,7 @@ export default function FailureDetailsModal({
   const isFatal = failureType === 'fatal'
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 overflow-y-auto">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"

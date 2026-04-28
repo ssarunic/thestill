@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Episode, EpisodeWithPodcast, FailureType, PipelineStage } from '../api/types'
+import { STAGE_LABEL_ACTIVE } from '../constants/stages'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
@@ -18,13 +19,7 @@ interface EpisodeCardProps {
   processingStage?: PipelineStage
 }
 
-const stageLabels: Record<PipelineStage, string> = {
-  download: 'Downloading',
-  downsample: 'Downsampling',
-  transcribe: 'Transcribing',
-  clean: 'Cleaning',
-  summarize: 'Summarizing',
-}
+const stageLabels = STAGE_LABEL_ACTIVE
 
 const stateColors: Record<string, string> = {
   discovered: 'bg-gray-100 text-gray-600',
