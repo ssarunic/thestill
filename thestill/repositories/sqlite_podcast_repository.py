@@ -458,8 +458,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         #   tables. ``entity_mentions.entity_id`` is nullable on purpose —
         #   ``extract-entities`` writes rows with ``resolution_status='pending'``
         #   and a ``NULL`` FK, then ``resolve-entities`` fills it in.
-        cursor = conn.execute("PRAGMA table_info(episodes)")
-        episode_columns = {row["name"] for row in cursor.fetchall()}
+        # ``episode_columns`` was repopulated by the spec #18 block above;
+        # nothing between there and here adds ``entity_extraction_status``,
+        # so the set is fresh enough for the membership check.
         if "entity_extraction_status" not in episode_columns:
             logger.info("Migrating database: adding spec #28 entity_extraction_status column to episodes")
             conn.execute("ALTER TABLE episodes ADD COLUMN entity_extraction_status TEXT NULL")

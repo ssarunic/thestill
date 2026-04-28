@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import type { FailureType } from '../api/types'
+import { STAGE_LABEL_FAILURE as stageLabels } from '../constants/stages'
 
 interface FailureDetailsModalProps {
   isOpen: boolean
@@ -17,20 +18,6 @@ interface FailureDetailsModalProps {
   maxRetries?: number
   onRetry?: () => void
   isRetrying?: boolean
-}
-
-// Stage labels
-const stageLabels: Record<string, string> = {
-  download: 'Download',
-  downsample: 'Downsample',
-  transcribe: 'Transcription',
-  clean: 'Cleaning',
-  summarize: 'Summary',
-  // Spec #28 entity branch
-  'extract-entities': 'Extracting entities',
-  'resolve-entities': 'Resolving',
-  'write-corpus': 'Writing corpus',
-  reindex: 'Reindexing',
 }
 
 function formatDate(dateStr: string | null): string {

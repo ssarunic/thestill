@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQueuePipelineTask, useEpisodeTasks, useRunPipeline, useCancelPipeline } from '../hooks/useApi'
 import type { PipelineStage, ExtendedPipelineTaskStatus } from '../api/types'
+import { STAGE_BUTTON_COLOR } from '../constants/stages'
 import PipelineStepper from './PipelineStepper'
 
 interface PipelineActionButtonProps {
@@ -42,19 +43,8 @@ const STAGE_LABELS: Record<string, string> = {
   processing: 'Processing...',
 }
 
-// Color scheme for different states
-const stageColors: Record<PipelineStage, string> = {
-  download: 'bg-blue-600 hover:bg-blue-700',
-  downsample: 'bg-indigo-600 hover:bg-indigo-700',
-  transcribe: 'bg-purple-600 hover:bg-purple-700',
-  clean: 'bg-amber-600 hover:bg-amber-700',
-  summarize: 'bg-green-600 hover:bg-green-700',
-  // Spec #28 entity branch
-  'extract-entities': 'bg-rose-600 hover:bg-rose-700',
-  'resolve-entities': 'bg-pink-600 hover:bg-pink-700',
-  'write-corpus': 'bg-fuchsia-600 hover:bg-fuchsia-700',
-  reindex: 'bg-violet-600 hover:bg-violet-700',
-}
+// Solid button-colour palette — see src/constants/stages.ts.
+const stageColors = STAGE_BUTTON_COLOR
 
 // Format seconds into human-readable time string
 function formatTimeRemaining(seconds: number): string {
