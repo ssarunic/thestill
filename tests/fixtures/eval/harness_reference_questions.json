@@ -1,0 +1,165 @@
+{
+  "_schema": "spec #28 Phase 0.3 — 10 reference questions for the O1 + O5 acceptance gate",
+  "_field_docs": {
+    "id": "stable identifier (q01..q10) — used as a test parametrization key",
+    "question": "the natural-language question Claude is asked, verbatim",
+    "expected_entities": "entities Claude should reference at least once (canonical id form, e.g. person:elon-musk)",
+    "expected_quote_fragments": "substrings that must appear in at least one cited quote (string match, case-insensitive)",
+    "min_distinct_episodes": "minimum number of distinct episode_ids cited in the answer (broad questions: 3+; narrow: 1)",
+    "category": "what failure mode this question stresses; lets the runner group failures by class",
+    "notes": "scratchpad for the human grader; ungraded by the runner"
+  },
+  "_targets": {
+    "count": 10,
+    "phase_1_gate": "Run against the SQL-only MCP alpha. Pass = 10/10 no-fabrication, every quote traceable to a tool result in the same turn.",
+    "phase_2_gate": "Re-run against the full hybrid surface (entity layer + qmd). Same pass criteria.",
+    "nightly": "Run against fixture corpus; regressions block release."
+  },
+  "questions": [
+    {
+      "id": "q01",
+      "question": "What has Scott Galloway said about the SpaceX IPO across recent Prof G Markets episodes, and how has his framing evolved?",
+      "expected_entities": [
+        "person:scott-galloway",
+        "company:spacex"
+      ],
+      "expected_quote_fragments": [
+        "SpaceX",
+        "IPO"
+      ],
+      "min_distinct_episodes": 2,
+      "category": "person × topic × time horizon (canonical O1)",
+      "notes": "Stresses cross-episode aggregation on a single host. Answer must be narrative + cited; the SpaceX IPO is covered in both Prof G Markets and the Prof G Pod, so getting the right host attribution matters."
+    },
+    {
+      "id": "q02",
+      "question": "What did Greg Brockman say about GPT-5.5 'Spud' on Big Technology Podcast?",
+      "expected_entities": [
+        "person:greg-brockman",
+        "company:openai"
+      ],
+      "expected_quote_fragments": [
+        "GPT-5.5",
+        "Spud"
+      ],
+      "min_distinct_episodes": 1,
+      "category": "narrow person × episode (single-source)",
+      "notes": "Tests whether find_mentions / list_quotes_by can pin a single guest interview without confusion with surrounding episodes about OpenAI."
+    },
+    {
+      "id": "q03",
+      "question": "Across the corpus, who has discussed Tim Cook stepping down from Apple, and what reasons are given?",
+      "expected_entities": [
+        "person:tim-cook",
+        "company:apple"
+      ],
+      "expected_quote_fragments": [
+        "Tim Cook",
+        "step"
+      ],
+      "min_distinct_episodes": 3,
+      "category": "cross-podcast topic × multiple speakers",
+      "notes": "Tim Cook stepping down was covered by Big Tech Podcast (Joanna Stern interview), Prof G Markets, and discussed in passing on 20VC. Stresses cross-podcast aggregation."
+    },
+    {
+      "id": "q04",
+      "question": "What has been said on Dwarkesh Podcast about bottlenecks to scaling AI compute?",
+      "expected_entities": [
+        "person:dwarkesh-patel",
+        "person:dylan-patel"
+      ],
+      "expected_quote_fragments": [
+        "scaling",
+        "compute"
+      ],
+      "min_distinct_episodes": 1,
+      "category": "single-podcast deep technical topic",
+      "notes": "Dylan Patel episode is the obvious hit but Ilya and Michael Nielsen episodes touch related themes — top-3 should include all three."
+    },
+    {
+      "id": "q05",
+      "question": "Find every time guests on 20VC have discussed Cursor's acquisition by xAI for $60BN.",
+      "expected_entities": [
+        "company:cursor",
+        "company:xai"
+      ],
+      "expected_quote_fragments": [
+        "Cursor",
+        "60"
+      ],
+      "min_distinct_episodes": 1,
+      "category": "specific deal / dollar-figure lexical hit",
+      "notes": "Lexical-friendly query (specific dollar figure). Hybrid mode should not lose this to semantic noise."
+    },
+    {
+      "id": "q06",
+      "question": "What has been said across the corpus about the AI job crisis, unemployment from automation, and Andrew Yang's predictions?",
+      "expected_entities": [
+        "person:andrew-yang",
+        "topic:ai-job-loss"
+      ],
+      "expected_quote_fragments": [
+        "job",
+        "unemployment"
+      ],
+      "min_distinct_episodes": 3,
+      "category": "broad topic × cross-podcast × secondary entity",
+      "notes": "Tests semantic recall (Prof G Markets explicit Andrew Yang ep + Lenny + Rest Is Money + 20VC). Should not just return the Andrew Yang ep."
+    },
+    {
+      "id": "q07",
+      "question": "On The Rest Is History, what was said about the rise of Margaret Thatcher in the 1970s?",
+      "expected_entities": [
+        "person:margaret-thatcher"
+      ],
+      "expected_quote_fragments": [
+        "Thatcher"
+      ],
+      "min_distinct_episodes": 1,
+      "category": "history-domain (out of distribution from AI)",
+      "notes": "Anchors a non-AI question to make sure search isn't biased toward technology vocabulary. Two-part Britain in the 70s episodes."
+    },
+    {
+      "id": "q08",
+      "question": "Across April 2026 episodes, what was said about Anthropic's Claude Opus 4.7 release?",
+      "expected_entities": [
+        "company:anthropic",
+        "product:claude-opus"
+      ],
+      "expected_quote_fragments": [
+        "Opus",
+        "4.7"
+      ],
+      "min_distinct_episodes": 3,
+      "category": "version × timeframe × product entity",
+      "notes": "Should hit Moonshots EP #248, AI Show #210, Lenny + 20VC. Tests both date_range filtering and entity-type=product."
+    },
+    {
+      "id": "q09",
+      "question": "What have guests said about Iran in 2026 — in the context of the war and in the context of AI supply chain risk?",
+      "expected_entities": [
+        "topic:iran"
+      ],
+      "expected_quote_fragments": [
+        "Iran"
+      ],
+      "min_distinct_episodes": 3,
+      "category": "polysemous topic / cross-context disambiguation",
+      "notes": "Same word, two completely different contexts (geopolitics vs. AI supply chain). Tests whether semantic mode can pull both clusters and present them as distinct."
+    },
+    {
+      "id": "q10",
+      "question": "What have Geoffrey Hinton and Ilya Sutskever said about the future of AI research and where we go after pure scaling?",
+      "expected_entities": [
+        "person:geoffrey-hinton",
+        "person:ilya-sutskever"
+      ],
+      "expected_quote_fragments": [
+        "scaling"
+      ],
+      "min_distinct_episodes": 2,
+      "category": "two-person AND query (set intersection)",
+      "notes": "Tests boolean composition over speakers + topic. Hinton on StarTalk (Feb), Ilya on Dwarkesh (Nov). Should not return either in isolation."
+    }
+  ]
+}

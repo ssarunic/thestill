@@ -1,0 +1,519 @@
+{
+  "_schema": "spec #28 Phase 0.3 — 50 question/episode pairs for the O3 semantic-recall gate",
+  "_field_docs": {
+    "id": "stable identifier (p001..p050) — parametrization key",
+    "question": "natural-language query passed to search_corpus(mode=hybrid)",
+    "relevant_episode_ids": "ground-truth set — episodes that should appear in top-5; multiple correct episodes per question are common and supported",
+    "category": "what failure mode this query stresses (lexical-easy / semantic-only / cross-podcast / specificity / language / etc.)",
+    "notes": "ungraded scratchpad for the human author"
+  },
+  "_targets": {
+    "count": 50,
+    "phase_2_gate": "Run against `search_corpus(mode=hybrid)` over a real corpus subset. Pass = top-5 recall ≥ 0.8 (≥ 40/50 questions have at least one of their relevant_episode_ids in the top 5).",
+    "nightly": "Same metric against fixture corpus."
+  },
+  "_corpus_sample_note": "Episode IDs are taken from the 241 cleaned-with-JSON-sidecar episodes available at the time of authoring (audit_segment_coverage.py output 2026-04-28).",
+  "pairs": [
+    {
+      "id": "p001",
+      "question": "AI infrastructure capex and hyperscaler spending",
+      "relevant_episode_ids": [
+        "41ecea27-e011-45fb-b41d-1fe1c61b1b38",
+        "fcecf0aa-87e6-4373-bc7d-160f036c563b",
+        "afc91a77-4ecc-40d3-a412-fb85aa2c4dfa"
+      ],
+      "category": "semantic-only (none of the episode titles contain 'capex')",
+      "notes": "Should retrieve Prof G Markets IPO ep, Prof G Pod SpaceX ep, Dwarkesh-Dylan Patel."
+    },
+    {
+      "id": "p002",
+      "question": "GPU shortages and data centre buildout",
+      "relevant_episode_ids": [
+        "a83b4189-ebcb-494f-8326-52b1e9fde0ee",
+        "afc91a77-4ecc-40d3-a412-fb85aa2c4dfa",
+        "57e5f594-3052-46a4-a0d0-66007f44e87f"
+      ],
+      "category": "semantic-only / synonym handling",
+      "notes": "Moonshots data center delay, Dwarkesh compute, Big Tech Allbirds GPU pivot."
+    },
+    {
+      "id": "p003",
+      "question": "Anthropic vs OpenAI rivalry and revenue race",
+      "relevant_episode_ids": [
+        "d11ca4c4-d119-4817-a47e-774648599457",
+        "984c7d64-05aa-4a83-ad94-f309a94bb5a5",
+        "d2367fbe-60c3-4216-a9a1-8ef049ea9591"
+      ],
+      "category": "lexical-friendly cross-podcast",
+      "notes": "20VC Anthropic surpasses, Big Tech Aaron Levie, AI Show OpenAI vs Anthropic."
+    },
+    {
+      "id": "p004",
+      "question": "Claude Code transforming software engineering velocity",
+      "relevant_episode_ids": [
+        "1bd83bf1-d8ef-4a51-8033-58383ba5912f",
+        "30816e43-f888-44cd-b915-e541afc3d386",
+        "a26823b1-c5c0-4d0d-83f0-5356710b2dc8"
+      ],
+      "category": "product-name lexical + semantic blend",
+      "notes": "How I AI Intercom 2x, Pragmatic Eng Boris Cherny, How I AI Galileo."
+    },
+    {
+      "id": "p005",
+      "question": "Sam Altman's leadership and OpenAI internal conflicts",
+      "relevant_episode_ids": [
+        "0181f3e2-0946-4105-bdad-a4d285639d74",
+        "956bb0ae-b895-48ad-8a3c-eb716b731e19",
+        "9e65ddcb-87a0-4c70-a275-0ad83b307e66",
+        "eb935272-b2d1-4722-a7d3-c6b42311975e"
+      ],
+      "category": "person × cross-podcast × multi-language",
+      "notes": "Includes a Croatian episode (Netokracija) — tests language-agnostic semantic retrieval."
+    },
+    {
+      "id": "p006",
+      "question": "DeepMind Gemini 3 capabilities and competitive position",
+      "relevant_episode_ids": [
+        "a26dc233-90ac-45e6-a643-a65ec30ee1cf",
+        "909913c6-018e-47ed-b71f-c9886a295596"
+      ],
+      "category": "specific product version",
+      "notes": "MAD Pod ep with Gemini 3 lead + DeepMind ep about AI building AI."
+    },
+    {
+      "id": "p007",
+      "question": "Mistral and European AI sovereignty",
+      "relevant_episode_ids": [
+        "9b779519-f776-452e-90ac-5d0c058a87c3"
+      ],
+      "category": "narrow / single-source",
+      "notes": "Latent Space Mistral ep — should rank top-1 lexically."
+    },
+    {
+      "id": "p008",
+      "question": "Reasoning models and chain-of-thought research",
+      "relevant_episode_ids": [
+        "0ca99ab4-a64c-4fb2-9c23-35efa5efb4b6",
+        "5a9730ad-a784-4100-b8dd-26a50e10606d",
+        "f3bbbf56-b65d-461f-8c17-b65b4455c273"
+      ],
+      "category": "semantic-only (technical concept)",
+      "notes": "Jerry Tworek GPT-5 thinking, Mark Chen on continual learning, Ilya age of research."
+    },
+    {
+      "id": "p009",
+      "question": "AI agents replacing SaaS and the software factory",
+      "relevant_episode_ids": [
+        "b7d99ca0-38f6-4229-9265-7409bd6de384",
+        "b5f61e6d-52bb-4baf-a31f-5767f608f008",
+        "199e7084-655e-4c63-86ef-f6b0b6a0e814",
+        "f702bce4-854b-4d14-b534-4e490650f876"
+      ],
+      "category": "trend-level cross-podcast",
+      "notes": "Latent Space Shopify + Notion, MAD Anthropic, Cheeky Pint Bret Taylor on Sierra."
+    },
+    {
+      "id": "p010",
+      "question": "Voice AI and conversational interfaces",
+      "relevant_episode_ids": [
+        "e68c3db9-219b-4446-9626-9eaf4204eb47",
+        "9b779519-f776-452e-90ac-5d0c058a87c3"
+      ],
+      "category": "narrow topic / two episodes",
+      "notes": "Cheeky Pint ElevenLabs ep, Latent Space Voxtral TTS."
+    },
+    {
+      "id": "p011",
+      "question": "Autonomous vehicles and the future of car ownership",
+      "relevant_episode_ids": [
+        "bcf36899-fc47-4cc2-a539-c0e9a032f3d2",
+        "7dfa7150-5b2d-41c6-8ff2-b5e4b8eaf249",
+        "9e210572-d14b-4f1c-9428-c5a685e8cb56"
+      ],
+      "category": "topic × cross-podcast",
+      "notes": "Cheeky Pint Waymo, Moonshots Uber CEO, Moonshots Elon $5T bet."
+    },
+    {
+      "id": "p012",
+      "question": "Cybersecurity threats from frontier AI models",
+      "relevant_episode_ids": [
+        "0181f3e2-0946-4105-bdad-a4d285639d74",
+        "045d2931-0006-49aa-aaa4-ef96101afdd5",
+        "8198dfbb-dd8d-4d46-a2b9-ace2540bd9b5"
+      ],
+      "category": "semantic-only / multi-language",
+      "notes": "Brockman cybersecurity, Prof G Markets dangerous AI leak, Croatian 'preopasan za javnost'."
+    },
+    {
+      "id": "p013",
+      "question": "Pentagon contracts and AI for defense",
+      "relevant_episode_ids": [
+        "35cbcba2-a81f-4413-8e39-88bcaf205604",
+        "3b9a0086-1e42-4326-a695-7e0b44ae0d35",
+        "fadae6e5-1687-49da-93de-55f1bd45f715"
+      ],
+      "category": "topic × cross-podcast",
+      "notes": "Big Tech Under Secretary, AI Show Pentagon round 2, AI Show Anthropic government."
+    },
+    {
+      "id": "p014",
+      "question": "Iran geopolitics and the impact on US households",
+      "relevant_episode_ids": [
+        "b91cff3c-5d86-418d-b590-b05b57361ce3",
+        "2b5644d1-f4b4-4765-aadd-4acc230a247f",
+        "6379befb-636d-4b90-8df1-f0d699a21e8f"
+      ],
+      "category": "polysemous-topic disambiguation (Iran vs AI Iran)",
+      "notes": "Prof G Markets Iran $50K, two months in, Prof G Pod Raging Moderates."
+    },
+    {
+      "id": "p015",
+      "question": "Iran's role in AI chip and supply chain risk",
+      "relevant_episode_ids": [
+        "37b1b86a-54ca-49fc-aa6d-c65355f9a78e",
+        "045d2931-0006-49aa-aaa4-ef96101afdd5"
+      ],
+      "category": "polysemous-topic disambiguation (the other side)",
+      "notes": "Moonshots Iran AI supply chain, Prof G Markets dangerous AI leak."
+    },
+    {
+      "id": "p016",
+      "question": "How startups should price AI agents and outcome-based pricing",
+      "relevant_episode_ids": [
+        "f702bce4-854b-4d14-b534-4e490650f876",
+        "5157fbca-0643-42d0-81b1-246595f044ec"
+      ],
+      "category": "narrow business topic",
+      "notes": "Cheeky Pint Bret Taylor (Sierra outcome pricing), 20VC Applovin economics."
+    },
+    {
+      "id": "p017",
+      "question": "PM hiring and what hiring managers screen for",
+      "relevant_episode_ids": [
+        "53bbb04f-fd74-4756-8a4d-a79f34bc3615",
+        "41e8c1d1-edc3-4dd0-b4fe-a5f0027aa455",
+        "7abcc9fe-1949-4cf8-bb89-e122fa8755f2"
+      ],
+      "category": "narrow vertical (product management)",
+      "notes": "Skip Pod hiring, Lenny half of PMs in trouble, Lenny comp negotiation."
+    },
+    {
+      "id": "p018",
+      "question": "Snap, Snapchat, and the future of mobile platforms",
+      "relevant_episode_ids": [
+        "08eefcd3-9ece-4adb-a6da-abc8ffe4c5f8",
+        "18aa83c7-0221-45ef-a133-697f52f00b1f"
+      ],
+      "category": "company × duplicate guest across podcasts",
+      "notes": "Evan Spiegel appears on both Cheeky Pint and Lenny — tests speaker-disambiguation."
+    },
+    {
+      "id": "p019",
+      "question": "Restaurant industry economics and DoorDash",
+      "relevant_episode_ids": [
+        "d48c5c7c-bf35-4ee0-a93e-db2dfc7ca31a",
+        "7213b69f-bb32-48b2-841b-ad09571ef798"
+      ],
+      "category": "company × cross-podcast",
+      "notes": "Cheeky Pint Tony Xu, In Depth ex-COO Christopher Payne."
+    },
+    {
+      "id": "p020",
+      "question": "Distribution as the most important moat in 2026",
+      "relevant_episode_ids": [
+        "18aa83c7-0221-45ef-a133-697f52f00b1f",
+        "d61c1024-5a03-489b-807a-356f7ac95be8"
+      ],
+      "category": "thesis-level concept",
+      "notes": "Lenny Spiegel on distribution, 20VC Jake Paul on attention as moat."
+    },
+    {
+      "id": "p021",
+      "question": "Solo founders bootstrapping to seven figures with AI",
+      "relevant_episode_ids": [
+        "72f157d6-dfb6-446c-bbab-2ab042cd7106",
+        "09dcb8db-184e-4d67-9f68-88afd1172208"
+      ],
+      "category": "specific business pattern",
+      "notes": "Behind the Craft Tibo, How I AI Memelord."
+    },
+    {
+      "id": "p022",
+      "question": "Figma, design tools and AI-augmented designers",
+      "relevant_episode_ids": [
+        "db13bd54-81f7-4237-b230-5616aabcf136",
+        "92be08c5-b396-4ade-b581-8c95de1ddb30",
+        "99ec8217-1ed9-4a85-b8bf-1f3c9959bc26",
+        "2cd9aee6-2a5e-4304-9609-8d0ac1047a32"
+      ],
+      "category": "narrow topic × company × multi-episode",
+      "notes": "Behind the Craft Dylan Field + Jenny Wen + Felix Lee Figma MCP, How I AI Claude design."
+    },
+    {
+      "id": "p023",
+      "question": "Engineering organisations after Kotlin: programming language design",
+      "relevant_episode_ids": [
+        "4b4ac1e0-0096-4b98-b13c-99f128102284"
+      ],
+      "category": "single-source narrow lexical",
+      "notes": "Pragmatic Eng Kotlin successor."
+    },
+    {
+      "id": "p024",
+      "question": "Building data-intensive applications and distributed systems trade-offs",
+      "relevant_episode_ids": [
+        "6d50fcad-d6c4-4d1a-af3a-d4918845b901"
+      ],
+      "category": "single-source author interview",
+      "notes": "Pragmatic Eng Martin Kleppmann."
+    },
+    {
+      "id": "p025",
+      "question": "Venture capital is changing — attention and brand over cash",
+      "relevant_episode_ids": [
+        "d61c1024-5a03-489b-807a-356f7ac95be8",
+        "070256b2-37c2-4ac6-9db1-a55e1d975831",
+        "554af5a0-fdb1-4da3-a1b2-ea07d48ab005"
+      ],
+      "category": "trend × cross-VC-podcast",
+      "notes": "20VC Jake Paul, 20VC Cursor xAI, 20VC more developers."
+    },
+    {
+      "id": "p026",
+      "question": "Public benefit corporations, mission-driven AI labs",
+      "relevant_episode_ids": [
+        "5d528c02-2ea8-41f2-b0b9-20d598aec60f",
+        "228924b1-f8a1-432d-b9ef-7730f8135e84"
+      ],
+      "category": "abstract topic",
+      "notes": "20VC Anj Midha on Anthropic, Lenny Cat Wu on Anthropic product."
+    },
+    {
+      "id": "p027",
+      "question": "Reed Hastings on Netflix culture and the keeper test",
+      "relevant_episode_ids": [
+        "1db5096c-ee1f-4aea-bc9e-2386fd1d8138"
+      ],
+      "category": "single-source person × principle",
+      "notes": "Masters of Scale Possible — Reed Hastings."
+    },
+    {
+      "id": "p028",
+      "question": "GLP-1 weight-loss drugs and aging parents",
+      "relevant_episode_ids": [
+        "2c0446d8-5cc5-4a85-adac-0cf5dee7489b"
+      ],
+      "category": "single-source narrow medical",
+      "notes": "Prof G Pod Truth About GLP-1s."
+    },
+    {
+      "id": "p029",
+      "question": "Longevity research, age reversal and David Sinclair's protocols",
+      "relevant_episode_ids": [
+        "25214373-c1d2-4eee-b1fd-37f56e21b5a7"
+      ],
+      "category": "single-source person × topic",
+      "notes": "Moonshots David Sinclair longevity."
+    },
+    {
+      "id": "p030",
+      "question": "De-extinction and bringing back lost animal species",
+      "relevant_episode_ids": [
+        "acc11be6-7483-42af-a1d1-3fd0618c2a64"
+      ],
+      "category": "single-source niche scientific topic",
+      "notes": "Moonshots Ben Lamm Colossal."
+    },
+    {
+      "id": "p031",
+      "question": "Cosmology, dark energy and the origins of the universe",
+      "relevant_episode_ids": [
+        "fbdbb519-f5cc-4bc6-a75e-ff4e19749718",
+        "aedc18b8-583a-4544-921c-c1b72044dadf"
+      ],
+      "category": "scientific cluster",
+      "notes": "Two StarTalk Cosmic Queries episodes."
+    },
+    {
+      "id": "p032",
+      "question": "Asteroid sample return missions",
+      "relevant_episode_ids": [
+        "1dfe0956-0b16-4922-9c27-6c2c9fccec1d"
+      ],
+      "category": "single-source narrow",
+      "notes": "StarTalk Bennu."
+    },
+    {
+      "id": "p033",
+      "question": "How evolution shapes cancer treatment",
+      "relevant_episode_ids": [
+        "1651e233-a8ef-41d7-b87b-d80f75a1638b",
+        "3a436427-ccf1-4a68-b31e-f4e1a6ef1471"
+      ],
+      "category": "cross-podcast biology",
+      "notes": "Rest Is Science evolution + Latent Space cancer trials."
+    },
+    {
+      "id": "p034",
+      "question": "Margaret Thatcher's rise and Britain's political turn in the late 1970s",
+      "relevant_episode_ids": [
+        "ff6acd38-6e8e-4025-b4fe-a280510db54a",
+        "3a4f5c23-cba5-4293-a3f2-b5acf2fb5cb4"
+      ],
+      "category": "history domain (anti-AI bias check)",
+      "notes": "Two Rest Is History 'Britain in the 70s' parts."
+    },
+    {
+      "id": "p035",
+      "question": "Samurai warfare and the formation of feudal Japan",
+      "relevant_episode_ids": [
+        "26b00332-6852-4b47-bce4-737e90b2e718",
+        "67a1735b-8a21-4ce7-8047-82b735c3bd05"
+      ],
+      "category": "history domain — Japanese context",
+      "notes": "Two Rest Is History Dawn of the Samurai parts."
+    },
+    {
+      "id": "p036",
+      "question": "Manchester City and Arsenal Premier League title race",
+      "relevant_episode_ids": [
+        "bfc2ebc8-2899-4d04-a280-9f49cc60668d",
+        "a08a1161-a0d2-4252-a0a9-73087dc9551f"
+      ],
+      "category": "sport domain (anti-tech bias check)",
+      "notes": "Both Rest Is Football episodes."
+    },
+    {
+      "id": "p037",
+      "question": "Should the UK government do more to back AI startups?",
+      "relevant_episode_ids": [
+        "85d8ccea-e882-429d-8443-cd0b1e910f83",
+        "c0084d86-69c1-4ec1-9ac7-4b1a5e6f640f",
+        "92dbcb53-0208-4829-bfb0-c5c948b81eb4"
+      ],
+      "category": "policy × cross-episode within podcast",
+      "notes": "Three Rest Is Money episodes about AI and the public sector."
+    },
+    {
+      "id": "p038",
+      "question": "Youth unemployment in the UK and why it's worsening",
+      "relevant_episode_ids": [
+        "594a4b8b-1299-4ede-9e1c-1941ced31361"
+      ],
+      "category": "single-source policy",
+      "notes": "Rest Is Money youth unemployment."
+    },
+    {
+      "id": "p039",
+      "question": "Croatian-language episodes about AI ethics and Sam Altman",
+      "relevant_episode_ids": [
+        "eb935272-b2d1-4722-a7d3-c6b42311975e",
+        "8198dfbb-dd8d-4d46-a2b9-ace2540bd9b5"
+      ],
+      "category": "non-English language coverage",
+      "notes": "Two Netokracija episodes — tests whether the index handles Croatian; spec acknowledges English-only quality."
+    },
+    {
+      "id": "p040",
+      "question": "Tylenol murders and forensic investigation",
+      "relevant_episode_ids": [
+        "aeb5702e-4c9c-4a9b-8eb6-374da0cb25a3"
+      ],
+      "category": "non-English single-source true crime",
+      "notes": "Mjesto Zločina Croatian true-crime ep."
+    },
+    {
+      "id": "p041",
+      "question": "Ilya Sutskever on the post-scaling era of AI research",
+      "relevant_episode_ids": [
+        "f3bbbf56-b65d-461f-8c17-b65b4455c273"
+      ],
+      "category": "single-source person × thesis",
+      "notes": "Dwarkesh ep — should rank top-1 with hybrid search."
+    },
+    {
+      "id": "p042",
+      "question": "Geoffrey Hinton on the origins of artificial intelligence",
+      "relevant_episode_ids": [
+        "824b65e2-ffe0-4cc7-b9ce-084d140fbf21"
+      ],
+      "category": "single-source person × historical framing",
+      "notes": "StarTalk Hinton."
+    },
+    {
+      "id": "p043",
+      "question": "Continual learning and reinforcement learning beyond code",
+      "relevant_episode_ids": [
+        "5a9730ad-a784-4100-b8dd-26a50e10606d",
+        "0ca99ab4-a64c-4fb2-9c23-35efa5efb4b6"
+      ],
+      "category": "ML technical cluster",
+      "notes": "Unsupervised Learning OpenAI chief scientist + MAD GPT-5 thinking."
+    },
+    {
+      "id": "p044",
+      "question": "Cloudflare and the future of internet infrastructure",
+      "relevant_episode_ids": [
+        "a22d5d50-041d-4837-a6fa-a2f41157bcc4"
+      ],
+      "category": "single-source company × infra topic",
+      "notes": "Masters of Scale Matthew Prince."
+    },
+    {
+      "id": "p045",
+      "question": "WhatsApp's engineering culture and serving billions of users",
+      "relevant_episode_ids": [
+        "cf77e54d-f08b-4003-87fb-bbef84b70a08"
+      ],
+      "category": "single-source engineering history",
+      "notes": "Pragmatic Eng Jean Lee on building WhatsApp."
+    },
+    {
+      "id": "p046",
+      "question": "Uber's early scaling and CTO experience",
+      "relevant_episode_ids": [
+        "30920190-8d3f-438f-988f-206db6092bb2"
+      ],
+      "category": "single-source company history",
+      "notes": "Pragmatic Eng Thuan Pham."
+    },
+    {
+      "id": "p047",
+      "question": "OKRs becoming outputs instead of business outcomes",
+      "relevant_episode_ids": [
+        "a248ddf7-074d-4038-ba59-d68c6df93717"
+      ],
+      "category": "single-source PM antipattern",
+      "notes": "Product Thinking ep 267."
+    },
+    {
+      "id": "p048",
+      "question": "Coaching frameworks and post-IPO product management",
+      "relevant_episode_ids": [
+        "a0a5ecdb-7877-40d2-a497-fd246f3b3420",
+        "b1e6f7cf-6cb0-4b67-9874-e20b815e3428"
+      ],
+      "category": "two-episode small-domain topic",
+      "notes": "Product Therapy + Skip Pod post-IPO PM."
+    },
+    {
+      "id": "p049",
+      "question": "Replit, vibe coding and the future of programming jobs",
+      "relevant_episode_ids": [
+        "4948411d-92de-4912-bc86-d5273cfcda46",
+        "554af5a0-fdb1-4da3-a1b2-ea07d48ab005"
+      ],
+      "category": "polarising thesis × cross-VC-podcast",
+      "notes": "20VC Replit CEO + 20VC more developers in 5 years."
+    },
+    {
+      "id": "p050",
+      "question": "Notion's MCP-first product reorg and the agentic workspace",
+      "relevant_episode_ids": [
+        "b5f61e6d-52bb-4baf-a31f-5767f608f008"
+      ],
+      "category": "single-source product × architecture",
+      "notes": "Latent Space Notion 5 rebuilds + 100 tools."
+    }
+  ]
+}
