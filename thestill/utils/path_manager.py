@@ -37,12 +37,22 @@ from typing import Literal, Optional
 # validates its own env-flag input against the same names.
 CleanupPipelineName = Literal["segmented", "legacy"]
 
+# Spec #28 — only the three entity types that get rendered pages on
+# disk (per the corpus layout in Strategy §1). ``product`` exists in the
+# entity database but does not produce a Markdown page in v1.
+CorpusEntityType = Literal["person", "company", "topic"]
+
 
 # Slugs originate from ``utils.slug.generate_slug`` which uses
 # python-slugify and emits lowercase ``[a-z0-9-]+``. The regex below
 # additionally forbids leading hyphens and bounds length — both
 # defence-in-depth against future slug-source changes.
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
+
+# UUID4 episode IDs are 36 chars of ``[0-9a-f-]`` arranged as 8-4-4-4-12.
+# We validate independently of ``_SLUG_RE`` because UUIDs do not match
+# the slug pattern (and we don't want to relax the slug rules).
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def _validate_slug(slug: str, *, name: str) -> str:
@@ -56,6 +66,22 @@ def _validate_slug(slug: str, *, name: str) -> str:
     if not isinstance(slug, str) or not _SLUG_RE.fullmatch(slug):
         raise ValueError(f"invalid {name}={slug!r}: must match [a-z0-9][a-z0-9-]{{0,99}}")
     return slug
+
+
+def _validate_episode_id(episode_id: str) -> str:
+    """Refuse anything that isn't a UUID4-shaped string.
+
+    Used by the spec #28 corpus path helpers (``corpus_episode_file`` /
+    ``corpus_episode_segmap_file``) where the filename comes from
+    ``Episode.id`` rather than a slug. The DB enforces ``length(id) =
+    36`` already; this is the same belt-and-braces stance as
+    ``_validate_slug``. Returns the **lowercased** form so a caller
+    that round-trips an uppercase UUID through this validator gets
+    consistent file paths on case-sensitive filesystems.
+    """
+    if not isinstance(episode_id, str) or not _UUID_RE.fullmatch(episode_id.lower()):
+        raise ValueError(f"invalid episode_id={episode_id!r}: must be a UUID4")
+    return episode_id.lower()
 
 
 class PathManager:
@@ -110,6 +136,15 @@ class PathManager:
         self._pending_operations = "pending_operations"
         self._external_transcripts = "external_transcripts"
         self._digests = "digests"
+        # Spec #28 — corpus is the rendered Markdown projection that qmd
+        # indexes (per-episode pages with segment anchors + per-entity
+        # pages). It's a regenerable view over ``clean_transcripts/`` +
+        # the ``entities`` SQLite tables, not a source of truth.
+        self._corpus = "corpus"
+        self._corpus_episodes = "episodes"
+        self._corpus_persons = "persons"
+        self._corpus_companies = "companies"
+        self._corpus_topics = "topics"
         self._feeds_file = "feeds.json"
 
     def _assert_inside_root(self, path: Path) -> Path:
@@ -184,6 +219,65 @@ class PathManager:
     def digests_dir(self) -> Path:
         """Get path to digests directory (stores generated digest markdown files)"""
         return self.storage_path / self._digests
+
+    # --- Spec #28 corpus paths -------------------------------------------------
+    # The four entity-type subdirs are split because a rendered Markdown
+    # entity page is itself just ``<type>/<slug>.md`` — keeping them in
+    # parallel directories matches the spec layout (Strategy §1) and lets
+    # Obsidian/qmd globs (`persons/*.md` etc.) work out of the box.
+
+    def corpus_dir(self) -> Path:
+        """Root of the rendered corpus projection (``data/corpus/``)."""
+        return self.storage_path / self._corpus
+
+    def corpus_episodes_dir(self) -> Path:
+        return self.corpus_dir() / self._corpus_episodes
+
+    def corpus_persons_dir(self) -> Path:
+        return self.corpus_dir() / self._corpus_persons
+
+    def corpus_companies_dir(self) -> Path:
+        return self.corpus_dir() / self._corpus_companies
+
+    def corpus_topics_dir(self) -> Path:
+        return self.corpus_dir() / self._corpus_topics
+
+    def corpus_episode_file(self, podcast_slug: str, episode_id: str) -> Path:
+        """Rendered episode Markdown page.
+
+        ``episode_id`` is the UUID4 from ``episodes.id`` (36 chars,
+        ``[a-f0-9-]``). It does NOT match ``_SLUG_RE`` (which only
+        accepts ``[a-z0-9][a-z0-9-]{0,99}``), so we validate it
+        independently rather than passing it through ``_validate_slug``.
+        ``_assert_inside_root`` is the load-bearing safety check that
+        keeps the path under ``data/``.
+        """
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_episode_id(episode_id)
+        return self._assert_inside_root(self.corpus_episodes_dir() / podcast_slug / f"{episode_id}.md")
+
+    def corpus_episode_segmap_file(self, podcast_slug: str, episode_id: str) -> Path:
+        """Sidecar JSON that maps qmd hits back to segment timestamps.
+
+        Lives next to ``<id>.md`` so byte-offset → segment-id resolution
+        is one disk read. Spec Strategy §4 ("Mapping qmd hits to exact
+        timestamps").
+        """
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_episode_id(episode_id)
+        return self._assert_inside_root(self.corpus_episodes_dir() / podcast_slug / f"{episode_id}.segmap.json")
+
+    def corpus_entity_file(self, entity_type: CorpusEntityType, entity_slug: str) -> Path:
+        """Rendered entity page (``persons/<slug>.md`` etc.)."""
+        _validate_slug(entity_slug, name="entity_slug")
+        type_to_dir = {
+            "person": self.corpus_persons_dir(),
+            "company": self.corpus_companies_dir(),
+            "topic": self.corpus_topics_dir(),
+        }
+        if entity_type not in type_to_dir:
+            raise ValueError(f"unknown entity_type={entity_type!r}: must be one of {sorted(type_to_dir)}")
+        return self._assert_inside_root(type_to_dir[entity_type] / f"{entity_slug}.md")
 
     # File path methods
 
@@ -543,6 +637,12 @@ class PathManager:
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
             self.digests_dir(),
+            # Spec #28 corpus tree.
+            self.corpus_dir(),
+            self.corpus_episodes_dir(),
+            self.corpus_persons_dir(),
+            self.corpus_companies_dir(),
+            self.corpus_topics_dir(),
         ]
 
         for directory in directories:

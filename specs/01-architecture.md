@@ -126,6 +126,25 @@ Each step is an atomic operation that can be run independently and scaled horizo
 5. **Clean** (`thestill clean-transcript`): LLM-based transcript cleaning
 6. **Summarize** (`thestill summarize`): Comprehensive analysis
 
+### Entity branch (spec #28)
+
+After `clean-transcript` completes, the dispatcher fans out to two
+parallel branches: the existing `summarize` chain and a new entity
+branch (`extract-entities → resolve-entities → write-corpus → reindex`).
+Each branch progresses independently and a failure in one does not
+block the other.
+
+```text
+clean ─┬─→ summarize                                                 (existing critical path)
+       └─→ extract-entities → resolve-entities → write-corpus → reindex   (entity branch)
+```
+
+User-facing `EpisodeState` still tracks the summarize branch only;
+entity-branch progress lives in `episodes.entity_extraction_status`
+(`pending` | `complete` | `failed` | `skipped_legacy`). A failure in
+the entity branch never marks the episode as failed in the user-visible
+sense — the episode card stays green.
+
 ### Episode State Progression
 
 ```
@@ -263,3 +282,25 @@ Comprehensive analysis of cleaned transcripts:
 - Centralized path management for all file artifacts
 - Single source of truth for directory and file paths
 - Methods for all artifact types (audio, transcripts, summaries)
+
+### Corpus Layout (`data/corpus/`)
+
+The rendered Markdown projection consumed by qmd (spec #28). It is a
+*regenerable view* over `clean_transcripts/` and the SQLite entity
+tables — never edited by hand, rebuilt by `thestill reindex` and the
+`write-corpus` pipeline stage.
+
+```text
+data/corpus/
+├── episodes/<podcast-slug>/<episode-id>.md           # rendered transcript with entity wikilinks
+├── episodes/<podcast-slug>/<episode-id>.segmap.json  # qmd-hit → segment-id sidecar
+├── persons/<slug>.md
+├── companies/<slug>.md
+└── topics/<slug>.md
+```
+
+`PathManager` exposes `corpus_dir`, `corpus_episode_file`,
+`corpus_episode_segmap_file`, and `corpus_entity_file(type, slug)` for
+the three rendered entity types (`person`, `company`, `topic`); the
+fourth entity type (`product`) lives in the SQLite tables but does not
+get a rendered page in v1.
