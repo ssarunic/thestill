@@ -12,19 +12,17 @@ from thestill.core.queue_manager import STAGE_SUCCESSORS, TaskStage, get_next_st
 
 
 class TestStageSuccessors:
-    def test_user_chain_is_linear_until_clean(self):
+    def test_user_chain_is_linear(self):
         assert get_next_stages(TaskStage.DOWNLOAD) == [TaskStage.DOWNSAMPLE]
         assert get_next_stages(TaskStage.DOWNSAMPLE) == [TaskStage.TRANSCRIBE]
         assert get_next_stages(TaskStage.TRANSCRIBE) == [TaskStage.CLEAN]
+        assert get_next_stages(TaskStage.CLEAN) == [TaskStage.SUMMARIZE]
 
-    def test_clean_fans_out(self):
-        successors = get_next_stages(TaskStage.CLEAN)
-        # Order matters less than membership, but pin both for clarity:
-        # summarize comes first because it's the existing user chain.
-        assert successors == [TaskStage.SUMMARIZE, TaskStage.EXTRACT_ENTITIES]
-
-    def test_summarize_terminates(self):
-        assert get_next_stages(TaskStage.SUMMARIZE) == []
+    def test_summarize_continues_into_entity_branch(self):
+        # spec #28 — entities run AFTER summarize, not in parallel.
+        # A future GLiNER variant may consume summary text, so summary
+        # must be durable on disk before extraction starts.
+        assert get_next_stages(TaskStage.SUMMARIZE) == [TaskStage.EXTRACT_ENTITIES]
 
     def test_entity_branch_is_linear_to_reindex(self):
         assert get_next_stages(TaskStage.EXTRACT_ENTITIES) == [TaskStage.RESOLVE_ENTITIES]
@@ -37,10 +35,7 @@ class TestStageSuccessors:
         # without affecting the canonical graph.
         result = get_next_stages(TaskStage.CLEAN)
         result.clear()
-        assert get_next_stages(TaskStage.CLEAN) == [
-            TaskStage.SUMMARIZE,
-            TaskStage.EXTRACT_ENTITIES,
-        ]
+        assert get_next_stages(TaskStage.CLEAN) == [TaskStage.SUMMARIZE]
 
     def test_every_stage_has_an_entry(self):
         # Pin the invariant so a future stage addition doesn't silently

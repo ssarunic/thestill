@@ -126,24 +126,31 @@ Each step is an atomic operation that can be run independently and scaled horizo
 5. **Clean** (`thestill clean-transcript`): LLM-based transcript cleaning
 6. **Summarize** (`thestill summarize`): Comprehensive analysis
 
-### Entity branch (spec #28)
+### Entity continuation (spec #28)
 
-After `clean-transcript` completes, the dispatcher fans out to two
-parallel branches: the existing `summarize` chain and a new entity
-branch (`extract-entities → resolve-entities → write-corpus → reindex`).
-Each branch progresses independently and a failure in one does not
-block the other.
+The pipeline is purely linear; entity stages run after `summarize`
+completes:
 
 ```text
-clean ─┬─→ summarize                                                 (existing critical path)
-       └─→ extract-entities → resolve-entities → write-corpus → reindex   (entity branch)
+clean → summarize → extract-entities → resolve-entities → write-corpus → reindex
 ```
 
-User-facing `EpisodeState` still tracks the summarize branch only;
-entity-branch progress lives in `episodes.entity_extraction_status`
+The order is intentional: a future GLiNER variant may consume summary
+text, so summary must be durable on disk before extraction starts.
+The per-episode mutex in the worker means at most one stage is
+in-flight per episode anyway — the linear chain just makes the
+dependency explicit instead of relying on FIFO ordering.
+
+User-facing `EpisodeState` still tops out at `SUMMARIZED`;
+entity-stage progress lives in `episodes.entity_extraction_status`
 (`pending` | `complete` | `failed` | `skipped_legacy`). A failure in
-the entity branch never marks the episode as failed in the user-visible
+an entity stage never marks the episode as failed in the user-visible
 sense — the episode card stays green.
+
+Callers that explicitly stop early (`target_state="summarized"` on
+the `run_pipeline` API route) skip the entity stages; callers that
+omit `target_state` (the process-episode and digest flows) run the
+full chain through to `reindex`.
 
 ### Episode State Progression
 

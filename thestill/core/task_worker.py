@@ -408,31 +408,34 @@ class TaskWorker:
     }
 
     def _maybe_enqueue_next_stage(self, task: Task) -> None:
-        """If task has ``run_full_pipeline`` metadata, fan out successors.
+        """If ``run_full_pipeline`` is set, advance the chain by one step.
 
-        Spec #28 §0.5 — replaces the linear ``get_next_stage`` walk with
-        a dependency-graph fan-out (``get_next_stages``). When ``CLEAN``
-        completes this enqueues both ``SUMMARIZE`` (existing user chain)
-        and ``EXTRACT_ENTITIES`` (entity branch); each successor then
-        progresses linearly via this same function.
+        The chain is purely linear (spec #28 §0.5):
+        ``download → downsample → transcribe → clean → summarize →
+        extract-entities → resolve-entities → write-corpus → reindex``.
 
-        ``target_state`` short-circuits only the user chain — once the
-        episode reaches the requested state we stop enqueueing further
-        user-facing stages, but in-flight entity-branch tasks are
-        unaffected (they don't appear in ``_STAGE_TO_STATE``).
+        ``target_state`` is honoured as an early-stop marker: callers
+        that explicitly pass ``target_state="summarized"`` (e.g. the
+        ``run_pipeline`` API route's default) stop after the user
+        chain. Callers that don't pass ``target_state`` at all (e.g.
+        process-episode + batch digest flows) run the full chain
+        through to ``reindex`` so the entity branch lands without
+        further opt-in. Entity-branch stages are absent from
+        ``_STAGE_TO_STATE`` on purpose — they're not user-visible
+        states and target_state never matches one.
         """
         if not task.metadata.get("run_full_pipeline"):
             return
 
-        target_state = task.metadata.get("target_state", "summarized")
+        target_state = task.metadata.get("target_state")
         resulting_state = self._STAGE_TO_STATE.get(task.stage.value)
-        if resulting_state == target_state:
+        if target_state is not None and resulting_state == target_state:
             logger.info("pipeline_target_reached", target_state=target_state)
             return
 
         successors = get_next_stages(task.stage)
         if not successors:
-            logger.info("pipeline_branch_complete", stage=task.stage.value)
+            logger.info("pipeline_complete", stage=task.stage.value)
             return
 
         for next_stage in successors:
