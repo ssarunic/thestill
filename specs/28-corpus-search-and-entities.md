@@ -243,17 +243,51 @@ Every search/list tool returns rows that look like:
 No tool returns a "summarised" field without the source attached. Claude
 can compose, but cannot fabricate.
 
-**Mapping qmd hits to exact timestamps.** qmd's public README emphasises
-paths, line numbers, and chunk snippets; the exact metadata shape its MCP
-`query` tool returns (line numbers? char offsets? snippet text only?) is
-not pinned in upstream docs. **Phase 0 spike** verifies what's actually
-returned and pins the contract before we commit to a sidecar format. The
-default plan below assumes line-number metadata is available (more robust
-than byte offsets across whitespace edits); if the spike shows only
-snippet text, we fall back to fuzzy-locating the snippet inside the
-source file using a Rabin-Karp scan.
+**Mapping qmd hits to exact timestamps.** Pinned by the Phase 0.1
+spike against qmd 2.1.0 (CLI + MCP server now share a version, where
+1.1.5 had a separately-tagged `qmd@0.9.9` MCP server). Re-verified
+under 2.1.0 — response shape is identical.
 
-The line-number-keyed default contract:
+- qmd's MCP server exposes **one search tool** named `query` (no
+  separate lexical/hybrid tools). Mode is selected by the
+  `searches[].type` field — `lex` (BM25, no LLM), `vec` (vector), or
+  `hyde` (hypothetical-answer expansion). All three return identical
+  response shapes.
+- Each hit in `result.structuredContent.results[]` has these fields:
+
+  ```jsonc
+  {
+    "docid":   "#cba654",                                            // content-hash, opaque
+    "file":    "thestill-qmd-spike/episodes/ep03-…-compute.md",       // collection-relative path
+    "title":   "ep03-dylan-patel-compute",                            // filename stem
+    "score":   0.93,                                                  // float 0–1
+    "context": null,                                                  // future hook; ignore
+    "snippet": "3: @@ -2,2 @@ (1 before, 0 after)\n4: \n5: [01:41] **Dylan Patel:** …"
+  }
+  ```
+
+- **`snippet` is the load-bearing field for line resolution.** It
+  starts with a `<line>: @@ -<start>,<count> @@ (N before, M after)`
+  unified-diff hunk header; following lines are `<line>: <content>`
+  pairs (1-indexed, source-file lines). The first non-header
+  `<line>:` token is the line number `qmd_client.py` keys off when
+  binary-searching the segmap sidecar.
+- **No byte offsets are exposed by qmd**, so the segmap sidecar's
+  `byte_start`/`byte_end` fields are kept as belt-and-braces only —
+  every lookup goes through line numbers in production.
+- The `qmd search` CLI does emit byte/line markers in plain-text form
+  (`qmd://collection/path.md:LINE` URIs + diff hunks), but the CLI
+  output is for humans; `qmd_client.py` always uses the MCP transport.
+
+**Implications for the search/service layer:**
+
+- `mode=lexical` and `mode=hybrid` both call MCP `query`, just with
+  different `searches` payloads (`[{type:"lex", …}]` vs
+  `[{type:"lex", …}, {type:"vec", …}]`). One transport, one tool.
+- The `qmd update`/`qmd embed` shell-out remains the right reindex
+  path — the MCP server has no write tools.
+
+The line-number-keyed contract:
 
 - Each rendered episode page in `data/corpus/episodes/.../<id>.md` is
   written as one Markdown block per cleaned-transcript segment, prefixed
@@ -658,12 +692,14 @@ The point of Phase 0 is to **lock down the unknowns and the measurement
 sticks before writing any production code.** Three deliverables, all
 small, all upfront.
 
-- **0.1 — qmd metadata spike.** Run `qmd query` (and `qmd search`)
-  against a 5-episode toy corpus and inspect the MCP response shape.
-  Confirm whether hits expose: line numbers, char offsets, snippet text,
-  chunk identifiers. Pin the resulting contract in this spec (replace
-  the "line preferred, byte fallback" placeholder in Strategy §4 with
-  the actual answer). Time-boxed to half a day.
+- **0.1 — qmd metadata spike.** ✅ Done 2026-04-28 against qmd 2.1.0
+  (re-run after upgrading from 1.1.5; confirmed identical response
+  shape across the major bump). Findings pinned in Strategy §4:
+  the MCP `query` tool exposes line numbers via `snippet` text
+  (1-indexed `<line>: …` prefix and a `@@ -<start>,<count> @@` diff
+  header), no byte offsets; `mode=lexical` and `mode=hybrid` both call
+  the same `query` tool with different `searches[].type` payloads.
+  Sidecar stays line-keyed; byte offsets are belt-and-braces only.
 - **0.2 — Speaker/segment coverage audit.** Run a one-shot script over
   the existing `clean_transcript_json_path` corpus to count: episodes
   with `AnnotatedTranscript` JSON sidecars present, episodes without (=
