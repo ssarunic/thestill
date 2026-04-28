@@ -27,6 +27,7 @@ Usage:
 """
 
 import json
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
@@ -586,17 +587,14 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
 
 def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
-    """Spec #28 §0.5 — shared no-op handler for the entity branch.
+    """Spec #28 §0.5 — shared no-op handler for entity stages still in Phase 0 mode.
 
-    Registered for all four entity-branch stages (extract-entities,
-    resolve-entities, write-corpus, reindex). Phase 1 will replace each
-    registration with a real handler (GLiNER extractor, ReFinED
-    resolver, corpus writer, qmd reindexer). Until then, the no-op
-    keeps the dependency-graph fan-out (``CLEAN`` → ``SUMMARIZE`` +
-    ``EXTRACT_ENTITIES``) chaining cleanly through to ``REINDEX``
-    without every cleaned episode hitting "no handler registered" →
-    DLQ. ``task.stage.value`` distinguishes the four call sites in
-    structured logs.
+    Phase 1 replaces these one-by-one with real handlers (GLiNER
+    extractor, ReFinED resolver, corpus writer, qmd reindexer). Until
+    each stage's real handler lands, the no-op keeps the linear chain
+    progressing through to ``REINDEX`` without hitting "no handler
+    registered" → DLQ. ``task.stage.value`` distinguishes the call
+    sites in structured logs.
     """
     logger.info(
         "entity_branch_placeholder",
@@ -604,6 +602,102 @@ def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
         episode_id=task.episode_id,
         note="phase_0_no_op",
     )
+
+
+def handle_extract_entities(task: Task, state: "AppState") -> None:
+    """Spec #28 §1.2 — run GLiNER over the cleaned-transcript JSON sidecar.
+
+    Reads ``episodes.clean_transcript_json_path``. Episodes without a
+    sidecar (legacy Markdown-only) are flagged as ``skipped_legacy``
+    and emit zero mentions — re-cleaning them through the
+    segment-preserving pipeline is a separate spec.
+
+    Idempotent: re-running on an already-extracted episode wipes the
+    old ``entity_mentions`` for that episode and writes fresh ones.
+    The user-facing failure isolation rule (``_NON_USER_FAILING_STAGES``
+    in queue_manager) means errors here flip
+    ``episodes.entity_extraction_status='failed'`` rather than the
+    user-visible ``failed_at_stage``.
+    """
+    from ..models.entities import EntityExtractionStatus
+
+    logger.info("entity_extraction_started", episode_id=task.episode_id)
+
+    podcast, episode = _get_episode_or_fail(task, state)
+    repo = state.entity_repository
+
+    if not episode.clean_transcript_json_path:
+        # Legacy episode — Markdown-only cleaning, no structured
+        # sidecar. Spec is explicit: skip with the documented status,
+        # never raise.
+        state.repository.update_entity_extraction_status(
+            episode_id=episode.id,
+            status=EntityExtractionStatus.SKIPPED_LEGACY.value,
+        )
+        logger.info(
+            "entity_extraction_skipped_legacy",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+        )
+        return
+
+    sidecar_path = state.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+    if not sidecar_path.exists():
+        raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar_path} (episode {episode.id})")
+
+    state.repository.update_entity_extraction_status(
+        episode_id=episode.id,
+        status=EntityExtractionStatus.PENDING.value,
+    )
+
+    with _handler_error_context(f"extracting entities for {episode.title}"):
+        from ..models.annotated_transcript import AnnotatedTranscript
+
+        transcript = AnnotatedTranscript.model_validate_json(sidecar_path.read_text(encoding="utf-8"))
+
+        extractor = _get_or_create_entity_extractor(state)
+        mentions = extractor.extract(transcript, episode_id=episode.id)
+
+        # Idempotent re-extract: wipe + write. The brief gap between
+        # the two transactions is harmless because no consumer reads
+        # ``entity_mentions`` during ``extract-entities`` — resolution
+        # runs in the next stage.
+        repo.delete_mentions_for_episode(episode.id)
+        inserted = repo.insert_mentions(mentions)
+
+        state.repository.update_entity_extraction_status(
+            episode_id=episode.id,
+            status=EntityExtractionStatus.COMPLETE.value,
+        )
+        logger.info(
+            "entity_extraction_completed",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+            mentions=inserted,
+        )
+
+
+_extractor_init_lock = threading.Lock()
+
+
+def _get_or_create_entity_extractor(state: "AppState"):
+    """Lazy-init the process-scope ``EntityExtractor``.
+
+    Loading GLiNER costs ~5-10s and ~400MB of RAM, so we defer until
+    the first ``extract-entities`` call and cache the instance on
+    ``AppState``. Subsequent tasks reuse the warm model.
+
+    The lock prevents two concurrent ``extract-entities`` tasks (when
+    ``EXTRACT_ENTITIES_PARALLEL_JOBS > 1``) from both creating fresh
+    extractors and double-loading the model — losing ~400MB to a GC'd
+    duplicate.
+    """
+    with _extractor_init_lock:
+        if state.entity_extractor is None:
+            from .entity_extractor import EntityExtractor
+
+            state.entity_extractor = EntityExtractor()
+    return state.entity_extractor
 
 
 def create_task_handlers(
@@ -625,7 +719,7 @@ def create_task_handlers(
         TaskStage.TRANSCRIBE: lambda task, cb=None: handle_transcribe(task, state, cb),
         TaskStage.CLEAN: lambda task, cb=None: handle_clean(task, state),
         TaskStage.SUMMARIZE: lambda task, cb=None: handle_summarize(task, state),
-        TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_extract_entities(task, state),
         TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
         TaskStage.WRITE_CORPUS: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
         TaskStage.REINDEX: lambda task, cb=None: handle_entity_branch_placeholder(task, state),

@@ -1,0 +1,1709 @@
+{
+  "episode_id": "",
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.16,
+      "end": 31.6,
+      "speaker": "Melissa Perri",
+      "text": "Creating great products isn't just about features or roadmaps. It's about how organisations think, decide, and operate around products. Product Thinking explores the systems, leadership, and culture behind successful product organisations. We're bringing together insights from multiple product leaders, pulled from past conversations, to explore one shared topic, offering different perspectives and lessons from real-world experience. I'm Melissa Perri, and you're listening to the Product Thinking Podcast by Product Institute.",
+      "kind": "intro",
+      "sponsor": null,
+      "source_segment_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "source_word_span": {
+        "start_segment_id": 0,
+        "start_word_index": 0,
+        "end_segment_id": 4,
+        "end_word_index": 13
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 1,
+      "start": 33.44,
+      "end": 59.76,
+      "speaker": "Melissa Perri",
+      "text": "Today we're exploring one of the most misunderstood frameworks in product, OKRs, why they so often turn into renamed roadmaps, copy-paste cascades, or individual performance tools, and what it actually takes to make them work. We'll start with Hugo Froes, who at the time was head of product operations at OLX, who shares how breaking OKRs into discovery, build, and outcome types helped teams stay flexible and connected to real results.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        5,
+        6
+      ],
+      "source_word_span": {
+        "start_segment_id": 5,
+        "start_word_index": 0,
+        "end_segment_id": 6,
+        "end_word_index": 34
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 2,
+      "start": 60.32,
+      "end": 74.08,
+      "speaker": "Melissa Perri",
+      "text": "Then we'll hear from Jeff Gothelf and Josh Seiden, the co-founders of Sense and Respond Learning, who break down what makes a key result actually meaningful and why cascading OKRs is a critical thinking exercise, not a copy-paste operation.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        7
+      ],
+      "source_word_span": {
+        "start_segment_id": 7,
+        "start_word_index": 0,
+        "end_segment_id": 7,
+        "end_word_index": 38
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 3,
+      "start": 74.56,
+      "end": 88.88,
+      "speaker": "Melissa Perri",
+      "text": "And we'll wrap up with Anish Bhimani, at the time chief product officer at JPMorgan Chase, who shares what happened when he asked his organisation to map their key results, found 341 of them, and why getting down to the real difference makers",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        8
+      ],
+      "source_word_span": {
+        "start_segment_id": 8,
+        "start_word_index": 0,
+        "end_segment_id": 8,
+        "end_word_index": 43
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 4,
+      "start": 88.88,
+      "end": 89.84,
+      "speaker": "Josh Seiden",
+      "text": "changed everything.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        9
+      ],
+      "source_word_span": {
+        "start_segment_id": 9,
+        "start_word_index": 0,
+        "end_segment_id": 9,
+        "end_word_index": 1
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 5,
+      "start": 90.32,
+      "end": 107.12,
+      "speaker": "Melissa Perri",
+      "text": "Let's hear from Hugo. When I've worked with companies who had that challenge of how do you break down this into, first of all, like a good OKR, one that we can actually understand? And then how do we put it into a system where now that we look at it, we know what actually makes sense? Usually there's all different levels.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        10,
+        11,
+        12,
+        13
+      ],
+      "source_word_span": {
+        "start_segment_id": 10,
+        "start_word_index": 0,
+        "end_segment_id": 13,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 6,
+      "start": 107.2,
+      "end": 124.56,
+      "speaker": "Melissa Perri",
+      "text": "Like people think those levels of OKRs could be like in a story level, they could be really high, they could be really low. What did you do to standardise that OKR framework that you just talked about between like discovery building? Did you have to socialise it? Did you have to teach people on it?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        14,
+        15,
+        16,
+        17
+      ],
+      "source_word_span": {
+        "start_segment_id": 14,
+        "start_word_index": 0,
+        "end_segment_id": 17,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 7,
+      "start": 124.64,
+      "end": 130.96,
+      "speaker": "Melissa Perri",
+      "text": "And then how did you get it into a system where it started to make sense to you and the rest of the company and the leaders?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        18
+      ],
+      "source_word_span": {
+        "start_segment_id": 18,
+        "start_word_index": 0,
+        "end_segment_id": 18,
+        "end_word_index": 26
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 8,
+      "start": 131.28,
+      "end": 145.2,
+      "speaker": "Hugo Froes",
+      "text": "It's for me, one thing I always find in every organisation I arrive at is one of the key problems is always planning. And in bigger enterprise organisations, people argue against this and oh, how can you do yearly planning? But we do yearly planning, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        19,
+        20,
+        21
+      ],
+      "source_word_span": {
+        "start_segment_id": 19,
+        "start_word_index": 0,
+        "end_segment_id": 21,
+        "end_word_index": 5
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 9,
+      "start": 145.36,
+      "end": 168.88,
+      "speaker": "Hugo Froes",
+      "text": "We have a stage at one stage of the year where we have to figure out what is the budget we want to basically allocate for our, you know, every gamble experience, everything we want to do next year. How do we allocate that budget? So this planning has to happen. But in terms of the organisations, trying to turn this as fluid as possible, adaptable and flexible as possible, that's where we see the most value, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        22,
+        23,
+        24,
+        25
+      ],
+      "source_word_span": {
+        "start_segment_id": 22,
+        "start_word_index": 0,
+        "end_segment_id": 25,
+        "end_word_index": 26
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 10,
+      "start": 169.04,
+      "end": 185.36,
+      "speaker": "Hugo Froes",
+      "text": "Because teams think, oh, you have these set timelines, and this is how it has to work. But sometimes it's that simple thing of someone who comes in who's neutral, who's outside, and saying, okay, we know we have to deliver this by this date. Let's actually work backwards rather than saying we have to deliver by this date. So let's sit a week before and discuss.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        26,
+        27,
+        28,
+        29
+      ],
+      "source_word_span": {
+        "start_segment_id": 26,
+        "start_word_index": 0,
+        "end_segment_id": 29,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 11,
+      "start": 185.52,
+      "end": 207.2,
+      "speaker": "Hugo Froes",
+      "text": "No, if you want to be comfortable here, maybe we need to discuss a month or two months before, where it's a relaxed conversation, right? You don't feel the pressure, you have to make a decision now. And so by this, we start creating the space for people to be flexible, start connecting the dots earlier. But another thing we did, for example, was with OKRs, a simple thing was defining two or three types of OKRs.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        30,
+        31,
+        32,
+        33
+      ],
+      "source_word_span": {
+        "start_segment_id": 30,
+        "start_word_index": 0,
+        "end_segment_id": 33,
+        "end_word_index": 20
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 12,
+      "start": 207.28,
+      "end": 225.6,
+      "speaker": "Hugo Froes",
+      "text": "And it's like everybody talks about the outcome OKRs, and I get it. The problem is what we noticed was with teams, they were working on an OKR and then they don't see those results for two or three quarters, right? And it's always on their roadmap, it's always there, sitting there, and it's bugging them. And you turn around and said, okay, let's break this down. You've got discovery OKRs.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        34,
+        35,
+        36,
+        37,
+        38
+      ],
+      "source_word_span": {
+        "start_segment_id": 34,
+        "start_word_index": 0,
+        "end_segment_id": 38,
+        "end_word_index": 3
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 13,
+      "start": 225.68,
+      "end": 243.36,
+      "speaker": "Hugo Froes",
+      "text": "So now you can actually map out discovery you're going to be doing. And next you're going to be doing build OKRs, right? Because you have to build something that's built around milestones. And then you have outcome OKRs. And so what happened was, strangely enough, this created a bit of a space for that habit of the, I won't even call it dual track. It's almost a triple track, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        39,
+        40,
+        41,
+        42,
+        43,
+        44
+      ],
+      "source_word_span": {
+        "start_segment_id": 39,
+        "start_word_index": 0,
+        "end_segment_id": 44,
+        "end_word_index": 5
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 14,
+      "start": 243.44,
+      "end": 263.92,
+      "speaker": "Hugo Froes",
+      "text": "Which is at any given time, you've got some things that are doing discovery, some that are doing build, and some that are doing launching, right? And actually in outcomes by this, because what I've seen in organisations is usually, oh, you've assigned an OKR, that's 100% of your time. And you're like, no, there's a hundred other things that have to happen, or else next quarter, we're only going to be, we're going to go back to zero.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        45,
+        46,
+        47
+      ],
+      "source_word_span": {
+        "start_segment_id": 45,
+        "start_word_index": 0,
+        "end_segment_id": 47,
+        "end_word_index": 28
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 15,
+      "start": 264.0,
+      "end": 268.88,
+      "speaker": "Hugo Froes",
+      "text": "And so it was creating this, and it created a huge impact. So one of the big ones is always planning.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        48,
+        49
+      ],
+      "source_word_span": {
+        "start_segment_id": 48,
+        "start_word_index": 0,
+        "end_segment_id": 49,
+        "end_word_index": 8
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 16,
+      "start": 269.12,
+      "end": 286.48,
+      "speaker": "Melissa Perri",
+      "text": "What I like about your approach too is I feel like it's very pragmatic when you're introducing OKRs or this concept of how we measure things to companies for the first time. There's a lot of people who are very dogmatic about it and say, hey, we should have started with the outcome and the key results. And it's, yeah, in a perfect world, you should have.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        50,
+        51,
+        52
+      ],
+      "source_word_span": {
+        "start_segment_id": 50,
+        "start_word_index": 0,
+        "end_segment_id": 52,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 17,
+      "start": 286.8,
+      "end": 302.96,
+      "speaker": "Melissa Perri",
+      "text": "But we live in a world where we've got a lot of stuff in progress. And if we're going to do this for the first time, why don't we actually look at what's in progress, label that? And then next time when we go to do the research, let's then let's look at our OKRs. Then we can get into it. And I think that's such a realistic place for companies to start.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        53,
+        54,
+        55,
+        56,
+        57
+      ],
+      "source_word_span": {
+        "start_segment_id": 53,
+        "start_word_index": 0,
+        "end_segment_id": 57,
+        "end_word_index": 11
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 18,
+      "start": 303.04,
+      "end": 319.84,
+      "speaker": "Melissa Perri",
+      "text": "And I'm so glad that you talked about it because I feel like sometimes people have that disconnect where they're like, oh, I want to do this the right way. So let's just throw out everything we're working on and start all over again. And you're like, no, you still have to deliver things. Like the stuff you're working on may be good. We just haven't expressed it that way. And that lets us know if it's good.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "source_word_span": {
+        "start_segment_id": 58,
+        "start_word_index": 0,
+        "end_segment_id": 63,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 19,
+      "start": 320.08,
+      "end": 328.96,
+      "speaker": "Hugo Froes",
+      "text": "No, and I think a lot of people have used OKRs as an excuse to aspire to a lot, right? But then you say, but what are you actually delivering?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        64,
+        65
+      ],
+      "source_word_span": {
+        "start_segment_id": 64,
+        "start_word_index": 0,
+        "end_segment_id": 65,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 20,
+      "start": 329.12,
+      "end": 329.36,
+      "speaker": "Anish Bhimani",
+      "text": "Yeah.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        66
+      ],
+      "source_word_span": {
+        "start_segment_id": 66,
+        "start_word_index": 0,
+        "end_segment_id": 66,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 21,
+      "start": 329.6,
+      "end": 348.08,
+      "speaker": "Hugo Froes",
+      "text": "Is it worthwhile? And oh, but we're hitting these numbers that we set out. Either sometimes they're too cautious, or you realise that they're building something, but it becomes it becomes a Frankenstein's monster. It has to be connected to, you know what, we have to keep producing. We have to keep bringing that value. And you might hit those numbers, but if the long-term value is broken, it isn't worth anything.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ],
+      "source_word_span": {
+        "start_segment_id": 67,
+        "start_word_index": 0,
+        "end_segment_id": 72,
+        "end_word_index": 16
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 22,
+      "start": 348.24,
+      "end": 355.04,
+      "speaker": "Hugo Froes",
+      "text": "And so it's an education piece, and everybody has their opinion. It's you bring up OKRs and we've got 500 opinions about everything.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        73,
+        74
+      ],
+      "source_word_span": {
+        "start_segment_id": 73,
+        "start_word_index": 0,
+        "end_segment_id": 74,
+        "end_word_index": 11
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 23,
+      "start": 355.28,
+      "end": 380.08,
+      "speaker": "Melissa Perri",
+      "text": "What Hugo laid out is something a lot of teams avoid saying out loud. OKRs can easily become a way to look ambitious without actually delivering. Splitting them into discovery, build, and outcome types gives teams a more honest way to track progress and stay flexible without losing sight of what actually needs to ship. But even when you structure OKRs well, there's still the question of what makes a key result truly meaningful.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        75,
+        76,
+        77,
+        78
+      ],
+      "source_word_span": {
+        "start_segment_id": 75,
+        "start_word_index": 0,
+        "end_segment_id": 78,
+        "end_word_index": 18
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 24,
+      "start": 380.24,
+      "end": 384.64,
+      "speaker": "Melissa Perri",
+      "text": "And that's where a lot of organisations quietly get it wrong. Here's Jeff and Josh.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        79,
+        80
+      ],
+      "source_word_span": {
+        "start_segment_id": 79,
+        "start_word_index": 0,
+        "end_segment_id": 80,
+        "end_word_index": 3
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 25,
+      "start": 384.96,
+      "end": 409.44,
+      "speaker": "Jeff Gothelf",
+      "text": "A good OKR. So and it's two parts, right? Objectives and key results. The objective is a qualitative, aspirational, and inspirational statement for the work that your team is doing. So this is the reason they get out of bed every day. This is an alignment statement. And depending on where the team sits in the organisation, it could be more strategic, it could be more tactical.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87
+      ],
+      "source_word_span": {
+        "start_segment_id": 81,
+        "start_word_index": 0,
+        "end_segment_id": 87,
+        "end_word_index": 19
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 26,
+      "start": 409.6,
+      "end": 437.2,
+      "speaker": "Jeff Gothelf",
+      "text": "But the idea is to really think through about why we're doing this work. We're trying to make something better, more efficient, easier to use, more accurate, whatever it is. We're looking for those kind of qualitative descriptors and again, something aspirational. Make it a lot easier for first-time home buyers to get a mortgage, right? Something along those lines, right? That's the objective.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        88,
+        89,
+        90,
+        91,
+        92,
+        93
+      ],
+      "source_word_span": {
+        "start_segment_id": 88,
+        "start_word_index": 0,
+        "end_segment_id": 93,
+        "end_word_index": 3
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 27,
+      "start": 437.36,
+      "end": 462.64,
+      "speaker": "Jeff Gothelf",
+      "text": "The key result is the quantitative part of the conversation that tells us how will we know we have achieved the objective. And the fundamental difference in the ideality, the OKR ideology that we're pushing forward in this book is that your key results have to be outcomes. They have to be measures of human behaviour, right? The humans that you're actually serving in this particular case. And that's how you know that you've actually delivered value.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        94,
+        95,
+        96,
+        97,
+        98
+      ],
+      "source_word_span": {
+        "start_segment_id": 94,
+        "start_word_index": 0,
+        "end_segment_id": 98,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 28,
+      "start": 462.8,
+      "end": 487.44,
+      "speaker": "Jeff Gothelf",
+      "text": "And I think that where this gets fluffy in Measure What Matters in a lot of organisations is that they're not strict on that, right? They will let outputs become the key results. And if you have an output like a feature, I would make it the will be the easiest, the easiest way for first-time home buyers to get a mortgage is our objective, and our key result is a mobile mortgage application by Friday. Yeah, exactly.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        99,
+        100,
+        101,
+        102
+      ],
+      "source_word_span": {
+        "start_segment_id": 99,
+        "start_word_index": 0,
+        "end_segment_id": 102,
+        "end_word_index": 1
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 29,
+      "start": 487.6,
+      "end": 509.52,
+      "speaker": "Jeff Gothelf",
+      "text": "Exactly by Friday. Exactly right. We've changed nothing except the name of the goal. The goal is now called OKR, but all we've done is fixed time, fixed scope initiative, right? Same thing we've always been doing. When you change the goal to a key result, right, increase the number of first-time home buyers applying for a mortgage with our bank by a hundred percent, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ],
+      "source_word_span": {
+        "start_segment_id": 103,
+        "start_word_index": 0,
+        "end_segment_id": 108,
+        "end_word_index": 28
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 30,
+      "start": 509.68,
+      "end": 534.08,
+      "speaker": "Jeff Gothelf",
+      "text": "All of a sudden you get a clear sense about whether or not you've actually delivered something of value. But the fundamental difference here is that the goal isn't dictating what you're delivering. The goal, the OKR, is dictating how you'll know you've actually delivered something of value. We want to see people changing their behaviour in a meaningful way for them that positively impacts the business as well.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        109,
+        110,
+        111,
+        112
+      ],
+      "source_word_span": {
+        "start_segment_id": 109,
+        "start_word_index": 0,
+        "end_segment_id": 112,
+        "end_word_index": 20
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 31,
+      "start": 534.56,
+      "end": 557.04,
+      "speaker": "Melissa Perri",
+      "text": "I don't recommend tools unless I actually use them. So when I tell you Granola has become a daily essential for me and most of my team, that means something. We're all in a lot of meetings. Granola is an AI notepad that quietly enhances your notes in the background. No bots joining your call, no awkward recordings, just cleaner thinking after every meeting. It's the rare tool that gives you time back instead of asking for more of it.",
+      "kind": "ad_break",
+      "sponsor": "Granola",
+      "source_segment_ids": [
+        113,
+        114,
+        115,
+        116,
+        117,
+        118
+      ],
+      "source_word_span": {
+        "start_segment_id": 113,
+        "start_word_index": 0,
+        "end_segment_id": 118,
+        "end_word_index": 15
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 32,
+      "start": 557.36,
+      "end": 561.68,
+      "speaker": "Melissa Perri",
+      "text": "You can try it yourself with three months free on any paid plan at granola.ai",
+      "kind": "ad_break",
+      "sponsor": "Granola",
+      "source_segment_ids": [
+        119
+      ],
+      "source_word_span": {
+        "start_segment_id": 119,
+        "start_word_index": 0,
+        "end_segment_id": 119,
+        "end_word_index": 14
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 33,
+      "start": 561.92,
+      "end": 563.6,
+      "speaker": "Josh Seiden",
+      "text": "/productinstitute.",
+      "kind": "ad_break",
+      "sponsor": "Granola",
+      "source_segment_ids": [
+        120
+      ],
+      "source_word_span": {
+        "start_segment_id": 120,
+        "start_word_index": 0,
+        "end_segment_id": 120,
+        "end_word_index": 2
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 34,
+      "start": 564.24,
+      "end": 591.76,
+      "speaker": "Melissa Perri",
+      "text": "So we're looking at OKRs then on the team level. How does this work to like scaling up to executives? Like, do executives have OKRs? What do those look like? And then how should we think about cascading them down to teams? And I also see people do this wrong as well. I feel like somewhere, and I don't know where the hell this was written, honestly, but I see people interpret that somebody's OKR, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127
+      ],
+      "source_word_span": {
+        "start_segment_id": 121,
+        "start_word_index": 0,
+        "end_segment_id": 127,
+        "end_word_index": 24
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 35,
+      "start": 591.84,
+      "end": 612.24,
+      "speaker": "Melissa Perri",
+      "text": "Like their key results should be somebody else, the next team down objectives. I read this somewhere and I've seen teams do this, and I'm like, what the like I don't know where that came from, but no idea. But I've seen several companies do this where it's like, okay, I have the top level objective and key results, and then the next team takes those key results and those become their objectives. And I was like, what the?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        128,
+        129,
+        130,
+        131
+      ],
+      "source_word_span": {
+        "start_segment_id": 128,
+        "start_word_index": 0,
+        "end_segment_id": 131,
+        "end_word_index": 5
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 36,
+      "start": 612.32,
+      "end": 618.24,
+      "speaker": "Melissa Perri",
+      "text": "Like, what the hell are you doing? So curious how you see these things, cascade, correctly.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        132,
+        133
+      ],
+      "source_word_span": {
+        "start_segment_id": 132,
+        "start_word_index": 0,
+        "end_segment_id": 133,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 37,
+      "start": 618.56,
+      "end": 638.64,
+      "speaker": "Josh Seiden",
+      "text": "Well, I think in an informal way, that certainly can work, right? You know, I think there's a useful question to ask, which is like, okay, this is the organisation, this is the next level up, right? This is let's start at the top. This is the organisation's goal here. What can my team do to contribute to that goal? Right.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        134,
+        135,
+        136,
+        137,
+        138,
+        139
+      ],
+      "source_word_span": {
+        "start_segment_id": 134,
+        "start_word_index": 0,
+        "end_segment_id": 139,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 38,
+      "start": 638.88,
+      "end": 661.84,
+      "speaker": "Josh Seiden",
+      "text": "And so I think, you know, looking up to that OKR is important and looking at the pieces of the OKR, right? Oh, well, the key result is to, I don't know, whatever, increase the number of registered users on our website. Like, okay, well, what can we do to increase the number of registered users on our website? Like, that's an interesting conversation.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        140,
+        141,
+        142,
+        143
+      ],
+      "source_word_span": {
+        "start_segment_id": 140,
+        "start_word_index": 0,
+        "end_segment_id": 143,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 39,
+      "start": 662.0,
+      "end": 669.6,
+      "speaker": "Josh Seiden",
+      "text": "Is it a mechanical conversation where you just copy and paste? No, it's not, right? It's a this whole thing has to be a critical thinking exercise, you know.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        144,
+        145,
+        146
+      ],
+      "source_word_span": {
+        "start_segment_id": 144,
+        "start_word_index": 0,
+        "end_segment_id": 146,
+        "end_word_index": 14
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 40,
+      "start": 669.76,
+      "end": 692.0,
+      "speaker": "Melissa Perri",
+      "text": "Yeah, and I totally agree with that. Like to me, like that's strategy deployment, right? It's like you have to actually make sure all these things go together. And then if my objective above me is to increase, let's say, adoption of a product, then there has to be some kind of data behind my objective, right? About how solving this problem will increase adoption, right? And the results we can track that show that it leads to it.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        147,
+        148,
+        149,
+        150,
+        151,
+        152
+      ],
+      "source_word_span": {
+        "start_segment_id": 147,
+        "start_word_index": 0,
+        "end_segment_id": 152,
+        "end_word_index": 12
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 41,
+      "start": 692.16,
+      "end": 707.76,
+      "speaker": "Melissa Perri",
+      "text": "What I see people do is literally copy and paste it, which is wrong. So I want to just point that out that if you were doing that, that's wrong. But I like the way that you're describing it. So tell me more about when you're working with executives as well, like what types of OKRs should they be handing down?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        153,
+        154,
+        155,
+        156
+      ],
+      "source_word_span": {
+        "start_segment_id": 153,
+        "start_word_index": 0,
+        "end_segment_id": 156,
+        "end_word_index": 23
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 42,
+      "start": 707.84,
+      "end": 718.24,
+      "speaker": "Melissa Perri",
+      "text": "How do they make sure that they set the right tone and the right, I guess, scope for an organisation so that people can look at it and say, how do I contribute to those OKRs?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        157
+      ],
+      "source_word_span": {
+        "start_segment_id": 157,
+        "start_word_index": 0,
+        "end_segment_id": 157,
+        "end_word_index": 35
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 43,
+      "start": 718.64,
+      "end": 728.8,
+      "speaker": "Jeff Gothelf",
+      "text": "So the way that we talk about it is that you should be setting objectives and key results, goals for the organisation that you have influence over.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        158
+      ],
+      "source_word_span": {
+        "start_segment_id": 158,
+        "start_word_index": 0,
+        "end_segment_id": 158,
+        "end_word_index": 28
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 44,
+      "start": 729.28,
+      "end": 729.52,
+      "speaker": null,
+      "text": "Right.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        159
+      ],
+      "source_word_span": {
+        "start_segment_id": 159,
+        "start_word_index": 0,
+        "end_segment_id": 159,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 45,
+      "start": 729.6,
+      "end": 749.68,
+      "speaker": "Jeff Gothelf",
+      "text": "So what is this kind of the world that you can impact? That's where your OKRs go. So if you're an executive and you own a company, like you're in an own, but you're in charge of an organisation, then you're setting corporate goals, enterprise-wide goals, right? If you're an executive in charge of a business unit, your OKRs are going to be focused on that business unit.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        160,
+        161,
+        162,
+        163
+      ],
+      "source_word_span": {
+        "start_segment_id": 160,
+        "start_word_index": 0,
+        "end_segment_id": 163,
+        "end_word_index": 19
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 46,
+      "start": 749.84,
+      "end": 769.12,
+      "speaker": "Jeff Gothelf",
+      "text": "If you're in charge of a product within that business unit, right, that OKR is going to be for that product. And if you're in charge of a portion of the customer journey of that product, then your sphere of influence is just your OKR is going to be focused on that portion of the customer journey, right? You're the authentication team, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        164,
+        165,
+        166
+      ],
+      "source_word_span": {
+        "start_segment_id": 164,
+        "start_word_index": 0,
+        "end_segment_id": 166,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 47,
+      "start": 769.28,
+      "end": 785.84,
+      "speaker": "Jeff Gothelf",
+      "text": "Your OKR should be focused on making the easiest, smoothest, most efficient, you know, most successful authentication process, right, in the world, that type of thing. Because that's the world that you can influence, right? Now I wholeheartedly agree with you, Melissa.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        167,
+        168,
+        169
+      ],
+      "source_word_span": {
+        "start_segment_id": 167,
+        "start_word_index": 0,
+        "end_segment_id": 169,
+        "end_word_index": 6
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 48,
+      "start": 786.0,
+      "end": 800.8,
+      "speaker": "Jeff Gothelf",
+      "text": "You should be able to then say when we make this authentication process the best it can be, that actually leads to more folks interacting with the system more quickly and it reduces our operational costs because we're not getting calls to the call centre to reset passwords.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        170
+      ],
+      "source_word_span": {
+        "start_segment_id": 170,
+        "start_word_index": 0,
+        "end_segment_id": 170,
+        "end_word_index": 47
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 49,
+      "start": 800.96,
+      "end": 801.2,
+      "speaker": null,
+      "text": "Right.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        171
+      ],
+      "source_word_span": {
+        "start_segment_id": 171,
+        "start_word_index": 0,
+        "end_segment_id": 171,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 50,
+      "start": 801.36,
+      "end": 812.56,
+      "speaker": "Jeff Gothelf",
+      "text": "So that's how we're contributing to the organisation by making the best authentication process possible. But that's to me is what do you have sort of influence over? And that's the scope of your goal, of your OKR.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        172,
+        173,
+        174
+      ],
+      "source_word_span": {
+        "start_segment_id": 172,
+        "start_word_index": 0,
+        "end_segment_id": 174,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 51,
+      "start": 812.8,
+      "end": 832.24,
+      "speaker": "Melissa Perri",
+      "text": "That makes a lot of sense. So Jeff and Josh made the distinction really clear. A key result is not a feature, a launch date, or a project milestone. It has to be a measure of behaviour change. If you can rename your existing roadmap as an OKR without changing anything about it, you've got the wrong goal. And the cascade problem they described is just as common.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        175,
+        176,
+        177,
+        178,
+        179,
+        180
+      ],
+      "source_word_span": {
+        "start_segment_id": 175,
+        "start_word_index": 0,
+        "end_segment_id": 180,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 52,
+      "start": 832.48,
+      "end": 857.6,
+      "speaker": "Melissa Perri",
+      "text": "Every level of the org, taking the key results above them and calling those their objectives. That's not strategy deployment, it's repackaging. For our final perspective, let's hear from Anish on what it looks like to actually fix this inside one of the most complex product environments out there. Besides, you know, history of meeting all these deadlines and being accountable for it, why do you think people have a hard time thinking in outcomes?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        181,
+        182,
+        183,
+        184
+      ],
+      "source_word_span": {
+        "start_segment_id": 181,
+        "start_word_index": 0,
+        "end_segment_id": 184,
+        "end_word_index": 25
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 53,
+      "start": 857.76,
+      "end": 864.8,
+      "speaker": "Melissa Perri",
+      "text": "What have you seen be the thing that people resist? And what have you used as ways to get them to be more outcome-oriented?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        185,
+        186
+      ],
+      "source_word_span": {
+        "start_segment_id": 185,
+        "start_word_index": 0,
+        "end_segment_id": 186,
+        "end_word_index": 13
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 54,
+      "start": 865.04,
+      "end": 884.96,
+      "speaker": "Anish Bhimani",
+      "text": "Yeah, I think there's two answers to that. Number one is everybody loves to say it's okay to fail until you actually do, right? And then all of a sudden, everybody comes out of the woodwork. And how could you let this happen? And for every one person doing something, there's six people telling them they're doing it wrong and things like that as well.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        187,
+        188,
+        189,
+        190,
+        191
+      ],
+      "source_word_span": {
+        "start_segment_id": 187,
+        "start_word_index": 0,
+        "end_segment_id": 191,
+        "end_word_index": 21
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 55,
+      "start": 885.2,
+      "end": 905.6,
+      "speaker": "Anish Bhimani",
+      "text": "The other thing I'd say, Melissa, is the challenge with outcomes is you can't escape accountability. So it's not that there's a lot of sort of human nature. It says, well, wait a minute, I did my part. My project was green, I delivered this thing. The fact that we didn't get the outcome for the customer, it's not my fault. I was like, well, wait a minute. That's why we're here, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198
+      ],
+      "source_word_span": {
+        "start_segment_id": 192,
+        "start_word_index": 0,
+        "end_segment_id": 198,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 56,
+      "start": 905.68,
+      "end": 918.08,
+      "speaker": "Anish Bhimani",
+      "text": "How do you put the customer at everything we're the setup of everything we're doing, right? And make sure that they are getting the outcome they need. If you do your little part building this widget or this feature and nobody uses it, what the hell was the point? Right.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        199,
+        200,
+        201,
+        202
+      ],
+      "source_word_span": {
+        "start_segment_id": 199,
+        "start_word_index": 0,
+        "end_segment_id": 202,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 57,
+      "start": 918.24,
+      "end": 934.8,
+      "speaker": "Anish Bhimani",
+      "text": "And what I say to the team all day long is, you know, we have to focus on, you know, I forget exactly who said it, but it's basically fall in love with the problem, not the solution. And it's really easy to say, all right, I have a solution, I'm gonna get building. I know how to build, and that's what I fall back on. And I build it and nobody uses it.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        203,
+        204,
+        205,
+        206
+      ],
+      "source_word_span": {
+        "start_segment_id": 203,
+        "start_word_index": 0,
+        "end_segment_id": 206,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 58,
+      "start": 934.96,
+      "end": 956.8,
+      "speaker": "Anish Bhimani",
+      "text": "We are much less likely to fall down on execution, you know, in terms of how we do the development or anything like that, than we are to execute flawlessly against a solution that solves completely the wrong problem and didn't need solving in the first place. Yeah. So, how do you get people thinking about what's that problem I'm trying to solve? And how do I know when I've solved the problem?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        207,
+        208,
+        209,
+        210
+      ],
+      "source_word_span": {
+        "start_segment_id": 207,
+        "start_word_index": 0,
+        "end_segment_id": 210,
+        "end_word_index": 9
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 59,
+      "start": 956.96,
+      "end": 976.64,
+      "speaker": "Anish Bhimani",
+      "text": "And that's hard because you got to spend the time doing discovery, you gotta spend the time with the customers and make sure you understand what their problems are, not just the problems you think they are or the bankers think they are or anything else like that. Then you have to come up with a solution, then you have to deliver it, then you have to drive adoption, and then you have to realise the business outcomes. It's harder.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        211,
+        212,
+        213
+      ],
+      "source_word_span": {
+        "start_segment_id": 211,
+        "start_word_index": 0,
+        "end_segment_id": 213,
+        "end_word_index": 1
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 60,
+      "start": 976.8,
+      "end": 981.52,
+      "speaker": "Anish Bhimani",
+      "text": "And there's a certain theme with a lot of people is like, boy, I don't want to do that. That sounds like work.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        214,
+        215
+      ],
+      "source_word_span": {
+        "start_segment_id": 214,
+        "start_word_index": 0,
+        "end_segment_id": 215,
+        "end_word_index": 3
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 61,
+      "start": 981.68,
+      "end": 1001.6,
+      "speaker": "Melissa Perri",
+      "text": "Yeah, that's true. And I see it's like you have to wait, right, to get the outcome. There's all these lagging indicators. So everybody's like, well, I want to know now if I was successful so I can move on, right? Instead of thinking in product terms like project terms of okay, I did it. Let me just like kick it over and it's done now. So I see that friction happening as well.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223
+      ],
+      "source_word_span": {
+        "start_segment_id": 216,
+        "start_word_index": 0,
+        "end_segment_id": 223,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 62,
+      "start": 1001.92,
+      "end": 1017.52,
+      "speaker": "Anish Bhimani",
+      "text": "Yeah, that's fair. I do think there's probably a happy medium we have to get to, which is as much as we want to get away from deliverable-based measures, there is a certain amount of that, right? If you want to see this outcome by the end of next year, you have to work backwards from that.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        224,
+        225,
+        226
+      ],
+      "source_word_span": {
+        "start_segment_id": 224,
+        "start_word_index": 0,
+        "end_segment_id": 226,
+        "end_word_index": 19
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 63,
+      "start": 1017.84,
+      "end": 1027.44,
+      "speaker": "Melissa Perri",
+      "text": "What kind of methods of reporting or, you know, looking at progress do you use to say, hey, here are the things that we're doing and this is how we're tying it back to outcomes?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        227
+      ],
+      "source_word_span": {
+        "start_segment_id": 227,
+        "start_word_index": 0,
+        "end_segment_id": 227,
+        "end_word_index": 35
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 64,
+      "start": 1027.76,
+      "end": 1046.4,
+      "speaker": "Anish Bhimani",
+      "text": "You just try to strike this balance between doing everything top down and doing everything bottoms up. So then we asked everybody, okay, what are you working on and how do you measure the progress? Just getting people used to that idea of those measures. And they came back with a set of KRs for their objectives that they had, which was great. The problem is there were 341 of them.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        228,
+        229,
+        230,
+        231,
+        232
+      ],
+      "source_word_span": {
+        "start_segment_id": 228,
+        "start_word_index": 0,
+        "end_segment_id": 232,
+        "end_word_index": 7
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 65,
+      "start": 1046.48,
+      "end": 1066.88,
+      "speaker": "Anish Bhimani",
+      "text": "And I was like, well, wait a minute, like we can't be, and by the way, only, you know, less than half of them had targets, and less than half of those were being measured. I was like, all right, you don't have 341, you have a lot less than that. If you took those 341, how many of them actually mapped up to those 11 objectives we had? About half. So what's the other half of the organisation doing?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        233,
+        234,
+        235,
+        236,
+        237
+      ],
+      "source_word_span": {
+        "start_segment_id": 233,
+        "start_word_index": 0,
+        "end_segment_id": 237,
+        "end_word_index": 8
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 66,
+      "start": 1067.12,
+      "end": 1080.64,
+      "speaker": "Anish Bhimani",
+      "text": "So then we took another crank of it, and that 341 came down to like 140, about 80% of which map to the top. So, okay, that's great. There's always going to be 20% of things that come up and life gets in the way, and that sort of thing, too.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        238,
+        239,
+        240
+      ],
+      "source_word_span": {
+        "start_segment_id": 238,
+        "start_word_index": 0,
+        "end_segment_id": 240,
+        "end_word_index": 22
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 67,
+      "start": 1080.88,
+      "end": 1100.4,
+      "speaker": "Anish Bhimani",
+      "text": "But then you look at all right, of all those things in there, how many, if we do them all, do we actually get the benefit that we expect from all these objectives? And the answer, unfortunately, was no. There's a lot of good stuff in there. Yeah, there are a lot of good ideas. Everybody's got a good idea, right? We're long past the days of funding bad ideas.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        241,
+        242,
+        243,
+        244,
+        245,
+        246
+      ],
+      "source_word_span": {
+        "start_segment_id": 241,
+        "start_word_index": 0,
+        "end_segment_id": 246,
+        "end_word_index": 8
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 68,
+      "start": 1100.56,
+      "end": 1123.04,
+      "speaker": "Anish Bhimani",
+      "text": "But it's how do you get the focus on those down to the handful of things that I refer to as the difference makers? If you get these things done, you make a substantial difference in the business outcomes that we have. So it is very much that. It is that OKR framework, but it's getting it down to a handful of measures that really matter and clearing everything else out.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        247,
+        248,
+        249,
+        250
+      ],
+      "source_word_span": {
+        "start_segment_id": 247,
+        "start_word_index": 0,
+        "end_segment_id": 250,
+        "end_word_index": 22
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 69,
+      "start": 1123.2,
+      "end": 1144.16,
+      "speaker": "Anish Bhimani",
+      "text": "So if you look at a lot of organisations, they get very focused on operational efficiency, right? And okay, how do we do this faster so I can, you know, reduce the number of operations people I have doing something or else like that? It's like you can't lead with that. You lead with customer experience. How do I deliver a much better customer experience? And let's use the onboarding.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        251,
+        252,
+        253,
+        254,
+        255,
+        256
+      ],
+      "source_word_span": {
+        "start_segment_id": 251,
+        "start_word_index": 0,
+        "end_segment_id": 256,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 70,
+      "start": 1144.24,
+      "end": 1167.04,
+      "speaker": "Anish Bhimani",
+      "text": "If I can onboard a customer in 24 hours, they get a much better experience. And to do that, I have to do so much automation and process re-engineering, other things that you get the operational efficiency anyway. So don't measure 20 different things, measure the one. In that case, cycle time of onboarding, and everything else flows from there. So it is a handful of metrics that really make a difference. We have about 40, right?",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        257,
+        258,
+        259,
+        260,
+        261,
+        262
+      ],
+      "source_word_span": {
+        "start_segment_id": 257,
+        "start_word_index": 0,
+        "end_segment_id": 262,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 71,
+      "start": 1167.2,
+      "end": 1171.12,
+      "speaker": "Anish Bhimani",
+      "text": "Which is still a lot, but it's a hell of a lot better than 341. Right.",
+      "kind": "content",
+      "sponsor": null,
+      "source_segment_ids": [
+        263,
+        264
+      ],
+      "source_word_span": {
+        "start_segment_id": 263,
+        "start_word_index": 0,
+        "end_segment_id": 264,
+        "end_word_index": 0
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 72,
+      "start": 1171.36,
+      "end": 1192.56,
+      "speaker": "Melissa Perri",
+      "text": "Yeah, definitely progress there. And that's a wrap on today's episode. I hope you took away something useful, whether you're rethinking how your team sets OKRs, trying to shift from outputs to real outcomes, or just figuring out which handful of metrics actually move the business. If you want to hear the full conversations, check out episodes 216, 156, and 144.",
+      "kind": "outro",
+      "sponsor": null,
+      "source_segment_ids": [
+        265,
+        266,
+        267,
+        268
+      ],
+      "source_word_span": {
+        "start_segment_id": 265,
+        "start_word_index": 0,
+        "end_segment_id": 268,
+        "end_word_index": 14
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 73,
+      "start": 1193.04,
+      "end": 1218.4,
+      "speaker": "Melissa Perri",
+      "text": "If you want to build stronger product management skills and learn practical approaches that you can use day to day, head over to Product Institute to learn more. And one more thing for a productivity boost, I encourage you to try out Granola, a tool I use every day. It's an AI powered notepad for meetings that helps capture notes and decisions automatically. You can get three months free on any paid plan at granola.ai/product-institute.",
+      "kind": "ad_break",
+      "sponsor": "Granola",
+      "source_segment_ids": [
+        269,
+        270,
+        271,
+        272
+      ],
+      "source_word_span": {
+        "start_segment_id": 269,
+        "start_word_index": 0,
+        "end_segment_id": 272,
+        "end_word_index": 14
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    },
+    {
+      "id": 74,
+      "start": 1218.96,
+      "end": 1225.92,
+      "speaker": "Melissa Perri",
+      "text": "Thank you so much for listening to The Product Thinking Podcast. Make sure you like and subscribe so you never miss an episode. We'll see you next time.",
+      "kind": "outro",
+      "sponsor": null,
+      "source_segment_ids": [
+        273,
+        274,
+        275
+      ],
+      "source_word_span": {
+        "start_segment_id": 273,
+        "start_word_index": 0,
+        "end_segment_id": 275,
+        "end_word_index": 4
+      },
+      "user_segment_id": null,
+      "metadata": {}
+    }
+  ],
+  "playback_time_offset_seconds": 0.0,
+  "algorithm_version": "v1",
+  "transcript_source_duration_s": 1225.92
+}
