@@ -55,6 +55,22 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _upgrade_image_url_to_https(url: Optional[str]) -> Optional[str]:
+    """Rewrite ``http://`` artwork URLs to ``https://``.
+
+    Why: the web UI's CSP only allows ``img-src https:``, so HTTP-only
+    image URLs (notably BBC's ``ichef.bbci.co.uk``) are blocked by the
+    browser. Every CDN we've encountered serves the same path over TLS,
+    so an unconditional upgrade is safe in practice and keeps the CSP
+    strict.
+    """
+    if not url:
+        return url
+    if url.startswith("http://"):
+        return "https://" + url[len("http://") :]
+    return url
+
+
 class FetchRSSResult(NamedTuple):
     """Outcome of a single RSS HTTP fetch (spec #19).
 
@@ -294,6 +310,7 @@ class RSSMediaSource(MediaSource):
                 elif isinstance(feed.image, dict):
                     image_url = feed.image.get("href") or feed.image.get("url")
 
+            image_url = _upgrade_image_url_to_https(image_url)
             if image_url:
                 logger.debug(f"Extracted podcast artwork: {image_url}")
 
@@ -1088,11 +1105,13 @@ class RSSMediaSource(MediaSource):
             if isinstance(entry.itunes_image, dict):
                 image_url = entry.itunes_image.get("href")
                 if image_url:
+                    image_url = _upgrade_image_url_to_https(image_url)
                     logger.debug(f"Found episode iTunes artwork: {image_url[:80]}...")
                     return image_url
             else:
                 image_url = str(entry.itunes_image)
                 if image_url:
+                    image_url = _upgrade_image_url_to_https(image_url)
                     logger.debug(f"Found episode iTunes artwork: {image_url[:80]}...")
                     return image_url
 
@@ -1101,11 +1120,13 @@ class RSSMediaSource(MediaSource):
             if hasattr(entry.image, "href"):
                 image_url = entry.image.href
                 if image_url:
+                    image_url = _upgrade_image_url_to_https(image_url)
                     logger.debug(f"Found episode RSS artwork: {image_url[:80]}...")
                     return image_url
             elif isinstance(entry.image, dict):
                 image_url = entry.image.get("href") or entry.image.get("url")
                 if image_url:
+                    image_url = _upgrade_image_url_to_https(image_url)
                     logger.debug(f"Found episode RSS artwork: {image_url[:80]}...")
                     return image_url
 
