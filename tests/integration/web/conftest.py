@@ -89,6 +89,10 @@ def app_state(app_config: Config) -> AppState:
     follower_service = FollowerService(follower_repository, repository)
     digest_repository = SqliteDigestRepository(db_path=app_config.database_path)
 
+    from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
+
+    entity_repository = SqliteEntityRepository(db_path=app_config.database_path)
+
     return AppState(
         config=app_config,
         path_manager=path_manager,
@@ -106,6 +110,7 @@ def app_state(app_config: Config) -> AppState:
         follower_repository=follower_repository,
         follower_service=follower_service,
         digest_repository=digest_repository,
+        entity_repository=entity_repository,
     )
 
 

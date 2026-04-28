@@ -93,6 +93,12 @@ local-transcription = [
     "transformers>=4.30.0",
     "librosa>=0.10.0",
 ]
+entities = [
+    # Spec #28 — entity extraction via GLiNER zero-shot NER. Downloads
+    # a ~400MB transformer on first use; pulls torch transitively.
+    # Optional so cloud-only deployments don't pay the install cost.
+    "gliner>=0.2.13",
+]
 
 [project.scripts]
 thestill = "thestill.cli:main"

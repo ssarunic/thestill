@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
+    from ..core.entity_extractor import EntityExtractor
     from ..core.feed_manager import PodcastFeedManager
     from ..core.progress_store import ProgressStore
     from ..core.queue_manager import QueueManager
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     from ..models.user import User
     from ..repositories.digest_repository import DigestRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
+    from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
@@ -92,6 +94,13 @@ class AppState:
     follower_repository: "PodcastFollowerRepository"
     follower_service: "FollowerService"
     digest_repository: "DigestRepository"
+    # Spec #28 — entity layer. Repository is always available; the
+    # ``EntityExtractor`` model is loaded lazily on the first
+    # ``extract-entities`` task because the GLiNER weights are large
+    # and most processes (web requests, CLI commands not touching the
+    # entity branch) never need it.
+    entity_repository: "SqliteEntityRepository"
+    entity_extractor: "Optional[EntityExtractor]" = None
 
 
 def get_app_state(request: Request) -> AppState:

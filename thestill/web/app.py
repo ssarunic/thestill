@@ -137,6 +137,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize digest repository
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
 
+    # Spec #28 — entity-layer repository. Schema is created by the
+    # podcast repo's migration block; this just opens connections.
+    from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+
+    entity_repository = SqliteEntityRepository(db_path=config.database_path)
+
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
         config=config,
@@ -155,6 +161,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_repository=follower_repository,
         follower_service=follower_service,
         digest_repository=digest_repository,
+        entity_repository=entity_repository,
     )
 
     # Create task worker with handlers that have access to app_state.
