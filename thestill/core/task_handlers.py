@@ -655,8 +655,22 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
 
         transcript = AnnotatedTranscript.model_validate_json(sidecar_path.read_text(encoding="utf-8"))
 
+        # Spec §1.13.4 — load anchor entities (host/guest/recurring) for
+        # this episode and expand them into surface variants. Empty list
+        # is fine: the extractor short-circuits the anchor-scan and
+        # speaker-resolution steps when no anchors are configured.
+        from .entity_anchor import expand_anchor_variants
+
+        anchor_ids = repo.get_episode_anchors(episode.id)
+        anchor_entities = [e for e in (repo.get_entity(eid) for eid in anchor_ids) if e is not None]
+        anchor_variants = expand_anchor_variants(anchor_entities)
+
         extractor = _get_or_create_entity_extractor(state)
-        mentions = extractor.extract(transcript, episode_id=episode.id)
+        mentions = extractor.extract(
+            transcript,
+            episode_id=episode.id,
+            anchor_variants=anchor_variants,
+        )
 
         # Idempotent re-extract: wipe + write. The brief gap between
         # the two transactions is harmless because no consumer reads
@@ -716,7 +730,19 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
         resolver = _get_or_create_entity_resolver(state)
-        results = resolver.resolve(pending)
+
+        # Spec §1.13.7 — overrides apply BEFORE we even hand the
+        # mention to ReFinED. Pre-route mentions matching a stored
+        # override into their forced bucket; only un-overridden rows
+        # go through model resolution. This is the "human corrections
+        # survive reindex" invariant.
+        forced_results, remaining = _apply_overrides(repo, pending)
+
+        # The resolver consults the blacklist for every QID candidate
+        # before accepting it (see ``EntityResolver.resolve``).
+        resolver_results = resolver.resolve(remaining, is_blacklisted=repo.is_blacklisted)
+
+        results = forced_results + resolver_results
 
         touched_entity_ids: set[str] = set()
         for r in results:
@@ -726,8 +752,17 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
                 mention_id=r.mention_id,
                 entity_id=entity_id_for_mention,
                 status=r.status,
+                method=r.method.value,
             )
             touched_entity_ids.add(r.entity.id)
+
+        # Spec §1.13.5 — within-episode coref pass. Walks unresolved
+        # person mentions, looks for a single resolved long-form
+        # anchor whose canonical name contains the surface as a
+        # token, and either repoints (RESOLVED) or marks AMBIGUOUS.
+        from .entity_coref import resolve_coreferences_for_episode
+
+        coref_decisions = resolve_coreferences_for_episode(repo, episode.id)
 
         # Spec §1.6 — inline scoped alias-merge for the entities just
         # touched. Cheap (only checks duplicates whose QID matches one
@@ -751,7 +786,89 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             mentions=len(results),
             resolved=sum(1 for r in results if r.status == "resolved"),
             unresolvable=sum(1 for r in results if r.status == "unresolvable"),
+            override_forced=len(forced_results),
+            coref_decisions=len(coref_decisions),
         )
+
+
+def _apply_overrides(repo, mentions):
+    """Spec §1.13.7 — split mentions into (forced_results, remaining).
+
+    Forced results bypass ReFinED entirely: the human override pre-
+    determines the outcome, so we build a ``ResolutionResult`` straight
+    away. Remaining mentions go through the model.
+    """
+    from ..models.entities import EntityRecord, EntityType, ResolutionMethod
+    from .entity_resolver import ResolutionResult, _build_entity_id
+
+    forced: list = []
+    remaining: list = []
+    for mention in mentions:
+        override = repo.lookup_override(mention.surface_form, mention.episode_id)
+        if override is None:
+            remaining.append(mention)
+            continue
+        kind = override["override_kind"]
+        if kind == "drop":
+            forced.append(
+                ResolutionResult(
+                    mention_id=mention.id,
+                    entity=_local_unresolvable_entity(mention),
+                    status="dropped",
+                    method=ResolutionMethod.OVERRIDE,
+                )
+            )
+        elif kind == "force_unresolvable":
+            forced.append(
+                ResolutionResult(
+                    mention_id=mention.id,
+                    entity=_local_unresolvable_entity(mention),
+                    status="unresolvable",
+                    method=ResolutionMethod.OVERRIDE,
+                )
+            )
+        elif kind == "force_entity":
+            target = repo.get_entity(override["entity_id"])
+            if target is None:
+                # Operator forced an entity that no longer exists;
+                # fall back to model resolution rather than corrupt.
+                logger.warning(
+                    "override_target_missing",
+                    surface_form=mention.surface_form,
+                    target_entity_id=override["entity_id"],
+                )
+                remaining.append(mention)
+                continue
+            forced.append(
+                ResolutionResult(
+                    mention_id=mention.id,
+                    entity=target,
+                    status="resolved",
+                    method=ResolutionMethod.OVERRIDE,
+                )
+            )
+        else:  # pragma: no cover — CHECK constraint covers this
+            remaining.append(mention)
+    return forced, remaining
+
+
+def _local_unresolvable_entity(mention):
+    """Build the local-slug fallback ``EntityRecord`` used for dropped
+    or force-unresolvable mentions. Mirrors
+    ``EntityResolver._unresolvable_result`` but lives here so the
+    handler can fabricate it without a model load.
+    """
+    from ..models.entities import EntityRecord, EntityType
+    from .entity_resolver import SURFACE_LABEL_TO_ENTITY_TYPE, _build_entity_id
+
+    inferred = SURFACE_LABEL_TO_ENTITY_TYPE.get((mention.surface_label or "").lower()) or EntityType.TOPIC
+    return EntityRecord(
+        id=_build_entity_id(inferred, mention.surface_form, qid=None),
+        type=inferred,
+        canonical_name=mention.surface_form,
+        wikidata_qid=None,
+        aliases=[],
+    )
 
 
 def _merge_qid_duplicates_for(repo, touched_entity_ids: set) -> int:

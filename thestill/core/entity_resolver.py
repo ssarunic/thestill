@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from structlog import get_logger
 
-from ..models.entities import EntityMention, EntityRecord, EntityType
+from ..models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ..utils.slug import generate_slug
 
 if TYPE_CHECKING:
@@ -61,6 +61,16 @@ logger = get_logger(__name__)
 # disk + memory.
 DEFAULT_REFINED_MODEL = "wikipedia_model_with_numbers"
 DEFAULT_ENTITY_SET = "wikipedia"
+
+# Spec #28 §1.13.3 — minimum ReFinED confidence to accept a QID.
+# Below this threshold the prediction is downgraded to ``unresolvable``.
+# Tuned to 0.5 from the post-1.12 audit: lower values let through
+# things like ``"Vercel" → "Vercel-Villedieu-le-Camp"`` and ``"frontier
+# labs" → "Reinforcement learning"`` — both products of ReFinED grasping
+# at the highest-scoring candidate when no entity in its index matched
+# the surface well. 0.5 trims the long tail of bad guesses while
+# preserving named-entity hits, which typically score 0.7+.
+DEFAULT_MIN_QID_CONFIDENCE = 0.5
 
 
 # Map ReFinED's ``coarse_type`` (used as a fallback when the GLiNER
@@ -99,11 +109,17 @@ class ResolutionResult:
     the ``entity`` is still populated — the handler creates a local
     slug-only entity (no QID) so future occurrences of the same
     surface form can be merged into it.
+
+    ``method`` records *how* the resolver landed on this entity (spec
+    §1.13.6) — ``direct`` for ReFinED hits, ``override`` when a
+    persisted ``mention_overrides`` row forced the answer,
+    ``unresolvable`` when the threshold rejected the QID, etc.
     """
 
     mention_id: int
     entity: EntityRecord
     status: str  # "resolved" | "unresolvable"
+    method: ResolutionMethod = ResolutionMethod.DIRECT
 
 
 class EntityResolver:
@@ -119,6 +135,7 @@ class EntityResolver:
         *,
         model: str = DEFAULT_REFINED_MODEL,
         entity_set: str = DEFAULT_ENTITY_SET,
+        min_qid_confidence: float = DEFAULT_MIN_QID_CONFIDENCE,
         preloaded_model: Optional["Refined"] = None,
     ):
         """``preloaded_model`` is a test seam — pass a stub or
@@ -126,22 +143,32 @@ class EntityResolver:
         """
         self.model_name = model
         self.entity_set = entity_set
+        self.min_qid_confidence = min_qid_confidence
         self._model: Optional["Refined"] = preloaded_model
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def resolve(self, mentions: List[EntityMention]) -> List[ResolutionResult]:
+    def resolve(
+        self,
+        mentions: List[EntityMention],
+        *,
+        is_blacklisted=None,
+    ) -> List[ResolutionResult]:
         """Resolve a list of pending mentions in one pass.
 
         Each mention is resolved independently against its
         ``quote_excerpt``. Mentions sharing a ``surface_form`` are NOT
         deduplicated here — context matters (e.g. "Apple" the company
         vs "apple" the fruit) and the per-mention `excerpt` gives
-        ReFinED the disambiguation hint it needs. The handler can
-        cache identical (surface, label, episode) triples if it wants
-        to skip duplicates.
+        ReFinED the disambiguation hint it needs.
+
+        ``is_blacklisted`` (spec §1.13.7) is an optional callable
+        ``(surface_form, qid) -> bool`` consulted for every QID candidate
+        before we accept it. The resolver itself doesn't read SQLite —
+        the handler injects the lookup so the resolver stays a pure
+        model wrapper.
         """
         if not mentions:
             return []
@@ -149,7 +176,7 @@ class EntityResolver:
         results: List[ResolutionResult] = []
         for mention in mentions:
             try:
-                result = self._resolve_one(mention)
+                result = self._resolve_one(mention, is_blacklisted=is_blacklisted)
             except Exception:
                 logger.exception(
                     "refined_resolve_failed",
@@ -186,7 +213,7 @@ class EntityResolver:
         )
         logger.info("refined_model_loaded")
 
-    def _resolve_one(self, mention: EntityMention) -> ResolutionResult:
+    def _resolve_one(self, mention: EntityMention, *, is_blacklisted=None) -> ResolutionResult:
         """Run ReFinED over the mention's excerpt and pick the
         prediction whose surface span best matches ``surface_form``.
 
@@ -202,6 +229,31 @@ class EntityResolver:
 
         wikidata_qid = getattr(match.predicted_entity, "wikidata_entity_id", None)
         if not wikidata_qid:
+            return self._unresolvable_result(mention)
+
+        # Spec §1.13.3 — confidence floor. ReFinED's Span objects
+        # expose ``.entity_linking_model_confidence_score`` for
+        # numeric-aware models; older builds expose ``.confidence``.
+        score = _extract_confidence(match)
+        if score is not None and score < self.min_qid_confidence:
+            logger.info(
+                "refined_low_confidence_rejected",
+                surface_form=mention.surface_form,
+                qid=wikidata_qid,
+                score=round(score, 3),
+                threshold=self.min_qid_confidence,
+            )
+            return self._unresolvable_result(mention)
+
+        # Spec §1.13.7 — blacklist negative cache. If a human has
+        # already said "no, this surface should never resolve to this
+        # QID", honor it.
+        if is_blacklisted is not None and is_blacklisted(mention.surface_form, wikidata_qid):
+            logger.info(
+                "refined_blacklisted_rejected",
+                surface_form=mention.surface_form,
+                qid=wikidata_qid,
+            )
             return self._unresolvable_result(mention)
 
         canonical_name = (
@@ -222,6 +274,7 @@ class EntityResolver:
                 description=getattr(match.predicted_entity, "description", None),
             ),
             status="resolved",
+            method=ResolutionMethod.DIRECT,
         )
 
     def _unresolvable_result(self, mention: EntityMention) -> ResolutionResult:
@@ -247,6 +300,7 @@ class EntityResolver:
                 aliases=[],
             ),
             status="unresolvable",
+            method=ResolutionMethod.UNRESOLVABLE,
         )
 
     def _infer_entity_type(self, mention: EntityMention, coarse_type: Optional[str]) -> EntityType:
@@ -263,6 +317,30 @@ class EntityResolver:
             if mapped is not None:
                 return mapped
         return EntityType.TOPIC
+
+
+def _extract_confidence(span) -> Optional[float]:
+    """Pull a single confidence number out of a ReFinED Span.
+
+    ReFinED's API surface drifts between releases — try several
+    attribute names in priority order and stop on the first numeric
+    hit. Returns ``None`` when nothing is exposed (older builds);
+    callers treat that as "skip the floor check" rather than reject.
+    """
+    for attr in (
+        "entity_linking_model_confidence_score",
+        "el_confidence",
+        "confidence",
+        "score",
+    ):
+        value = getattr(span, attr, None)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _pick_best_span(spans, surface_form: str):

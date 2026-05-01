@@ -46,6 +46,14 @@ class ResolutionStatus(str, Enum):
     PENDING = "pending"
     RESOLVED = "resolved"
     UNRESOLVABLE = "unresolvable"
+    # Spec #28 §1.13.5: a short-form mention with multiple long-form
+    # candidates in the same episode. Surfaced in the admin override
+    # queue rather than guessed.
+    AMBIGUOUS = "ambiguous"
+    # Spec #28 §1.13.7: a human override said "drop this mention"
+    # (e.g. generic noun mistakenly extracted). Survives reindex via
+    # ``mention_overrides``.
+    DROPPED = "dropped"
 
 
 class EntityExtractionStatus(str, Enum):
@@ -60,6 +68,26 @@ class MentionRole(str, Enum):
     GUEST = "guest"
     MENTIONED = "mentioned"
     SELF = "self"
+    # Spec #28 §1.13.2: a synthesized mention of the segment's speaker
+    # (so ``list_quotes_by`` finds them even when they don't say their
+    # own name). Distinct from SELF, which marks a self-reference inside
+    # body text ("I, Karpathy, think...").
+    SPEAKING = "speaking"
+
+
+class ResolutionMethod(str, Enum):
+    """Spec #28 §1.13.6 — how a mention reached its current status.
+
+    Persisted alongside ``resolution_status`` so downstream consumers
+    can downweight or flag less-authoritative resolutions.
+    """
+
+    DIRECT = "direct"  # ReFinED grounded the surface to a QID
+    ANCHOR = "anchor"  # matched a host/guest/recurring anchor variant
+    COREF = "coref"  # within-episode coreference (post-resolve pass)
+    OVERRIDE = "override"  # forced by a human via mention_overrides
+    UNRESOLVABLE = "unresolvable"  # ReFinED failed or scored too low
+    AMBIGUOUS = "ambiguous"  # multiple candidates in same episode
 
 
 class MatchType(str, Enum):
@@ -124,6 +152,13 @@ class EntityMention(BaseModel):
     sentiment: Optional[float] = None
     confidence: float
     extractor: str
+    # Spec #28 §1.13.6 — how the resolver landed on this row. ``None``
+    # for legacy mentions written before the column existed.
+    resolution_method: Optional[ResolutionMethod] = None
+    # Spec #28 §1.13.5 — populated only when ``resolution_status='ambiguous'``.
+    # JSON list of entity ids that matched the short-form mention; the
+    # admin override queue picks one.
+    candidate_entity_ids: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: Optional[datetime] = None
 

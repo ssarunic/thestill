@@ -35,7 +35,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionStatus
+from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 
 logger = get_logger(__name__)
 
@@ -228,6 +228,8 @@ class SqliteEntityRepository:
                 m.sentiment,
                 m.confidence,
                 m.extractor,
+                m.resolution_method.value if m.resolution_method else None,
+                json.dumps(m.candidate_entity_ids) if m.candidate_entity_ids else None,
                 m.created_at.isoformat(),
                 m.resolved_at.isoformat() if m.resolved_at else None,
             )
@@ -242,8 +244,9 @@ class SqliteEntityRepository:
                     entity_id, resolution_status, episode_id, segment_id,
                     start_ms, end_ms, speaker, role, surface_form,
                     surface_label, quote_excerpt, sentiment, confidence,
-                    extractor, created_at, resolved_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extractor, resolution_method, candidate_entity_ids,
+                    created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -314,24 +317,34 @@ class SqliteEntityRepository:
         entity_id: Optional[str],
         status: str,
         resolved_at: Optional[datetime] = None,
+        method: Optional[str] = None,
+        candidate_entity_ids: Optional[List[str]] = None,
     ) -> bool:
-        """Flip a pending mention to ``resolved`` or ``unresolvable``.
+        """Flip a pending mention to a terminal status.
 
-        ``entity_id`` is required for ``status='resolved'`` and ignored
-        (stored as NULL by the caller) for ``unresolvable``. Returns
-        True if a row was updated.
+        Accepted ``status`` values: ``resolved`` | ``unresolvable`` |
+        ``ambiguous`` | ``dropped``. ``entity_id`` is required for
+        ``resolved`` and ignored (stored as NULL by the caller) for
+        the other statuses. ``method`` is one of ``ResolutionMethod``;
+        ``candidate_entity_ids`` is populated only when status is
+        ``ambiguous`` (spec §1.13.5).
         """
-        if status not in ("resolved", "unresolvable"):
+        if status not in ("resolved", "unresolvable", "ambiguous", "dropped"):
             raise ValueError(f"invalid resolution status={status!r}")
         ts = (resolved_at or datetime.now(timezone.utc)).isoformat()
+        candidates_json = json.dumps(candidate_entity_ids) if candidate_entity_ids else None
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE entity_mentions
-                SET entity_id = ?, resolution_status = ?, resolved_at = ?
+                SET entity_id = ?,
+                    resolution_status = ?,
+                    resolved_at = ?,
+                    resolution_method = COALESCE(?, resolution_method),
+                    candidate_entity_ids = ?
                 WHERE id = ?
                 """,
-                (entity_id, status, ts, mention_id),
+                (entity_id, status, ts, method, candidates_json, mention_id),
             )
             return cursor.rowcount > 0
 
@@ -680,6 +693,243 @@ class SqliteEntityRepository:
         return inserted
 
     # ------------------------------------------------------------------
+    # Spec #28 §1.13.1 — host / guest / recurring anchor metadata
+    # ------------------------------------------------------------------
+
+    def set_podcast_hosts(self, podcast_id: str, entity_ids: List[str]) -> None:
+        """Replace ``podcasts.host_entity_ids`` with the given list."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET host_entity_ids = ? WHERE id = ?",
+                (json.dumps(list(entity_ids)), podcast_id),
+            )
+
+    def set_podcast_recurring(self, podcast_id: str, entity_ids: List[str]) -> None:
+        """Replace ``podcasts.recurring_entity_ids`` with the given list."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET recurring_entity_ids = ? WHERE id = ?",
+                (json.dumps(list(entity_ids)), podcast_id),
+            )
+
+    def set_episode_guests(self, episode_id: str, entity_ids: List[str]) -> None:
+        """Replace ``episodes.guest_entity_ids`` with the given list."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET guest_entity_ids = ? WHERE id = ?",
+                (json.dumps(list(entity_ids)), episode_id),
+            )
+
+    def get_podcast_anchors(self, podcast_id: str) -> dict:
+        """Return ``{'hosts': [...], 'recurring': [...]}`` for one podcast."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT host_entity_ids, recurring_entity_ids FROM podcasts WHERE id = ?",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return {"hosts": [], "recurring": []}
+        return {
+            "hosts": json.loads(row["host_entity_ids"] or "[]"),
+            "recurring": json.loads(row["recurring_entity_ids"] or "[]"),
+        }
+
+    def get_episode_anchors(self, episode_id: str) -> List[str]:
+        """Return the union of host + recurring + guest entity ids for an
+        episode. Used by the extractor's anchor-injection pass.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.host_entity_ids, p.recurring_entity_ids,
+                       e.guest_entity_ids
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE e.id = ?
+                """,
+                (episode_id,),
+            ).fetchone()
+        if row is None:
+            return []
+        ids: List[str] = []
+        for column in ("host_entity_ids", "recurring_entity_ids", "guest_entity_ids"):
+            ids.extend(json.loads(row[column] or "[]"))
+        # Preserve order, drop duplicates
+        seen: set = set()
+        unique: List[str] = []
+        for entity_id in ids:
+            if entity_id and entity_id not in seen:
+                seen.add(entity_id)
+                unique.append(entity_id)
+        return unique
+
+    def detect_top_speakers(self, podcast_id: str, *, limit: int = 5) -> List[Tuple[str, int]]:
+        """Spec §1.13.1 — propose hosts by speaker frequency.
+
+        Returns ``(speaker_label, segment_count)`` rows ordered by
+        frequency descending. The CLI consumes this list and asks the
+        operator to pick which speakers are hosts vs guests vs noise.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.speaker, COUNT(*) AS n
+                FROM entity_mentions m
+                JOIN episodes e ON m.episode_id = e.id
+                WHERE e.podcast_id = ?
+                  AND m.speaker IS NOT NULL
+                  AND TRIM(m.speaker) != ''
+                  AND LOWER(m.speaker) != 'unknown'
+                GROUP BY m.speaker
+                ORDER BY n DESC
+                LIMIT ?
+                """,
+                (podcast_id, limit),
+            ).fetchall()
+        return [(r["speaker"], r["n"]) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Spec #28 §1.13.5 — within-episode coreference helpers
+    # ------------------------------------------------------------------
+
+    def list_unresolved_person_mentions(self, episode_id: str) -> List[EntityMention]:
+        """Mentions for one episode with surface_label='person' and
+        ``resolution_status='unresolvable'``. Drives the coref pass.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM entity_mentions
+                WHERE episode_id = ?
+                  AND resolution_status = 'unresolvable'
+                  AND (surface_label = 'person' OR surface_label IS NULL)
+                """,
+                (episode_id,),
+            ).fetchall()
+        return [_row_to_mention(r) for r in rows]
+
+    def list_resolved_persons_for_episode(self, episode_id: str) -> List[EntityRecord]:
+        """Distinct ``person``-typed entities resolved in this episode."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT e.*
+                FROM entity_mentions m
+                JOIN entities e ON m.entity_id = e.id
+                WHERE m.episode_id = ?
+                  AND m.resolution_status = 'resolved'
+                  AND e.type = 'person'
+                """,
+                (episode_id,),
+            ).fetchall()
+        return [_row_to_entity(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Spec #28 §1.13.7 — mention overrides + resolution blacklist
+    # ------------------------------------------------------------------
+
+    def add_override(
+        self,
+        *,
+        surface_form: str,
+        episode_id: Optional[str],
+        kind: str,
+        entity_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> int:
+        """Insert a row into ``mention_overrides``. Returns the row id."""
+        if kind not in ("drop", "force_entity", "force_unresolvable"):
+            raise ValueError(f"invalid override kind={kind!r}")
+        if kind == "force_entity" and not entity_id:
+            raise ValueError("force_entity requires entity_id")
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO mention_overrides
+                    (surface_form, episode_id, override_kind, entity_id, reason, created_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (surface_form, episode_id, kind, entity_id, reason, created_by),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def lookup_override(self, surface_form: str, episode_id: Optional[str]) -> Optional[dict]:
+        """Find an override matching ``(surface_form, episode_id)`` or
+        ``(surface_form, NULL)`` (global). Episode-scoped wins over
+        global. Returns the row as a dict or ``None``.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, surface_form, episode_id, override_kind, entity_id,
+                       reason, created_by, created_at
+                FROM mention_overrides
+                WHERE LOWER(surface_form) = LOWER(?)
+                  AND (episode_id = ? OR episode_id IS NULL)
+                ORDER BY (episode_id IS NULL) ASC, id DESC
+                LIMIT 1
+                """,
+                (surface_form, episode_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_overrides(self, *, limit: int = 200) -> List[dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM mention_overrides ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_mention(self, mention_id: int) -> Optional[EntityMention]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM entity_mentions WHERE id = ?",
+                (mention_id,),
+            ).fetchone()
+        return _row_to_mention(row) if row else None
+
+    def add_blacklist_entry(
+        self,
+        *,
+        surface_form: str,
+        wrong_qid: str,
+        reason: Optional[str] = None,
+    ) -> int:
+        """Negative cache: refuse to ground ``surface_form → wrong_qid``."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO resolution_blacklist
+                    (surface_form, wrong_qid, reason)
+                VALUES (?, ?, ?)
+                """,
+                (surface_form, wrong_qid, reason),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def is_blacklisted(self, surface_form: str, wrong_qid: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM resolution_blacklist
+                WHERE LOWER(surface_form) = LOWER(?) AND wrong_qid = ?
+                LIMIT 1
+                """,
+                (surface_form, wrong_qid),
+            ).fetchone()
+        return row is not None
+
+    def list_blacklist(self, *, limit: int = 200) -> List[dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM resolution_blacklist ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
     # Alias merging (spec §1.6)
     # ------------------------------------------------------------------
 
@@ -758,6 +1008,9 @@ def _row_to_mention_context(row: sqlite3.Row) -> MentionContext:
 
 
 def _row_to_mention(row: sqlite3.Row) -> EntityMention:
+    keys = set(row.keys())
+    method_str = row["resolution_method"] if "resolution_method" in keys else None
+    candidates_json = row["candidate_entity_ids"] if "candidate_entity_ids" in keys else None
     return EntityMention(
         id=row["id"],
         entity_id=row["entity_id"],
@@ -769,11 +1022,13 @@ def _row_to_mention(row: sqlite3.Row) -> EntityMention:
         speaker=row["speaker"],
         role=MentionRole(row["role"]) if row["role"] else None,
         surface_form=row["surface_form"],
-        surface_label=row["surface_label"] if "surface_label" in row.keys() else None,
+        surface_label=row["surface_label"] if "surface_label" in keys else None,
         quote_excerpt=row["quote_excerpt"],
         sentiment=row["sentiment"],
         confidence=row["confidence"],
         extractor=row["extractor"],
+        resolution_method=ResolutionMethod(method_str) if method_str else None,
+        candidate_entity_ids=json.loads(candidates_json) if candidates_json else [],
         created_at=datetime.fromisoformat(row["created_at"]),
         resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
     )

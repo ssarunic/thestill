@@ -45,12 +45,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable, List, Optional
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional
 
 from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript
-from ..models.entities import EntityMention, EntityType, ResolutionStatus
+from ..models.entities import EntityMention, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
+from .entity_anchor import AnchorVariant, index_variants_by_surface
 
 if TYPE_CHECKING:
     # ``gliner`` is an optional dep — imported lazily inside ``_load_model``
@@ -160,6 +161,9 @@ class _SegmentPrediction:
     confidence: float
     char_start: int
     char_end: int
+    # Spec §1.13.4: anchor-derived predictions are tagged here so
+    # ``_to_mention`` can write the right ``extractor`` string.
+    extractor: str = "gliner"
 
 
 class EntityExtractor:
@@ -196,22 +200,58 @@ class EntityExtractor:
         transcript: AnnotatedTranscript,
         *,
         episode_id: str,
+        anchor_variants: Optional[Iterable[AnchorVariant]] = None,
     ) -> List[EntityMention]:
-        """Run GLiNER over each ``content`` segment, return pending mentions.
+        """Run GLiNER over each ``content`` segment, return mentions.
 
         ``episode_id`` is taken as a parameter (not from the JSON
         sidecar's own ``episode_id`` field) because the sidecar is
         often written with an empty ``episode_id`` — the database row
         is the authority.
+
+        ``anchor_variants`` (spec §1.13.4) is the list of host/guest/
+        recurring surface variants for this episode. When supplied,
+        any GLiNER hit whose surface matches an anchor variant is
+        marked ``resolution_status=resolved`` directly (skipping
+        ReFinED), and the extractor additionally scans body text for
+        anchor surfaces GLiNER may have missed (last-name-only,
+        first-name-only) and synthesizes mentions for them.
         """
         self._load_model()
+        anchor_index = index_variants_by_surface(anchor_variants or [])
         predictions = self._collect_predictions(transcript.segments)
-        mentions = [self._to_mention(p, episode_id=episode_id) for p in predictions]
+        mentions: List[EntityMention] = []
+        seen_spans: set = set()
+        for pred in predictions:
+            mention = self._to_mention(pred, episode_id=episode_id, anchor_index=anchor_index)
+            mentions.append(mention)
+            seen_spans.add((pred.segment.id, pred.char_start, pred.char_end))
+
+        # Spec §1.13.4 — separate scan for anchor surfaces that GLiNER
+        # missed entirely (e.g. last-name-only mentions in episodes with
+        # a clean guest signal). Skip spans GLiNER already covered.
+        if anchor_index:
+            for anchor_pred in self._scan_anchors(transcript.segments, anchor_index, exclude_spans=seen_spans):
+                mentions.append(
+                    self._to_mention(
+                        anchor_pred,
+                        episode_id=episode_id,
+                        anchor_index=anchor_index,
+                    )
+                )
+
+        # Spec §1.13.2 — synthesize one SPEAKING mention per content
+        # segment with a non-empty speaker. The speaker name is matched
+        # against the anchor index (host/guest/recurring) to attach an
+        # entity_id when known; otherwise the row stays pending.
+        mentions.extend(self._synthesize_speaker_mentions(transcript, episode_id, anchor_index))
+
         logger.info(
             "entity_extraction_complete",
             episode_id=episode_id,
             mentions=len(mentions),
             content_segments=sum(1 for s in transcript.segments if s.kind == "content"),
+            anchor_variants=len(anchor_index),
         )
         return mentions
 
@@ -260,6 +300,7 @@ class EntityExtractor:
             return self._collect_predictions_per_segment(targets, labels)
 
         results: List[_SegmentPrediction] = []
+        gliner_extractor = f"gliner:{self.model_name}"
         for segment, hits in zip(targets, batch_results):
             for hit in hits:
                 surface = hit["text"]
@@ -273,6 +314,7 @@ class EntityExtractor:
                         confidence=float(hit["score"]),
                         char_start=int(hit["start"]),
                         char_end=int(hit["end"]),
+                        extractor=gliner_extractor,
                     )
                 )
         return results
@@ -282,6 +324,7 @@ class EntityExtractor:
     ) -> List[_SegmentPrediction]:
         """Fallback path when the batch API errors. Same output shape."""
         results: List[_SegmentPrediction] = []
+        gliner_extractor = f"gliner:{self.model_name}"
         for segment in targets:
             try:
                 raw = self._model.predict_entities(segment.text, labels, threshold=self.confidence_threshold)
@@ -304,15 +347,44 @@ class EntityExtractor:
                         confidence=float(hit["score"]),
                         char_start=int(hit["start"]),
                         char_end=int(hit["end"]),
+                        extractor=gliner_extractor,
                     )
                 )
         return results
 
-    def _to_mention(self, pred: _SegmentPrediction, *, episode_id: str) -> EntityMention:
+    def _to_mention(
+        self,
+        pred: _SegmentPrediction,
+        *,
+        episode_id: str,
+        anchor_index: Optional[Dict[str, List[AnchorVariant]]] = None,
+    ) -> EntityMention:
         # Per AnnotatedSegment: start/end are seconds (float). Convert
         # to milliseconds for the SQLite columns.
         start_ms = int(round(pred.segment.start * 1000))
         end_ms = int(round(pred.segment.end * 1000))
+        anchor_match = _match_anchor(anchor_index, pred.surface_form) if anchor_index else None
+        if anchor_match is not None:
+            entity_id = anchor_match.entity_id
+            label = anchor_match.entity_type.value
+            return EntityMention(
+                entity_id=entity_id,
+                resolution_status=ResolutionStatus.RESOLVED,
+                episode_id=episode_id,
+                segment_id=pred.segment.id,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                speaker=pred.segment.speaker,
+                role=MentionRole.MENTIONED,
+                surface_form=pred.surface_form,
+                surface_label=label,
+                quote_excerpt=_excerpt_around(pred.segment.text, pred.char_start, pred.char_end),
+                sentiment=None,
+                confidence=pred.confidence,
+                extractor=pred.extractor,
+                resolution_method=ResolutionMethod.ANCHOR,
+                resolved_at=None,
+            )
         return EntityMention(
             entity_id=None,
             resolution_status=ResolutionStatus.PENDING,
@@ -327,8 +399,167 @@ class EntityExtractor:
             quote_excerpt=_excerpt_around(pred.segment.text, pred.char_start, pred.char_end),
             sentiment=None,
             confidence=pred.confidence,
-            extractor=f"gliner:{self.model_name}",
+            extractor=pred.extractor,
         )
+
+    def _scan_anchors(
+        self,
+        segments: Iterable[AnnotatedSegment],
+        anchor_index: Dict[str, List[AnchorVariant]],
+        *,
+        exclude_spans: set,
+    ) -> List[_SegmentPrediction]:
+        """Scan body text for anchor surfaces GLiNER missed.
+
+        Word-boundary regex per surface keeps "Karpathy" from matching
+        inside "Karpathys" while still matching at sentence boundaries.
+        Skips spans GLiNER already produced (passed in
+        ``exclude_spans``).
+        """
+        results: List[_SegmentPrediction] = []
+        # Compile each surface once. We sort longest-first so longer
+        # variants ("Andrej Karpathy") consume a span before shorter
+        # ones ("Andrej") have a chance to.
+        compiled = sorted(anchor_index.keys(), key=len, reverse=True)
+        for segment in segments:
+            if segment.kind != "content" or not segment.text.strip():
+                continue
+            text = segment.text
+            consumed_spans: List = []
+            for surface in compiled:
+                pattern = re.compile(r"\b" + re.escape(surface) + r"\b", re.IGNORECASE)
+                for match in pattern.finditer(text):
+                    span = (match.start(), match.end())
+                    if (segment.id, span[0], span[1]) in exclude_spans:
+                        continue
+                    if any(_overlaps(span, c) for c in consumed_spans):
+                        continue
+                    consumed_spans.append(span)
+                    # Pull the canonical-cased variant for the recorded
+                    # surface (cosmetic; resolution keys off the
+                    # entity_id either way).
+                    variants = anchor_index[surface]
+                    canonical_surface = variants[0].surface
+                    results.append(
+                        _SegmentPrediction(
+                            segment=segment,
+                            surface_form=canonical_surface,
+                            label=variants[0].entity_type.value,
+                            confidence=1.0,  # anchor-matched, not GLiNER-scored
+                            char_start=span[0],
+                            char_end=span[1],
+                            extractor="anchor:scan",
+                        )
+                    )
+        return results
+
+    def _synthesize_speaker_mentions(
+        self,
+        transcript: AnnotatedTranscript,
+        episode_id: str,
+        anchor_index: Dict[str, List[AnchorVariant]],
+    ) -> List[EntityMention]:
+        """Spec §1.13.2 — emit one SPEAKING mention per content segment.
+
+        The mention's ``surface_form`` is the speaker label. When the
+        speaker label exactly matches an anchor variant the mention is
+        pre-resolved to that anchor entity (method=ANCHOR); otherwise
+        the row is left ``unresolvable`` so it doesn't pollute the
+        ReFinED batch (a bare speaker label like "Speaker 1" has no
+        Wikidata QID).
+        """
+        out: List[EntityMention] = []
+        for segment in transcript.segments:
+            if segment.kind != "content":
+                continue
+            speaker = (segment.speaker or "").strip()
+            if not speaker or speaker.lower() in {"unknown", "speaker", "n/a"}:
+                continue
+            anchor_match = _match_anchor(anchor_index, speaker)
+            start_ms = int(round(segment.start * 1000))
+            end_ms = int(round(segment.end * 1000))
+            if anchor_match is not None:
+                out.append(
+                    EntityMention(
+                        entity_id=anchor_match.entity_id,
+                        resolution_status=ResolutionStatus.RESOLVED,
+                        episode_id=episode_id,
+                        segment_id=segment.id,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        speaker=speaker,
+                        role=MentionRole.SPEAKING,
+                        surface_form=speaker,
+                        surface_label=anchor_match.entity_type.value,
+                        quote_excerpt=_speaker_excerpt(segment.text),
+                        sentiment=None,
+                        confidence=1.0,
+                        extractor="speaker:synth",
+                        resolution_method=ResolutionMethod.ANCHOR,
+                    )
+                )
+            else:
+                # Spec §1.13.2: still emit a SPEAKING row with surface=
+                # speaker label even when unresolved, so quotes-by can
+                # filter on speaker even before the operator wires up
+                # host/guest metadata.
+                out.append(
+                    EntityMention(
+                        entity_id=None,
+                        resolution_status=ResolutionStatus.UNRESOLVABLE,
+                        episode_id=episode_id,
+                        segment_id=segment.id,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        speaker=speaker,
+                        role=MentionRole.SPEAKING,
+                        surface_form=speaker,
+                        surface_label="person",
+                        quote_excerpt=_speaker_excerpt(segment.text),
+                        sentiment=None,
+                        confidence=1.0,
+                        extractor="speaker:synth",
+                        resolution_method=ResolutionMethod.UNRESOLVABLE,
+                    )
+                )
+        return out
+
+
+def _match_anchor(
+    anchor_index: Optional[Dict[str, List[AnchorVariant]]],
+    surface: str,
+) -> Optional[AnchorVariant]:
+    """Return the matching anchor variant for ``surface``, or ``None``."""
+    if not anchor_index:
+        return None
+    bucket = anchor_index.get(surface.lower().strip())
+    if not bucket:
+        return None
+    # Multiple anchors collide on the same short form (e.g. two
+    # "Andrejs" in one episode) — leave it unresolved here; the coref
+    # pass will mark it ambiguous instead of guessing.
+    if len(bucket) > 1:
+        return None
+    return bucket[0]
+
+
+def _overlaps(a: tuple, b: tuple) -> bool:
+    """Half-open span overlap test for the anchor scanner."""
+    return not (a[1] <= b[0] or b[1] <= a[0])
+
+
+def _speaker_excerpt(text: str, *, max_chars: int = 240) -> str:
+    """Quote excerpt for a synthesized speaker mention — first sentence
+    of the segment so the citation surface still has narrative content,
+    truncated to keep the row small.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
+    if len(sentence) > max_chars:
+        return sentence[:max_chars].rstrip() + "…"
+    return sentence
 
 
 def _excerpt_around(text: str, char_start: int, char_end: int) -> str:

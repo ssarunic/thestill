@@ -89,7 +89,12 @@ class TestExtractorContract:
         mentions = _stub_extractor().extract(transcript, episode_id="ep-1")
         # ad_break must not produce hits; content one does.
         assert all(m.segment_id == 1 for m in mentions)
-        assert {m.surface_form for m in mentions} == {"OKR"}
+        # Spec §1.13.2 — content segments now also produce a synthetic
+        # SPEAKING mention with the speaker label as surface form. Filter
+        # to the GLiNER body extractions when asserting against the
+        # body-text surface form set.
+        body_surfaces = {m.surface_form for m in mentions if m.extractor.startswith("gliner")}
+        assert body_surfaces == {"OKR"}
 
     def test_emits_pending_unresolved_mentions(self):
         transcript = AnnotatedTranscript.model_validate(
@@ -109,9 +114,13 @@ class TestExtractorContract:
         )
         mentions = _stub_extractor().extract(transcript, episode_id="ep-uuid")
 
+        # Filter to gliner-emitted body mentions — speaker synthesis adds
+        # a SPEAKING row per content segment that we cover separately.
+        gliner_mentions = [m for m in mentions if m.extractor.startswith("gliner")]
+
         # Stub matches "OKR" + "Melissa" — both present in the text.
-        assert len(mentions) == 2
-        for m in mentions:
+        assert len(gliner_mentions) == 2
+        for m in gliner_mentions:
             assert isinstance(m, EntityMention)
             assert m.entity_id is None
             assert m.resolution_status is ResolutionStatus.PENDING
@@ -147,9 +156,11 @@ class TestRealFixture:
         mentions = _stub_extractor().extract(transcript, episode_id="ep-okrs")
         # Stub matches "OKR" in many segments and "Melissa" in the intro;
         # the assertion is just that we get >0 mentions and they all
-        # respect the contract.
-        assert len(mentions) > 0
-        for m in mentions:
+        # respect the contract. Speaker synthesis adds SPEAKING rows
+        # alongside; assert on the gliner-emitted body mentions.
+        gliner_mentions = [m for m in mentions if m.extractor.startswith("gliner")]
+        assert len(gliner_mentions) > 0
+        for m in gliner_mentions:
             assert m.entity_id is None
             assert m.resolution_status is ResolutionStatus.PENDING
             assert m.episode_id == "ep-okrs"

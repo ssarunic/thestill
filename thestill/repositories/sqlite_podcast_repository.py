@@ -542,6 +542,149 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute("ALTER TABLE entity_mentions ADD COLUMN surface_label TEXT NULL")
                 logger.info("Migration complete: surface_label added to entity_mentions")
 
+            # spec #28 §1.13.6 — resolution_method + candidate_entity_ids
+            if "resolution_method" not in mention_columns:
+                logger.info("Migrating database: adding resolution_method to entity_mentions")
+                conn.execute("ALTER TABLE entity_mentions ADD COLUMN resolution_method TEXT NULL")
+            if "candidate_entity_ids" not in mention_columns:
+                logger.info("Migrating database: adding candidate_entity_ids to entity_mentions")
+                conn.execute("ALTER TABLE entity_mentions ADD COLUMN candidate_entity_ids TEXT NULL")
+
+        # spec #28 §1.13 — relax the entity_mentions CHECK constraints so
+        # ``resolution_status`` can be one of {pending,resolved,unresolvable,
+        # ambiguous,dropped} and ``role`` can include ``speaking``. SQLite
+        # cannot ALTER an existing CHECK; we rebuild the table once when
+        # we detect the legacy CHECK still in place. Idempotent — the
+        # ``sql`` column on sqlite_master tells us whether ambiguous is
+        # already allowed.
+        legacy_check = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='entity_mentions'"
+        ).fetchone()
+        if legacy_check is not None and "'ambiguous'" not in (legacy_check["sql"] or ""):
+            logger.info("Migrating database: rebuilding entity_mentions with relaxed CHECKs (spec #28 §1.13)")
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE entity_mentions_new (
+                        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                        entity_id             TEXT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                        resolution_status     TEXT NOT NULL DEFAULT 'pending',
+                        episode_id            TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                        segment_id            INTEGER NOT NULL,
+                        start_ms              INTEGER NOT NULL,
+                        end_ms                INTEGER NOT NULL,
+                        speaker               TEXT NULL,
+                        role                  TEXT NULL,
+                        surface_form          TEXT NOT NULL,
+                        surface_label         TEXT NULL,
+                        quote_excerpt         TEXT NOT NULL,
+                        sentiment             REAL NULL,
+                        confidence            REAL NOT NULL,
+                        extractor             TEXT NOT NULL,
+                        resolution_method     TEXT NULL,
+                        candidate_entity_ids  TEXT NULL,
+                        created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        resolved_at           TIMESTAMP NULL,
+                        CHECK (resolution_status IN ('pending','resolved','unresolvable','ambiguous','dropped')),
+                        CHECK (role IS NULL OR role IN ('host','guest','mentioned','self','speaking'))
+                    );
+                    INSERT INTO entity_mentions_new (
+                        id, entity_id, resolution_status, episode_id, segment_id,
+                        start_ms, end_ms, speaker, role, surface_form, surface_label,
+                        quote_excerpt, sentiment, confidence, extractor,
+                        resolution_method, candidate_entity_ids,
+                        created_at, resolved_at
+                    )
+                    SELECT
+                        id, entity_id, resolution_status, episode_id, segment_id,
+                        start_ms, end_ms, speaker, role, surface_form, surface_label,
+                        quote_excerpt, sentiment, confidence, extractor,
+                        resolution_method, candidate_entity_ids,
+                        created_at, resolved_at
+                    FROM entity_mentions;
+                    DROP TABLE entity_mentions;
+                    ALTER TABLE entity_mentions_new RENAME TO entity_mentions;
+                    CREATE INDEX IF NOT EXISTS idx_mentions_entity
+                        ON entity_mentions(entity_id, episode_id) WHERE entity_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_mentions_episode
+                        ON entity_mentions(episode_id);
+                    CREATE INDEX IF NOT EXISTS idx_mentions_role
+                        ON entity_mentions(entity_id, role) WHERE entity_id IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_mentions_pending
+                        ON entity_mentions(resolution_status) WHERE resolution_status = 'pending';
+                    """
+                )
+                logger.info("Migration complete: entity_mentions CHECKs relaxed")
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+
+        # spec #28 §1.13.1 — host/guest/recurring entity ids on
+        # podcasts and episodes. Stored as JSON arrays for symmetry
+        # with ``entities.aliases`` and to keep the listing logic
+        # simple — no junction table for what is fundamentally a
+        # short, episode-scoped tag list.
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns_now = {row["name"] for row in cursor.fetchall()}
+        if "host_entity_ids" not in podcast_columns_now:
+            logger.info("Migrating database: adding host_entity_ids to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN host_entity_ids TEXT NOT NULL DEFAULT '[]'")
+        if "recurring_entity_ids" not in podcast_columns_now:
+            logger.info("Migrating database: adding recurring_entity_ids to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN recurring_entity_ids TEXT NOT NULL DEFAULT '[]'")
+
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns_now = {row["name"] for row in cursor.fetchall()}
+        if "guest_entity_ids" not in episode_columns_now:
+            logger.info("Migrating database: adding guest_entity_ids to episodes")
+            conn.execute("ALTER TABLE episodes ADD COLUMN guest_entity_ids TEXT NOT NULL DEFAULT '[]'")
+
+        # spec #28 §1.13.7 — mention_overrides + resolution_blacklist tables.
+        # The override layer is what guarantees human corrections survive
+        # reindex: the resolver consults these tables BEFORE persisting.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mention_overrides'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating mention_overrides table")
+            conn.executescript(
+                """
+                CREATE TABLE mention_overrides (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    surface_form  TEXT NOT NULL,
+                    episode_id    TEXT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    override_kind TEXT NOT NULL,
+                    entity_id     TEXT NULL REFERENCES entities(id) ON DELETE SET NULL,
+                    reason        TEXT NULL,
+                    created_by    TEXT NULL,
+                    created_at    TIMESTAMP NOT NULL
+                                  DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    CHECK (override_kind IN ('drop','force_entity','force_unresolvable'))
+                );
+                CREATE INDEX idx_overrides_surface_episode
+                    ON mention_overrides(LOWER(surface_form), episode_id);
+                """
+            )
+            logger.info("Migration complete: mention_overrides created")
+
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resolution_blacklist'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating resolution_blacklist table")
+            conn.executescript(
+                """
+                CREATE TABLE resolution_blacklist (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    surface_form  TEXT NOT NULL,
+                    wrong_qid     TEXT NOT NULL,
+                    reason        TEXT NULL,
+                    created_at    TIMESTAMP NOT NULL
+                                  DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    UNIQUE(surface_form, wrong_qid)
+                );
+                CREATE INDEX idx_blacklist_lookup
+                    ON resolution_blacklist(LOWER(surface_form), wrong_qid);
+                """
+            )
+            logger.info("Migration complete: resolution_blacklist created")
+
         # Migration: rewrite legacy http:// artwork URLs to https://
         # The web UI's CSP only allows `img-src https:`, so any stored
         # http:// image_url is silently blocked by the browser. Every

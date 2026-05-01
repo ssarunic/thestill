@@ -110,6 +110,16 @@ def _build_state(pending: List[EntityMention]):
     # find_duplicate_qid_pairs returns a list — default empty for the
     # happy path; tests that exercise alias-merge override.
     state.entity_repository.find_duplicate_qid_pairs.return_value = []
+    # Spec §1.13.7 — handler now consults the override layer (returns
+    # None for "no override") and the blacklist (returns False for
+    # "not blacklisted") before resolution. MagicMock's auto-mock
+    # would otherwise hand back a truthy stub.
+    state.entity_repository.lookup_override.return_value = None
+    state.entity_repository.is_blacklisted.return_value = False
+    # Spec §1.13.5 — coref pass runs after resolution. Default empty
+    # so the happy-path test isn't perturbed by a stubbed coref result.
+    state.entity_repository.list_resolved_persons_for_episode.return_value = []
+    state.entity_repository.list_unresolved_person_mentions.return_value = []
     state.entity_resolver = EntityResolver(preloaded_model=StubReFinED())
     return state
 

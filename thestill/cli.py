@@ -3458,6 +3458,254 @@ def entity_merge(ctx, keeper, loser, dry_run):
 
 
 # ---------------------------------------------------------------------------
+# Spec #28 §1.13 — host / guest / recurring anchor metadata + override layer
+# ---------------------------------------------------------------------------
+
+
+@main.group("podcast")
+def podcast_group():
+    """Per-podcast metadata for the entity layer (hosts, recurring voices)."""
+
+
+@podcast_group.command("set-hosts")
+@click.argument("podcast_id")
+@click.argument("entity_ids", nargs=-1, required=True)
+@click.pass_context
+@require_config
+@log_command
+def podcast_set_hosts(ctx, podcast_id, entity_ids):
+    """Pin the canonical host(s) of a podcast.
+
+    The extractor's anchor pass uses this list to short-circuit
+    resolution for host name mentions in the body text.
+    """
+    repo = ctx.obj.entity_repository
+    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
+    if missing:
+        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
+        ctx.exit(1)
+    repo.set_podcast_hosts(podcast_id, list(entity_ids))
+    click.echo(f"✓ {podcast_id}: hosts = {', '.join(entity_ids)}")
+
+
+@podcast_group.command("set-recurring")
+@click.argument("podcast_id")
+@click.argument("entity_ids", nargs=-1, required=True)
+@click.pass_context
+@require_config
+@log_command
+def podcast_set_recurring(ctx, podcast_id, entity_ids):
+    """Pin recurring voices (regular co-hosts who aren't the lead host)."""
+    repo = ctx.obj.entity_repository
+    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
+    if missing:
+        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
+        ctx.exit(1)
+    repo.set_podcast_recurring(podcast_id, list(entity_ids))
+    click.echo(f"✓ {podcast_id}: recurring = {', '.join(entity_ids)}")
+
+
+@podcast_group.command("detect-hosts")
+@click.argument("podcast_id")
+@click.option("--limit", default=5, show_default=True, help="Top-N speaker labels to propose.")
+@click.pass_context
+@require_config
+@log_command
+def podcast_detect_hosts(ctx, podcast_id, limit):
+    """Propose hosts by speaker frequency across all episodes of a podcast.
+
+    Read-only — prints a ranked table the operator inspects, then
+    follows up with ``set-hosts``. The function only sees mentions
+    that already have a ``speaker`` value, so it works best after at
+    least one extraction pass has run on this podcast.
+    """
+    repo = ctx.obj.entity_repository
+    rows = repo.detect_top_speakers(podcast_id, limit=limit)
+    if not rows:
+        click.echo(
+            f"No speaker data for {podcast_id} yet — run "
+            "``thestill extract-entities --podcast-id {podcast_id}`` first."
+        )
+        return
+    click.echo(f"Top {len(rows)} speakers for {podcast_id}:")
+    click.echo(f"  {'rank':>4}  {'segments':>9}  speaker")
+    for rank, (speaker, count) in enumerate(rows, 1):
+        click.echo(f"  {rank:>4}  {count:>9}  {speaker}")
+    click.echo("\nFollow up with: thestill podcast set-hosts <podcast_id> <entity_id> ...")
+
+
+@main.group("episode")
+def episode_group():
+    """Per-episode metadata for the entity layer (guests)."""
+
+
+@episode_group.command("set-guests")
+@click.argument("episode_id")
+@click.argument("entity_ids", nargs=-1, required=True)
+@click.pass_context
+@require_config
+@log_command
+def episode_set_guests(ctx, episode_id, entity_ids):
+    """Pin the guest(s) of an episode.
+
+    The extractor's anchor pass adds these to the host/recurring set
+    for this one episode only — guests rotate, hosts don't.
+    """
+    repo = ctx.obj.entity_repository
+    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
+    if missing:
+        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
+        ctx.exit(1)
+    repo.set_episode_guests(episode_id, list(entity_ids))
+    click.echo(f"✓ {episode_id}: guests = {', '.join(entity_ids)}")
+
+
+# ---------------------------------------------------------------------------
+# Spec #28 §1.13.7 — mention overrides + resolution blacklist
+# ---------------------------------------------------------------------------
+
+
+@main.group("mention")
+def mention_group():
+    """Per-mention overrides — drop bad rows, fix wrong resolutions."""
+
+
+@mention_group.command("drop")
+@click.argument("mention_id", type=int)
+@click.option("--reason", default=None, help="Free-text justification (logged + stored).")
+@click.option(
+    "--scope-episode", is_flag=True, help="Limit the override to this mention's episode (default: global by surface)."
+)
+@click.pass_context
+@require_config
+@log_command
+def mention_drop(ctx, mention_id, reason, scope_episode):
+    """Soft-delete a mention. Stores a ``mention_overrides`` row so the
+    drop survives a future reindex.
+    """
+    repo = ctx.obj.entity_repository
+    mention = repo.get_mention(mention_id)
+    if mention is None:
+        click.echo(f"❌ No mention with id={mention_id}", err=True)
+        ctx.exit(1)
+    repo.add_override(
+        surface_form=mention.surface_form,
+        episode_id=mention.episode_id if scope_episode else None,
+        kind="drop",
+        reason=reason,
+    )
+    repo.resolve_mention(
+        mention_id=mention_id,
+        entity_id=None,
+        status="dropped",
+        method="override",
+    )
+    click.echo(f"✓ Dropped mention id={mention_id} (surface={mention.surface_form!r})")
+
+
+@mention_group.command("repoint")
+@click.argument("mention_id", type=int)
+@click.argument("entity_id")
+@click.option("--reason", default=None, help="Free-text justification.")
+@click.option(
+    "--scope-global", is_flag=True, help="Apply this override to every future mention with this surface form."
+)
+@click.pass_context
+@require_config
+@log_command
+def mention_repoint(ctx, mention_id, entity_id, reason, scope_global):
+    """Override a mention's resolution to point at a specific entity."""
+    repo = ctx.obj.entity_repository
+    mention = repo.get_mention(mention_id)
+    if mention is None:
+        click.echo(f"❌ No mention with id={mention_id}", err=True)
+        ctx.exit(1)
+    target = repo.get_entity(entity_id)
+    if target is None:
+        click.echo(f"❌ No entity with id={entity_id}", err=True)
+        ctx.exit(1)
+    repo.add_override(
+        surface_form=mention.surface_form,
+        episode_id=None if scope_global else mention.episode_id,
+        kind="force_entity",
+        entity_id=entity_id,
+        reason=reason,
+    )
+    repo.resolve_mention(
+        mention_id=mention_id,
+        entity_id=entity_id,
+        status="resolved",
+        method="override",
+    )
+    click.echo(
+        f"✓ Repointed mention id={mention_id} ({mention.surface_form!r}) " f"→ {entity_id} ({target.canonical_name})"
+    )
+
+
+@main.command("resolution-blacklist")
+@click.argument("subcommand", type=click.Choice(["add", "list"]))
+@click.argument("surface_form", required=False)
+@click.argument("wrong_qid", required=False)
+@click.option("--reason", default=None)
+@click.pass_context
+@require_config
+@log_command
+def resolution_blacklist(ctx, subcommand, surface_form, wrong_qid, reason):
+    """Negative cache: refuse a (surface_form → wrong_qid) match.
+
+    Consulted by the resolver before accepting any QID. Use after
+    spotting a false positive like "Vercel" → "Vercel-Villedieu-le-Camp".
+    """
+    repo = ctx.obj.entity_repository
+    if subcommand == "list":
+        rows = repo.list_blacklist()
+        if not rows:
+            click.echo("(no blacklist entries)")
+            return
+        for r in rows:
+            click.echo(f"  {r['id']:>4}  {r['surface_form']!r:<30}  {r['wrong_qid']:<10}  {r['reason'] or ''}")
+        return
+    # add
+    if not surface_form or not wrong_qid:
+        click.echo("Usage: resolution-blacklist add <surface_form> <wrong_qid> [--reason ...]", err=True)
+        ctx.exit(1)
+    repo.add_blacklist_entry(surface_form=surface_form, wrong_qid=wrong_qid, reason=reason)
+    click.echo(f"✓ Blacklisted: {surface_form!r} ↛ {wrong_qid}")
+
+
+# Augment the existing ``entity`` group with an ``alias-add`` command.
+# (Defined here rather than at the entity_group def site to keep the
+# Phase 1.13 additions co-located with the other 1.13 plumbing.)
+
+
+@main.command("entity-alias-add")
+@click.argument("entity_id")
+@click.argument("alias")
+@click.pass_context
+@require_config
+@log_command
+def entity_alias_add(ctx, entity_id, alias):
+    """Teach the resolver: ``<alias>`` is a synonym for ``<entity_id>``.
+
+    Aliases are merged into ``entities.aliases`` and consulted by
+    ``find_entity_by_name`` (powering ``find-mentions``, ``quotes-by``,
+    etc.) and by the anchor expander (so e.g. "Karpathy" maps to
+    person:andrej-karpathy when he's on the show).
+    """
+    repo = ctx.obj.entity_repository
+    entity = repo.get_entity(entity_id)
+    if entity is None:
+        click.echo(f"❌ No entity with id={entity_id}", err=True)
+        ctx.exit(1)
+    if alias in entity.aliases:
+        click.echo(f"(alias already present)")
+        return
+    entity.aliases = sorted(set(entity.aliases) | {alias})
+    repo.upsert_entity(entity)
+    click.echo(f"✓ {entity_id}: aliases += {alias!r}")
+
+
+# ---------------------------------------------------------------------------
 # Spec #28 §1.12 — harness eval (offline analogue of the Claude Desktop gate)
 # ---------------------------------------------------------------------------
 

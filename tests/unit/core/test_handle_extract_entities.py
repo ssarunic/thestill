@@ -67,6 +67,10 @@ def _build_state(tmp_path, episode, podcast, sidecar_relpath: str | None):
 
     state.path_manager.clean_transcript_file.side_effect = _clean_transcript_file
     state.repository.get_episode.return_value = (podcast, episode)
+    # Spec §1.13.4 — the extractor handler now loads anchor entities
+    # before running. With no anchors the list is empty; default the
+    # repo stub so we don't end up with MagicMock-typed anchor ids.
+    state.entity_repository.get_episode_anchors.return_value = []
     state.entity_extractor = EntityExtractor(preloaded_model=StubGLiNER())
     return state
 
@@ -117,8 +121,12 @@ class TestHappyPath:
         state.entity_repository.delete_mentions_for_episode.assert_called_once_with("ep-uuid")
         insert_call = state.entity_repository.insert_mentions.call_args
         mentions = list(insert_call.args[0])
-        assert len(mentions) > 0
-        for m in mentions:
+        # Spec §1.13.2 — speaker synthesis emits SPEAKING rows alongside
+        # GLiNER body extractions. Filter to gliner mentions for the
+        # legacy contract assertion.
+        gliner_mentions = [m for m in mentions if m.extractor.startswith("gliner")]
+        assert len(gliner_mentions) > 0
+        for m in gliner_mentions:
             assert isinstance(m, EntityMention)
             assert m.entity_id is None
             assert m.resolution_status is ResolutionStatus.PENDING
