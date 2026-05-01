@@ -16,7 +16,7 @@ import functools
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -3180,6 +3180,281 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
+
+
+# ---------------------------------------------------------------------------
+# Spec #28 §1.9 — entity-layer query CLI peers (mirror of MCP §1.8 tools)
+# ---------------------------------------------------------------------------
+
+
+def _date_range_from_since(since: Optional[str]):
+    """Convert ``--since 30d`` etc. to a closed (start, end) interval.
+
+    Returns ``None`` when ``since`` is None, leaving downstream queries
+    unscoped. Reuses ``parse_time_window`` so the syntax matches the
+    existing CLI commands (``thestill digest --since 24h`` etc.).
+    """
+    if since is None:
+        return None
+    days = parse_time_window(since)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    return (start, end)
+
+
+def _print_citation_rows(rows, *, json_output: bool, header: Optional[str] = None) -> None:
+    """Pretty-print ``CitationRow``s as a TTY table or as JSON.
+
+    Defaults to TTY because the user is normally running interactively;
+    ``--json`` switches to a single-line-per-row machine format that
+    pipes cleanly into ``jq``.
+    """
+    if json_output:
+        for row in rows:
+            click.echo(json.dumps(row.model_dump(mode="json"), default=str))
+        return
+    if header:
+        click.echo(header)
+    if not rows:
+        click.echo("  (no results)")
+        return
+    for row in rows:
+        ts = row.published_at.date().isoformat() if row.published_at else "????-??-??"
+        speaker = row.speaker or "?"
+        quote = row.quote.replace("\n", " ").strip()[:120]
+        click.echo(
+            f"  {ts}  {row.podcast_title[:25]:<25}  "
+            f"{row.episode_title[:35]:<35}  "
+            f"@{row.start_ms // 1000}s  "
+            f"{speaker[:20]:<20}  «{quote}»"
+        )
+
+
+@main.command("find-mentions")
+@click.argument("entity")
+@click.option(
+    "--type",
+    "entity_type",
+    type=click.Choice(["person", "company", "product", "topic"]),
+    help="Disambiguation hint when multiple entities share a name.",
+)
+@click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
+@click.option("--since", help="Time window like 30d, 6m, 24h.")
+@click.option("--role", type=click.Choice(["host", "guest", "mentioned", "self"]), help="Filter by role.")
+@click.option("--limit", "-l", default=50, type=int, help="Max rows.")
+@click.option("--json", "json_output", is_flag=True, help="Emit one JSON row per line.")
+@click.pass_context
+@require_config
+@log_command
+def find_mentions(ctx, entity, entity_type, podcast_id, since, role, limit, json_output):
+    """Find every resolved mention of an ENTITY across the corpus.
+
+    ENTITY is matched against canonical id, canonical_name, then alias.
+    Output is citation-shaped: timestamp, podcast, episode, speaker,
+    quote excerpt. Same data as the MCP ``find_mentions`` tool.
+    """
+    from .search.citation import build_citation_rows
+
+    repo = ctx.obj.entity_repository
+    matched = repo.find_entity_by_name(entity, entity_type=entity_type)
+    if matched is None:
+        click.echo(f"❌ No entity matched {entity!r}", err=True)
+        ctx.exit(1)
+
+    contexts = repo.find_mentions(
+        entity_id=matched.id,
+        podcast_id=podcast_id,
+        date_range=_date_range_from_since(since),
+        role=role,
+        limit=limit,
+    )
+    rows = build_citation_rows(contexts)
+    _print_citation_rows(
+        rows,
+        json_output=json_output,
+        header=(
+            f"Resolved entity: {matched.id} ({matched.canonical_name}) "
+            f"qid={matched.wikidata_qid or '—'}\n"
+            f"{len(rows)} mention(s):"
+        ),
+    )
+
+
+@main.command("quotes-by")
+@click.argument("speaker")
+@click.option("--topic", help="Optional topic name or entity id (intersect).")
+@click.option("--podcast-id", help="Restrict to one podcast.")
+@click.option("--since", help="Time window like 30d.")
+@click.option("--limit", "-l", default=50, type=int, help="Max rows.")
+@click.option("--json", "json_output", is_flag=True, help="Emit one JSON row per line.")
+@click.pass_context
+@require_config
+@log_command
+def quotes_by(ctx, speaker, topic, podcast_id, since, limit, json_output):
+    """List resolved mentions where SPEAKER said something.
+
+    SPEAKER is matched as a case-insensitive substring against the
+    diarised label. Optional ``--topic`` intersects on episodes that
+    also mention the topic. Same data as the MCP ``list_quotes_by``
+    tool.
+    """
+    from .search.citation import build_citation_rows
+
+    repo = ctx.obj.entity_repository
+    topic_id = None
+    if topic:
+        topic_entity = repo.find_entity_by_name(topic)
+        if topic_entity is None:
+            click.echo(f"❌ No topic matched {topic!r}", err=True)
+            ctx.exit(1)
+        topic_id = topic_entity.id
+
+    contexts = repo.list_mentions_by_speaker(
+        speaker=speaker,
+        topic_entity_id=topic_id,
+        podcast_id=podcast_id,
+        date_range=_date_range_from_since(since),
+        limit=limit,
+    )
+    rows = build_citation_rows(contexts)
+    header = f"{len(rows)} mention(s) by speaker matching {speaker!r}"
+    if topic_id:
+        header += f" intersected with {topic_id!r}"
+    _print_citation_rows(rows, json_output=json_output, header=header + ":")
+
+
+@main.group("entity")
+def entity_group():
+    """Inspect or manually adjust the entities table."""
+
+
+@entity_group.command("get")
+@click.argument("id_or_name")
+@click.option(
+    "--type",
+    "entity_type",
+    type=click.Choice(["person", "company", "product", "topic"]),
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit a single JSON object.")
+@click.pass_context
+@require_config
+@log_command
+def entity_get(ctx, id_or_name, entity_type, json_output):
+    """Show an entity record + its mention count + cooccurring entities.
+
+    ID_OR_NAME is resolved as canonical id, then canonical name, then
+    alias. Mirrors the MCP ``get_entity`` tool.
+    """
+    repo = ctx.obj.entity_repository
+    matched = repo.find_entity_by_name(id_or_name, entity_type=entity_type)
+    if matched is None:
+        click.echo(f"❌ No entity matched {id_or_name!r}", err=True)
+        ctx.exit(1)
+
+    summary = repo.get_entity_summary(matched.id)
+    if summary is None:
+        click.echo("❌ Entity disappeared mid-query", err=True)
+        ctx.exit(1)
+
+    if json_output:
+        payload = {
+            "entity": {
+                "id": summary["entity"].id,
+                "type": summary["entity"].type.value,
+                "canonical_name": summary["entity"].canonical_name,
+                "wikidata_qid": summary["entity"].wikidata_qid,
+                "aliases": summary["entity"].aliases,
+                "description": summary["entity"].description,
+            },
+            "mention_count": summary["mention_count"],
+            "cooccurring": [
+                {
+                    "id": c["entity"].id,
+                    "canonical_name": c["entity"].canonical_name,
+                    "episode_count": c["episode_count"],
+                }
+                for c in summary["cooccurring"]
+            ],
+            "recent_mentions": summary["recent_mentions"][0:5]
+            and [
+                {
+                    "episode_id": ctx_.episode_id,
+                    "episode_title": ctx_.episode_title,
+                    "start_ms": ctx_.mention.start_ms,
+                    "speaker": ctx_.mention.speaker,
+                }
+                for ctx_ in summary["recent_mentions"]
+            ],
+        }
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    e = summary["entity"]
+    click.echo(f"id:             {e.id}")
+    click.echo(f"type:           {e.type.value}")
+    click.echo(f"canonical_name: {e.canonical_name}")
+    click.echo(f"wikidata_qid:   {e.wikidata_qid or '—'}")
+    if e.aliases:
+        click.echo(f"aliases:        {', '.join(e.aliases)}")
+    if e.description:
+        click.echo(f"description:    {e.description[:120]}")
+    click.echo(f"mention_count:  {summary['mention_count']}")
+    if summary["cooccurring"]:
+        click.echo("\nTop co-occurring:")
+        for c in summary["cooccurring"][:10]:
+            click.echo(f"  {c['episode_count']:>3}× {c['entity'].id}")
+    if summary["recent_mentions"]:
+        click.echo(f"\nRecent mentions (top {min(5, len(summary['recent_mentions']))}):")
+        for mc in summary["recent_mentions"][:5]:
+            ts = mc.episode_pub_date.date().isoformat() if mc.episode_pub_date else "????"
+            click.echo(
+                f"  {ts}  {mc.podcast_title[:25]:<25}  "
+                f"@{mc.mention.start_ms // 1000}s  "
+                f"{mc.mention.surface_form}"
+            )
+
+
+@entity_group.command("merge")
+@click.argument("keeper")
+@click.argument("loser")
+@click.option("--dry-run", "-d", is_flag=True, help="Report without writing.")
+@click.pass_context
+@require_config
+@log_command
+def entity_merge(ctx, keeper, loser, dry_run):
+    """Repoint LOSER's mentions to KEEPER and delete LOSER.
+
+    Use after fixing a mis-resolved entity by hand. Both arguments
+    are entity ids in the canonical ``"{type}:{slug}"`` form. Refuses
+    to merge entities of different types.
+    """
+    repo = ctx.obj.entity_repository
+    keeper_ent = repo.get_entity(keeper)
+    loser_ent = repo.get_entity(loser)
+    if keeper_ent is None:
+        click.echo(f"❌ Keeper {keeper!r} not found", err=True)
+        ctx.exit(1)
+    if loser_ent is None:
+        click.echo(f"❌ Loser {loser!r} not found", err=True)
+        ctx.exit(1)
+    if keeper_ent.type is not loser_ent.type:
+        click.echo(
+            f"❌ Cannot merge across types: {keeper_ent.type.value} ≠ {loser_ent.type.value}",
+            err=True,
+        )
+        ctx.exit(1)
+
+    label = "would merge" if dry_run else "merged"
+    if dry_run:
+        click.echo(f"  [dry-run] would repoint mentions {loser_ent.id!r} → {keeper_ent.id!r}")
+        click.echo(f"  [dry-run] would delete {loser_ent.id!r}")
+        click.echo(f"\n🎉 1 {label} (dry-run)")
+        return
+
+    moved = repo.repoint_mentions(from_entity_id=loser_ent.id, to_entity_id=keeper_ent.id)
+    repo.delete_entity(loser_ent.id)
+    click.echo(f"✓ {moved} mention(s) repointed; {loser_ent.id} deleted")
+    click.echo(f"\n🎉 1 {label}")
 
 
 @main.command()
