@@ -27,6 +27,7 @@ import uuid
 from functools import wraps
 from typing import Any, Callable
 
+import click
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -105,6 +106,23 @@ def log_command(f: Callable) -> Callable:
             )
 
             return result
+
+        except (click.exceptions.Exit, click.exceptions.Abort) as e:
+            # Click's control-flow signals: ctx.exit(code) raises Exit, ctx.abort()
+            # raises Abort. They are not errors — Click's runner translates them
+            # into the process exit code. Log at INFO without a traceback so a
+            # routine non-zero exit (e.g. "no entity matched") doesn't look
+            # catastrophic, then re-raise so Click can do its job.
+            # Field is named ``exit_status`` (not ``exit_code``) to avoid the
+            # ``log_safety`` redactor's broad substring match on "code".
+            duration_s = time.time() - start_time
+            exit_status = getattr(e, "exit_code", 1)
+            logger.info(
+                "cli_command_exited",
+                exit_status=exit_status,
+                duration_s=round(duration_s, 2),
+            )
+            raise
 
         except Exception as e:
             # Log command failure
