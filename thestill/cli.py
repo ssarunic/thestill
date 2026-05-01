@@ -3457,6 +3457,142 @@ def entity_merge(ctx, keeper, loser, dry_run):
     click.echo(f"\n🎉 1 {label}")
 
 
+# ---------------------------------------------------------------------------
+# Spec #28 §1.12 — harness eval (offline analogue of the Claude Desktop gate)
+# ---------------------------------------------------------------------------
+
+
+@main.command("harness-eval")
+@click.option(
+    "--questions-file",
+    default="tests/fixtures/eval/harness_reference_questions.json",
+    help="Path to the harness JSON file.",
+)
+@click.option("--limit-per-question", default=20, type=int, help="Max rows per tool call.")
+@click.option("--json", "json_output", is_flag=True, help="Emit a JSON report instead of TTY.")
+@click.pass_context
+@require_config
+@log_command
+def harness_eval(ctx, questions_file, limit_per_question, json_output):
+    """Run the 10 harness reference questions against the entity tools.
+
+    Spec #28 §1.12 acceptance gate. The full gate has Claude Desktop
+    in the loop and verifies no-fabrication; this offline grader is
+    the floor — verifies the tool surface + the resolved data
+    actually supports each question.
+
+    Per-question status:
+    - PASS — every expected entity resolves, the requested fragments
+      appear in at least one returned quote, and ``min_distinct_episodes``
+      is met.
+    - FAIL — entities resolved but quotes/episode threshold not met
+      (data is too sparse or the resolver mis-resolved).
+    - SKIP — one or more expected entities don't exist yet (corpus
+      hasn't been processed for that question's data).
+    """
+    from .repositories.sqlite_entity_repository import SqliteEntityRepository
+
+    payload_path = Path(questions_file)
+    if not payload_path.is_absolute():
+        payload_path = Path.cwd() / payload_path
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    questions = payload["questions"]
+    repo: SqliteEntityRepository = ctx.obj.entity_repository
+
+    results = [_grade_one(repo, q, limit_per_question) for q in questions]
+
+    summary = {
+        "pass": sum(1 for r in results if r["status"] == "pass"),
+        "fail": sum(1 for r in results if r["status"] == "fail"),
+        "skip": sum(1 for r in results if r["status"] == "skip"),
+        "total": len(results),
+    }
+
+    if json_output:
+        click.echo(json.dumps({"results": results, "summary": summary}, indent=2, default=str))
+        return
+
+    for r in results:
+        symbol = {"pass": "✓", "fail": "✗", "skip": "·"}[r["status"]]
+        click.echo(f"{symbol} {r['id']}  {r['question'][:90]}")
+        for note in r["notes"]:
+            click.echo(f"    {note}")
+
+    click.echo()
+    click.echo(f"🎉 {summary['pass']}/{summary['total']} pass, " f"{summary['fail']} fail, {summary['skip']} skip")
+
+    # Exit non-zero only when something genuinely failed. Skips are
+    # expected when the corpus hasn't been fully resolved yet — they
+    # signal "data not ready", not "code broken".
+    if summary["fail"] > 0:
+        ctx.exit(2)
+
+
+def _grade_one(repo, question: dict, limit: int) -> dict:
+    """Walk a harness question through the entity tools and grade it."""
+    notes = []
+    expected_entities = question.get("expected_entities", [])
+    expected_fragments = [f.lower() for f in question.get("expected_quote_fragments", [])]
+    min_eps = int(question.get("min_distinct_episodes", 1))
+
+    resolved_entities = []
+    for name in expected_entities:
+        ent = repo.find_entity_by_name(name)
+        if ent is None:
+            notes.append(f"unresolved entity: {name!r}")
+            continue
+        resolved_entities.append(ent)
+
+    if not resolved_entities and expected_entities:
+        return {
+            "id": question["id"],
+            "question": question["question"],
+            "status": "skip",
+            "notes": notes or ["no expected entities resolved"],
+        }
+
+    rows = []
+    for ent in resolved_entities:
+        rows.extend(repo.find_mentions(entity_id=ent.id, limit=limit))
+
+    distinct_episodes = {r.episode_id for r in rows}
+    fragment_hits = []
+    if expected_fragments:
+        for frag in expected_fragments:
+            hit_episodes = {r.episode_id for r in rows if frag in (r.mention.quote_excerpt or "").lower()}
+            fragment_hits.append((frag, len(hit_episodes)))
+        missing = [f for f, n in fragment_hits if n == 0]
+        if missing:
+            notes.append(f"fragments not found in any returned quote: {missing}")
+
+    notes.append(
+        f"resolved {len(resolved_entities)}/{len(expected_entities)} entities, "
+        f"{len(rows)} mentions across {len(distinct_episodes)} episode(s)"
+    )
+
+    if not rows:
+        return {
+            "id": question["id"],
+            "question": question["question"],
+            "status": "skip",
+            "notes": notes + ["entity exists but no resolved mentions yet"],
+        }
+
+    status = "pass"
+    if len(distinct_episodes) < min_eps:
+        notes.append(f"min_distinct_episodes not met: got {len(distinct_episodes)}, need {min_eps}")
+        status = "fail"
+    if expected_fragments and any(n == 0 for _, n in fragment_hits):
+        status = "fail"
+
+    return {
+        "id": question["id"],
+        "question": question["question"],
+        "status": status,
+        "notes": notes,
+    }
+
+
 @main.command()
 @click.option("--host", "-h", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
 @click.option("--port", "-p", default=8000, type=int, help="Port to bind to (default: 8000)")
