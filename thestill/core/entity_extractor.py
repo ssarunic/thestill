@@ -75,10 +75,14 @@ DEFAULT_LABELS_TO_TYPES = {
 }
 
 # Confidence floor — GLiNER returns scored predictions; very low scores
-# tend to be wikipedia-tier surface forms ("you", "all the time") that
-# the resolution stage would reject anyway. Filtering at extraction
-# time saves the resolution call.
-DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+# tend to be borderline topic surface forms ("discovery", "data") that
+# the resolution stage rejects or mis-resolves anyway. Bumped from 0.5
+# to 0.65 after a head-to-head probe vs an LLM-prompt extractor: at
+# 0.5 we picked up unstable topic predictions in the 0.55-0.65 band;
+# at 0.65 we kept every named-entity hit (people, companies, products)
+# while cutting ~40% of the topic noise. Filtering at extraction time
+# saves the resolution-stage round-trip.
+DEFAULT_CONFIDENCE_THRESHOLD = 0.65
 
 # Quote excerpt window: ±N characters around the surface form. Matches
 # the spec contract in §"Citation-shaped results" — every mention
