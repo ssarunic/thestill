@@ -497,6 +497,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     speaker             TEXT NULL,
                     role                TEXT NULL,
                     surface_form        TEXT NOT NULL,
+                    surface_label       TEXT NULL,
                     quote_excerpt       TEXT NOT NULL,
                     sentiment           REAL NULL,
                     confidence          REAL NOT NULL,
@@ -526,6 +527,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
             )
             logger.info("Migration complete: spec #28 entity tables created")
+
+        # spec #28 §1.5 — record the GLiNER-emitted label
+        # (``person``/``company``/``product``/``topic``) on each mention so
+        # the resolver can map to ``EntityType`` without re-running the
+        # extractor. ReFinED's ``coarse_type`` is the fallback when this
+        # column is NULL (legacy rows from before the migration).
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entity_mentions'")
+        if cursor.fetchone() is not None:
+            cursor = conn.execute("PRAGMA table_info(entity_mentions)")
+            mention_columns = {row["name"] for row in cursor.fetchall()}
+            if "surface_label" not in mention_columns:
+                logger.info("Migrating database: adding surface_label to entity_mentions")
+                conn.execute("ALTER TABLE entity_mentions ADD COLUMN surface_label TEXT NULL")
+                logger.info("Migration complete: surface_label added to entity_mentions")
 
         # Migration: rewrite legacy http:// artwork URLs to https://
         # The web UI's CSP only allows `img-src https:`, so any stored

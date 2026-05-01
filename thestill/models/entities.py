@@ -114,6 +114,12 @@ class EntityMention(BaseModel):
     speaker: Optional[str] = None
     role: Optional[MentionRole] = None
     surface_form: str
+    # Spec #28 §1.5 — the GLiNER label that produced this mention
+    # (``person`` / ``company`` / ``product`` / ``topic``). Lets the
+    # resolver map to ``EntityType`` without re-running extraction.
+    # ``None`` for legacy rows written before the surface_label column
+    # existed; resolver falls back to ReFinED's ``coarse_type`` then.
+    surface_label: Optional[str] = None
     quote_excerpt: str
     sentiment: Optional[float] = None
     confidence: float

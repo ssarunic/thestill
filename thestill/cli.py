@@ -77,6 +77,7 @@ class CLIContext:
         console: ConsoleOutput,
         auth_service: AuthService,
         digest_repository: SqliteDigestRepository,
+        entity_repository=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -89,6 +90,13 @@ class CLIContext:
         self.external_transcript_downloader = external_transcript_downloader
         self.console = console
         self.auth_service = auth_service
+        self.entity_repository = entity_repository
+        # Spec #28 §1.5 — lazy ReFinED resolver, same pattern as
+        # ``AppState.entity_resolver``. Constructed on first use by
+        # ``thestill resolve-entities`` and ``rebuild-cooccurrences``;
+        # CLI invocations that don't touch the entity branch pay
+        # nothing.
+        self.entity_resolver = None
         self.digest_repository = digest_repository
 
 
@@ -169,6 +177,12 @@ def main(ctx, config, quiet):
         # Initialize digest repository for digest persistence
         digest_repository = SqliteDigestRepository(str(config_obj.database_path))
 
+        # Spec #28 — entity-layer repository (always-on; the schema
+        # is created by SqlitePodcastRepository's migration block).
+        from .repositories.sqlite_entity_repository import SqliteEntityRepository
+
+        entity_repository = SqliteEntityRepository(db_path=config_obj.database_path)
+
         # Store all services in typed context object
         ctx.obj = CLIContext(
             config=config_obj,
@@ -183,6 +197,7 @@ def main(ctx, config, quiet):
             console=console,
             auth_service=auth_service,
             digest_repository=digest_repository,
+            entity_repository=entity_repository,
         )
 
     except Exception as e:
@@ -2914,6 +2929,254 @@ def evaluate_clean_transcript(
     total_time = time.time() - start_time
     click.echo("\n🎉 Evaluation complete!")
     click.echo(f"✓ {total_processed} transcript(s) evaluated in {total_time:.1f} seconds")
+
+
+# ---------------------------------------------------------------------------
+# Spec #28 — entity-layer CLI commands
+# ---------------------------------------------------------------------------
+
+
+def _get_or_create_cli_resolver(ctx):
+    """Lazy ReFinED resolver for CLI commands.
+
+    Same pattern as ``task_handlers._get_or_create_entity_resolver``
+    but scoped to ``CLIContext`` rather than ``AppState``. Single-
+    threaded by construction (CLI commands run in the main thread),
+    so no lock needed here.
+    """
+    if ctx.obj.entity_resolver is None:
+        from .core.entity_resolver import EntityResolver
+
+        ctx.obj.entity_resolver = EntityResolver()
+    return ctx.obj.entity_resolver
+
+
+@main.command("resolve-entities")
+@click.option("--episode-id", help="Resolve a single episode by id")
+@click.option("--podcast-id", help="Filter to one podcast (index, slug, or RSS URL)")
+@click.option("--max-episodes", "-m", type=int, help="Cap the number of episodes")
+@click.option("--dry-run", "-d", is_flag=True, help="Report what would resolve without writing")
+@click.pass_context
+@require_config
+@log_command
+def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
+    """Resolve pending ``entity_mentions`` to Wikidata entities.
+
+    Manual driver for the ``resolve-entities`` pipeline stage. By
+    default resolves every episode that has pending mentions; use
+    ``--episode-id`` for a one-shot run, ``--podcast-id`` to scope
+    by podcast, ``--max-episodes`` to cap the batch.
+    """
+    from .core.entity_resolver import EntityResolver  # noqa: F401  (warm import)
+    from .models.entities import EntityExtractionStatus
+
+    repo = ctx.obj.entity_repository
+    podcast_repo = ctx.obj.repository
+
+    if episode_id:
+        episode_ids = [episode_id]
+    else:
+        # Find episodes with pending mentions, optionally scoped to a
+        # podcast. We grab the IDs up front so progress reporting is
+        # accurate.
+        sql = "SELECT DISTINCT episode_id FROM entity_mentions " "WHERE resolution_status = 'pending'"
+        params: list = []
+        if podcast_id:
+            podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+            if not podcast:
+                click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+                ctx.exit(1)
+            sql += " AND episode_id IN (SELECT id FROM episodes WHERE podcast_id = ?)"
+            params.append(podcast.id)
+        sql += " ORDER BY episode_id"
+        if max_episodes:
+            sql += f" LIMIT {int(max_episodes)}"
+        with repo._get_connection() as conn:
+            episode_ids = [r[0] for r in conn.execute(sql, params).fetchall()]
+
+    click.echo(f"Found {len(episode_ids)} episode(s) with pending mentions")
+    if dry_run:
+        for eid in episode_ids:
+            click.echo(f"  would resolve {eid}")
+        return
+
+    resolver = _get_or_create_cli_resolver(ctx)
+    total_resolved = 0
+    total_unresolvable = 0
+    for eid in episode_ids:
+        pending = repo.list_pending_mentions(episode_id=eid)
+        if not pending:
+            continue
+        results = resolver.resolve(pending)
+        for r in results:
+            repo.upsert_entity(r.entity)
+            repo.resolve_mention(
+                mention_id=r.mention_id,
+                entity_id=r.entity.id if r.status == "resolved" else None,
+                status=r.status,
+            )
+            if r.status == "resolved":
+                total_resolved += 1
+            else:
+                total_unresolvable += 1
+        # Inline scoped maintenance — same as the handler.
+        repo.rebuild_cooccurrences(episode_ids=[eid])
+        # Mirror the handler: keep the per-episode status consistent
+        # with the resolved state. Extraction set this to 'complete'
+        # already — leaving it untouched matches the spec's
+        # per-mention-status model.
+        _ = EntityExtractionStatus  # silence unused-import; kept for future status writes
+        click.echo(f"✓ {eid}: {len(results)} mentions processed")
+
+    click.echo(
+        f"\n🎉 Resolved {total_resolved} mentions, "
+        f"{total_unresolvable} unresolvable, across {len(episode_ids)} episode(s)"
+    )
+
+
+@main.command("rebuild-cooccurrences")
+@click.option("--podcast-id", help="Rebuild only pairs touching this podcast's episodes")
+@click.option("--episode-id", help="Rebuild only pairs touching this single episode")
+@click.option("--full", is_flag=True, help="Wipe and rebuild the entire entity_cooccurrences table")
+@click.pass_context
+@require_config
+@log_command
+def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
+    """Materialise ``entity_cooccurrences`` from resolved mentions.
+
+    Default scope is "every episode with at least one resolved
+    mention" — equivalent to ``--full`` but slightly cheaper because
+    the per-pair self-join runs once. ``--full`` blows away the table
+    first (use after a Phase change that affects how entities are
+    resolved). ``--episode-id``/``--podcast-id`` scope the rebuild
+    to pairs touching specific episodes.
+    """
+    repo = ctx.obj.entity_repository
+    if full:
+        click.echo("Wiping and rebuilding entity_cooccurrences (full)…")
+        rows = repo.rebuild_cooccurrences(episode_ids=None)
+        click.echo(f"✓ {rows} co-occurrence pair(s) materialised")
+        return
+
+    episode_ids: list = []
+    if episode_id:
+        episode_ids = [episode_id]
+    elif podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        with repo._get_connection() as conn:
+            episode_ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM episodes WHERE podcast_id = ?",
+                    (podcast.id,),
+                ).fetchall()
+            ]
+    else:
+        with repo._get_connection() as conn:
+            episode_ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT DISTINCT episode_id FROM entity_mentions " "WHERE resolution_status = 'resolved'"
+                ).fetchall()
+            ]
+
+    if not episode_ids:
+        click.echo("No resolved mentions to scope the rebuild from.")
+        return
+
+    rows = repo.rebuild_cooccurrences(episode_ids=episode_ids)
+    click.echo(f"✓ {rows} co-occurrence pair(s) materialised across {len(episode_ids)} episode(s)")
+
+
+@main.command("merge-aliases")
+@click.option(
+    "--levenshtein-threshold",
+    default=0.1,
+    type=float,
+    help="Max edit-distance / max(name_len) for a fuzzy match (default 0.1)",
+)
+@click.option("--dry-run", "-d", is_flag=True, help="Report merges without writing")
+@click.pass_context
+@require_config
+@log_command
+def merge_aliases(ctx, levenshtein_threshold, dry_run):
+    """Collapse duplicate entities (spec #28 §1.6).
+
+    Two-step nightly job:
+
+    1. **QID dedupe.** Any pair of entities sharing a Wikidata QID
+       collapses into the alphabetically-first id; the loser's
+       mentions are repointed and the loser deleted.
+    2. **Fuzzy merge.** Within each entity type, pairs whose
+       canonical-name edit distance is < ``levenshtein-threshold``
+       times the longer name's length collapse the same way. The
+       default of 0.1 is the spec's recommended threshold.
+
+    Idempotent: running again is a no-op once duplicates are gone.
+    """
+    from rapidfuzz.distance import Levenshtein
+
+    repo = ctx.obj.entity_repository
+
+    # Step 1: QID dedupe
+    qid_pairs = repo.find_duplicate_qid_pairs()
+    qid_merged = 0
+    for qid, keeper, loser in qid_pairs:
+        if dry_run:
+            click.echo(f"  [dry-run] QID {qid}: would merge {loser} → {keeper}")
+            continue
+        repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
+        repo.delete_entity(loser)
+        qid_merged += 1
+    click.echo(f"QID dedupe: {qid_merged} merge(s){' (dry-run)' if dry_run else ''}")
+
+    # Step 2: fuzzy merge within each type
+    fuzzy_merged = 0
+    for entity_type in ("person", "company", "product", "topic"):
+        entities = repo.list_entities_by_type(entity_type)
+        # Pairwise within the type. ``list_entities_by_type`` returns
+        # them sorted by canonical_name, which clusters near-duplicates
+        # together.
+        for i, ent_a in enumerate(entities):
+            for ent_b in entities[i + 1 :]:
+                if ent_a.canonical_name == ent_b.canonical_name:
+                    continue  # exact-name dupes shouldn't exist within a type, but skip safely
+                # Don't merge if both have QIDs and they differ — those
+                # are genuine distinct entities (e.g. "Tim Cook" vs
+                # "Tim Cooke" the photographer).
+                if ent_a.wikidata_qid and ent_b.wikidata_qid and ent_a.wikidata_qid != ent_b.wikidata_qid:
+                    continue
+                a_name = ent_a.canonical_name
+                b_name = ent_b.canonical_name
+                max_len = max(len(a_name), len(b_name))
+                if max_len == 0:
+                    continue
+                distance = Levenshtein.distance(a_name, b_name)
+                if distance / max_len > levenshtein_threshold:
+                    continue
+                # Keeper preference: the one with a QID, then the
+                # alphabetically-first id.
+                if ent_b.wikidata_qid and not ent_a.wikidata_qid:
+                    keeper, loser = ent_b, ent_a
+                elif ent_a.id < ent_b.id:
+                    keeper, loser = ent_a, ent_b
+                else:
+                    keeper, loser = ent_b, ent_a
+                if dry_run:
+                    click.echo(
+                        f"  [dry-run] fuzzy {entity_type}: "
+                        f"would merge {loser.id!r} ({loser.canonical_name!r}) → "
+                        f"{keeper.id!r} ({keeper.canonical_name!r}) (d={distance})"
+                    )
+                    continue
+                repo.repoint_mentions(from_entity_id=loser.id, to_entity_id=keeper.id)
+                repo.delete_entity(loser.id)
+                fuzzy_merged += 1
+    click.echo(f"Fuzzy merge: {fuzzy_merged} merge(s){' (dry-run)' if dry_run else ''}")
+    click.echo(f"\n🎉 Total merges: {qid_merged + fuzzy_merged}{' (dry-run)' if dry_run else ''}")
 
 
 @main.command()

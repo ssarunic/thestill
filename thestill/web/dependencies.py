@@ -34,6 +34,7 @@ from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..core.entity_extractor import EntityExtractor
+    from ..core.entity_resolver import EntityResolver
     from ..core.feed_manager import PodcastFeedManager
     from ..core.progress_store import ProgressStore
     from ..core.queue_manager import QueueManager
@@ -101,6 +102,10 @@ class AppState:
     # entity branch) never need it.
     entity_repository: "SqliteEntityRepository"
     entity_extractor: "Optional[EntityExtractor]" = None
+    # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
+    # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the
+    # cost on processes that never run resolve-entities tasks.
+    entity_resolver: "Optional[EntityResolver]" = None
 
 
 def get_app_state(request: Request) -> AppState:

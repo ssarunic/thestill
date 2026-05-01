@@ -25,15 +25,16 @@ their respective Phase 1 sub-tasks land — keeping the boundary
 explicit prevents accidental partial implementations.
 """
 
+import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.entities import EntityMention, EntityRecord
+from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionStatus
 
 logger = get_logger(__name__)
 
@@ -84,18 +85,117 @@ class SqliteEntityRepository:
     def upsert_entity(self, entity: EntityRecord) -> str:
         """Create or update an ``entities`` row, returning its id.
 
-        Phase 1: insert when ``id`` is unseen; merge aliases / refresh
-        ``updated_at`` when the same QID is already present.
+        Idempotent: insert when ``id`` is unseen, refresh
+        ``canonical_name``/``description``/``aliases`` and bump
+        ``updated_at`` on conflict. Aliases are *merged* (union of
+        existing + incoming), not replaced — repeated calls with
+        partial alias sets accumulate rather than overwrite.
         """
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.5")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT aliases FROM entities WHERE id = ?",
+                (entity.id,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO entities (
+                        id, type, canonical_name, wikidata_qid,
+                        aliases, description, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity.id,
+                        entity.type.value,
+                        entity.canonical_name,
+                        entity.wikidata_qid,
+                        json.dumps(entity.aliases),
+                        entity.description,
+                        entity.created_at.isoformat(),
+                        now_iso,
+                    ),
+                )
+                logger.info(
+                    "entity_inserted",
+                    entity_id=entity.id,
+                    qid=entity.wikidata_qid,
+                )
+            else:
+                # Union the alias sets (case-sensitive — matches how
+                # ReFinED returns surface forms).
+                existing_aliases = set(json.loads(existing["aliases"] or "[]"))
+                merged_aliases = sorted(existing_aliases | set(entity.aliases))
+                conn.execute(
+                    """
+                    UPDATE entities SET
+                        canonical_name = ?,
+                        wikidata_qid   = COALESCE(?, wikidata_qid),
+                        aliases        = ?,
+                        description    = COALESCE(?, description),
+                        updated_at     = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        entity.canonical_name,
+                        entity.wikidata_qid,
+                        json.dumps(merged_aliases),
+                        entity.description,
+                        now_iso,
+                        entity.id,
+                    ),
+                )
+        return entity.id
 
     def get_entity(self, entity_id: str) -> Optional[EntityRecord]:
         """Look up by canonical ``"{type}:{slug}"`` id."""
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.8")
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM entities WHERE id = ?",
+                (entity_id,),
+            ).fetchone()
+        return _row_to_entity(row) if row else None
 
     def find_entity_by_qid(self, wikidata_qid: str) -> Optional[EntityRecord]:
         """Look up by Wikidata QID (used during resolution merging)."""
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.5")
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM entities WHERE wikidata_qid = ? LIMIT 1",
+                (wikidata_qid,),
+            ).fetchone()
+        return _row_to_entity(row) if row else None
+
+    def list_entities_by_type(self, entity_type: str) -> List[EntityRecord]:
+        """Return every entity of the given type (used by alias-merge)."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM entities WHERE type = ? ORDER BY canonical_name",
+                (entity_type,),
+            ).fetchall()
+        return [_row_to_entity(r) for r in rows]
+
+    def delete_entity(self, entity_id: str) -> bool:
+        """Hard-delete an entity. ``ON DELETE CASCADE`` removes mentions
+        + cooccurrence rows pointing at it. Returns True if a row was
+        deleted (for use by the alias-merge job, which collapses the
+        loser of a duplicate pair after re-pointing its mentions).
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+            return cursor.rowcount > 0
+
+    def repoint_mentions(self, *, from_entity_id: str, to_entity_id: str) -> int:
+        """Bulk-UPDATE every mention pointing at ``from_entity_id`` to
+        point at ``to_entity_id``. Returns rowcount. Used by alias-merge
+        before deleting the loser of a duplicate pair so cascade
+        doesn't take the mentions with it.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE entity_mentions SET entity_id = ? WHERE entity_id = ?",
+                (to_entity_id, from_entity_id),
+            )
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Mentions
@@ -122,6 +222,7 @@ class SqliteEntityRepository:
                 m.speaker,
                 m.role.value if m.role else None,
                 m.surface_form,
+                m.surface_label,
                 m.quote_excerpt,
                 m.sentiment,
                 m.confidence,
@@ -139,9 +240,9 @@ class SqliteEntityRepository:
                 INSERT INTO entity_mentions (
                     entity_id, resolution_status, episode_id, segment_id,
                     start_ms, end_ms, speaker, role, surface_form,
-                    quote_excerpt, sentiment, confidence, extractor,
-                    created_at, resolved_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    surface_label, quote_excerpt, sentiment, confidence,
+                    extractor, created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -189,9 +290,21 @@ class SqliteEntityRepository:
     ) -> List[EntityMention]:
         """Return mentions with ``resolution_status='pending'``.
 
-        Phase 1: drives the ``resolve-entities`` batching loop.
+        Drives the ``resolve-entities`` batching loop. ``episode_id``
+        scopes to one episode (handler-driven path); without it the
+        full backlog is returned (CLI ``thestill resolve-entities`` /
+        eventual rebuild path).
         """
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.5")
+        sql = "SELECT * FROM entity_mentions WHERE resolution_status = 'pending'"
+        params: list = []
+        if episode_id is not None:
+            sql += " AND episode_id = ?"
+            params.append(episode_id)
+        sql += " ORDER BY id LIMIT ?"
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_mention(r) for r in rows]
 
     def resolve_mention(
         self,
@@ -201,8 +314,25 @@ class SqliteEntityRepository:
         status: str,
         resolved_at: Optional[datetime] = None,
     ) -> bool:
-        """Flip a pending mention to ``resolved`` or ``unresolvable``."""
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.5")
+        """Flip a pending mention to ``resolved`` or ``unresolvable``.
+
+        ``entity_id`` is required for ``status='resolved'`` and ignored
+        (stored as NULL by the caller) for ``unresolvable``. Returns
+        True if a row was updated.
+        """
+        if status not in ("resolved", "unresolvable"):
+            raise ValueError(f"invalid resolution status={status!r}")
+        ts = (resolved_at or datetime.now(timezone.utc)).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE entity_mentions
+                SET entity_id = ?, resolution_status = ?, resolved_at = ?
+                WHERE id = ?
+                """,
+                (entity_id, status, ts, mention_id),
+            )
+            return cursor.rowcount > 0
 
     def find_mentions(
         self,
@@ -236,8 +366,157 @@ class SqliteEntityRepository:
     def rebuild_cooccurrences(self, *, episode_ids: Optional[List[str]] = None) -> int:
         """Rebuild ``entity_cooccurrences`` for the given episodes.
 
-        Spec §1.7: called automatically at the end of ``resolve-entities``
-        for affected episodes, and via ``thestill rebuild-cooccurrences``
-        for full rebuilds. Returns the number of rows materialised.
+        Called automatically at the end of ``resolve-entities`` for
+        affected episodes, and via ``thestill rebuild-cooccurrences``
+        for full rebuilds.
+
+        ``episode_count`` is "distinct episodes containing the pair
+        across the whole corpus" — NOT a running counter. So even when
+        scoped to specific episodes, the per-pair aggregate has to be
+        recomputed corpus-wide for any pair touched by the scope. We
+        achieve this by:
+        1. Collecting the entity-set that appears in the scoped
+           episodes (any pair touching one of these entities is
+           potentially stale).
+        2. Deleting all rows in ``entity_cooccurrences`` that touch any
+           of those entities (DELETE WHERE a_id IN ... OR b_id IN ...).
+        3. INSERT … SELECT the corpus-wide aggregate for pairs where at
+           least one entity is in the affected set.
+        4. Returns the number of cooccurrence rows materialised.
+
+        ``episode_ids=None`` is a full rebuild — wipe-and-replace.
         """
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.7")
+        with self._get_connection() as conn:
+            if episode_ids is None:
+                conn.execute("DELETE FROM entity_cooccurrences")
+                affected_predicate = ""
+                params: list = []
+            else:
+                if not episode_ids:
+                    return 0
+                # Find the entity_ids touched by these episodes; only
+                # those have potentially-stale cooccurrence rows.
+                placeholders = ",".join("?" * len(episode_ids))
+                affected_rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT entity_id FROM entity_mentions
+                    WHERE entity_id IS NOT NULL
+                      AND resolution_status = 'resolved'
+                      AND episode_id IN ({placeholders})
+                    """,
+                    list(episode_ids),
+                ).fetchall()
+                affected_ids = [r["entity_id"] for r in affected_rows]
+                if not affected_ids:
+                    return 0
+                aff_placeholders = ",".join("?" * len(affected_ids))
+                conn.execute(
+                    f"""
+                    DELETE FROM entity_cooccurrences
+                    WHERE entity_a_id IN ({aff_placeholders})
+                       OR entity_b_id IN ({aff_placeholders})
+                    """,
+                    affected_ids + affected_ids,
+                )
+                affected_predicate = (
+                    f" AND (a.entity_id IN ({aff_placeholders}) " f"     OR b.entity_id IN ({aff_placeholders}))"
+                )
+                params = affected_ids + affected_ids
+
+            # Self-join scoped to resolved mentions; canonical pair
+            # ordering via the ``a.entity_id < b.entity_id`` predicate
+            # in the JOIN clause matches the ``CHECK (a < b)`` on the
+            # target table.
+            cursor = conn.execute(
+                f"""
+                INSERT INTO entity_cooccurrences (
+                    entity_a_id, entity_b_id, episode_count, last_seen_at
+                )
+                SELECT
+                    a.entity_id,
+                    b.entity_id,
+                    COUNT(DISTINCT a.episode_id),
+                    MAX(COALESCE(a.resolved_at, a.created_at))
+                FROM entity_mentions a
+                JOIN entity_mentions b
+                    ON a.episode_id = b.episode_id
+                   AND a.entity_id < b.entity_id
+                WHERE a.resolution_status = 'resolved'
+                  AND b.resolution_status = 'resolved'
+                  {affected_predicate}
+                GROUP BY a.entity_id, b.entity_id
+                """,
+                params,
+            )
+            inserted = cursor.rowcount
+        logger.info(
+            "cooccurrences_rebuilt",
+            scope_episode_count=len(episode_ids) if episode_ids else None,
+            rows=inserted,
+        )
+        return inserted
+
+    # ------------------------------------------------------------------
+    # Alias merging (spec §1.6)
+    # ------------------------------------------------------------------
+
+    def find_duplicate_qid_pairs(self) -> List[Tuple[str, str, str]]:
+        """Find pairs of entities sharing a Wikidata QID.
+
+        Returns list of ``(qid, keeper_id, loser_id)`` tuples. The
+        "keeper" is chosen deterministically as the alphabetically
+        first ``id``; the loser's mentions get repointed at the
+        keeper, then the loser is deleted by the caller.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT wikidata_qid, MIN(id) AS keeper_id, GROUP_CONCAT(id) AS all_ids
+                FROM entities
+                WHERE wikidata_qid IS NOT NULL
+                GROUP BY wikidata_qid
+                HAVING COUNT(*) > 1
+                """
+            ).fetchall()
+        pairs: List[Tuple[str, str, str]] = []
+        for row in rows:
+            keeper = row["keeper_id"]
+            for loser in row["all_ids"].split(","):
+                if loser != keeper:
+                    pairs.append((row["wikidata_qid"], keeper, loser))
+        return pairs
+
+
+def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
+    return EntityRecord(
+        id=row["id"],
+        type=EntityType(row["type"]),
+        canonical_name=row["canonical_name"],
+        wikidata_qid=row["wikidata_qid"],
+        aliases=json.loads(row["aliases"] or "[]"),
+        description=row["description"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_mention(row: sqlite3.Row) -> EntityMention:
+    return EntityMention(
+        id=row["id"],
+        entity_id=row["entity_id"],
+        resolution_status=ResolutionStatus(row["resolution_status"]),
+        episode_id=row["episode_id"],
+        segment_id=row["segment_id"],
+        start_ms=row["start_ms"],
+        end_ms=row["end_ms"],
+        speaker=row["speaker"],
+        role=MentionRole(row["role"]) if row["role"] else None,
+        surface_form=row["surface_form"],
+        surface_label=row["surface_label"] if "surface_label" in row.keys() else None,
+        quote_excerpt=row["quote_excerpt"],
+        sentiment=row["sentiment"],
+        confidence=row["confidence"],
+        extractor=row["extractor"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
+    )

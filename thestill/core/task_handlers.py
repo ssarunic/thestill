@@ -678,6 +678,99 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
 
 
 _extractor_init_lock = threading.Lock()
+_resolver_init_lock = threading.Lock()
+
+
+def handle_resolve_entities(task: Task, state: "AppState") -> None:
+    """Spec #28 §1.5 — resolve pending mentions to Wikidata entities.
+
+    Reads all ``resolution_status='pending'`` mentions for the task's
+    episode, runs ReFinED, upserts the resulting ``EntityRecord``s,
+    flips each mention's status to ``resolved`` or ``unresolvable``,
+    runs an inline scoped alias-merge for the touched entities (spec
+    §1.6), then triggers an episode-scoped co-occurrence rebuild
+    (spec §1.7).
+
+    Idempotent: re-running on an episode whose mentions are already
+    resolved returns immediately because ``list_pending_mentions``
+    returns []. Use ``thestill rebuild-entities`` (Phase 3) or flip
+    rows back to ``pending`` to force re-resolution.
+
+    Failure isolation: errors here flip
+    ``episodes.entity_extraction_status='failed'`` (via the worker's
+    ``_NON_USER_FAILING_STAGES`` rule), never ``failed_at_stage``.
+    """
+    logger.info("entity_resolution_started", episode_id=task.episode_id)
+
+    podcast, episode = _get_episode_or_fail(task, state)
+    repo = state.entity_repository
+
+    pending = repo.list_pending_mentions(episode_id=episode.id)
+    if not pending:
+        logger.info(
+            "entity_resolution_no_pending",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+        )
+        return
+
+    with _handler_error_context(f"resolving entities for {episode.title}"):
+        resolver = _get_or_create_entity_resolver(state)
+        results = resolver.resolve(pending)
+
+        touched_entity_ids: set[str] = set()
+        for r in results:
+            repo.upsert_entity(r.entity)
+            entity_id_for_mention = r.entity.id if r.status == "resolved" else None
+            repo.resolve_mention(
+                mention_id=r.mention_id,
+                entity_id=entity_id_for_mention,
+                status=r.status,
+            )
+            touched_entity_ids.add(r.entity.id)
+
+        # Spec §1.6 — inline scoped alias-merge for the entities just
+        # touched. Cheap (only checks duplicates whose QID matches one
+        # of the entities resolved in this episode); the full-corpus
+        # sweep runs via ``thestill merge-aliases``.
+        merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
+        if merged:
+            logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
+
+        # Spec §1.7 — refresh cooccurrences for any pair touching this
+        # episode's entities. Per spec, the table holds corpus-wide
+        # episode_count per pair, so the rebuild has to recompute
+        # full counts (it does that internally — see
+        # ``rebuild_cooccurrences`` docstring).
+        repo.rebuild_cooccurrences(episode_ids=[episode.id])
+
+        logger.info(
+            "entity_resolution_completed",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+            mentions=len(results),
+            resolved=sum(1 for r in results if r.status == "resolved"),
+            unresolvable=sum(1 for r in results if r.status == "unresolvable"),
+        )
+
+
+def _merge_qid_duplicates_for(repo, touched_entity_ids: set) -> int:
+    """Collapse any duplicate-QID pairs that touch ``touched_entity_ids``.
+
+    The full-corpus duplicate scan in
+    ``find_duplicate_qid_pairs`` is cheap (one indexed query); the
+    filter here is just to keep the inline log noise scoped to "what
+    this resolve call actually changed". Returns the number of
+    loser-entities deleted.
+    """
+    pairs = repo.find_duplicate_qid_pairs()
+    relevant = [(qid, k, l) for (qid, k, l) in pairs if k in touched_entity_ids or l in touched_entity_ids]
+    merged = 0
+    for _qid, keeper, loser in relevant:
+        repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
+        repo.delete_entity(loser)
+        merged += 1
+    return merged
 
 
 def _get_or_create_entity_extractor(state: "AppState"):
@@ -700,6 +793,22 @@ def _get_or_create_entity_extractor(state: "AppState"):
     return state.entity_extractor
 
 
+def _get_or_create_entity_resolver(state: "AppState"):
+    """Lazy-init the process-scope ``EntityResolver``.
+
+    ReFinED loads several GB of LMDB-indexed Wikidata on first use
+    (~30-60s, ~4-6GB RAM). Same lock pattern as the extractor: defer
+    until the first ``resolve-entities`` task fires, cache on
+    ``AppState``, prevent concurrent double-load.
+    """
+    with _resolver_init_lock:
+        if state.entity_resolver is None:
+            from .entity_resolver import EntityResolver
+
+            state.entity_resolver = EntityResolver()
+    return state.entity_resolver
+
+
 def create_task_handlers(
     state: "AppState",
 ) -> Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]]:
@@ -720,7 +829,7 @@ def create_task_handlers(
         TaskStage.CLEAN: lambda task, cb=None: handle_clean(task, state),
         TaskStage.SUMMARIZE: lambda task, cb=None: handle_summarize(task, state),
         TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_extract_entities(task, state),
-        TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_resolve_entities(task, state),
         TaskStage.WRITE_CORPUS: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
         TaskStage.REINDEX: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
     }

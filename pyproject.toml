@@ -98,6 +98,24 @@ entities = [
     # a ~400MB transformer on first use; pulls torch transitively.
     # Optional so cloud-only deployments don't pay the install cost.
     "gliner>=0.2.13",
+    # Spec #28 §1.5 — entity disambiguation against Wikidata via
+    # amazon-science/ReFinED. Lazy-loads several GB of LMDB-indexed
+    # Wikidata to ``~/.cache/refined/`` on first use. CPU works; GPU
+    # is 4-5x faster. Memory ~4-6GB at runtime.
+    #
+    # Installed from git because the package isn't published to PyPI;
+    # the ``refined`` PyPI name is a placeholder for an unrelated 0.0.1
+    # release. Pin to a tag once amazon-science cuts one.
+    "refined @ git+https://github.com/amazon-science/ReFinED.git",
+    # ReFinED's tokenizer config relies on ``transformers`` < 4.40 —
+    # 4.40 made ``add_special_tokens`` a method on ``RobertaTokenizer``
+    # which collides with the same kwarg ReFinED's config passes in.
+    # Loosen this once amazon-science fixes the upstream issue.
+    "transformers>=4.30,<4.40",
+    # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
+    # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
+    # short canonical names than stdlib difflib.
+    "rapidfuzz>=3.0.0",
 ]
 
 [project.scripts]

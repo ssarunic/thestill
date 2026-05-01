@@ -319,6 +319,7 @@ class EntityExtractor:
             speaker=pred.segment.speaker,
             role=None,
             surface_form=pred.surface_form,
+            surface_label=pred.label,
             quote_excerpt=_excerpt_around(pred.segment.text, pred.char_start, pred.char_end),
             sentiment=None,
             confidence=pred.confidence,
