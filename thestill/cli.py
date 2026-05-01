@@ -3127,11 +3127,13 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
     for qid, keeper, loser in qid_pairs:
         if dry_run:
             click.echo(f"  [dry-run] QID {qid}: would merge {loser} → {keeper}")
+            qid_merged += 1
             continue
         repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
         repo.delete_entity(loser)
         qid_merged += 1
-    click.echo(f"QID dedupe: {qid_merged} merge(s){' (dry-run)' if dry_run else ''}")
+    label = "would merge" if dry_run else "merge(s)"
+    click.echo(f"QID dedupe: {qid_merged} {label}")
 
     # Step 2: fuzzy merge within each type
     fuzzy_merged = 0
@@ -3171,12 +3173,13 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                         f"would merge {loser.id!r} ({loser.canonical_name!r}) → "
                         f"{keeper.id!r} ({keeper.canonical_name!r}) (d={distance})"
                     )
+                    fuzzy_merged += 1
                     continue
                 repo.repoint_mentions(from_entity_id=loser.id, to_entity_id=keeper.id)
                 repo.delete_entity(loser.id)
                 fuzzy_merged += 1
-    click.echo(f"Fuzzy merge: {fuzzy_merged} merge(s){' (dry-run)' if dry_run else ''}")
-    click.echo(f"\n🎉 Total merges: {qid_merged + fuzzy_merged}{' (dry-run)' if dry_run else ''}")
+    click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
+    click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
 
 
 @main.command()

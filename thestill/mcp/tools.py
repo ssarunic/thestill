@@ -34,6 +34,7 @@ from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
 from ..repositories.sqlite_digest_repository import SqliteDigestRepository
+from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import (
@@ -48,6 +49,7 @@ from ..services.auth_service import AuthService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
+from .entity_tools import dispatch_entity_tool, entity_tool_definitions
 from .middleware.stdio_adapter import log_mcp_stdio
 
 logger = structlog.get_logger(__name__)
@@ -92,6 +94,9 @@ def setup_tools(server: Server, storage_path: str):
     path_manager = PathManager(storage_path)
     repository = SqlitePodcastRepository(db_path=config.database_path)
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
+    # Spec #28 §1.8 — entity-layer repository, surfaced via the
+    # entity tools registered below.
+    entity_repository = SqliteEntityRepository(db_path=config.database_path)
     podcast_service = PodcastService(storage_path, repository, path_manager)
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
@@ -398,6 +403,10 @@ def setup_tools(server: Server, storage_path: str):
                     "required": [],
                 },
             ),
+            # Spec #28 §1.8 — entity-layer MCP alpha. Schemas live in
+            # ``entity_tools.entity_tool_definitions()`` so the
+            # tool/handler pair stays co-located.
+            *entity_tool_definitions(),
         ]
 
     @server.call_tool()
@@ -1703,9 +1712,16 @@ def setup_tools(server: Server, storage_path: str):
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-            else:
-                logger.error(f"Unknown tool: {name}")
-                return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}))]
+            # Spec #28 §1.8 — try the entity-tool dispatcher before
+            # falling through to "unknown tool". Returns ``None`` when
+            # ``name`` isn't an entity tool, in which case we fall
+            # through to the unknown-tool error path.
+            entity_response = dispatch_entity_tool(name, arguments, entity_repository)
+            if entity_response is not None:
+                return entity_response
+
+            logger.error(f"Unknown tool: {name}")
+            return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}))]
 
         except Exception as e:
             logger.error(f"Error calling tool {name}: {e}", exc_info=True)

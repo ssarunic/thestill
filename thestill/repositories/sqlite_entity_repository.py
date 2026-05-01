@@ -28,6 +28,7 @@ explicit prevents accidental partial implementations.
 import json
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -338,26 +339,248 @@ class SqliteEntityRepository:
         self,
         *,
         entity_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
         episode_id: Optional[str] = None,
         podcast_id: Optional[str] = None,
         date_range: Optional[Tuple[datetime, datetime]] = None,
         role: Optional[str] = None,
         limit: int = 50,
-    ) -> List[EntityMention]:
-        """Backing query for the ``find_mentions`` MCP tool / CLI peer."""
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.8")
+    ) -> List["MentionContext"]:
+        """Spec #28 §1.8 — backing query for ``find_mentions`` MCP tool.
+
+        Returns mentions joined with their owning episode + podcast so
+        the MCP tool can hand back citation-shaped rows (Strategy §4)
+        without a second round-trip per result. Only resolved mentions
+        are returned — pending/unresolvable rows have no canonical
+        ``entity_id`` to filter by anyway.
+
+        ``entity_id`` filters to a specific entity (``"person:elon-musk"``);
+        ``entity_type`` filters to a category (``"person"``). Both
+        compose with podcast/episode/date_range/role.
+        """
+        sql = """
+            SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
+                   ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
+            FROM entity_mentions m
+            JOIN episodes e ON m.episode_id = e.id
+            JOIN podcasts p ON e.podcast_id = p.id
+            LEFT JOIN entities ent ON m.entity_id = ent.id
+            WHERE m.resolution_status = 'resolved'
+        """
+        params: list = []
+        if entity_id is not None:
+            sql += " AND m.entity_id = ?"
+            params.append(entity_id)
+        if entity_type is not None:
+            sql += " AND ent.type = ?"
+            params.append(entity_type)
+        if episode_id is not None:
+            sql += " AND m.episode_id = ?"
+            params.append(episode_id)
+        if podcast_id is not None:
+            sql += " AND p.id = ?"
+            params.append(podcast_id)
+        if date_range is not None:
+            sql += " AND e.pub_date BETWEEN ? AND ?"
+            params.append(date_range[0].isoformat())
+            params.append(date_range[1].isoformat())
+        if role is not None:
+            sql += " AND m.role = ?"
+            params.append(role)
+        sql += " ORDER BY e.pub_date DESC, m.start_ms ASC LIMIT ?"
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_mention_context(r) for r in rows]
 
     def list_mentions_by_speaker(
         self,
         *,
         speaker: str,
-        topic: Optional[str] = None,
+        topic_entity_id: Optional[str] = None,
         podcast_id: Optional[str] = None,
         date_range: Optional[Tuple[datetime, datetime]] = None,
         limit: int = 50,
-    ) -> List[EntityMention]:
-        """Backing query for the ``list_quotes_by`` MCP tool."""
-        raise NotImplementedError("Phase 1 — see spec #28 task 1.8")
+    ) -> List["MentionContext"]:
+        """Spec #28 §1.8 — backing query for ``list_quotes_by`` MCP tool.
+
+        Filters resolved mentions to those whose ``speaker`` field
+        matches (case-insensitive substring — diarisation labels vary
+        slightly across episodes). ``topic_entity_id`` adds an
+        intersect: episodes where the speaker spoke AND the topic was
+        mentioned somewhere in the same episode (not necessarily by
+        the same speaker).
+        """
+        sql = """
+            SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
+                   ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
+            FROM entity_mentions m
+            JOIN episodes e ON m.episode_id = e.id
+            JOIN podcasts p ON e.podcast_id = p.id
+            LEFT JOIN entities ent ON m.entity_id = ent.id
+            WHERE m.resolution_status = 'resolved'
+              AND m.speaker IS NOT NULL
+              AND LOWER(m.speaker) LIKE LOWER(?)
+        """
+        params: list = [f"%{speaker}%"]
+        if topic_entity_id is not None:
+            sql += """
+                AND m.episode_id IN (
+                    SELECT episode_id FROM entity_mentions
+                    WHERE entity_id = ? AND resolution_status = 'resolved'
+                )
+            """
+            params.append(topic_entity_id)
+        if podcast_id is not None:
+            sql += " AND p.id = ?"
+            params.append(podcast_id)
+        if date_range is not None:
+            sql += " AND e.pub_date BETWEEN ? AND ?"
+            params.append(date_range[0].isoformat())
+            params.append(date_range[1].isoformat())
+        sql += " ORDER BY e.pub_date DESC, m.start_ms ASC LIMIT ?"
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_mention_context(r) for r in rows]
+
+    def get_mention_for_clip(
+        self,
+        *,
+        episode_id: str,
+        start_ms: int,
+        end_ms: Optional[int] = None,
+    ) -> Optional["MentionContext"]:
+        """Return the resolved mention closest to ``start_ms`` for the
+        episode — backing query for ``get_episode_clip`` MCP tool.
+
+        Strategy: pick the resolved mention whose start_ms straddles
+        the requested ``start_ms`` (within the segment), or the
+        nearest one if none straddles. ``end_ms`` is reported in the
+        result via the segment bounds — callers can override via the
+        ``±sec`` window in the MCP tool.
+        """
+        sql_base = """
+            SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
+                   ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
+            FROM entity_mentions m
+            JOIN episodes e ON m.episode_id = e.id
+            JOIN podcasts p ON e.podcast_id = p.id
+            LEFT JOIN entities ent ON m.entity_id = ent.id
+            WHERE m.resolution_status = 'resolved'
+              AND m.episode_id = ?
+        """
+        with self._get_connection() as conn:
+            # Try a straddling match first; fall back to nearest by
+            # absolute distance from the requested start_ms.
+            row = conn.execute(
+                sql_base + " AND m.start_ms <= ? AND m.end_ms >= ? ORDER BY m.start_ms LIMIT 1",
+                (episode_id, start_ms, start_ms),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    sql_base + " ORDER BY ABS(m.start_ms - ?) LIMIT 1",
+                    (episode_id, start_ms),
+                ).fetchone()
+        if row is None:
+            return None
+        return _row_to_mention_context(row)
+
+    # ------------------------------------------------------------------
+    # Entity-page assembly (spec §1.8 — get_entity)
+    # ------------------------------------------------------------------
+
+    def get_entity_summary(
+        self,
+        entity_id: str,
+        *,
+        cooccurring_limit: int = 20,
+        recent_mentions_limit: int = 10,
+    ) -> Optional[dict]:
+        """Return entity + mention_count + cooccurring + recent_mentions.
+
+        Mirrors the spec's ``get_entity`` MCP tool output shape. Returns
+        ``None`` if the entity doesn't exist.
+        """
+        entity = self.get_entity(entity_id)
+        if entity is None:
+            return None
+        with self._get_connection() as conn:
+            mention_count = conn.execute(
+                "SELECT COUNT(*) FROM entity_mentions " "WHERE entity_id = ? AND resolution_status = 'resolved'",
+                (entity_id,),
+            ).fetchone()[0]
+            # Co-occurring entities — fetch from canonical-pair table
+            # and unify into a single column. Order by episode_count.
+            cooccur_rows = conn.execute(
+                """
+                SELECT
+                    CASE WHEN c.entity_a_id = ? THEN c.entity_b_id
+                         ELSE c.entity_a_id END AS other_id,
+                    c.episode_count,
+                    c.last_seen_at
+                FROM entity_cooccurrences c
+                WHERE c.entity_a_id = ? OR c.entity_b_id = ?
+                ORDER BY c.episode_count DESC
+                LIMIT ?
+                """,
+                (entity_id, entity_id, entity_id, cooccurring_limit),
+            ).fetchall()
+        cooccurring = []
+        for row in cooccur_rows:
+            other = self.get_entity(row["other_id"])
+            if other is None:
+                continue
+            cooccurring.append(
+                {
+                    "entity": other,
+                    "episode_count": row["episode_count"],
+                    "last_seen_at": row["last_seen_at"],
+                }
+            )
+        recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
+        return {
+            "entity": entity,
+            "mention_count": mention_count,
+            "cooccurring": cooccurring,
+            "recent_mentions": recent_mentions,
+        }
+
+    def find_entity_by_name(self, name: str, *, entity_type: Optional[str] = None) -> Optional[EntityRecord]:
+        """Resolve a free-form name (canonical name OR alias OR id)
+        to an entity. Used by MCP tools that accept ``id_or_name``.
+        Case-insensitive on canonical_name; exact match on id; alias
+        match is JSON LIKE.
+        """
+        with self._get_connection() as conn:
+            # First try exact id match
+            row = conn.execute(
+                "SELECT * FROM entities WHERE id = ?",
+                (name,),
+            ).fetchone()
+            if row is None:
+                sql = "SELECT * FROM entities WHERE LOWER(canonical_name) = LOWER(?)"
+                params: list = [name]
+                if entity_type is not None:
+                    sql += " AND type = ?"
+                    params.append(entity_type)
+                sql += " LIMIT 1"
+                row = conn.execute(sql, params).fetchone()
+            if row is None:
+                # Alias match: aliases is a JSON array stored as TEXT.
+                # The cheap LIKE-based scan is fine because ``entities``
+                # is small (~1k-10k rows in v1).
+                sql = "SELECT * FROM entities WHERE aliases LIKE ?"
+                params = [f'%"{name}"%']
+                if entity_type is not None:
+                    sql += " AND type = ?"
+                    params.append(entity_type)
+                sql += " LIMIT 1"
+                row = conn.execute(sql, params).fetchone()
+        return _row_to_entity(row) if row else None
 
     # ------------------------------------------------------------------
     # Co-occurrences
@@ -497,6 +720,40 @@ def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
         description=row["description"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+@dataclass(frozen=True)
+class MentionContext:
+    """A resolved ``EntityMention`` joined with its episode + podcast +
+    entity, ready to render as a ``CitationRow`` (Strategy §4).
+
+    The joined fields live alongside the mention rather than nested so
+    the MCP-tool layer can pluck what it needs without re-joining.
+    """
+
+    mention: EntityMention
+    episode_id: str
+    episode_title: str
+    episode_pub_date: Optional[datetime]
+    podcast_id: str
+    podcast_title: str
+    podcast_slug: str
+    entity_type: Optional[str]
+    entity_canonical_name: Optional[str]
+
+
+def _row_to_mention_context(row: sqlite3.Row) -> MentionContext:
+    return MentionContext(
+        mention=_row_to_mention(row),
+        episode_id=row["episode_id"],
+        episode_title=row["episode_title"],
+        episode_pub_date=(datetime.fromisoformat(row["episode_pub_date"]) if row["episode_pub_date"] else None),
+        podcast_id=row["podcast_id"],
+        podcast_title=row["podcast_title"],
+        podcast_slug=row["podcast_slug"],
+        entity_type=row["entity_type"],
+        entity_canonical_name=row["entity_canonical_name"],
     )
 
 
