@@ -604,6 +604,97 @@ def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
     )
 
 
+def handle_write_corpus(task: Task, state: "AppState") -> None:
+    """Spec #28 §2.3 — render the Markdown corpus page for one episode.
+
+    Reads ``episodes.clean_transcript_json_path`` plus resolved
+    ``entity_mentions`` rows, writes
+    ``data/corpus/episodes/<podcast-slug>/<episode-id>.md`` and the
+    matching ``<episode-id>.segmap.json`` sidecar. Idempotent — files
+    that are byte-identical to the previous run aren't touched, so
+    the next ``REINDEX`` stage doesn't burn cycles re-embedding
+    unchanged content.
+
+    Skips legacy episodes that lack the structured JSON sidecar (same
+    rule as ``extract-entities``).
+    """
+    from ..models.annotated_transcript import AnnotatedTranscript
+    from .corpus_writer import CorpusWriter
+
+    podcast, episode = _get_episode_or_fail(task, state)
+    if not episode.clean_transcript_json_path:
+        logger.info(
+            "write_corpus_skipped_legacy",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+        )
+        return
+
+    sidecar = state.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+    if not sidecar.exists():
+        raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar} (episode {episode.id})")
+
+    transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
+
+    writer = CorpusWriter(
+        path_manager=state.path_manager,
+        entity_repository=state.entity_repository,
+    )
+    written = writer.write_episode_page(
+        podcast=podcast,
+        episode=episode,
+        transcript=transcript,
+    )
+
+    # Stash the touched paths on the task so the REINDEX stage knows
+    # which files to push to qmd. ``Task.metadata`` is the cross-stage
+    # bag (already a ``Dict[str, Any]``).
+    task.metadata["corpus_paths"] = [str(p) for p in written.written]
+    logger.info(
+        "write_corpus_completed",
+        episode_id=episode.id,
+        podcast_slug=podcast.slug,
+        wrote=len(written.written),
+        unchanged=len(written.skipped_unchanged),
+    )
+
+
+def handle_reindex(task: Task, state: "AppState") -> None:
+    """Spec #28 §2.4 — push the rendered corpus pages to qmd.
+
+    Reads the touched-path list from ``task.payload['corpus_paths']``
+    written by the previous WRITE_CORPUS stage. If empty (e.g.
+    write-corpus was a no-op idempotent re-run), the handler exits
+    without touching qmd.
+
+    Failures here are non-user-facing — flipping the entity-extraction
+    status, NOT ``failed_at_stage`` — because the user-visible pipeline
+    is already done by this point.
+    """
+    from .reindex import QmdNotInstalledError, reindex_paths
+
+    paths_str = (task.metadata or {}).get("corpus_paths") or []
+    paths = [Path(p) for p in paths_str]
+    if not paths:
+        logger.info("reindex_no_paths", episode_id=task.episode_id)
+        return
+    try:
+        report = reindex_paths(paths)
+    except QmdNotInstalledError:
+        logger.warning(
+            "reindex_skipped_qmd_missing",
+            episode_id=task.episode_id,
+            note="run `make qmd-up` to backfill the index later",
+        )
+        return
+    logger.info(
+        "reindex_completed",
+        episode_id=task.episode_id,
+        files=report["updated"],
+        embedded=report["embedded"],
+    )
+
+
 def handle_extract_entities(task: Task, state: "AppState") -> None:
     """Spec #28 §1.2 — run GLiNER over the cleaned-transcript JSON sidecar.
 
@@ -947,6 +1038,6 @@ def create_task_handlers(
         TaskStage.SUMMARIZE: lambda task, cb=None: handle_summarize(task, state),
         TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_extract_entities(task, state),
         TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_resolve_entities(task, state),
-        TaskStage.WRITE_CORPUS: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
-        TaskStage.REINDEX: lambda task, cb=None: handle_entity_branch_placeholder(task, state),
+        TaskStage.WRITE_CORPUS: lambda task, cb=None: handle_write_corpus(task, state),
+        TaskStage.REINDEX: lambda task, cb=None: handle_reindex(task, state),
     }

@@ -3706,6 +3706,159 @@ def entity_alias_add(ctx, entity_id, alias):
 
 
 # ---------------------------------------------------------------------------
+# Spec #28 §2 — corpus rendering & qmd bootstrap
+# ---------------------------------------------------------------------------
+
+
+@main.group("corpus")
+def corpus_group():
+    """Render the SQLite corpus into Markdown for qmd-driven search."""
+
+
+@corpus_group.command("bootstrap")
+@click.option(
+    "--collection",
+    default="thestill-corpus",
+    show_default=True,
+    help="qmd collection name to register data/corpus/ under.",
+)
+@click.option(
+    "--render-all/--no-render-all",
+    default=True,
+    show_default=True,
+    help="Re-render every episode + entity page before registering with qmd.",
+)
+@click.pass_context
+@require_config
+@log_command
+def corpus_bootstrap(ctx, collection, render_all):
+    """First-run setup: render every episode/entity into ``data/corpus/``,
+    register the directory as a qmd collection, run ``qmd embed``.
+
+    Idempotent — safe to re-run after Phase 1.13 re-resolution shifts
+    entity wiki-links around. ``--no-render-all`` skips the
+    materialisation step (qmd-only re-register).
+    """
+    from .core.corpus_writer import CorpusWriter
+    from .core.reindex import bootstrap_collection, reindex_paths
+    from .models.annotated_transcript import AnnotatedTranscript
+
+    repo = ctx.obj.entity_repository
+    podcast_repo = ctx.obj.repository
+    path_manager = ctx.obj.path_manager
+    writer = CorpusWriter(path_manager=path_manager, entity_repository=repo)
+
+    written_paths = []
+    if render_all:
+        click.echo("Rendering episode pages…")
+        episode_count = 0
+        wrote_count = 0
+        skipped_count = 0
+        for podcast in podcast_repo.get_all():
+            for episode in podcast.episodes or []:
+                if not episode.clean_transcript_json_path:
+                    continue
+                sidecar = path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+                if not sidecar.exists():
+                    continue
+                transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
+                result = writer.write_episode_page(
+                    podcast=podcast,
+                    episode=episode,
+                    transcript=transcript,
+                )
+                episode_count += 1
+                wrote_count += len(result.written)
+                skipped_count += len(result.skipped_unchanged)
+                written_paths.extend(result.written)
+        click.echo(f"  {episode_count} episodes processed: {wrote_count} files written, " f"{skipped_count} unchanged")
+
+        click.echo("Rendering entity pages…")
+        entity_result = writer.write_all_entity_pages()
+        click.echo(
+            f"  {len(entity_result.written)} entity pages written, " f"{len(entity_result.skipped_unchanged)} unchanged"
+        )
+        written_paths.extend(entity_result.written)
+
+    click.echo(f"Registering qmd collection {collection!r}…")
+    report = bootstrap_collection(path_manager.corpus_dir(), collection=collection)
+    click.echo(f"  collection {'added' if report['added'] else 'already registered'} at {report['path']}")
+
+    if written_paths:
+        click.echo(f"Re-indexing {len(written_paths)} updated file(s) in qmd…")
+        reindex_paths([Path(p) for p in written_paths], collection=collection)
+        click.echo("  ✓ qmd update + embed complete")
+    else:
+        click.echo("(no files changed — qmd update skipped)")
+
+    click.echo("✓ corpus bootstrap complete")
+
+
+@corpus_group.command("render")
+@click.option("--podcast-id", default=None, help="Render only this podcast's episodes.")
+@click.option("--episode-id", default=None, help="Render only this episode.")
+@click.option("--reindex/--no-reindex", default=True, show_default=True, help="Push touched paths to qmd.")
+@click.pass_context
+@require_config
+@log_command
+def corpus_render(ctx, podcast_id, episode_id, reindex):
+    """Re-render a podcast or single episode into ``data/corpus/`` and
+    optionally push the touched files to qmd.
+
+    Useful after a manual reindex (Phase 1.13 ``mention drop`` /
+    ``mention repoint`` operations) since corpus pages reflect resolved
+    entity wiki-links.
+    """
+    from .core.corpus_writer import CorpusWriter
+    from .core.reindex import QmdNotInstalledError, reindex_paths
+    from .models.annotated_transcript import AnnotatedTranscript
+
+    repo = ctx.obj.entity_repository
+    podcast_repo = ctx.obj.repository
+    path_manager = ctx.obj.path_manager
+    writer = CorpusWriter(path_manager=path_manager, entity_repository=repo)
+
+    if episode_id:
+        result = podcast_repo.get_episode(episode_id)
+        if result is None:
+            click.echo(f"❌ No episode with id={episode_id}", err=True)
+            ctx.exit(1)
+        podcast, episode = result
+        episodes = [(podcast, episode)]
+    elif podcast_id:
+        podcast = podcast_repo.get(podcast_id)
+        if podcast is None:
+            click.echo(f"❌ No podcast with id={podcast_id}", err=True)
+            ctx.exit(1)
+        episodes = [(podcast, ep) for ep in (podcast.episodes or [])]
+    else:
+        episodes = []
+        for p in podcast_repo.get_all():
+            for ep in p.episodes or []:
+                episodes.append((p, ep))
+
+    written_paths = []
+    for podcast, episode in episodes:
+        if not episode.clean_transcript_json_path:
+            continue
+        sidecar = path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+        if not sidecar.exists():
+            continue
+        transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
+        result = writer.write_episode_page(podcast=podcast, episode=episode, transcript=transcript)
+        written_paths.extend(result.written)
+
+    click.echo(f"Rendered {len(episodes)} episode(s); {len(written_paths)} file(s) updated.")
+
+    if reindex and written_paths:
+        try:
+            reindex_paths([Path(p) for p in written_paths])
+            click.echo("✓ qmd update + embed complete")
+        except QmdNotInstalledError as exc:
+            click.echo(f"(skipped qmd update: {exc})", err=True)
+
+
+# ---------------------------------------------------------------------------
 # Spec #28 §1.12 — harness eval (offline analogue of the Claude Desktop gate)
 # ---------------------------------------------------------------------------
 

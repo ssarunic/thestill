@@ -51,6 +51,7 @@ from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
 from .middleware.stdio_adapter import log_mcp_stdio
+from .search_tools import dispatch_search_tool, search_tool_definitions
 
 logger = structlog.get_logger(__name__)
 
@@ -407,6 +408,8 @@ def setup_tools(server: Server, storage_path: str):
             # ``entity_tools.entity_tool_definitions()`` so the
             # tool/handler pair stays co-located.
             *entity_tool_definitions(),
+            # Spec #28 §2.6 — qmd-backed corpus search.
+            *search_tool_definitions(),
         ]
 
     @server.call_tool()
@@ -1719,6 +1722,34 @@ def setup_tools(server: Server, storage_path: str):
             entity_response = dispatch_entity_tool(name, arguments, entity_repository)
             if entity_response is not None:
                 return entity_response
+
+            # Spec #28 §2.6 — qmd-backed corpus search. Lazy QmdClient
+            # construction: ``qmd`` is an external Node binary, so a
+            # fresh deploy without it should still serve every other
+            # tool. The dispatcher catches ``FileNotFoundError`` and
+            # surfaces it as a structured error rather than a 500.
+            if name in {"search_corpus"}:
+                try:
+                    from ..search.qmd_client import QmdClient
+
+                    qmd_client = QmdClient(corpus_dir=Path(config.storage_path) / "corpus")
+                except FileNotFoundError as exc:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "success": False,
+                                    "error": f"qmd not available: {exc}",
+                                }
+                            ),
+                        )
+                    ]
+                search_response = dispatch_search_tool(
+                    name, arguments, repository=entity_repository, qmd_client=qmd_client
+                )
+                if search_response is not None:
+                    return search_response
 
             logger.error(f"Unknown tool: {name}")
             return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}))]

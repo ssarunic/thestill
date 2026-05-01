@@ -59,6 +59,7 @@ from .routes import (
     api_digests,
     api_episodes,
     api_podcasts,
+    api_search,
     api_status,
     api_top_podcasts,
     auth,
@@ -339,6 +340,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+    # Spec #28 §2.7 — qmd-backed corpus search (REST mirror of search_corpus MCP tool).
+    app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 

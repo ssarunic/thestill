@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-fast test-coverage lint format typecheck check clean clean-all run-mcp
+.PHONY: help install install-dev test test-fast test-coverage lint format typecheck check clean clean-all run-mcp qmd-up qmd-down qmd-status
 
 # Default target
 .DEFAULT_GOAL := help
@@ -110,6 +110,32 @@ clean-all: clean ## Clean everything including data directory
 
 run-mcp: ## Run the MCP server
 	./venv/bin/thestill-mcp
+
+# ---------------------------------------------------------------------------
+# Spec #28 §2.1 — qmd index management (corpus search foundations)
+# ---------------------------------------------------------------------------
+# These targets manage the qmd collection that backs lexical+vector
+# search over the rendered Markdown corpus at data/corpus/. qmd is an
+# external Node.js binary (≥ Node 22). Install via:
+#     brew install qmd                  (macOS)
+#     npm install -g qmd-cli            (Linux / WSL)
+QMD_COLLECTION := thestill-corpus
+QMD_CORPUS_DIR := data/corpus
+
+qmd-up: ## Bootstrap the qmd collection over data/corpus/ (idempotent).
+	@command -v qmd >/dev/null 2>&1 || { \
+		echo "$(YELLOW)qmd not found on PATH. Install it (https://qmd.dev) before running this target.$(RESET)"; \
+		exit 1; \
+	}
+	./venv/bin/thestill corpus bootstrap
+
+qmd-down: ## Remove the qmd collection (data/corpus stays).
+	@command -v qmd >/dev/null 2>&1 || exit 0
+	-qmd collection remove $(QMD_COLLECTION)
+
+qmd-status: ## Show qmd collection health for thestill-corpus.
+	@command -v qmd >/dev/null 2>&1 || { echo "qmd not installed"; exit 1; }
+	@qmd collection show $(QMD_COLLECTION) || qmd collection list
 
 # Development shortcuts
 dev-refresh: ## Quick: Refresh all podcast feeds
