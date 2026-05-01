@@ -828,6 +828,160 @@ validation of the product claim.
   moving to Phase 2.** **First user-visible artefact, and the O1+O5
   validation gate.**
 
+### Phase 1.13 — Speaker indexing, coreference, and human-correction layer (~2 days)
+
+Surfaced from the post-Phase-1.12 reindex audit on 30 episodes (2026-05-01).
+Two real bugs hit:
+
+1. **Hosts and guests are absent from the entity index.** `EntityExtractor`
+   only scans `segment.text`, never `segment.speaker`. So Andrej Karpathy
+   in the dedicated Karpathy interview is missing — his name is in the
+   speaker field 81× and the body 0×. Same for every host. **Direct symptom:**
+   `thestill find-mentions "Andrej Karpathy"` returns nothing.
+2. **ReFinED accepts low-confidence QID guesses.** Surface "frontier labs"
+   resolved to _Reinforcement learning_; "Vercel" resolved to
+   _Vercel-Villedieu-le-Camp_ (a French village). Resolution rate looks
+   ~51% but is inflated by these false positives.
+
+Plus the structural gap: short-form / last-name-only / first-name-only
+mentions ("Andrej said…", "Karpathy said…") are not coreferred to the
+long-form entity that anchors the episode.
+
+**1.13.1 — Host / guest / recurring metadata.**
+Two additive columns:
+
+```sql
+ALTER TABLE podcasts  ADD COLUMN host_entity_ids       TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE podcasts  ADD COLUMN recurring_entity_ids  TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE episodes  ADD COLUMN guest_entity_ids      TEXT NOT NULL DEFAULT '[]';
+```
+
+Bootstrap CLI:
+
+- `thestill podcast set-hosts <podcast_id> <entity_id...>`
+- `thestill podcast set-recurring <podcast_id> <entity_id...>` (e.g., Ed Elson on Prof G)
+- `thestill episode set-guests <episode_id> <entity_id...>`
+
+Population strategy: `thestill podcast detect-hosts <podcast_id>` proposes
+the most-frequent `speaker` value across the podcast's episodes, mapped
+to a person entity (resolving via existing aliases first); user confirms.
+
+Note on data-modelling decision: **host/guest is a property of the
+entity↔podcast (or entity↔episode) relationship, NOT of the mention.**
+Don't extend `MentionRole` with `HOST_SPEAKING` / `GUEST_SPEAKING`. The
+citation builder enriches each row with a derived `speaker_kind ∈
+{host, guest, recurring, unknown}` at read time by joining the speaker
+against the host/guest lists. This yields "cited by host" /
+"cited by guest" / "cited by third party" implicitly: when
+`mention.role=mentioned`, the `speaker_kind` of the _speaker_ tells you
+who is doing the citing.
+
+**1.13.2 — Synthesize speaker mentions.**
+For each content segment, emit a synthetic `EntityMention` with
+`surface_form = segment.speaker`, `role = SPEAKING`, `start_ms/end_ms
+= segment span`, `extractor = "speaker:synth"`. Skip if speaker is
+`null`/`Unknown`/`""`. This is what makes `quotes-by "Karpathy"` actually
+return his words; it also lets resolution anchor host/guest entities once
+per podcast/episode rather than every time their name happens to appear
+in body text.
+
+**1.13.3 — ReFinED confidence floor.**
+Below threshold (`>= 0.5` to start; tune on the 30-ep sample) →
+`resolution_status = 'unresolvable'`, drop the QID guess. Log the
+rejected `(surface, qid, score)` triple at INFO so we can audit the floor.
+
+**1.13.4 — Pass-1: anchor injection during extraction.**
+Before GLiNER runs on an episode, build the **anchor set** from
+`podcasts.host_entity_ids + podcasts.recurring_entity_ids +
+episodes.guest_entity_ids`. For each anchor entity expand surface variants:
+full name, last token alone, first token alone, "First Initial. Last",
+plus aliases already on the entity row.
+
+When an anchor surface is found in the body during extraction, the
+mention bypasses ReFinED and resolves directly to the anchor entity with
+`resolution_method = 'anchor'`. This is the single biggest quality win
+and fixes the Karpathy episode.
+
+**1.13.5 — Pass-3: within-episode coreference (post-resolve).**
+For each remaining unresolved person mention M with surface S in episode E:
+
+- Find resolved person mentions in E whose `canonical_name` contains S
+  as a token.
+- **Exactly one** match → repoint M to that entity, set
+  `resolution_method = 'coref'`, set `resolution_status = 'resolved'`.
+- **Zero** matches → leave unresolvable.
+- **Multiple** matches → set `resolution_status = 'ambiguous'`, populate
+  `candidate_entity_ids` with all candidates as JSON, surface in admin
+  override queue.
+
+**Hard rule (no Pass 4):** never infer cross-episode coreference for
+short-form mentions. "Adam" in episode A and "Adam" in episode B are
+different people unless both episodes resolved a long-form anchor to
+the same entity. Better to lose recall than fabricate identity.
+
+**1.13.6 — `resolution_method` and `candidate_entity_ids` columns.**
+
+```sql
+ALTER TABLE entity_mentions ADD COLUMN resolution_method   TEXT;
+   -- 'direct' | 'anchor' | 'coref' | 'unresolvable' | 'ambiguous'
+ALTER TABLE entity_mentions ADD COLUMN candidate_entity_ids TEXT;
+   -- JSON array; populated only when resolution_status='ambiguous'
+```
+
+Update CHECK constraint on `resolution_status` to include `'ambiguous'`.
+The citation builder downweights / flags coref-resolved mentions —
+they're less authoritative than direct ReFinED hits.
+
+**1.13.7 — Mention-level overrides (the human-correction layer).**
+
+```sql
+CREATE TABLE mention_overrides (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    surface_form  TEXT NOT NULL,
+    episode_id    TEXT REFERENCES episodes(id) ON DELETE CASCADE,
+                  -- nullable: NULL means "applies to every episode"
+    override_kind TEXT NOT NULL CHECK (override_kind IN
+                  ('drop','force_entity','force_unresolvable')),
+    entity_id     TEXT REFERENCES entities(id),
+                  -- required when override_kind='force_entity'
+    reason        TEXT,
+    created_by    TEXT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+);
+CREATE INDEX idx_overrides_surface_episode ON mention_overrides(surface_form, episode_id);
+```
+
+CLI surface (admin-only, no UI yet):
+
+- `thestill mention drop <mention_id> --reason "..."` — soft-delete a
+  bad mention (sets `resolution_status='dropped'`, records override).
+- `thestill mention repoint <mention_id> <entity_id>` — fix a wrong
+  resolution; records `force_entity` override scoped to that episode.
+- `thestill entity alias-add <entity_id> <surface>` — teach the
+  resolver: e.g. `"frontier labs" → topic:ai-labs` globally.
+- `thestill resolution-blacklist add <surface> <wrong_qid>` — negative
+  cache; the resolver consults it before persisting any QID match.
+
+**The non-negotiable invariant:** human corrections survive
+re-extraction. The resolver consults `mention_overrides` _before_
+persisting a result. Re-running `extract-entities` + `resolve-entities`
+on an episode must NOT undo a human's `drop` or `repoint`. This is what
+makes the override layer trustworthy — without it, every reindex throws
+away your work.
+
+**1.13.8 — Re-run reindex on the 30-episode sample, verify quality bar.**
+Acceptance:
+
+- `thestill find-mentions "Andrej Karpathy"` returns body mentions in the
+  Karpathy episode.
+- `thestill find-mentions "Karpathy"` returns the same set (alias hit).
+- The `Vercel-Villedieu-le-Camp` / `Reinforcement learning` class of false
+  positives is gone (manually inspect 5 random low-confidence resolutions).
+- `person:andrej` and `topic:andrej` no longer exist as distinct generic
+  entities for episodes that have an anchor.
+- Resolution rate on the 30-ep sample either improves or holds steady at
+  ~51% (a drop is acceptable if false-positives have been culled).
+
 ### Phase 2 — Hybrid corpus search via qmd (4–5 days)
 
 Now that the entity layer is validated, add the lexical/semantic search
@@ -1043,6 +1197,27 @@ The 50 question/episode pairs (also from Phase 0.3) are run against
 - **ReFinED memory footprint.** Loads several GB of Wikidata index. May
   need to run as a separate worker process, not in the same Python process
   as the API server. Decide during phase 2.
+- **Admin web UI for mention correction.** Phase 1.13 ships CLI-only
+  override commands. Once corpus is bigger and more humans are reviewing,
+  promote to a web admin panel: per-episode mention table with inline
+  drop/repoint, "low-confidence resolutions" review queue, and an audit
+  log of every override. Tracked as a candidate for Phase 5+; not built
+  until we've used the CLI for a few weeks and know which patterns repeat.
+- **PII detection for non-public corpora.** A future thestill use-case
+  could ingest private podcasts (paid feeds, NDA interviews, internal
+  recordings). At that point a PII-redaction pass before persisting
+  transcripts and quote excerpts becomes load-bearing — possibly via an
+  external service (e.g., Dalston). _Not_ a fix for the current entity
+  false-positive problem (those are generic-noun mistakes, not privacy
+  leaks). Tracked here so we don't forget the dependency when private
+  podcasts ship; explicitly out of scope for spec #28.
+- **Multi-pass extraction quality from the 30-ep audit (2026-05-01).**
+  Phase 1.13 addresses the audit's concrete failures (hosts/guests
+  missing, low-confidence ReFinED hits, no coref). If a follow-up audit
+  surfaces new patterns (numeric-version aliasing like "Software 1.0/2.0/3.0",
+  acronym disambiguation, organisation-vs-product overlap), open a
+  Phase 1.14 ticket with the same shape: failure inventory → targeted
+  fix → reindex 30 → quality gate.
 
 ## Success metrics (post-ship, 30-day window)
 
