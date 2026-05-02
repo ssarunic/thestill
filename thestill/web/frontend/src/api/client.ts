@@ -43,6 +43,10 @@ import type {
   DigestPreviewResponse,
   DigestStatus,
   TopPodcastsResponse,
+  CorpusSearchOptions,
+  QuickSearchOptions,
+  QuickSearchResponse,
+  SearchResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -524,6 +528,63 @@ export async function deleteDigest(digestId: string): Promise<void> {
 
 export async function getMorningBriefing(): Promise<DigestPreviewResponse> {
   return fetchApi<DigestPreviewResponse>('/digests/morning-briefing')
+}
+
+// ============================================================================
+// Search API (spec #28 §4)
+// ============================================================================
+
+// Quick typeahead — pinned to lexical mode server-side. Pass an
+// AbortSignal so each keystroke can cancel the prior in-flight call.
+export async function quickSearch(
+  q: string,
+  opts: QuickSearchOptions = {},
+  signal?: AbortSignal,
+): Promise<QuickSearchResponse> {
+  const params = new URLSearchParams()
+  params.set('q', q)
+  if (opts.limit_per_group !== undefined) params.set('limit_per_group', String(opts.limit_per_group))
+  if (opts.podcast_id) params.set('podcast_id', opts.podcast_id)
+  if (opts.date_from) params.set('date_from', opts.date_from)
+  if (opts.has_entity) {
+    for (const id of opts.has_entity) params.append('has_entity', id)
+  }
+  const response = await fetch(`${API_BASE}/search/quick?${params.toString()}`, {
+    credentials: 'include',
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`Search error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
+}
+
+// Full corpus search — used by the /search results page (Phase 4.2).
+// Defaults to hybrid mode (the LLM-friendly default); the ⌘K bar uses
+// quickSearch above instead.
+export async function corpusSearch(
+  q: string,
+  opts: CorpusSearchOptions = {},
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  const params = new URLSearchParams()
+  params.set('q', q)
+  if (opts.mode) params.set('mode', opts.mode)
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.podcast_id) params.set('podcast_id', opts.podcast_id)
+  if (opts.date_from) params.set('date_from', opts.date_from)
+  if (opts.date_to) params.set('date_to', opts.date_to)
+  if (opts.has_entity) {
+    for (const id of opts.has_entity) params.append('has_entity', id)
+  }
+  const response = await fetch(`${API_BASE}/search/corpus?${params.toString()}`, {
+    credentials: 'include',
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`Search error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
 }
 
 export async function createMorningBriefing(): Promise<CreateDigestResponse> {

@@ -40,8 +40,10 @@ import {
   deleteDigest,
   getMorningBriefing,
   createMorningBriefing,
+  quickSearch,
+  corpusSearch,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -562,5 +564,37 @@ export function useDeleteDigest() {
       // Invalidate digests list
       queryClient.invalidateQueries({ queryKey: ['digests'] })
     },
+  })
+}
+
+// ============================================================================
+// Search hooks (spec #28 §4)
+// ============================================================================
+
+// Quick typeahead. Stays disabled below 2 chars so we don't pummel
+// the backend on the first keystroke. `keepPreviousData` makes the
+// dropdown feel stable while the next request lands.
+export function useQuickSearch(query: string, options: QuickSearchOptions = {}) {
+  const trimmed = query.trim()
+  return useQuery({
+    queryKey: ['search', 'quick', trimmed, options],
+    queryFn: ({ signal }) => quickSearch(trimmed, options, signal),
+    enabled: trimmed.length >= 2,
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
+  })
+}
+
+// Full corpus search for the /search results page (Phase 4.2). Hybrid
+// is the default — that's the LLM-friendly mode and is fine here
+// because typing latency isn't on the line.
+export function useCorpusSearch(query: string, options: CorpusSearchOptions = {}) {
+  const trimmed = query.trim()
+  return useQuery({
+    queryKey: ['search', 'corpus', trimmed, options],
+    queryFn: ({ signal }) => corpusSearch(trimmed, options, signal),
+    enabled: trimmed.length >= 2,
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
   })
 }
