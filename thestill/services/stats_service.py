@@ -64,6 +64,9 @@ class SystemStats(BaseModel):
     # Spec #28 §2.10 — sqlite-vec chunk index health.
     chunks_count: int = 0
     embedding_model: str = ""
+    # Spec #28 Phase 3.4 — episodes the entity branch skipped because they
+    # have no AnnotatedTranscript JSON sidecar (legacy Markdown-only cleaning).
+    episodes_skipped_legacy: int = 0
     storage_path: str
     last_updated: datetime
 
@@ -156,6 +159,7 @@ class StatsService:
             audio_files_count = len(list(audio_path.glob("*.*")))
 
         chunks_count, embedding_model = self._chunks_health()
+        episodes_skipped_legacy = self._skipped_legacy_count()
 
         stats = SystemStats(
             podcasts_tracked=podcasts_tracked,
@@ -172,6 +176,7 @@ class StatsService:
             audio_files_count=audio_files_count,
             chunks_count=chunks_count,
             embedding_model=embedding_model,
+            episodes_skipped_legacy=episodes_skipped_legacy,
             storage_path=str(self.storage_path),
             last_updated=datetime.now(),
         )
@@ -189,6 +194,19 @@ class StatsService:
         getter = getattr(repo, "get_chunks_health", None)
         if getter is None:
             return 0, ""
+        return getter()
+
+    def _skipped_legacy_count(self) -> int:
+        """Delegate to the repository's skipped-legacy count.
+
+        Returns 0 on backends that don't implement the count (e.g. the
+        in-memory ``DictPodcastRepository`` used in unit tests) so the
+        stats payload stays well-formed.
+        """
+        repo = self.repository
+        getter = getattr(repo, "count_episodes_skipped_legacy", None)
+        if getter is None:
+            return 0
         return getter()
 
     def get_recent_activity(self, limit: int = 20) -> List[ActivityItem]:

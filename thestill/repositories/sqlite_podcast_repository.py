@@ -1499,6 +1499,28 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             return 0, ""
         return int(row["n"] or 0), row["model"] or ""
 
+    def count_episodes_skipped_legacy(self) -> int:
+        """Spec #28 Phase 3.4 — episodes the entity branch declined to process.
+
+        An episode is ``skipped_legacy`` when ``extract-entities`` ran but
+        the episode lacked a structured ``AnnotatedTranscript`` JSON
+        sidecar (legacy Markdown-only cleaning). Surfacing the count in
+        ``thestill status`` makes the size of the legacy backlog visible
+        without scraping logs.
+
+        Returns 0 on databases that predate the spec #28 Phase 1
+        ``entity_extraction_status`` migration — same defensiveness
+        ``get_chunks_health`` uses for the corpus chunks table.
+        """
+        with self._get_connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM episodes " "WHERE entity_extraction_status = 'skipped_legacy'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return 0
+        return int(row["n"] or 0)
+
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:

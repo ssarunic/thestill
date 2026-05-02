@@ -20,6 +20,7 @@ import type {
   AllEpisodesResponse,
   EpisodeFilters,
   BulkProcessResponse,
+  DLQBranchFilter,
   DLQListResponse,
   DLQActionResponse,
   DLQBulkRetryResponse,
@@ -254,8 +255,11 @@ export async function bulkProcessEpisodes(episodeIds: string[]): Promise<BulkPro
 // Dead Letter Queue (DLQ) API
 // ============================================================================
 
-export async function getDLQTasks(limit: number = 100): Promise<DLQListResponse> {
-  return fetchApi<DLQListResponse>(`/commands/dlq?limit=${limit}`)
+export async function getDLQTasks(
+  limit: number = 100,
+  branch: DLQBranchFilter = 'all',
+): Promise<DLQListResponse> {
+  return fetchApi<DLQListResponse>(`/commands/dlq?limit=${limit}&branch=${branch}`)
 }
 
 export async function retryDLQTask(taskId: string): Promise<DLQActionResponse> {

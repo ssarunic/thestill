@@ -39,7 +39,38 @@ jobs:
         # Skip tests/integration/pipeline/: they claim to be mocked but actually
         # hit example.com over the network and fail; unrelated to CI setup.
         # Track separately; fix and re-enable here when mocking is repaired.
-        run: uv run pytest -q --tb=short --ignore=tests/integration/pipeline
+        # Skip tests/perf/: a separate ``latency`` job runs them so noise on
+        # the latency budget doesn't block unrelated unit-test work.
+        run: uv run pytest -q --tb=short --ignore=tests/integration/pipeline --ignore=tests/perf
+
+  latency:
+    # Spec #28 Phase 3.3 — per-tool P50/P95 latency budget gate.
+    # Runs the same install as ``python`` but only the ``tests/perf/`` suite,
+    # which uses a stub embedding model + 10-episode fixture corpus to assert
+    # search_corpus / find_mentions / list_quotes_by stay under the spec
+    # thresholds (lines 1316–1325) × 1.25 CI tolerance.
+    name: Latency budget (spec #28)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (frozen) with dev + entities extras
+        # ``[entities]`` brings sqlite-vec, which the perf fixture needs.
+        run: uv sync --frozen --extra dev --extra entities
+
+      - name: pytest tests/perf
+        run: uv run pytest tests/perf -v --tb=short
 
   frontend:
     name: Frontend build + tests

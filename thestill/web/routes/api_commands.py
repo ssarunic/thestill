@@ -30,7 +30,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from structlog import get_logger
 
-from ...core.queue_manager import QueueManager, Task, TaskStage
+from ...core.queue_manager import ENTITY_BRANCH_STAGES, QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
 from ...models.podcast import EpisodeState
 from ...models.user import User
@@ -1462,21 +1462,39 @@ class DLQBulkRetryResponse(BaseModel):
 @router.get("/dlq", response_model=DLQListResponse)
 async def list_dlq_tasks(
     limit: int = 100,
+    branch: str = "all",
     state: AppState = Depends(get_app_state),
 ) -> DLQListResponse:
     """
-    List tasks in the Dead Letter Queue (status='dead').
+    List tasks in the Dead Letter Queue (status='dead' or 'failed').
 
-    These are tasks that failed with fatal errors that will not automatically retry.
-    They need manual intervention - either retry after fixing the issue, or skip.
+    These are tasks that failed with fatal errors or exhausted retries
+    on transient errors. They need manual intervention — either retry
+    after fixing the issue, or skip.
 
     Args:
         limit: Maximum number of tasks to return (default 100)
+        branch: Filter by pipeline branch. ``all`` (default) returns
+            both branches; ``user`` returns only the download → summarize
+            chain; ``entity`` returns only spec #28 extract-entities,
+            resolve-entities, reindex stages. Lets the queue viewer
+            isolate entity-branch failures so they don't drown the
+            user-facing critical path (spec #28 Phase 3.2).
 
     Returns:
         DLQListResponse with list of dead tasks and their episode info
     """
-    dead_tasks = state.queue_manager.get_dead_tasks(limit=limit)
+    branch_stage_map: Dict[str, Optional[list]] = {
+        "all": None,
+        "user": [s for s in TaskStage if s not in ENTITY_BRANCH_STAGES],
+        "entity": list(ENTITY_BRANCH_STAGES),
+    }
+    if branch not in branch_stage_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid branch={branch!r}; expected one of: {', '.join(branch_stage_map)}",
+        )
+    dead_tasks = state.queue_manager.get_dead_tasks(limit=limit, stage_filter=branch_stage_map[branch])
 
     tasks_with_info = []
     for task in dead_tasks:

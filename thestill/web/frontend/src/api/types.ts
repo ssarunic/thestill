@@ -498,6 +498,10 @@ export interface DLQListResponse {
   count: number
 }
 
+// Spec #28 Phase 3.2 — DLQ filter to keep entity-branch failures from
+// drowning the user-facing critical path in the queue viewer.
+export type DLQBranchFilter = 'all' | 'user' | 'entity'
+
 export interface DLQActionResponse {
   status: string
   message: string
