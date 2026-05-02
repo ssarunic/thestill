@@ -600,6 +600,92 @@ class SqliteEntityRepository:
                 row = conn.execute(sql, params).fetchone()
         return _row_to_entity(row) if row else None
 
+    def search_entities_by_prefix(
+        self,
+        prefix: str,
+        *,
+        types: Optional[Tuple[str, ...]] = None,
+        limit_per_type: int = 5,
+    ) -> List["EntityHit"]:
+        """Spec #28 §4.1 — typeahead lookup for the ⌘K command bar.
+
+        Case-insensitive substring match against ``canonical_name`` and
+        the JSON-encoded ``aliases`` array, ranked by resolved-mention
+        count (most-mentioned first). ``types`` restricts to one or
+        more ``entity_type`` values; ``None`` returns hits across all
+        four types. ``limit_per_type`` caps the rows per type so a busy
+        ``person`` bucket can't crowd out the ``company`` / ``topic``
+        buckets in the typeahead.
+
+        Returns ``EntityHit`` rows (see module bottom) — id, type,
+        canonical name, the alias that matched (if it was an alias hit
+        rather than a name hit), and the resolved-mention count for
+        ranking on the client side.
+        """
+        prefix = (prefix or "").strip()
+        if not prefix:
+            return []
+        like_pattern = f"%{prefix.lower()}%"
+        # JSON aliases are stored case-preserving — match the lower-cased
+        # value against a lower-cased copy of the column.
+        type_clause = ""
+        type_params: list = []
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            type_clause = f"AND e.type IN ({placeholders})"
+            type_params = list(types)
+        sql = f"""
+            WITH ranked AS (
+                SELECT
+                    e.id            AS id,
+                    e.type          AS type,
+                    e.canonical_name AS canonical_name,
+                    e.aliases       AS aliases,
+                    (SELECT COUNT(*) FROM entity_mentions m
+                       WHERE m.entity_id = e.id
+                         AND m.resolution_status = 'resolved') AS mention_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.type
+                        ORDER BY (SELECT COUNT(*) FROM entity_mentions m2
+                                    WHERE m2.entity_id = e.id
+                                      AND m2.resolution_status = 'resolved') DESC,
+                                 LENGTH(e.canonical_name) ASC,
+                                 e.canonical_name ASC
+                    ) AS rn
+                FROM entities e
+                WHERE (LOWER(e.canonical_name) LIKE ?
+                       OR LOWER(e.aliases) LIKE ?)
+                  {type_clause}
+            )
+            SELECT id, type, canonical_name, aliases, mention_count
+            FROM ranked
+            WHERE rn <= ?
+            ORDER BY mention_count DESC, LENGTH(canonical_name) ASC, canonical_name ASC
+        """
+        params = [like_pattern, like_pattern, *type_params, limit_per_type]
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        hits: List[EntityHit] = []
+        prefix_lower = prefix.lower()
+        for row in rows:
+            aliases = json.loads(row["aliases"] or "[]")
+            matched_alias: Optional[str] = None
+            if prefix_lower not in row["canonical_name"].lower():
+                for alias in aliases:
+                    if prefix_lower in alias.lower():
+                        matched_alias = alias
+                        break
+            hits.append(
+                EntityHit(
+                    id=row["id"],
+                    type=row["type"],
+                    canonical_name=row["canonical_name"],
+                    matched_alias=matched_alias,
+                    mention_count=row["mention_count"],
+                )
+            )
+        return hits
+
     # ------------------------------------------------------------------
     # Co-occurrences
     # ------------------------------------------------------------------
@@ -976,6 +1062,24 @@ def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+@dataclass(frozen=True)
+class EntityHit:
+    """Spec #28 §4.1 — one row from ``search_entities_by_prefix``.
+
+    Lightweight projection used by the ⌘K typeahead path: the full
+    ``EntityRecord`` carries description + timestamps that aren't
+    needed in a dropdown list. ``matched_alias`` is non-``None`` only
+    when the prefix didn't hit ``canonical_name`` directly — the UI
+    uses it to render "Musk → Elon Musk" hints.
+    """
+
+    id: str
+    type: str
+    canonical_name: str
+    matched_alias: Optional[str]
+    mention_count: int
 
 
 @dataclass(frozen=True)

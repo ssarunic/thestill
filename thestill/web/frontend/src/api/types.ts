@@ -787,6 +787,108 @@ export interface DigestPreviewEpisode {
   pub_date: string | null
 }
 
+// ============================================================================
+// Spec #28 §4 — Search types (corpus + quick typeahead)
+// ============================================================================
+
+export type SearchMode = 'lexical' | 'semantic' | 'hybrid'
+
+export interface SearchResult {
+  episode_id: string
+  podcast_id: string
+  podcast_title: string
+  episode_title: string
+  published_at: string | null
+  start_ms: number
+  end_ms: number
+  speaker: string | null
+  quote: string
+  score: number
+  match_type: string
+  deeplink: string
+  web_url: string
+}
+
+export interface SearchResponse {
+  query: string
+  mode: SearchMode
+  total: number
+  results: SearchResult[]
+}
+
+export interface CorpusSearchOptions {
+  mode?: SearchMode
+  limit?: number
+  podcast_id?: string
+  date_from?: string
+  date_to?: string
+  has_entity?: string[]
+}
+
+// Quick search (⌘K typeahead) — pinned to lexical server-side, never
+// silently upgraded. Items are discriminated by `kind` so the
+// CommandBar can render mixed groups uniformly.
+
+export interface QuickEpisodeItem {
+  kind: 'episode'
+  episode_id: string
+  podcast_id: string
+  podcast_slug: string
+  episode_slug: string
+  title: string
+  podcast_title: string
+  pub_date: string | null
+  image_url: string | null
+}
+
+export interface QuickEntityItem {
+  kind: 'entity'
+  entity_type: 'person' | 'company' | 'product' | 'topic'
+  id: string
+  name: string
+  matched_alias: string | null
+  mention_count: number
+}
+
+export interface QuickQuoteItem {
+  kind: 'quote'
+  episode_id: string
+  podcast_id: string
+  podcast_slug: string
+  episode_slug: string
+  podcast_title: string
+  episode_title: string
+  speaker: string | null
+  quote: string
+  start_ms: number
+  end_ms: number
+  score: number
+}
+
+export type QuickSearchItem = QuickEpisodeItem | QuickEntityItem | QuickQuoteItem
+
+export type QuickGroupType = 'episode' | 'person' | 'company' | 'topic' | 'quote'
+
+export interface QuickGroup {
+  type: QuickGroupType
+  label: string
+  items: QuickSearchItem[]
+}
+
+export interface QuickSearchResponse {
+  query: string
+  took_ms: number
+  groups: QuickGroup[]
+  see_all_url: string
+}
+
+export interface QuickSearchOptions {
+  limit_per_group?: number
+  podcast_id?: string
+  date_from?: string
+  has_entity?: string[]
+}
+
 export interface DigestPreviewResponse {
   status: string
   timestamp: string

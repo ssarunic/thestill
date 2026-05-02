@@ -4,6 +4,7 @@ import MobileHeader from './MobileHeader'
 import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
+import CommandBar from './CommandBar'
 import { PlayerProvider, usePlayer } from '../contexts/PlayerContext'
 
 interface NavItemProps {
@@ -61,6 +62,7 @@ function useScreenSize(): ScreenSize {
 function LayoutContent() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
+  const [isCommandBarOpen, setIsCommandBarOpen] = useState(false)
   const screenSize = useScreenSize()
   const { track } = usePlayer()
 
@@ -70,7 +72,25 @@ function LayoutContent() {
     setIsSidebarExpanded(false)
   }, [screenSize])
 
+  // Spec #28 §4.1 — global ⌘K / Ctrl+K toggle for the command bar.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setIsCommandBarOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   const showLabels = isSidebarExpanded || screenSize === 'desktop'
+
+  const searchIcon = (
+    <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+    </svg>
+  )
 
   const dashboardIcon = (
     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -194,6 +214,25 @@ function LayoutContent() {
 
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 ${showLabels ? 'p-4' : 'p-2'}`}>
+              <button
+                type="button"
+                onClick={() => setIsCommandBarOpen(true)}
+                title={!showLabels ? 'Search (⌘K)' : undefined}
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 ${
+                  showLabels ? 'justify-start' : 'justify-center'
+                }`}
+                data-testid="cmdk-trigger"
+              >
+                {searchIcon}
+                {showLabels && (
+                  <>
+                    <span className="flex-1 text-left">Search</span>
+                    <kbd className="hidden lg:inline-flex items-center rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-500">
+                      ⌘K
+                    </kbd>
+                  </>
+                )}
+              </button>
               <NavItem
                 to="/"
                 icon={dashboardIcon}
@@ -276,6 +315,8 @@ function LayoutContent() {
       </main>
 
       <MiniPlayer />
+
+      <CommandBar isOpen={isCommandBarOpen} onClose={() => setIsCommandBarOpen(false)} />
     </div>
   )
 }

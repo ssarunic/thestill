@@ -15,6 +15,7 @@ const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const QueueViewer = lazy(() => import('./pages/QueueViewer'))
 const Settings = lazy(() => import('./pages/Settings'))
 const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
+const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Login = lazy(() => import('./pages/Login'))
 
 // Loading fallback for page transitions
@@ -95,6 +96,11 @@ function App() {
         <Route path="settings" element={
           <Suspense fallback={<PageLoader />}>
             <Settings />
+          </Suspense>
+        } />
+        <Route path="search" element={
+          <Suspense fallback={<PageLoader />}>
+            <SearchResults />
           </Suspense>
         } />
       </Route>
