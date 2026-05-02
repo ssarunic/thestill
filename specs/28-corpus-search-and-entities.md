@@ -1019,6 +1019,188 @@ layer for queries that aren't entity-scoped (O2, O3).
   `search_corpus(mode=hybrid)`; record top-5 recall. Gate this phase on
   ≥ 0.8.
 
+### Phase 2.10 — Search-backend abstraction + sqlite-vec migration (3 days)
+
+**Status: planned, post-2.7 deviation.**
+
+Surfaced from a post-2.7 review on 2026-05-02. Three concerns about the
+qmd-backed search path drove this:
+
+1. **Process boundary cost.** Every `search_corpus` call spawns
+   `qmd mcp` over stdio with a 5–10 s cold-start latency on the first
+   call after the OS evicts qmd's pages. Acceptable for Claude Desktop
+   (one query per conversational turn), unacceptable for the Phase 4
+   ⌘K command bar where typeahead expects ≤ 50 ms.
+2. **Schema impedance.** We materialise a Markdown projection
+   (`corpus_writer.py`) just so qmd can index it, then re-introduce
+   the structure we already had via `<!-- seg ... -->` anchors and
+   segmap sidecars. Three layers of indirection (segment → line → byte
+   → qmd hit → segmap → segment) for what should be a one-row lookup.
+3. **Limited control.** "Boost episode pages over entity pages",
+   "filter to one podcast at index time", and "join across
+   `entity_mentions`" are all painful or impossible across the qmd
+   process boundary. The Phase 2 reindex audit found qmd consistently
+   ranks entity pages above episode pages because of term-density
+   asymmetry — a problem that disappears when chunks are uniformly
+   sized rows in our own DB.
+
+**Decision: migrate to in-process search backed by SQLite +
+`sqlite-vec`.** Postgres + pgvector was the initial alternative
+considered but rejected: it adds a second daemon, a second backup
+story, and a second connection-string story to a product whose
+local-first identity rests on "one SQLite file under `data/`". At our
+target scale (550 episodes × ~250 segments/ep ≈ 140k vectors),
+sqlite-vec brute-force is comfortably under 100 ms and stays inside
+the existing DB file. We revisit pgvector iff/when the multi-tenant
+hosted story forces it.
+
+**The abstraction.** A `SearchBackend` Protocol sits one level up from
+the storage choice — it does NOT sit between sqlite-vec and pgvector
+(those have near-identical query shapes; abstracting between them is
+over-engineering). It sits between qmd (subprocess + segmap-mediated)
+and any in-process SQL implementation (direct rows, structured
+timestamps).
+
+```python
+# thestill/search/base.py
+class SearchBackend(Protocol):
+    def search(
+        self,
+        query: str,
+        *,
+        mode: SearchMode,           # lexical | semantic | hybrid
+        limit: int,
+        filters: SearchFilters | None,
+    ) -> list[ResolvedHit]: ...
+```
+
+Two implementations during the migration window:
+``QmdSearchBackend`` (existing) and ``SqliteVecBackend`` (new). Once
+the recall bench (§2.10.5 below) settles which wins, the loser is
+deleted; the abstraction collapses naturally and ``SqliteVecBackend``
+becomes the one path. If pgvector ever lands, it replaces
+``SqliteVecBackend`` at the same seam — no caller changes.
+
+**Sub-tickets:**
+
+- **2.10.1** Extract the shared shape. Promote ``ResolvedHit`` from
+  ``search/qmd_client.py`` into ``search/base.py``, define the
+  ``SearchBackend`` Protocol + ``SearchMode`` enum +
+  ``SearchFilters`` dataclass. Update ``QmdSearchBackend`` (formerly
+  ``QmdClient``) to satisfy the protocol with no behaviour change.
+  Wire ``search_corpus`` MCP tool + ``GET /api/search/corpus`` REST
+  to take a ``SearchBackend`` injection — config selects which
+  via ``SEARCH_BACKEND=qmd|sqlite_vec`` (default ``qmd`` until 2.10.5
+  flips it).
+
+- **2.10.2** Schema migration: add a ``chunks`` table to ``podcasts.db``.
+
+  ```sql
+  CREATE TABLE chunks (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      episode_id      TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      segment_id      INTEGER NOT NULL,
+      start_ms        INTEGER NOT NULL,
+      end_ms          INTEGER NOT NULL,
+      speaker         TEXT NULL,
+      text            TEXT NOT NULL,
+      embedding_model TEXT NOT NULL,         -- e.g. "bge-small-en-v1.5"
+      embedding       BLOB NOT NULL,         -- float32[N], packed via sqlite-vec
+      created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (episode_id, segment_id, embedding_model)
+  );
+  CREATE INDEX idx_chunks_episode ON chunks(episode_id);
+
+  -- sqlite-vec virtual table mirrors `chunks.embedding` for k-NN.
+  -- Loaded via the ``sqlite-vec`` extension at connection time.
+  CREATE VIRTUAL TABLE chunks_vec USING vec0(
+      embedding float[384]            -- bge-small-en-v1.5 dimension
+  );
+  ```
+
+  Plus the FTS5 mirror for the lexical leg of hybrid search:
+
+  ```sql
+  CREATE VIRTUAL TABLE chunks_fts USING fts5(text, content='chunks', content_rowid='id');
+  CREATE TRIGGER chunks_ai AFTER INSERT ON chunks
+      BEGIN INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text); END;
+  -- Plus AD/AU triggers for delete/update parity.
+  ```
+
+- **2.10.3** ``core/chunk_writer.py``. Mirrors ``corpus_writer.py``'s
+  segmentation but writes rows, not Markdown. Per content segment from
+  the cleaned-transcript JSON: emit one ``chunks`` row with
+  ``text = "<speaker>: <segment_text>"``, ``segment_id``,
+  ``start_ms``/``end_ms``, and the embedding produced by a small
+  ``EmbeddingModel`` wrapper around `sentence-transformers/bge-small-en-v1.5`
+  (default; configurable). Idempotent: ``UNIQUE (episode_id,
+  segment_id, embedding_model)`` lets the writer use ``INSERT OR
+  IGNORE`` for re-runs. The Markdown projection in ``corpus_writer.py``
+  stays — it's still useful for Obsidian browsing — but it stops being
+  the search index.
+
+- **2.10.4** ``search/sqlite_vec_client.py``. Three-mode search:
+
+  - ``lexical`` — `chunks_fts MATCH ? ORDER BY bm25(chunks_fts)`
+  - ``semantic`` — `vec_distance_cosine(chunks_vec.embedding, ?) ORDER BY 2`
+  - ``hybrid`` — reciprocal-rank-fusion of the two top-K lists.
+    Default K = 50, weight = 0.5/0.5; tuneable.
+
+  Joins to ``episodes``/``podcasts`` for the citation row build are
+  one SQL query, no second round-trip. Filters (``podcast_id``,
+  ``date_range``, ``has_entity[]``) push down into the WHERE clause —
+  no qmd-style "fetch a hundred and filter in Python".
+
+- **2.10.5** Bake-off. Run the existing 10-question harness (§2.8) +
+  the 50 Q/E pairs (§2.9) against BOTH backends. Record per-question
+  top-5 recall, P50/P95 latency, and a "fewer entity-page-noise"
+  qualitative score. Gate the deletion of the qmd path on:
+
+  - sqlite-vec recall ≥ qmd recall − 0.05 (i.e. parity within
+    measurement noise), AND
+  - sqlite-vec P95 latency < 200 ms (vs qmd's ≥ 5 s cold-start), AND
+  - sqlite-vec produces zero "entity-page hits dropped" log lines on
+    the harness (the term-density-asymmetry bug should disappear with
+    uniform per-segment chunks).
+
+- **2.10.6** Cut over and delete. Once 2.10.5 passes, flip the
+  default ``SEARCH_BACKEND=sqlite_vec``, mark ``QmdSearchBackend``
+  deprecated for one release, then delete it +
+  ``thestill/core/reindex.py`` + the ``data/corpus/`` Markdown
+  projection writer (entity-only Markdown stays — Obsidian use case).
+  Update ``Makefile`` to drop ``qmd-up``/``qmd-down``.
+
+  Pipeline integration: ``REINDEX`` task stage handler swaps from
+  shelling out to ``qmd update`` to calling
+  ``chunk_writer.write_episode(episode_id)`` + ``write_chunks`` —
+  same idempotent contract, no subprocess.
+
+**Acceptance:**
+
+- All five existing search-related tests still pass against the
+  sqlite-vec backend (the abstraction makes them backend-agnostic).
+- The Phase 2.9 recall bench passes its ≥ 0.8 gate on sqlite-vec.
+- ⌘K command-bar typeahead (Phase 4) feasibility-tested: P95 query
+  latency < 50 ms on the populated corpus.
+- ``thestill status`` reports backend + chunk count + embedding
+  model.
+- Documentation updated: spec §"Architecture" now describes the
+  in-process search path; ``docs/configuration.md`` documents
+  ``SEARCH_BACKEND`` selection.
+
+**What we explicitly do NOT do in Phase 2.10:**
+
+- Ship pgvector. The abstraction makes a future migration easy if the
+  multi-tenant story forces it; speculatively shipping it now would
+  add a Postgres operational dependency we don't need yet.
+- Build HyDE / query-expansion rewriting. qmd had it; we're choosing
+  to drop it and reach for an LLM rewrite step (already used in the
+  cleaning pipeline) only if recall on novel phrasings degrades
+  measurably below the §2.9 gate.
+- Introduce per-user / per-tenant search scoping. Single-tenant
+  remains the explicit non-goal from spec §"What we explicitly do
+  not do".
+
 ### Phase 3 — Productionisation & failure handling (2–3 days)
 
 The entity branch has been running async since Phase 1, but a few rough
@@ -1218,6 +1400,17 @@ The 50 question/episode pairs (also from Phase 0.3) are run against
   acronym disambiguation, organisation-vs-product overlap), open a
   Phase 1.14 ticket with the same shape: failure inventory → targeted
   fix → reindex 30 → quality gate.
+- **qmd vs in-process search (2026-05-02 deviation, see Phase 2.10).**
+  Phase 2 shipped qmd-backed search and immediately surfaced three
+  costs: subprocess cold-start latency (5–10 s), schema impedance
+  (Markdown projection + segmap sidecars to re-introduce structure
+  we already had), and qmd's term-density bias toward entity pages.
+  The product is migrating to SQLite + ``sqlite-vec`` in Phase 2.10
+  while keeping qmd as a pluggable backend during the bake-off.
+  pgvector was considered and deferred — adds a Postgres daemon and
+  compromises the local-first identity for no scale-of-hand benefit
+  at our target corpus size (~140k vectors). Open question: revisit
+  iff/when the multi-tenant hosted product story forces it.
 
 ## Success metrics (post-ship, 30-day window)
 
