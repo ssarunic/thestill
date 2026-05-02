@@ -29,8 +29,8 @@ back to the server for context:
 - ``list_episodes_by_entity(has_entity[], podcast_id?, date_range?,
   limit?) → EpisodeSummary[]``
 
-These are SQL-only — no qmd dependency. The hybrid ``search_corpus``
-tool lands in Phase 2 and delegates to qmd.
+These are SQL-only against the entity tables. The hybrid
+``search_corpus`` tool delegates to ``SqliteVecBackend`` (Phase 2.10).
 """
 
 from __future__ import annotations

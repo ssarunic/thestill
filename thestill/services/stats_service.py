@@ -61,6 +61,9 @@ class SystemStats(BaseModel):
 
     transcripts_available: int
     audio_files_count: int
+    # Spec #28 §2.10 — sqlite-vec chunk index health.
+    chunks_count: int = 0
+    embedding_model: str = ""
     storage_path: str
     last_updated: datetime
 
@@ -152,6 +155,8 @@ class StatsService:
         if audio_path.exists():
             audio_files_count = len(list(audio_path.glob("*.*")))
 
+        chunks_count, embedding_model = self._chunks_health()
+
         stats = SystemStats(
             podcasts_tracked=podcasts_tracked,
             episodes_total=episodes_total,
@@ -165,6 +170,8 @@ class StatsService:
             episodes_unprocessed=episodes_unprocessed,
             transcripts_available=transcripts_available,
             audio_files_count=audio_files_count,
+            chunks_count=chunks_count,
+            embedding_model=embedding_model,
             storage_path=str(self.storage_path),
             last_updated=datetime.now(),
         )
@@ -175,6 +182,14 @@ class StatsService:
         )
 
         return stats
+
+    def _chunks_health(self) -> tuple[int, str]:
+        """Delegate to the repository's chunks-health query."""
+        repo = self.repository
+        getter = getattr(repo, "get_chunks_health", None)
+        if getter is None:
+            return 0, ""
+        return getter()
 
     def get_recent_activity(self, limit: int = 20) -> List[ActivityItem]:
         """

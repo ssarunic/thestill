@@ -18,7 +18,6 @@ from thestill.models.entities import (
     MatchType,
     MentionRole,
     ResolutionStatus,
-    SegmentAnchor,
 )
 
 
@@ -91,22 +90,6 @@ class TestEntityMention:
         assert restored.role is MentionRole.MENTIONED
         assert restored.resolution_status is ResolutionStatus.RESOLVED
         assert restored.sentiment == -0.2
-
-
-class TestSegmentAnchor:
-    def test_round_trip(self):
-        a = SegmentAnchor(
-            seg_id=42,
-            line_start=7,
-            line_end=9,
-            byte_start=0,
-            byte_end=312,
-            start_ms=2347000,
-            end_ms=2389000,
-        )
-        restored = SegmentAnchor.model_validate(a.model_dump())
-        assert restored.seg_id == 42
-        assert restored.byte_end == 312
 
 
 class TestCitationRow:

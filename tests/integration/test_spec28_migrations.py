@@ -148,7 +148,6 @@ class TestTasksTableRebuild:
                 "summarize",
                 "extract-entities",
                 "resolve-entities",
-                "write-corpus",
                 "reindex",
             ):
                 conn.execute(

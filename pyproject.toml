@@ -116,6 +116,16 @@ entities = [
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
     "rapidfuzz>=3.0.0",
+    # Spec #28 §2.10 — in-process search backend (replaces qmd).
+    # ``sentence-transformers`` provides the embedding model. Default
+    # ``paraphrase-multilingual-MiniLM-L12-v2`` (384-dim, ~470MB on
+    # disk) supports 50+ languages including Croatian; English-only
+    # corpora can swap to ``BAAI/bge-small-en-v1.5`` via the
+    # ``EMBEDDING_MODEL`` env var for ~5-10% better English recall.
+    # ``sqlite-vec`` is a SQLite extension that adds the ``vec0``
+    # virtual table type for k-NN over float32 blobs.
+    "sentence-transformers>=3.0.0",
+    "sqlite-vec>=0.1.6",
 ]
 
 [project.scripts]

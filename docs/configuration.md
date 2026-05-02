@@ -147,6 +147,41 @@ When `MULTI_USER=true`:
 3. Add authorized redirect URI: `http://localhost:8000/auth/google/callback`
 4. Copy Client ID and Secret to `.env`
 
+## Corpus Search (sqlite-vec)
+
+Hybrid lexical + semantic search over transcript chunks lives in the
+`chunks`, `chunks_vec`, and `chunks_fts` tables of `podcasts.db`. The
+embedding model that produces vectors for both indexing and querying
+is configurable.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `EMBEDDING_MODEL` | sentence-transformers model name (must be in `EMBEDDING_MODEL_DIMS`) | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
+
+**Default model** is multilingual (50+ languages including Croatian,
+German, French, Polish, Mandarin, Japanese, Arabic) at 384 dim and
+~470 MB on disk.
+
+**English-only swap** for ~5–10% better English recall:
+
+```bash
+EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+```
+
+Both ship in the `[entities]` optional extra. Adding a model with a
+different dimension requires extending `EMBEDDING_MODEL_DIMS` in
+`thestill/search/base.py` and re-running the chunks migration against
+an empty `chunks` table.
+
+**Backfill the index** for an existing corpus:
+
+```bash
+make corpus-backfill         # or: thestill chunks backfill
+```
+
+`thestill status` reports current chunk count and the embedding model
+in use.
+
 ## MCP Server
 
 | Variable | Description | Default |

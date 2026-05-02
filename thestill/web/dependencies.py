@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
+    from ..core.embedding_model import EmbeddingModel
     from ..core.entity_extractor import EntityExtractor
     from ..core.entity_resolver import EntityResolver
     from ..core.feed_manager import PodcastFeedManager
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
+    from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
     from ..utils.config import Config
@@ -106,6 +108,12 @@ class AppState:
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the
     # cost on processes that never run resolve-entities tasks.
     entity_resolver: "Optional[EntityResolver]" = None
+    # Spec #28 §2.10 — sqlite-vec corpus search. Both fields are
+    # constructed eagerly at startup; the heavy sentence-transformers
+    # weights only load when EmbeddingModel.encode_one() runs (first
+    # semantic/hybrid query or first REINDEX task).
+    search_backend: "Optional[SearchBackend]" = None
+    embedding_model: "Optional[EmbeddingModel]" = None
 
 
 def get_app_state(request: Request) -> AppState:

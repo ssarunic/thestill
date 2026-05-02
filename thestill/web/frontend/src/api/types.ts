@@ -361,7 +361,6 @@ export type PipelineStage =
   | 'summarize'
   | 'extract-entities'
   | 'resolve-entities'
-  | 'write-corpus'
   | 'reindex'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 

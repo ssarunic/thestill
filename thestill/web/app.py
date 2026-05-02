@@ -140,9 +140,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # Spec #28 — entity-layer repository. Schema is created by the
     # podcast repo's migration block; this just opens connections.
+    from ..core.embedding_model import EmbeddingModel
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+    from ..search.sqlite_vec_client import SqliteVecBackend
 
     entity_repository = SqliteEntityRepository(db_path=config.database_path)
+    # Spec #28 §2.10 — eager construction of both the wrapper and the
+    # backend; sentence-transformers itself only loads inside
+    # EmbeddingModel.encode_one() on the first semantic/hybrid call.
+    embedding_model = EmbeddingModel(config.embedding_model)
+    search_backend = SqliteVecBackend(
+        db_path=config.database_path,
+        embedding_model=embedding_model,
+    )
 
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(
@@ -163,6 +173,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_service=follower_service,
         digest_repository=digest_repository,
         entity_repository=entity_repository,
+        search_backend=search_backend,
+        embedding_model=embedding_model,
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -340,7 +352,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
-    # Spec #28 §2.7 — qmd-backed corpus search (REST mirror of search_corpus MCP tool).
+    # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])

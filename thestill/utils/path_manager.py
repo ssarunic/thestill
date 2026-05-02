@@ -136,12 +136,11 @@ class PathManager:
         self._pending_operations = "pending_operations"
         self._external_transcripts = "external_transcripts"
         self._digests = "digests"
-        # Spec #28 — corpus is the rendered Markdown projection that qmd
-        # indexes (per-episode pages with segment anchors + per-entity
-        # pages). It's a regenerable view over ``clean_transcripts/`` +
-        # the ``entities`` SQLite tables, not a source of truth.
+        # Spec #28 — corpus holds the Obsidian-friendly per-entity
+        # Markdown pages regenerated from the ``entities`` SQLite
+        # tables. Episode pages were dropped in Phase 2.10 (chunks
+        # now live as embeddings in the SQLite ``chunks`` table).
         self._corpus = "corpus"
-        self._corpus_episodes = "episodes"
         self._corpus_persons = "persons"
         self._corpus_companies = "companies"
         self._corpus_topics = "topics"
@@ -224,14 +223,11 @@ class PathManager:
     # The four entity-type subdirs are split because a rendered Markdown
     # entity page is itself just ``<type>/<slug>.md`` — keeping them in
     # parallel directories matches the spec layout (Strategy §1) and lets
-    # Obsidian/qmd globs (`persons/*.md` etc.) work out of the box.
+    # Obsidian globs (`persons/*.md` etc.) work out of the box.
 
     def corpus_dir(self) -> Path:
         """Root of the rendered corpus projection (``data/corpus/``)."""
         return self.storage_path / self._corpus
-
-    def corpus_episodes_dir(self) -> Path:
-        return self.corpus_dir() / self._corpus_episodes
 
     def corpus_persons_dir(self) -> Path:
         return self.corpus_dir() / self._corpus_persons
@@ -241,31 +237,6 @@ class PathManager:
 
     def corpus_topics_dir(self) -> Path:
         return self.corpus_dir() / self._corpus_topics
-
-    def corpus_episode_file(self, podcast_slug: str, episode_id: str) -> Path:
-        """Rendered episode Markdown page.
-
-        ``episode_id`` is the UUID4 from ``episodes.id`` (36 chars,
-        ``[a-f0-9-]``). It does NOT match ``_SLUG_RE`` (which only
-        accepts ``[a-z0-9][a-z0-9-]{0,99}``), so we validate it
-        independently rather than passing it through ``_validate_slug``.
-        ``_assert_inside_root`` is the load-bearing safety check that
-        keeps the path under ``data/``.
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        _validate_episode_id(episode_id)
-        return self._assert_inside_root(self.corpus_episodes_dir() / podcast_slug / f"{episode_id}.md")
-
-    def corpus_episode_segmap_file(self, podcast_slug: str, episode_id: str) -> Path:
-        """Sidecar JSON that maps qmd hits back to segment timestamps.
-
-        Lives next to ``<id>.md`` so byte-offset → segment-id resolution
-        is one disk read. Spec Strategy §4 ("Mapping qmd hits to exact
-        timestamps").
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        _validate_episode_id(episode_id)
-        return self._assert_inside_root(self.corpus_episodes_dir() / podcast_slug / f"{episode_id}.segmap.json")
 
     def corpus_entity_file(self, entity_type: CorpusEntityType, entity_slug: str) -> Path:
         """Rendered entity page (``persons/<slug>.md`` etc.)."""
@@ -637,9 +608,9 @@ class PathManager:
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
             self.digests_dir(),
-            # Spec #28 corpus tree.
+            # Spec #28 corpus tree — entity pages only (Phase 2.10
+            # removed the per-episode rendered Markdown projection).
             self.corpus_dir(),
-            self.corpus_episodes_dir(),
             self.corpus_persons_dir(),
             self.corpus_companies_dir(),
             self.corpus_topics_dir(),
