@@ -1178,6 +1178,9 @@ def status(ctx):
     click.echo("Corpus chunk index (sqlite-vec):")
     click.echo(f"  Chunks indexed:  {stats.chunks_count:,}")
     click.echo(f"  Embedding model: {stats.embedding_model or '(none — run `thestill chunks backfill`)'}")
+    click.echo("")
+    click.echo("Entity extraction:")
+    click.echo(f"  Skipped (legacy, no JSON sidecar): {stats.episodes_skipped_legacy:,}")
 
     # Show pending Google Cloud transcription operations (if using Google provider)
     if config.transcription_provider.lower() == "google":
@@ -3199,6 +3202,109 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
+
+
+# ---------------------------------------------------------------------------
+# Spec #28 Phase 3.1 — entity-branch backfill
+# ---------------------------------------------------------------------------
+
+
+@main.command("rebuild-entities")
+@click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
+@click.option("--since", help="Only episodes published in this window (e.g. 30d, 24h, 2w).")
+@click.option("--max-episodes", "-m", type=int, help="Cap the number of episodes processed.")
+@click.option("--dry-run", "-d", is_flag=True, help="Report what would be rebuilt without writing.")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt for unscoped runs.")
+@click.pass_context
+@require_config
+@log_command
+def rebuild_entities(ctx, podcast_id, since, max_episodes, dry_run, yes):
+    """Re-run entity extraction + resolution over a slice of the corpus.
+
+    Use after upgrading GLiNER, extending entity types, or fixing
+    extraction bugs. Wipes ``entity_mentions`` for matching episodes,
+    resets ``entity_extraction_status`` to ``pending``, and enqueues an
+    ``extract-entities`` task per episode — the worker re-runs the
+    entity branch (extract → resolve → reindex) with normal retry/DLQ
+    semantics. The user-facing pipeline state is untouched.
+
+    Episodes without a JSON sidecar (legacy Markdown-only cleaning) are
+    re-marked ``skipped_legacy`` by the handler; they're included in
+    scope so the count in ``thestill status`` stays accurate.
+    """
+    from .core.queue_manager import QueueManager, TaskStage
+
+    config = ctx.obj.config
+    podcast_repo = ctx.obj.repository
+    entity_repo = ctx.obj.entity_repository
+
+    date_range = _date_range_from_since(since)
+
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        podcasts = [podcast]
+    else:
+        podcasts = podcast_repo.get_all()
+
+    eligible: list = []
+    for p in podcasts:
+        for ep in p.episodes or []:
+            if date_range is not None:
+                pd = ep.pub_date
+                if pd is None:
+                    continue
+                # Episode pub_date may be tz-naive (older rows persisted
+                # without tz) or tz-aware. ``_date_range_from_since`` is
+                # always tz-aware UTC; assume the same for naive rows.
+                if pd.tzinfo is None:
+                    pd = pd.replace(tzinfo=timezone.utc)
+                if not (date_range[0] <= pd <= date_range[1]):
+                    continue
+            eligible.append((p, ep))
+
+    if max_episodes:
+        eligible = eligible[:max_episodes]
+
+    click.echo(f"Eligible episodes: {len(eligible)}")
+    if dry_run:
+        for p, e in eligible[:20]:
+            click.echo(f"  - {p.title} :: {e.title}")
+        if len(eligible) > 20:
+            click.echo(f"  … (+{len(eligible) - 20} more)")
+        return
+
+    if not eligible:
+        click.echo("Nothing to do.")
+        return
+
+    if not podcast_id and not yes:
+        # Unscoped runs touch the whole corpus — confirm interactively.
+        if not click.confirm(
+            f"This will wipe entity_mentions for {len(eligible)} episode(s) "
+            f"and re-enqueue the entity branch. Proceed?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    queue = QueueManager(str(config.database_path))
+    enqueued = 0
+    skipped_existing = 0
+    for _p, ep in eligible:
+        # Don't enqueue a duplicate if extract-entities is already pending
+        # or processing — let the worker drain naturally first.
+        if queue.has_pending_task(ep.id, TaskStage.EXTRACT_ENTITIES):
+            skipped_existing += 1
+            continue
+        entity_repo.delete_mentions_for_episode(ep.id)
+        podcast_repo.update_entity_extraction_status(episode_id=ep.id, status="pending")
+        queue.add_task(ep.id, TaskStage.EXTRACT_ENTITIES)
+        enqueued += 1
+
+    click.echo(f"✓ rebuild-entities: {enqueued} enqueued, " f"{skipped_existing} skipped (already queued)")
 
 
 # ---------------------------------------------------------------------------

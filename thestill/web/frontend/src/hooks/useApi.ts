@@ -41,7 +41,7 @@ import {
   getMorningBriefing,
   createMorningBriefing,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -286,10 +286,10 @@ export function useBulkProcess() {
 // Dead Letter Queue (DLQ) hooks
 // ============================================================================
 
-export function useDLQTasks(limit = 100) {
+export function useDLQTasks(limit = 100, branch: DLQBranchFilter = 'all') {
   return useQuery({
-    queryKey: ['dlq', 'tasks', limit],
-    queryFn: () => getDLQTasks(limit),
+    queryKey: ['dlq', 'tasks', limit, branch],
+    queryFn: () => getDLQTasks(limit, branch),
     refetchInterval: 10000, // Poll every 10 seconds
   })
 }

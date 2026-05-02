@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useDLQTasks, useRetryDLQTask, useSkipDLQTask, useRetryAllDLQTasks } from '../hooks/useApi'
-import type { DLQTask, FailureType } from '../api/types'
+import type { DLQTask, DLQBranchFilter, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
-import { STAGE_BADGE_COLOR } from '../constants/stages'
+import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES } from '../constants/stages'
 
 // Spec #28 entity-branch failures don't normally appear here — they go
 // to ``entity_extraction_status='failed'``, not the ``tasks`` DLQ — but
@@ -169,7 +169,13 @@ function DLQTaskCard({ task, onRetry, onSkip, isRetrying, isSkipping }: DLQTaskC
 }
 
 export default function FailedTasks() {
-  const { data, isLoading, error } = useDLQTasks()
+  // Spec #28 Phase 3.2 — default to ``user`` so the entity branch
+  // doesn't drown the user-facing critical path on page load.
+  const [branch, setBranch] = useState<DLQBranchFilter>('user')
+  const { data, isLoading, error } = useDLQTasks(100, branch)
+  // Always fetch ``all`` for the stat tiles so the tab counts stay
+  // truthful even when a non-``all`` tab is active.
+  const { data: allData } = useDLQTasks(100, 'all')
   const retryMutation = useRetryDLQTask()
   const skipMutation = useSkipDLQTask()
   const retryAllMutation = useRetryAllDLQTasks()
@@ -203,7 +209,13 @@ export default function FailedTasks() {
   }
 
   const handleRetryAll = async () => {
-    const taskIds = selectedTasks.size > 0 ? Array.from(selectedTasks) : undefined
+    // Scope the bulk retry to the visible tab. The retry-all endpoint
+    // accepts an optional id list; passing ``undefined`` would retry
+    // every dead task in the corpus, which defeats the User-pipeline
+    // vs Entity-branch separation we just added (spec #28 Phase 3.2).
+    const taskIds = selectedTasks.size > 0
+      ? Array.from(selectedTasks)
+      : tasks.map(t => t.task_id)
     await retryAllMutation.mutateAsync(taskIds)
     setSelectedTasks(new Set())
   }
@@ -247,6 +259,9 @@ export default function FailedTasks() {
   }
 
   const tasks = data?.tasks || []
+  const allTasks = allData?.tasks || []
+  const userCount = allTasks.filter(t => !ENTITY_BRANCH_STAGES.has(t.stage)).length
+  const entityCount = allTasks.filter(t => ENTITY_BRANCH_STAGES.has(t.stage)).length
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -297,11 +312,37 @@ export default function FailedTasks() {
         )}
       </div>
 
+      {/* Branch filter tabs (spec #28 Phase 3.2) */}
+      <div className="mb-4 flex border-b border-gray-200">
+        {([
+          { key: 'user' as const, label: 'User pipeline', count: userCount },
+          { key: 'entity' as const, label: 'Entity branch', count: entityCount },
+          { key: 'all' as const, label: 'All', count: allTasks.length },
+        ]).map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setBranch(tab.key)}
+            className={`
+              px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors
+              ${branch === tab.key
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+              }
+            `}
+          >
+            {tab.label}
+            <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">
+              {tab.count}
+            </span>
+          </button>
+        ))}
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-gray-900">{tasks.length}</div>
-          <div className="text-sm text-gray-500">Total Failed</div>
+          <div className="text-sm text-gray-500">Showing</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-yellow-600">
@@ -316,10 +357,10 @@ export default function FailedTasks() {
           <div className="text-sm text-gray-500">Fatal Errors</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-gray-600">
-            {selectedTasks.size}
+          <div className="text-2xl font-bold text-rose-600">
+            {entityCount}
           </div>
-          <div className="text-sm text-gray-500">Selected</div>
+          <div className="text-sm text-gray-500">Entity Branch</div>
         </div>
       </div>
 

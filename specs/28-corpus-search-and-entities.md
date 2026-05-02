@@ -1212,20 +1212,20 @@ pgvector), not for runtime selection between two.
   remains the explicit non-goal from spec §"What we explicitly do
   not do".
 
-### Phase 3 — Productionisation & failure handling (2–3 days)
+### Phase 3 — Productionisation & failure handling (2–3 days) ✅ Complete 2026-05-02
 
 The entity branch has been running async since Phase 1, but a few rough
 edges need polish before it's hands-off.
 
-- **3.1** Backfill command: `thestill rebuild-entities --podcast-id
+- **3.1** ✅ Backfill command: `thestill rebuild-entities --podcast-id
   --since` re-runs extraction/resolution over a slice of the corpus,
   for when GLiNER is upgraded or entity types are extended.
-- **3.2** DLQ surfacing for entity-branch failures: separate filter in
+- **3.2** ✅ DLQ surfacing for entity-branch failures: separate filter in
   the queue viewer ([10-queue-viewer.md](10-queue-viewer.md)) so they
   don't drown the existing critical path.
-- **3.3** Latency budget enforcement in CI: per-tool P50/P95 thresholds
+- **3.3** ✅ Latency budget enforcement in CI: per-tool P50/P95 thresholds
   on the fixture corpus (Test plan). Fail PRs that regress.
-- **3.4** Skipped-legacy episode count visible in `thestill status`.
+- **3.4** ✅ Skipped-legacy episode count visible in `thestill status`.
 
 ### Phase 4 — Command bar and search UI (4–5 days)
 

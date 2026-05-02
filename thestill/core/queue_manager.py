@@ -97,6 +97,13 @@ def is_entity_branch_stage(stage: TaskStage) -> bool:
     return stage in _NON_USER_FAILING_STAGES
 
 
+# Public alias for callers building stage filters (e.g. the DLQ
+# entity-branch filter in spec #28 Phase 3.2). The frozenset above is
+# private because its membership is tied to failure-isolation semantics;
+# this constant is the same set under a name that conveys "branch".
+ENTITY_BRANCH_STAGES: frozenset[TaskStage] = _NON_USER_FAILING_STAGES
+
+
 # Spec #28 §0.5 — fully linear chain. The entity branch was originally
 # designed to fan out from CLEAN in parallel with SUMMARIZE, but the
 # worker's per-episode mutex serialised them anyway and the spec design
@@ -995,7 +1002,11 @@ class QueueManager:
         logger.error(f"Task {task_id} moved to DLQ (dead): {error_message}")
         return self.get_task(task_id)
 
-    def get_dead_tasks(self, limit: int = 100) -> List[Task]:
+    def get_dead_tasks(
+        self,
+        limit: int = 100,
+        stage_filter: Optional[List[TaskStage]] = None,
+    ) -> List[Task]:
         """
         Get tasks in the Dead Letter Queue (terminal failure states).
 
@@ -1004,21 +1015,23 @@ class QueueManager:
 
         Args:
             limit: Maximum number of tasks to return
+            stage_filter: If provided, restrict results to these stages.
+                Spec #28 Phase 3.2 uses this to separate the entity branch
+                from the user-facing critical path in the queue viewer.
 
         Returns:
             List of dead/failed tasks, ordered by most recent first
         """
+        sql = "SELECT * FROM tasks WHERE status IN ('dead', 'failed')"
+        params: List[Any] = []
+        if stage_filter:
+            placeholders = ",".join("?" * len(stage_filter))
+            sql += f" AND stage IN ({placeholders})"
+            params.extend(s.value for s in stage_filter)
+        sql += " ORDER BY completed_at DESC LIMIT ?"
+        params.append(limit)
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM tasks
-                WHERE status IN ('dead', 'failed')
-                ORDER BY completed_at DESC
-                LIMIT ?
-            """,
-                (limit,),
-            )
-
+            cursor = conn.execute(sql, params)
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
     def retry_dead_task(self, task_id: str) -> Optional[Task]:

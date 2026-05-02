@@ -1,5 +1,15 @@
 import type { PipelineStage } from '../api/types'
 
+// Spec #28 entity-branch stage membership — mirrors the
+// ``ENTITY_BRANCH_STAGES`` frozenset in
+// thestill/core/queue_manager.py. Used by the FailedTasks page to
+// classify DLQ entries client-side without re-querying.
+export const ENTITY_BRANCH_STAGES: ReadonlySet<PipelineStage> = new Set([
+  'extract-entities',
+  'resolve-entities',
+  'reindex',
+])
+
 // Canonical lane order: user chain first (download → … → summarize),
 // then the spec #28 entity branch (extract-entities → … → reindex).
 // Mirrors `STAGE_SUCCESSORS` in thestill/core/queue_manager.py:106.
