@@ -78,6 +78,8 @@ class CLIContext:
         auth_service: AuthService,
         digest_repository: SqliteDigestRepository,
         entity_repository=None,
+        search_backend=None,
+        embedding_model=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -91,12 +93,16 @@ class CLIContext:
         self.console = console
         self.auth_service = auth_service
         self.entity_repository = entity_repository
-        # Spec #28 §1.5 — lazy ReFinED resolver, same pattern as
-        # ``AppState.entity_resolver``. Constructed on first use by
-        # ``thestill resolve-entities`` and ``rebuild-cooccurrences``;
-        # CLI invocations that don't touch the entity branch pay
-        # nothing.
+        # Spec #28 §1.5 — lazy ReFinED resolver, constructed on first
+        # use by ``thestill resolve-entities`` and
+        # ``rebuild-cooccurrences``; CLI invocations that don't touch
+        # the entity branch pay nothing.
         self.entity_resolver = None
+        # Spec #28 §2.10 — sqlite-vec corpus search. EmbeddingModel
+        # wraps sentence-transformers; the underlying weights only
+        # load on first ``encode_one`` call.
+        self.search_backend = search_backend
+        self.embedding_model = embedding_model
         self.digest_repository = digest_repository
 
 
@@ -179,9 +185,16 @@ def main(ctx, config, quiet):
 
         # Spec #28 — entity-layer repository (always-on; the schema
         # is created by SqlitePodcastRepository's migration block).
+        from .core.embedding_model import EmbeddingModel
         from .repositories.sqlite_entity_repository import SqliteEntityRepository
+        from .search.sqlite_vec_client import SqliteVecBackend
 
         entity_repository = SqliteEntityRepository(db_path=config_obj.database_path)
+        embedding_model = EmbeddingModel(config_obj.embedding_model)
+        search_backend = SqliteVecBackend(
+            db_path=config_obj.database_path,
+            embedding_model=embedding_model,
+        )
 
         # Store all services in typed context object
         ctx.obj = CLIContext(
@@ -198,6 +211,8 @@ def main(ctx, config, quiet):
             auth_service=auth_service,
             digest_repository=digest_repository,
             entity_repository=entity_repository,
+            search_backend=search_backend,
+            embedding_model=embedding_model,
         )
 
     except Exception as e:
@@ -1159,6 +1174,10 @@ def status(ctx):
     click.echo(
         f"  Summary: {stats.episodes_summarized}/{stats.episodes_total} fully processed ({stats.episodes_unprocessed} in progress)"
     )
+    click.echo("")
+    click.echo("Corpus chunk index (sqlite-vec):")
+    click.echo(f"  Chunks indexed:  {stats.chunks_count:,}")
+    click.echo(f"  Embedding model: {stats.embedding_model or '(none — run `thestill chunks backfill`)'}")
 
     # Show pending Google Cloud transcription operations (if using Google provider)
     if config.transcription_provider.lower() == "google":
@@ -3706,156 +3725,99 @@ def entity_alias_add(ctx, entity_id, alias):
 
 
 # ---------------------------------------------------------------------------
-# Spec #28 §2 — corpus rendering & qmd bootstrap
+# Spec #28 §2.10 — chunks (sqlite-vec) backfill + entity-page rebuild
 # ---------------------------------------------------------------------------
 
 
-@main.group("corpus")
-def corpus_group():
-    """Render the SQLite corpus into Markdown for qmd-driven search."""
+@main.group("chunks")
+def chunks_group():
+    """Manage the sqlite-vec chunk index that backs corpus search."""
 
 
-@corpus_group.command("bootstrap")
-@click.option(
-    "--collection",
-    default="thestill-corpus",
-    show_default=True,
-    help="qmd collection name to register data/corpus/ under.",
-)
-@click.option(
-    "--render-all/--no-render-all",
-    default=True,
-    show_default=True,
-    help="Re-render every episode + entity page before registering with qmd.",
-)
+@chunks_group.command("backfill")
+@click.option("--podcast-id", default=None, help="Restrict to one podcast.")
+@click.option("--max-episodes", "-m", default=None, type=int, help="Cap episodes processed.")
+@click.option("--force", is_flag=True, help="Re-embed episodes already chunked at the current model.")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be processed; don't write.")
 @click.pass_context
 @require_config
 @log_command
-def corpus_bootstrap(ctx, collection, render_all):
-    """First-run setup: render every episode/entity into ``data/corpus/``,
-    register the directory as a qmd collection, run ``qmd embed``.
-
-    Idempotent — safe to re-run after Phase 1.13 re-resolution shifts
-    entity wiki-links around. ``--no-render-all`` skips the
-    materialisation step (qmd-only re-register).
-    """
-    from .core.corpus_writer import CorpusWriter
-    from .core.reindex import bootstrap_collection, reindex_paths
+def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
+    """Embed and index every episode that has a cleaned-transcript JSON sidecar."""
+    from .core.chunk_writer import ChunkWriter
     from .models.annotated_transcript import AnnotatedTranscript
 
-    repo = ctx.obj.entity_repository
     podcast_repo = ctx.obj.repository
     path_manager = ctx.obj.path_manager
-    writer = CorpusWriter(path_manager=path_manager, entity_repository=repo)
+    config = ctx.obj.config
 
-    written_paths = []
-    if render_all:
-        click.echo("Rendering episode pages…")
-        episode_count = 0
-        wrote_count = 0
-        skipped_count = 0
-        for podcast in podcast_repo.get_all():
-            for episode in podcast.episodes or []:
-                if not episode.clean_transcript_json_path:
-                    continue
-                sidecar = path_manager.clean_transcript_file(episode.clean_transcript_json_path)
-                if not sidecar.exists():
-                    continue
-                transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
-                result = writer.write_episode_page(
-                    podcast=podcast,
-                    episode=episode,
-                    transcript=transcript,
-                )
-                episode_count += 1
-                wrote_count += len(result.written)
-                skipped_count += len(result.skipped_unchanged)
-                written_paths.extend(result.written)
-        click.echo(f"  {episode_count} episodes processed: {wrote_count} files written, " f"{skipped_count} unchanged")
-
-        click.echo("Rendering entity pages…")
-        entity_result = writer.write_all_entity_pages()
-        click.echo(
-            f"  {len(entity_result.written)} entity pages written, " f"{len(entity_result.skipped_unchanged)} unchanged"
-        )
-        written_paths.extend(entity_result.written)
-
-    click.echo(f"Registering qmd collection {collection!r}…")
-    report = bootstrap_collection(path_manager.corpus_dir(), collection=collection)
-    click.echo(f"  collection {'added' if report['added'] else 'already registered'} at {report['path']}")
-
-    if written_paths:
-        click.echo(f"Re-indexing {len(written_paths)} updated file(s) in qmd…")
-        reindex_paths([Path(p) for p in written_paths], collection=collection)
-        click.echo("  ✓ qmd update + embed complete")
-    else:
-        click.echo("(no files changed — qmd update skipped)")
-
-    click.echo("✓ corpus bootstrap complete")
-
-
-@corpus_group.command("render")
-@click.option("--podcast-id", default=None, help="Render only this podcast's episodes.")
-@click.option("--episode-id", default=None, help="Render only this episode.")
-@click.option("--reindex/--no-reindex", default=True, show_default=True, help="Push touched paths to qmd.")
-@click.pass_context
-@require_config
-@log_command
-def corpus_render(ctx, podcast_id, episode_id, reindex):
-    """Re-render a podcast or single episode into ``data/corpus/`` and
-    optionally push the touched files to qmd.
-
-    Useful after a manual reindex (Phase 1.13 ``mention drop`` /
-    ``mention repoint`` operations) since corpus pages reflect resolved
-    entity wiki-links.
-    """
-    from .core.corpus_writer import CorpusWriter
-    from .core.reindex import QmdNotInstalledError, reindex_paths
-    from .models.annotated_transcript import AnnotatedTranscript
-
-    repo = ctx.obj.entity_repository
-    podcast_repo = ctx.obj.repository
-    path_manager = ctx.obj.path_manager
-    writer = CorpusWriter(path_manager=path_manager, entity_repository=repo)
-
-    if episode_id:
-        result = podcast_repo.get_episode(episode_id)
-        if result is None:
-            click.echo(f"❌ No episode with id={episode_id}", err=True)
-            ctx.exit(1)
-        podcast, episode = result
-        episodes = [(podcast, episode)]
-    elif podcast_id:
+    if podcast_id:
         podcast = podcast_repo.get(podcast_id)
         if podcast is None:
             click.echo(f"❌ No podcast with id={podcast_id}", err=True)
             ctx.exit(1)
-        episodes = [(podcast, ep) for ep in (podcast.episodes or [])]
+        candidate_eps = [(podcast, ep) for ep in (podcast.episodes or [])]
     else:
-        episodes = []
+        candidate_eps = []
         for p in podcast_repo.get_all():
             for ep in p.episodes or []:
-                episodes.append((p, ep))
+                candidate_eps.append((p, ep))
 
-    written_paths = []
-    for podcast, episode in episodes:
-        if not episode.clean_transcript_json_path:
-            continue
-        sidecar = path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+    eligible = [(p, e) for p, e in candidate_eps if e.clean_transcript_json_path]
+    if max_episodes:
+        eligible = eligible[:max_episodes]
+
+    click.echo(f"Eligible episodes: {len(eligible)} (of {len(candidate_eps)} total)")
+    if dry_run:
+        for p, e in eligible[:20]:
+            click.echo(f"  - {p.title} :: {e.title}")
+        if len(eligible) > 20:
+            click.echo(f"  … (+{len(eligible) - 20} more)")
+        return
+
+    writer = ChunkWriter(db_path=str(config.database_path), embedding_model=ctx.obj.embedding_model)
+
+    inserted_total = 0
+    skipped_total = 0
+    for p, e in eligible:
+        sidecar = path_manager.clean_transcript_file(e.clean_transcript_json_path)
         if not sidecar.exists():
+            click.echo(f"  ! sidecar missing for {e.id} ({sidecar})")
             continue
         transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
-        result = writer.write_episode_page(podcast=podcast, episode=episode, transcript=transcript)
-        written_paths.extend(result.written)
+        inserted = writer.write_episode(e.id, transcript, force=force)
+        if inserted:
+            inserted_total += inserted
+            click.echo(f"  ✓ {p.title} :: {e.title} ({inserted} chunks)")
+        else:
+            skipped_total += 1
 
-    click.echo(f"Rendered {len(episodes)} episode(s); {len(written_paths)} file(s) updated.")
+    click.echo(f"✓ chunks backfill complete: {inserted_total} inserted, {skipped_total} skipped")
 
-    if reindex and written_paths:
-        try:
-            reindex_paths([Path(p) for p in written_paths])
-            click.echo("✓ qmd update + embed complete")
-        except QmdNotInstalledError as exc:
-            click.echo(f"(skipped qmd update: {exc})", err=True)
+
+@main.command("rebuild-entity-pages")
+@click.option(
+    "--type",
+    "entity_type",
+    type=click.Choice(["person", "company", "topic"]),
+    default=None,
+    help="Restrict to one entity type.",
+)
+@click.pass_context
+@require_config
+@log_command
+def rebuild_entity_pages(ctx, entity_type):
+    """Regenerate Obsidian entity Markdown pages from the entity DB."""
+    from .core.entity_page_writer import EntityPageWriter
+    from .models.entities import EntityType
+
+    writer = EntityPageWriter(
+        path_manager=ctx.obj.path_manager,
+        entity_repository=ctx.obj.entity_repository,
+    )
+    et = EntityType(entity_type) if entity_type else None
+    result = writer.write_all(entity_type=et)
+    click.echo(f"✓ {len(result.written)} entity pages written, " f"{len(result.skipped_unchanged)} unchanged")
 
 
 # ---------------------------------------------------------------------------

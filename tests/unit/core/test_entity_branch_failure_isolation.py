@@ -52,12 +52,6 @@ class TestEntityBranchFailureIsolation:
         repo.update_entity_extraction_status.assert_called_once()
         repo.mark_episode_failed.assert_not_called()
 
-    def test_write_corpus_failure_only_touches_entity_status(self):
-        worker, repo = _make_worker_with_mock_repo()
-        worker._mark_episode_failed(_make_task(TaskStage.WRITE_CORPUS), "boom", "transient")
-        repo.update_entity_extraction_status.assert_called_once()
-        repo.mark_episode_failed.assert_not_called()
-
     def test_reindex_failure_only_touches_entity_status(self):
         worker, repo = _make_worker_with_mock_repo()
         worker._mark_episode_failed(_make_task(TaskStage.REINDEX), "boom", "transient")

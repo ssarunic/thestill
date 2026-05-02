@@ -60,14 +60,9 @@ class TestLinearChain:
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.EXTRACT_ENTITIES))
         assert _enqueued_stages(queue) == [TaskStage.RESOLVE_ENTITIES]
 
-    def test_resolve_entities_enqueues_write_corpus(self):
+    def test_resolve_entities_enqueues_reindex(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.RESOLVE_ENTITIES))
-        assert _enqueued_stages(queue) == [TaskStage.WRITE_CORPUS]
-
-    def test_write_corpus_enqueues_reindex(self):
-        worker, queue = _make_worker()
-        worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.WRITE_CORPUS))
         assert _enqueued_stages(queue) == [TaskStage.REINDEX]
 
     def test_reindex_terminates(self):

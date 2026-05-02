@@ -63,10 +63,15 @@ class SqliteEntityRepository:
 
         Same WAL pragmas as the podcast repo so the entity layer
         participates in the same concurrency story (multiple readers,
-        single writer, ``busy_timeout=5000``).
+        single writer, ``busy_timeout=5000``). Also loads sqlite-vec
+        when available so cascade DELETEs from ``episodes`` don't
+        crash on the ``chunks_ad`` trigger.
         """
+        from ..utils.sqlite_ext import maybe_load_vec_extension
+
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        maybe_load_vec_extension(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA busy_timeout = 5000")

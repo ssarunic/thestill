@@ -76,8 +76,15 @@ class Config(BaseModel):
     # Spec #28 entity-branch stages (run async off ``clean``).
     extract_entities_parallel_jobs: Optional[int] = None
     resolve_entities_parallel_jobs: Optional[int] = None
-    write_corpus_parallel_jobs: Optional[int] = None
     reindex_parallel_jobs: Optional[int] = None
+    # Spec #28 §2.10 — sentence-transformers model used to embed
+    # transcript segments into the ``chunks`` table for hybrid corpus
+    # search. Must be a key in ``thestill.search.base.EMBEDDING_MODEL_DIMS``;
+    # the ``chunks_vec`` virtual table is sized at migration time from
+    # that dim, so swapping to a model of a different dimension
+    # requires a fresh ``chunks`` table.
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
     chunk_duration_minutes: int = 30
     max_episodes_per_podcast: Optional[int] = None  # Limit episodes per podcast during discovery
 
@@ -208,7 +215,6 @@ class Config(BaseModel):
             TaskStage.SUMMARIZE: self.summarize_parallel_jobs,
             TaskStage.EXTRACT_ENTITIES: self.extract_entities_parallel_jobs,
             TaskStage.RESOLVE_ENTITIES: self.resolve_entities_parallel_jobs,
-            TaskStage.WRITE_CORPUS: self.write_corpus_parallel_jobs,
             TaskStage.REINDEX: self.reindex_parallel_jobs,
         }
         return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
@@ -362,11 +368,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
                 "summarize",
                 "extract-entities",
                 "resolve-entities",
-                "write-corpus",
                 "reindex",
             )
             if os.getenv(f"{stage.replace('-', '_').upper()}_PARALLEL_JOBS")
         },
+        "embedding_model": os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None

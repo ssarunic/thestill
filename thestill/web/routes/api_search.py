@@ -1,20 +1,20 @@
-"""Spec #28 §2.7 — REST mirror of the ``search_corpus`` MCP tool.
+"""Spec #28 §2.10 — REST mirror of the ``search_corpus`` MCP tool.
 
-Single endpoint ``GET /api/search/corpus`` that mirrors the MCP tool's
-inputs and returns the same citation rows. Intended for the web UI's
-command bar (Phase 4) and ad-hoc curl debugging.
+``GET /api/search/corpus`` proxies into the ``SqliteVecBackend`` on
+the AppState. The backend owns its embedding model (lazy-loads
+sentence-transformers on first semantic/hybrid call); the route just
+parses params, builds a filter, and calls ``.search()``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
-from ...repositories.sqlite_entity_repository import SqliteEntityRepository
+from ...search.base import SearchFilters, SearchMode
 from ..dependencies import AppState, get_app_state
 
 logger = get_logger(__name__)
@@ -22,8 +22,6 @@ router = APIRouter()
 
 
 class SearchResult(BaseModel):
-    """One row in the search response — citation-shaped."""
-
     episode_id: str
     podcast_id: str
     podcast_title: str
@@ -49,64 +47,28 @@ class SearchResponse(BaseModel):
 @router.get("/corpus", response_model=SearchResponse)
 def search_corpus(
     q: str = Query(..., min_length=1, description="Search text."),
-    mode: str = Query("hybrid", regex="^(lexical|semantic|hybrid)$"),
-    intent: Optional[str] = Query(None),
+    mode: str = Query("hybrid", pattern="^(lexical|semantic|hybrid)$"),
     limit: int = Query(10, ge=1, le=50),
-    min_score: float = Query(0.0, ge=0.0, le=1.0),
+    podcast_id: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None, description="ISO-8601 date."),
+    date_to: Optional[str] = Query(None, description="ISO-8601 date."),
+    has_entity: Optional[List[str]] = Query(None),
     state: AppState = Depends(get_app_state),
 ):
-    """Search the rendered corpus via qmd. Mirrors the MCP tool.
+    backend = state.search_backend
+    if backend is None:
+        raise HTTPException(status_code=503, detail="search backend not initialised")
 
-    Returns at most ``limit`` rows ordered by qmd relevance. Episode
-    hits resolve to a transcript segment via the segmap sidecar; entity
-    hits are filtered out (Phase 5 will surface them as a separate
-    ``entities`` field once the web UI has entity pages).
-    """
-    try:
-        from ...search.qmd_client import QmdClient
-    except FileNotFoundError as exc:  # pragma: no cover — environment-specific
-        raise HTTPException(status_code=503, detail=str(exc))
-
-    corpus_dir = state.path_manager.corpus_dir()
-    if not corpus_dir.exists():
-        raise HTTPException(status_code=503, detail="corpus has not been bootstrapped — run `make qmd-up`")
-
-    try:
-        client = QmdClient(corpus_dir=corpus_dir)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=f"qmd not installed: {exc}")
-
-    if mode == "lexical":
-        searches = [{"type": "lex", "query": q}]
-    elif mode == "semantic":
-        searches = [{"type": "vec", "query": q}]
-    else:  # hybrid
-        searches = [{"type": "lex", "query": q}, {"type": "vec", "query": q}]
-
-    hits = client.search(searches, limit=limit, intent=intent, min_score=min_score)
-    repo: SqliteEntityRepository = state.entity_repository
-    citation_rows = client.to_citation_rows(hits, repository=repo)
-
+    filters = SearchFilters(
+        podcast_id=podcast_id,
+        date_from=date_from,
+        date_to=date_to,
+        has_entity=tuple(has_entity or ()),
+    )
+    hits = backend.search(q, mode=SearchMode(mode), limit=limit, filters=filters)
     return SearchResponse(
         query=q,
         mode=mode,
-        total=len(citation_rows),
-        results=[
-            SearchResult(
-                episode_id=r.episode_id,
-                podcast_id=r.podcast_id,
-                podcast_title=r.podcast_title,
-                episode_title=r.episode_title,
-                published_at=r.published_at.isoformat() if r.published_at else None,
-                start_ms=r.start_ms,
-                end_ms=r.end_ms,
-                speaker=r.speaker,
-                quote=r.quote,
-                score=r.score,
-                match_type=r.match_type.value,
-                deeplink=r.deeplink,
-                web_url=r.web_url,
-            )
-            for r in citation_rows
-        ],
+        total=len(hits),
+        results=[SearchResult(**h.as_citation()) for h in hits],
     )

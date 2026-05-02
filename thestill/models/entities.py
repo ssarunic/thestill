@@ -18,9 +18,6 @@ Four user-facing models:
 
 - ``EntityRecord``  — a canonical person/company/product/topic.
 - ``EntityMention`` — a single occurrence of an entity in an episode segment.
-- ``SegmentAnchor`` — one row of the ``<id>.segmap.json`` sidecar that maps
-  a qmd hit (line/byte offset in rendered Markdown) back to a segment-precise
-  ``(segment_id, start_ms, end_ms)``.
 - ``CitationRow``   — the wire shape every search/list tool returns.
 
 Plus five enums (``EntityType``, ``ResolutionStatus``,
@@ -93,6 +90,7 @@ class ResolutionMethod(str, Enum):
 class MatchType(str, Enum):
     LEXICAL = "lexical"
     SEMANTIC = "semantic"
+    HYBRID = "hybrid"
     ENTITY = "entity"
 
 
@@ -161,26 +159,6 @@ class EntityMention(BaseModel):
     candidate_entity_ids: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: Optional[datetime] = None
-
-
-class SegmentAnchor(BaseModel):
-    """One row of the ``<id>.segmap.json`` sidecar.
-
-    Maps a qmd hit at a line/byte offset in a rendered Markdown episode
-    page back to the segment that produced it, with the canonical
-    millisecond timestamps from ``AnnotatedTranscript``. Phase 2's
-    ``qmd_client`` binary-searches by whichever key qmd's metadata
-    actually exposes (line preferred, byte fallback) — both are written
-    so either path works without rebuilding the sidecar.
-    """
-
-    seg_id: int
-    line_start: int
-    line_end: int
-    byte_start: int
-    byte_end: int
-    start_ms: int
-    end_ms: int
 
 
 class CitationRow(BaseModel):

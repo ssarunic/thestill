@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-fast test-coverage lint format typecheck check clean clean-all run-mcp qmd-up qmd-down qmd-status
+.PHONY: help install install-dev test test-fast test-coverage lint format typecheck check clean clean-all run-mcp corpus-backfill rebuild-entity-pages
 
 # Default target
 .DEFAULT_GOAL := help
@@ -112,30 +112,17 @@ run-mcp: ## Run the MCP server
 	./venv/bin/thestill-mcp
 
 # ---------------------------------------------------------------------------
-# Spec #28 §2.1 — qmd index management (corpus search foundations)
+# Spec #28 §2.10 — corpus chunk index (sqlite-vec)
 # ---------------------------------------------------------------------------
-# These targets manage the qmd collection that backs lexical+vector
-# search over the rendered Markdown corpus at data/corpus/. qmd is an
-# external Node.js binary (≥ Node 22). Install via:
-#     brew install qmd                  (macOS)
-#     npm install -g qmd-cli            (Linux / WSL)
-QMD_COLLECTION := thestill-corpus
-QMD_CORPUS_DIR := data/corpus
+# Replaces the qmd shell-out from Phase 2 with an in-process SQLite +
+# sqlite-vec backend. Embeddings are written into the ``chunks`` table
+# of the existing podcasts.db; no external services or daemons.
 
-qmd-up: ## Bootstrap the qmd collection over data/corpus/ (idempotent).
-	@command -v qmd >/dev/null 2>&1 || { \
-		echo "$(YELLOW)qmd not found on PATH. Install it (https://qmd.dev) before running this target.$(RESET)"; \
-		exit 1; \
-	}
-	./venv/bin/thestill corpus bootstrap
+corpus-backfill: ## Embed and index every cleaned-transcript episode into chunks.
+	./venv/bin/thestill chunks backfill
 
-qmd-down: ## Remove the qmd collection (data/corpus stays).
-	@command -v qmd >/dev/null 2>&1 || exit 0
-	-qmd collection remove $(QMD_COLLECTION)
-
-qmd-status: ## Show qmd collection health for thestill-corpus.
-	@command -v qmd >/dev/null 2>&1 || { echo "qmd not installed"; exit 1; }
-	@qmd collection show $(QMD_COLLECTION) || qmd collection list
+rebuild-entity-pages: ## Regenerate Obsidian entity Markdown pages from the entity DB.
+	./venv/bin/thestill rebuild-entity-pages
 
 # Development shortcuts
 dev-refresh: ## Quick: Refresh all podcast feeds

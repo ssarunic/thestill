@@ -26,8 +26,7 @@ class TestStageSuccessors:
 
     def test_entity_branch_is_linear_to_reindex(self):
         assert get_next_stages(TaskStage.EXTRACT_ENTITIES) == [TaskStage.RESOLVE_ENTITIES]
-        assert get_next_stages(TaskStage.RESOLVE_ENTITIES) == [TaskStage.WRITE_CORPUS]
-        assert get_next_stages(TaskStage.WRITE_CORPUS) == [TaskStage.REINDEX]
+        assert get_next_stages(TaskStage.RESOLVE_ENTITIES) == [TaskStage.REINDEX]
         assert get_next_stages(TaskStage.REINDEX) == []
 
     def test_returned_list_is_a_copy(self):
@@ -50,7 +49,6 @@ class TestEntityBranchClassifier:
         for stage in (
             TaskStage.EXTRACT_ENTITIES,
             TaskStage.RESOLVE_ENTITIES,
-            TaskStage.WRITE_CORPUS,
             TaskStage.REINDEX,
         ):
             assert is_entity_branch_stage(stage), f"{stage.value} should be entity-branch"

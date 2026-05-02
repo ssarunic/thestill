@@ -98,6 +98,17 @@ def setup_tools(server: Server, storage_path: str):
     # Spec #28 §1.8 — entity-layer repository, surfaced via the
     # entity tools registered below.
     entity_repository = SqliteEntityRepository(db_path=config.database_path)
+    # Spec #28 §2.10 — sqlite-vec corpus search. The EmbeddingModel
+    # wrapper is cheap; sentence-transformers loads only when
+    # encode_one fires (first semantic/hybrid call).
+    from ..core.embedding_model import EmbeddingModel
+    from ..search.sqlite_vec_client import SqliteVecBackend
+
+    embedding_model = EmbeddingModel(config.embedding_model)
+    search_backend = SqliteVecBackend(
+        db_path=config.database_path,
+        embedding_model=embedding_model,
+    )
     podcast_service = PodcastService(storage_path, repository, path_manager)
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
@@ -408,7 +419,7 @@ def setup_tools(server: Server, storage_path: str):
             # ``entity_tools.entity_tool_definitions()`` so the
             # tool/handler pair stays co-located.
             *entity_tool_definitions(),
-            # Spec #28 §2.6 — qmd-backed corpus search.
+            # Spec #28 §2.10 — sqlite-vec corpus search.
             *search_tool_definitions(),
         ]
 
@@ -1723,30 +1734,11 @@ def setup_tools(server: Server, storage_path: str):
             if entity_response is not None:
                 return entity_response
 
-            # Spec #28 §2.6 — qmd-backed corpus search. Lazy QmdClient
-            # construction: ``qmd`` is an external Node binary, so a
-            # fresh deploy without it should still serve every other
-            # tool. The dispatcher catches ``FileNotFoundError`` and
-            # surfaces it as a structured error rather than a 500.
             if name in {"search_corpus"}:
-                try:
-                    from ..search.qmd_client import QmdClient
-
-                    qmd_client = QmdClient(corpus_dir=Path(config.storage_path) / "corpus")
-                except FileNotFoundError as exc:
-                    return [
-                        TextContent(
-                            type="text",
-                            text=json.dumps(
-                                {
-                                    "success": False,
-                                    "error": f"qmd not available: {exc}",
-                                }
-                            ),
-                        )
-                    ]
                 search_response = dispatch_search_tool(
-                    name, arguments, repository=entity_repository, qmd_client=qmd_client
+                    name,
+                    arguments,
+                    search_backend=search_backend,
                 )
                 if search_response is not None:
                     return search_response

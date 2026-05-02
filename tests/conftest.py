@@ -20,12 +20,36 @@ making tests faster, more reliable, and free from API costs.
 """
 
 import json
+import os
 from typing import Dict, List, Optional, Type, TypeVar
 
 import pytest
 from pydantic import BaseModel
 
 from thestill.core.llm_provider import LLMProvider
+
+
+@pytest.fixture(autouse=True)
+def _stub_llm_credentials(monkeypatch):
+    """Make ``load_config()`` succeed without a real ``.env`` file.
+
+    The CLI's entrypoint calls ``load_dotenv()`` from CWD which
+    picks up the developer's local credentials; in CI there is no
+    ``.env``, so any test that goes through ``main()`` (via
+    CliRunner) hits the API-key validation in ``load_config`` and
+    exits with a configuration error before the actual command runs.
+    Setting placeholder values here keeps the validation happy
+    without touching real APIs — every LLM call in tests goes
+    through ``MockLLMProvider`` regardless.
+    """
+    if not os.getenv("OPENAI_API_KEY"):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-stub-key")
+    # Spec #25 item 4.1 — AuthService requires JWT_SECRET_KEY in every
+    # mode. Same .env situation as OPENAI_API_KEY: present locally,
+    # missing in CI.
+    if not os.getenv("JWT_SECRET_KEY"):
+        monkeypatch.setenv("JWT_SECRET_KEY", "test-stub-jwt-secret-32-bytes-min")
+
 
 # TypeVar for generic structured output return type
 T = TypeVar("T", bound=BaseModel)

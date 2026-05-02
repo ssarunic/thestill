@@ -685,6 +685,79 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: resolution_blacklist created")
 
+        # spec #28 §2.10 — chunks + chunks_vec + chunks_fts enable
+        # corpus semantic + lexical search via sqlite-vec virtual tables.
+        # The guard checks ``chunks_vec`` (the last and extension-
+        # dependent table) so a partial migration that crashed after
+        # creating ``chunks`` but before ``chunks_vec`` still retries
+        # on the next startup. Skipped entirely when the ``sqlite-vec``
+        # extension isn't installed (the ``[entities]`` extra is missing).
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'")
+        if cursor.fetchone() is None:
+            from ..search.base import DEFAULT_EMBEDDING_MODEL, embedding_dim_for
+            from ..utils.sqlite_ext import SqliteVecNotInstalledError, load_vec_extension
+
+            try:
+                load_vec_extension(conn)
+            except SqliteVecNotInstalledError:
+                logger.warning(
+                    "sqlite_vec_unavailable_skipping_chunks_migration",
+                    note="install thestill[entities] to enable corpus chunk search",
+                )
+            else:
+                vec_dim = embedding_dim_for(DEFAULT_EMBEDDING_MODEL)
+                logger.info(
+                    "Migrating database: creating spec #28 §2.10 chunks tables",
+                    embedding_model=DEFAULT_EMBEDDING_MODEL,
+                    vec_dim=vec_dim,
+                )
+                conn.executescript(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS chunks (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        episode_id      TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                        segment_id      INTEGER NOT NULL,
+                        start_ms        INTEGER NOT NULL,
+                        end_ms          INTEGER NOT NULL,
+                        speaker         TEXT NULL,
+                        text            TEXT NOT NULL,
+                        embedding_model TEXT NOT NULL,
+                        embedding       BLOB NOT NULL,
+                        created_at      TIMESTAMP NOT NULL
+                                        DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                        UNIQUE (episode_id, segment_id, embedding_model)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_chunks_episode ON chunks(episode_id);
+                    CREATE INDEX IF NOT EXISTS idx_chunks_model ON chunks(embedding_model);
+
+                    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+                        embedding float[{vec_dim}]
+                    );
+
+                    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
+                        USING fts5(text, content='chunks', content_rowid='id');
+
+                    CREATE TRIGGER IF NOT EXISTS chunks_ai
+                        AFTER INSERT ON chunks BEGIN
+                        INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
+                        INSERT INTO chunks_fts(rowid, text)      VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS chunks_ad
+                        AFTER DELETE ON chunks BEGIN
+                        DELETE FROM chunks_vec WHERE rowid = old.id;
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS chunks_au
+                        AFTER UPDATE ON chunks BEGIN
+                        DELETE FROM chunks_vec WHERE rowid = old.id;
+                        INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                        INSERT INTO chunks_fts(rowid, text)      VALUES (new.id, new.text);
+                    END;
+                    """
+                )
+                logger.info("Migration complete: spec #28 §2.10 chunks tables created")
+
         # Migration: rewrite legacy http:// artwork URLs to https://
         # The web UI's CSP only allows `img-src https:`, so any stored
         # http:// image_url is silently blocked by the browser. Every
@@ -1287,9 +1360,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         - Row factory for dict-like access
         - Foreign keys enabled
         - Automatic commit/rollback
+        - sqlite-vec loaded when available, so cascade DELETEs from
+          ``episodes`` to ``chunks`` can fire the ``chunks_ad`` trigger
+          that touches the ``chunks_vec`` virtual table without
+          ``no such module: vec0``
         """
+        from ..utils.sqlite_ext import maybe_load_vec_extension
+
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row  # Dict-like access
+        maybe_load_vec_extension(conn)
         conn.execute("PRAGMA foreign_keys = ON")
 
         try:
@@ -1398,6 +1478,26 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             cursor = conn.execute("SELECT region FROM top_podcasts_meta ORDER BY region")
             return [row["region"] for row in cursor.fetchall()]
+
+    def get_chunks_health(self) -> Tuple[int, str]:
+        """Spec #28 §2.10 — chunk row count + dominant embedding model.
+
+        Returns ``(0, "")`` when the ``chunks`` table doesn't exist
+        (deployments without the ``[entities]`` extra) or is empty.
+        """
+        with self._get_connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n, "
+                    "(SELECT embedding_model FROM chunks GROUP BY embedding_model "
+                    "ORDER BY COUNT(*) DESC LIMIT 1) AS model "
+                    "FROM chunks"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return 0, ""
+        if row is None:
+            return 0, ""
+        return int(row["n"] or 0), row["model"] or ""
 
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""

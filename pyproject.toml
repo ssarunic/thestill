@@ -116,6 +116,30 @@ entities = [
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
     "rapidfuzz>=3.0.0",
+    # Spec #28 §2.10 — in-process search backend (replaces qmd).
+    # ``sentence-transformers`` provides the embedding model. Default
+    # ``paraphrase-multilingual-MiniLM-L12-v2`` (384-dim, ~470MB on
+    # disk) supports 50+ languages including Croatian; English-only
+    # corpora can swap to ``BAAI/bge-small-en-v1.5`` via the
+    # ``EMBEDDING_MODEL`` env var for ~5-10% better English recall.
+    # ``sqlite-vec`` is a SQLite extension that adds the ``vec0``
+    # virtual table type for k-NN over float32 blobs.
+    "sentence-transformers>=3.0.0",
+    "sqlite-vec>=0.1.6",
+]
+
+[tool.uv]
+# ``[entities]`` and ``[local-transcription]`` are deployed
+# separately and never installed into the same environment.
+# Telling uv they conflict lets the lockfile resolve each in its
+# own fork — without this, uv must satisfy both simultaneously and
+# fails because ReFinED pins ``transformers<4.40`` while whisperx
+# >= 3.7.1 requires ``transformers>=4.48``.
+conflicts = [
+    [
+        { extra = "entities" },
+        { extra = "local-transcription" },
+    ],
 ]
 
 [project.scripts]

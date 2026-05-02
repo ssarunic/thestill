@@ -70,7 +70,6 @@ class TaskStage(str, Enum):
     SUMMARIZE = "summarize"
     EXTRACT_ENTITIES = "extract-entities"
     RESOLVE_ENTITIES = "resolve-entities"
-    WRITE_CORPUS = "write-corpus"
     REINDEX = "reindex"
 
 
@@ -83,7 +82,6 @@ _NON_USER_FAILING_STAGES = frozenset(
     {
         TaskStage.EXTRACT_ENTITIES,
         TaskStage.RESOLVE_ENTITIES,
-        TaskStage.WRITE_CORPUS,
         TaskStage.REINDEX,
     }
 )
@@ -114,8 +112,7 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.CLEAN: [TaskStage.SUMMARIZE],
     TaskStage.SUMMARIZE: [TaskStage.EXTRACT_ENTITIES],
     TaskStage.EXTRACT_ENTITIES: [TaskStage.RESOLVE_ENTITIES],
-    TaskStage.RESOLVE_ENTITIES: [TaskStage.WRITE_CORPUS],
-    TaskStage.WRITE_CORPUS: [TaskStage.REINDEX],
+    TaskStage.RESOLVE_ENTITIES: [TaskStage.REINDEX],
     TaskStage.REINDEX: [],
 }
 
@@ -256,8 +253,11 @@ class QueueManager:
           workers competing for the next task this is the difference
           between "graceful serialisation" and "spurious crashes".
         """
+        from ..utils.sqlite_ext import maybe_load_vec_extension
+
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        maybe_load_vec_extension(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA busy_timeout = 5000")
