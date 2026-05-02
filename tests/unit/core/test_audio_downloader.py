@@ -481,8 +481,10 @@ class TestCleanupOldFiles:
         # Should have counted the old file
         assert count == 1
 
-    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, capfd):
+    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage):
         """Should log correct messages in dry-run mode."""
+        from structlog.testing import capture_logs
+
         # Create multiple old files
         old_file1 = temp_storage / "old_file1.mp3"
         old_file1.write_text("content1")
@@ -494,22 +496,21 @@ class TestCleanupOldFiles:
         os.utime(old_file1, (old_time, old_time))
         os.utime(old_file2, (old_time, old_time))
 
-        # Execute cleanup with dry-run
-        count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
+        # capture_logs is structlog's official test utility — yields
+        # the raw event-dict list, independent of whichever processor
+        # chain or output stream is configured.
+        with capture_logs() as captured:
+            count = audio_downloader.cleanup_old_files(days=30, dry_run=True)
 
-        # Verify return count
         assert count == 2
 
-        # structlog writes to stderr in console mode; capfd captures
-        # both fd-level streams whereas capsys only sees Python-level
-        # writes (which structlog bypasses).
-        captured = capfd.readouterr()
-        combined = captured.out + captured.err
-        assert "would_delete_old_file" in combined
-        assert "old_file1.mp3" in combined
-        assert "old_file2.mp3" in combined
-        assert "cleanup_summary" in combined
-        assert "files_count" in combined
+        events = {entry.get("event") for entry in captured}
+        assert "would_delete_old_file" in events
+        assert "cleanup_summary" in events
+        filenames = {entry.get("filename") for entry in captured if entry.get("event") == "would_delete_old_file"}
+        assert filenames == {"old_file1.mp3", "old_file2.mp3"}
+        summary = next(e for e in captured if e.get("event") == "cleanup_summary")
+        assert summary.get("files_count") == 2
 
     def test_cleanup_returns_count(self, audio_downloader, temp_storage):
         """Should return correct count of deleted files."""

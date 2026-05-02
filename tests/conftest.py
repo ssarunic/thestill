@@ -44,6 +44,11 @@ def _stub_llm_credentials(monkeypatch):
     """
     if not os.getenv("OPENAI_API_KEY"):
         monkeypatch.setenv("OPENAI_API_KEY", "test-stub-key")
+    # Spec #25 item 4.1 — AuthService requires JWT_SECRET_KEY in every
+    # mode. Same .env situation as OPENAI_API_KEY: present locally,
+    # missing in CI.
+    if not os.getenv("JWT_SECRET_KEY"):
+        monkeypatch.setenv("JWT_SECRET_KEY", "test-stub-jwt-secret-32-bytes-min")
 
 
 # TypeVar for generic structured output return type
