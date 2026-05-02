@@ -481,7 +481,7 @@ class TestCleanupOldFiles:
         # Should have counted the old file
         assert count == 1
 
-    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, capsys):
+    def test_cleanup_dry_run_logs_correctly(self, audio_downloader, temp_storage, capfd):
         """Should log correct messages in dry-run mode."""
         # Create multiple old files
         old_file1 = temp_storage / "old_file1.mp3"
@@ -500,13 +500,16 @@ class TestCleanupOldFiles:
         # Verify return count
         assert count == 2
 
-        # Verify structured log output (structlog writes to stdout)
-        captured = capsys.readouterr()
-        assert "would_delete_old_file" in captured.out
-        assert "old_file1.mp3" in captured.out
-        assert "old_file2.mp3" in captured.out
-        assert "cleanup_summary" in captured.out
-        assert "files_count=2" in captured.out
+        # structlog writes to stderr in console mode; capfd captures
+        # both fd-level streams whereas capsys only sees Python-level
+        # writes (which structlog bypasses).
+        captured = capfd.readouterr()
+        combined = captured.out + captured.err
+        assert "would_delete_old_file" in combined
+        assert "old_file1.mp3" in combined
+        assert "old_file2.mp3" in combined
+        assert "cleanup_summary" in combined
+        assert "files_count" in combined
 
     def test_cleanup_returns_count(self, audio_downloader, temp_storage):
         """Should return correct count of deleted files."""
