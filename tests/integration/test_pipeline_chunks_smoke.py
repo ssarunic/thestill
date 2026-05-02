@@ -14,8 +14,10 @@ import uuid
 from datetime import datetime
 from typing import List
 
-import numpy as np
 import pytest
+
+pytest.importorskip("sqlite_vec", reason="sqlite-vec extension required")
+np = pytest.importorskip("numpy", reason="numpy required for embedding tests")
 
 from thestill.core.chunk_writer import ChunkWriter
 from thestill.core.embedding_model import EmbeddingModel
@@ -25,8 +27,6 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.search.base import DEFAULT_EMBEDDING_MODEL, SearchMode, embedding_dim_for
 from thestill.search.sqlite_vec_client import SqliteVecBackend
 from thestill.utils.sqlite_ext import maybe_load_vec_extension
-
-pytest.importorskip("sqlite_vec", reason="sqlite-vec extension required")
 
 _DIM = embedding_dim_for(DEFAULT_EMBEDDING_MODEL)
 

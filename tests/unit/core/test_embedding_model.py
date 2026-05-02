@@ -11,8 +11,9 @@ import sys
 import types
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
+
+np = pytest.importorskip("numpy", reason="numpy required for embedding tests")
 
 from thestill.core.embedding_model import EmbeddingModel
 from thestill.search.base import DEFAULT_EMBEDDING_MODEL
