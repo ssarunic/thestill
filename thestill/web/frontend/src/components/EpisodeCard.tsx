@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Episode, EpisodeWithPodcast, FailureType, PipelineStage } from '../api/types'
-import { STAGE_LABEL_ACTIVE } from '../constants/stages'
+import { STAGE_LABEL, STAGE_LABEL_ACTIVE } from '../constants/stages'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
@@ -16,7 +16,7 @@ interface EpisodeCardProps {
   onSelect?: (episodeId: string, selected: boolean) => void
   // Artwork fallback (optional - use podcast image if episode has none)
   podcastImageUrl?: string | null
-  processingStage?: PipelineStage
+  processingStage?: { stage: PipelineStage; status: 'queued' | 'processing' } | PipelineStage
 }
 
 const stageLabels = STAGE_LABEL_ACTIVE
@@ -148,12 +148,30 @@ export default function EpisodeCard({
                 {failureTypeLabels[episode.failure_type]}
               </span>
             )}
-            {processingStage && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
-                {stageLabels[processingStage]}
-              </span>
-            )}
+            {processingStage && (() => {
+              const ps = typeof processingStage === 'string'
+                ? { stage: processingStage, status: 'processing' as const }
+                : processingStage
+              if (ps.status === 'queued') {
+                return (
+                  <span
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600"
+                    title="Waiting for a worker to pick this up"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Queued: {STAGE_LABEL[ps.stage]}
+                  </span>
+                )
+              }
+              return (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                  <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+                  {stageLabels[ps.stage]}
+                </span>
+              )
+            })()}
             {/* Always show state badge */}
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stateColors[episode.state]}`}>
               {stateLabels[episode.state]}

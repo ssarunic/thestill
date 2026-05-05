@@ -355,9 +355,22 @@ export function useQueueTasks(completedLimit = 10) {
   })
 }
 
-export function useProcessingStageByEpisodeId(): Map<string, PipelineStage> {
+export type EpisodeActiveStage = {
+  stage: PipelineStage
+  status: 'queued' | 'processing'
+}
+
+export function useProcessingStageByEpisodeId(): Map<string, EpisodeActiveStage> {
   const { data } = useQueueTasks()
-  return new Map(data?.processing_tasks.map((task) => [task.episode_id, task.stage]) ?? [])
+  const map = new Map<string, EpisodeActiveStage>()
+  // Pending first, processing wins if both exist for the same episode
+  for (const task of data?.pending_tasks ?? []) {
+    map.set(task.episode_id, { stage: task.stage, status: 'queued' })
+  }
+  for (const task of data?.processing_tasks ?? []) {
+    map.set(task.episode_id, { stage: task.stage, status: 'processing' })
+  }
+  return map
 }
 
 export function useBumpQueueTask() {

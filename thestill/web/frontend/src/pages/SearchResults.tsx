@@ -184,24 +184,25 @@ function Section({ title, children }: { title?: string; children: React.ReactNod
 
 function QuoteResultRow({ result }: { result: SearchResult }) {
   const navigate = useNavigate()
-  const [podcastSlug, episodeSlug] = useEpisodeSlugs(result.episode_id)
   const seconds = Math.floor(result.start_ms / 1000)
+  const hasSlugs = !!result.podcast_slug && !!result.episode_slug
 
   const handleOpen = () => {
-    if (podcastSlug && episodeSlug) {
-      navigate(`/podcasts/${podcastSlug}/episodes/${episodeSlug}?t=${seconds}`)
-    } else {
-      // Slugs unavailable — fall back to the absolute web_url the
-      // backend embedded. This won't auto-play but it'll at least
-      // route to the episode page if/when slugs land.
-      navigate(result.web_url)
+    if (hasSlugs) {
+      navigate(
+        `/podcasts/${result.podcast_slug}/episodes/${result.episode_slug}?t=${seconds}`,
+      )
     }
   }
 
   return (
     <li
-      className="cursor-pointer rounded-lg border border-gray-200 p-4 hover:border-primary-200 hover:bg-primary-50/50"
-      onClick={handleOpen}
+      className={`rounded-lg border border-gray-200 p-4 ${
+        hasSlugs
+          ? 'cursor-pointer hover:border-primary-200 hover:bg-primary-50/50'
+          : 'cursor-not-allowed opacity-70'
+      }`}
+      onClick={hasSlugs ? handleOpen : undefined}
       data-testid="search-quote-row"
     >
       <p className="text-sm text-gray-900">"{result.quote}"</p>
@@ -209,7 +210,11 @@ function QuoteResultRow({ result }: { result: SearchResult }) {
         {result.speaker ? `${result.speaker} · ` : ''}
         {result.episode_title} · {result.podcast_title}
         {' · '}
-        <span className="text-primary-600">▶ play at {formatSeconds(seconds)}</span>
+        {hasSlugs ? (
+          <span className="text-primary-600">▶ play at {formatSeconds(seconds)}</span>
+        ) : (
+          <span className="text-gray-400">deep link unavailable for legacy episode</span>
+        )}
       </p>
     </li>
   )
@@ -236,16 +241,6 @@ function EntityResultRow({ item }: { item: QuickEntityItem }) {
       </Link>
     </li>
   )
-}
-
-// We don't have podcast/episode slug on the corpus search response —
-// those would require a separate query per row. For now, render the
-// quote with the web_url fallback; quote rows from the ⌘K bar carry
-// slugs, and Phase 5 adds entity pages that don't need this either.
-// This shim returns null/null and lets QuoteResultRow fall back to
-// the absolute web_url.
-function useEpisodeSlugs(_episodeId: string): [string | null, string | null] {
-  return [null, null]
 }
 
 function IdleState() {

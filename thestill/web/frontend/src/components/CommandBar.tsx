@@ -23,8 +23,10 @@ import type {
   QuickGroup,
   QuickQuoteItem,
   QuickSearchItem,
+  QuickSearchOptions,
 } from '../api/types'
 import { parseQuery } from '../utils/searchOperators'
+import type { ParsedFilters } from '../utils/searchOperators'
 
 interface CommandBarProps {
   isOpen: boolean
@@ -47,13 +49,8 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
 
   const parsed = useMemo(() => parseQuery(query), [query])
   const searchOptions = useMemo(
-    () => ({
-      // The endpoint takes a single date_from; before: still parses
-      // but isn't honoured by /quick (full search uses it via
-      // /api/search/corpus). Keep the parse so the hint surfaces.
-      date_from: parsed.filters.date_from,
-    }),
-    [parsed.filters.date_from],
+    () => buildSearchOptions(parsed.filters),
+    [parsed.filters],
   )
   const { data, isFetching, isError, error } = useQuickSearch(parsed.text, searchOptions)
 
@@ -142,6 +139,7 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
 
   const totalHits = flat.length
   const trimmed = parsed.text.trim()
+  const hasFilters = hasActiveFilters(parsed.filters)
   const showIdle = trimmed.length < 2
   const showEmpty = !showIdle && !isFetching && totalHits === 0 && !!data
   const showError = !showIdle && isError
@@ -178,7 +176,7 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
         </div>
 
         <div ref={listRef} className="max-h-[60vh] overflow-y-auto">
-          {showIdle && <IdleHint />}
+          {showIdle && <IdleHint hasFilters={hasFilters} filters={parsed.filters} />}
           {parsed.hints.length > 0 && <HintBanner hints={parsed.hints} />}
           {showError && <ErrorState message={(error as Error)?.message ?? 'Search is offline'} />}
           {showEmpty && <EmptyState query={trimmed} />}
@@ -321,7 +319,27 @@ function QuoteRow({ item }: { item: QuickQuoteItem }) {
   )
 }
 
-function IdleHint() {
+function IdleHint({
+  hasFilters,
+  filters,
+}: {
+  hasFilters: boolean
+  filters: ParsedFilters
+}) {
+  if (hasFilters) {
+    return (
+      <div className="px-4 py-8 text-center text-sm text-gray-500" data-testid="cmdk-idle-with-filters">
+        <p className="mb-2">Add a search term to narrow these filters.</p>
+        <div className="flex flex-wrap justify-center gap-1.5 text-xs">
+          {summariseFilters(filters).map((label) => (
+            <span key={label} className="rounded bg-primary-50 px-2 py-0.5 text-primary-800">
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="px-4 py-8 text-center text-sm text-gray-500">
       <p className="mb-2">Type to search.</p>
@@ -332,6 +350,50 @@ function IdleHint() {
       </p>
     </div>
   )
+}
+
+function hasActiveFilters(filters: ParsedFilters): boolean {
+  return (
+    !!filters.date_from ||
+    !!filters.date_to ||
+    !!filters.podcast_slug ||
+    (filters.person?.length ?? 0) > 0 ||
+    (filters.company?.length ?? 0) > 0 ||
+    (filters.topic?.length ?? 0) > 0
+  )
+}
+
+function summariseFilters(filters: ParsedFilters): string[] {
+  const labels: string[] = []
+  for (const v of filters.person ?? []) labels.push(`person:${v}`)
+  for (const v of filters.company ?? []) labels.push(`company:${v}`)
+  for (const v of filters.topic ?? []) labels.push(`topic:${v}`)
+  if (filters.podcast_slug) labels.push(`podcast:${filters.podcast_slug}`)
+  if (filters.date_from) labels.push(`after:${filters.date_from}`)
+  if (filters.date_to) labels.push(`before:${filters.date_to}`)
+  return labels
+}
+
+// Convert the parsed operator filters to the wire shape /api/search/quick
+// expects. ``person:elon-musk`` becomes ``has_entity=person:elon-musk``
+// — entity ids are ``"{type}:{slug}"`` so we reconstruct by joining.
+// Values that already look like a fully-qualified id are passed through
+// unchanged so e.g. ``person:person:elon-musk`` doesn't double-prefix.
+function buildSearchOptions(filters: ParsedFilters): QuickSearchOptions {
+  const has_entity: string[] = []
+  for (const v of filters.person ?? []) has_entity.push(qualifyEntityId('person', v))
+  for (const v of filters.company ?? []) has_entity.push(qualifyEntityId('company', v))
+  for (const v of filters.topic ?? []) has_entity.push(qualifyEntityId('topic', v))
+  const opts: QuickSearchOptions = {}
+  if (has_entity.length > 0) opts.has_entity = has_entity
+  if (filters.podcast_slug) opts.podcast_slug = filters.podcast_slug
+  if (filters.date_from) opts.date_from = filters.date_from
+  if (filters.date_to) opts.date_to = filters.date_to
+  return opts
+}
+
+function qualifyEntityId(type: 'person' | 'company' | 'topic', value: string): string {
+  return value.includes(':') ? value : `${type}:${value}`
 }
 
 function HintBanner({ hints }: { hints: { operator: string; value: string; reason: string }[] }) {
