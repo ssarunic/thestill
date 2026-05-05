@@ -92,6 +92,10 @@ local-transcription = [
     "pyannote.audio>=3.1.1",
     "transformers>=4.30.0",
     "librosa>=0.10.0",
+    # Parakeet TDT runs through NeMo's ASR API so the hypothesis carries
+    # native segment- and word-level timestamps. The HF transformers
+    # path drops them (spec #18 Parakeet word-timestamp fix).
+    "nemo_toolkit[asr]>=2.0.0",
 ]
 entities = [
     # Spec #28 — entity extraction via GLiNER zero-shot NER. Downloads
