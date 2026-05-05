@@ -14,11 +14,10 @@
 
 """Shared ISO 639-1 language metadata for LLM prompts.
 
-Both the legacy :class:`~thestill.core.transcript_cleaner.TranscriptCleaner`
-and the new :class:`~thestill.core.segmented_transcript_cleaner.SegmentedTranscriptCleaner`
-need the same name + spelling-rules vocabulary for the language-aware
-system prompt. Keeping it in one place prevents the two from drifting
-as new languages are added.
+The :class:`~thestill.core.segmented_transcript_cleaner.SegmentedTranscriptCleaner`
+needs name + spelling-rules vocabulary for its language-aware system
+prompt. Keeping it in one place prevents drift as new languages are
+added.
 """
 
 from typing import Dict, TypedDict

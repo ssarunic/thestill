@@ -278,13 +278,6 @@ async def get_episode_transcript_by_slugs(
     if segmented is not None:
         response_payload["segments"] = segmented.annotated.model_dump()
 
-    shadow = state.podcast_service.get_shadow_transcript_for_episode(episode)
-    if shadow is not None:
-        response_payload["shadow"] = {
-            "pipeline": shadow.pipeline,
-            "content": shadow.content,
-        }
-
     return api_response(response_payload)
 
 

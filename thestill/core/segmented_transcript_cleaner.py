@@ -465,11 +465,8 @@ def _apply_speaker_mapping(
 ) -> List[AnnotatedSegment]:
     """Return a new segment list with speaker ids substituted by real names.
 
-    Mirrors the deterministic substitution the legacy
-    :meth:`thestill.core.transcript_cleaner.TranscriptCleaner._apply_speaker_mapping`
-    did as Stage 2a, but operates on the structured ``speaker`` field of
-    each :class:`AnnotatedSegment` rather than doing a regex over
-    Markdown text.
+    Operates on the structured ``speaker`` field of each
+    :class:`AnnotatedSegment`.
 
     - An empty or ``None`` ``mapping`` passes through unchanged.
     - Entries with an empty name in the mapping are skipped (ids left
