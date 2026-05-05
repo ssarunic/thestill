@@ -32,11 +32,6 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-# Declared here (rather than imported from the processor) to keep
-# ``PathManager`` free of upward dependencies on ``core``. The processor
-# validates its own env-flag input against the same names.
-CleanupPipelineName = Literal["segmented", "legacy"]
-
 # Spec #28 — only the three entity types that get rendered pages on
 # disk (per the corpus layout in Strategy §1). ``product`` exists in the
 # entity database but does not produce a Markdown page in v1.
@@ -360,47 +355,6 @@ class PathManager:
         if base.endswith(".md"):
             base = base[:-3]
         return self._assert_inside_root(self.clean_transcripts_dir() / podcast_slug / f"{base}.json")
-
-    def clean_transcript_shadow_file(
-        self,
-        podcast_slug: str,
-        episode_filename: str,
-        pipeline: CleanupPipelineName,
-    ) -> Path:
-        """Full path to a shadow cleanup debug artefact.
-
-        When the cleanup processor runs one pipeline as the primary and
-        the other as a shadow (spec #18 §"Dual output during debugging"),
-        the shadow's blended Markdown lives here. The filename carries
-        the shadow pipeline's name so either variant is self-describing:
-
-        - ``.../debug/{base}.shadow_legacy.md`` when the segmented path
-          is primary and the legacy cleaner shadowed.
-        - ``.../debug/{base}.shadow_segmented.md`` when the legacy path
-          is primary and the segmented cleaner shadowed.
-
-        Args:
-            podcast_slug: Slugified podcast title.
-            episode_filename: The cleaned-transcript Markdown filename.
-            pipeline: Either ``"legacy"`` or ``"segmented"`` — identifies
-                which pipeline produced this shadow artefact.
-
-        Returns:
-            Full path to the shadow debug file.
-
-        Raises:
-            ValueError: When ``pipeline`` is neither ``"legacy"`` nor
-                ``"segmented"``.
-        """
-        if pipeline not in ("legacy", "segmented"):
-            raise ValueError(f"pipeline must be 'legacy' or 'segmented', got {pipeline!r}")
-        _validate_slug(podcast_slug, name="podcast_slug")
-        base = episode_filename
-        if base.endswith(".md"):
-            base = base[:-3]
-        return self._assert_inside_root(
-            self.clean_transcripts_dir() / podcast_slug / "debug" / f"{base}.shadow_{pipeline}.md"
-        )
 
     def summary_file(self, filename: str) -> Path:
         """

@@ -28,16 +28,12 @@ from ..models.annotated_transcript import AnnotatedTranscript
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
-from ..utils.path_manager import CleanupPipelineName, PathManager
+from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]
-
-# Both pipeline names the shadow probe walks (spec #18 Phase D). Tuple
-# typed with the Literal so mypy can flag typos at call sites.
-_SHADOW_PIPELINES: tuple[CleanupPipelineName, ...] = ("legacy", "segmented")
 
 
 def extract_summary_preview(summary_path: Path, max_length: int = 200) -> Optional[str]:
@@ -107,19 +103,6 @@ class SegmentedTranscriptResult(NamedTuple):
     """
 
     annotated: AnnotatedTranscript
-
-
-class ShadowTranscriptResult(NamedTuple):
-    """Shadow pipeline's blended-Markdown output for the side-by-side view.
-
-    Returned when a shadow debug file exists on disk for this episode
-    (produced when the cleanup processor ran with
-    ``THESTILL_LEGACY_CLEANUP_SHADOW=1``). ``pipeline`` names which
-    pipeline shadowed.
-    """
-
-    pipeline: CleanupPipelineName
-    content: str
 
 
 class PodcastWithIndex(BaseModel):
@@ -673,46 +656,6 @@ class PodcastService:
 
         annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
         return SegmentedTranscriptResult(annotated=annotated)
-
-    def get_shadow_transcript(
-        self, podcast_id: Union[str, int], episode_id: Union[str, int]
-    ) -> Optional[ShadowTranscriptResult]:
-        """Load the shadow-pipeline debug file for an episode, if present.
-
-        Convenience wrapper; see :meth:`get_shadow_transcript_for_episode`.
-        """
-        episode = self.get_episode(podcast_id, episode_id)
-        if episode is None:
-            return None
-        return self.get_shadow_transcript_for_episode(episode)
-
-    def get_shadow_transcript_for_episode(self, episode: Episode) -> Optional[ShadowTranscriptResult]:
-        """Load the shadow-pipeline debug file for an already-resolved episode.
-
-        The cleanup processor writes the shadow's blended Markdown to a
-        file named ``{stem}.shadow_{pipeline}.md`` inside a ``debug/``
-        subdirectory next to the primary cleaned MD. We probe for both
-        ``shadow_legacy.md`` and ``shadow_segmented.md`` and return the
-        first one that exists. Returns ``None`` when no shadow ran or
-        the file has been cleaned up.
-        """
-        if not episode.clean_transcript_path:
-            return None
-
-        clean_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
-        debug_dir = clean_path.parent / "debug"
-        for pipeline in _SHADOW_PIPELINES:
-            candidate = debug_dir / f"{clean_path.stem}.shadow_{pipeline}.md"
-            if candidate.exists():
-                try:
-                    return ShadowTranscriptResult(
-                        pipeline=pipeline,
-                        content=candidate.read_text(encoding="utf-8"),
-                    )
-                except Exception as error:  # pylint: disable=broad-except
-                    logger.error(f"Error reading shadow transcript: {error}")
-                    return None
-        return None
 
     def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
