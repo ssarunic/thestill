@@ -115,7 +115,7 @@ entities = [
     # 4.40 made ``add_special_tokens`` a method on ``RobertaTokenizer``
     # which collides with the same kwarg ReFinED's config passes in.
     # Loosen this once amazon-science fixes the upstream issue.
-    "transformers>=4.30,<4.40",
+    "transformers>=4.30,<5.8",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
