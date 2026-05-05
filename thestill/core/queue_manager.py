@@ -134,6 +134,37 @@ def get_next_stages(current_stage: TaskStage) -> List[TaskStage]:
     return list(STAGE_SUCCESSORS.get(current_stage, []))
 
 
+# Per-branch stage ordering, used by ``supersede_stale_tasks`` to decide
+# which DLQ rows for an episode have been made obsolete by a later stage
+# succeeding. The user chain and the entity branch are separate failure
+# domains (see ``_NON_USER_FAILING_STAGES``); a successful ``summarize``
+# does not supersede a dead ``extract-entities`` and vice versa.
+_USER_CHAIN_ORDER: List[TaskStage] = [
+    TaskStage.DOWNLOAD,
+    TaskStage.DOWNSAMPLE,
+    TaskStage.TRANSCRIBE,
+    TaskStage.CLEAN,
+    TaskStage.SUMMARIZE,
+]
+_ENTITY_BRANCH_ORDER: List[TaskStage] = [
+    TaskStage.EXTRACT_ENTITIES,
+    TaskStage.RESOLVE_ENTITIES,
+    TaskStage.REINDEX,
+]
+
+
+def _stages_at_or_before(stage: TaskStage) -> List[TaskStage]:
+    """Stages in the same branch up to and including ``stage``.
+
+    Used to find DLQ rows that a successful ``stage`` makes moot.
+    """
+    for branch in (_USER_CHAIN_ORDER, _ENTITY_BRANCH_ORDER):
+        if stage in branch:
+            idx = branch.index(stage)
+            return branch[: idx + 1]
+    return [stage]
+
+
 class TaskStatus(str, Enum):
     """Status of a queued task."""
 
@@ -143,6 +174,12 @@ class TaskStatus(str, Enum):
     RETRY_SCHEDULED = "retry_scheduled"  # Waiting for backoff timer
     FAILED = "failed"  # Exhausted retries (transient errors)
     DEAD = "dead"  # Fatal error, in Dead Letter Queue
+    # Terminal: a previously dead/failed row whose stage has since been
+    # made moot by the same episode reaching a later stage through a
+    # different run (e.g. user fixed the API key and re-triggered the
+    # pipeline). The DLQ default view hides these so stale rows don't
+    # train users to ignore the queue. See ``supersede_stale_tasks``.
+    SUPERSEDED = "superseded"
 
 
 class ErrorType(str, Enum):
@@ -655,6 +692,48 @@ class QueueManager:
 
         logger.info(f"Task completed: {task_id}")
 
+    def supersede_stale_tasks(self, episode_id: str, completed_stage: TaskStage) -> int:
+        """Auto-resolve dead/failed DLQ rows that ``completed_stage`` makes moot.
+
+        When the same episode reaches a later stage through a fresh run
+        (e.g. the user fixed a bad API key, re-triggered transcription,
+        and the pipeline made it to ``summarize``), the older
+        ``transcribe`` DLQ row is obsolete: a Retry on it would race the
+        current state, and stale rows train users to ignore the queue.
+
+        The user chain (``download``..``summarize``) and the entity
+        branch (``extract-entities``..``reindex``) are independent failure
+        domains, so this function only marks DLQ rows for stages in the
+        same branch at or before ``completed_stage``.
+
+        Returns the number of rows marked ``superseded``.
+        """
+        in_branch = _stages_at_or_before(completed_stage)
+        if not in_branch:
+            return 0
+        now = datetime.utcnow().isoformat()
+        placeholders = ",".join("?" * len(in_branch))
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE tasks
+                SET status = 'superseded', updated_at = ?, completed_at = ?
+                WHERE episode_id = ?
+                  AND stage IN ({placeholders})
+                  AND status IN ('dead', 'failed')
+                """,
+                [now, now, episode_id, *(s.value for s in in_branch)],
+            )
+            count = cursor.rowcount or 0
+        if count:
+            logger.info(
+                "dlq_tasks_superseded",
+                episode_id=episode_id,
+                completed_stage=completed_stage.value,
+                count=count,
+            )
+        return count
+
     def fail_task(self, task_id: str, error_message: str) -> None:
         """
         Mark a task as failed.
@@ -779,7 +858,7 @@ class QueueManager:
 
     def cleanup_old_tasks(self, days: int = 7) -> int:
         """
-        Delete completed/failed/dead tasks older than specified days.
+        Delete completed/failed/dead/superseded tasks older than specified days.
 
         Args:
             days: Delete tasks older than this many days
@@ -791,7 +870,7 @@ class QueueManager:
             cursor = conn.execute(
                 """
                 DELETE FROM tasks
-                WHERE status IN ('completed', 'failed', 'dead')
+                WHERE status IN ('completed', 'failed', 'dead', 'superseded')
                 AND completed_at < datetime('now', '-' || ? || ' days')
             """,
                 (days,),
