@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -41,6 +42,7 @@ from structlog import get_logger
 from ..models.entities import MatchType
 from ..utils.sqlite_ext import load_vec_extension
 from .base import ResolvedHit, SearchFilters, SearchMode
+from .query_translator import translate_lexical_query
 
 if False:  # TYPE_CHECKING
     from ..core.embedding_model import EmbeddingModel
@@ -101,17 +103,34 @@ class SqliteVecBackend:
         limit: int,
         filters: Optional[SearchFilters],
     ) -> List[ResolvedHit]:
-        """Run a search and return ranked hits."""
+        """Run a search and return ranked hits.
+
+        The query is run through ``translate_lexical_query`` so that
+        spec #28 §O2 operators (``-term``, ``speaker:foo``, ``AND``,
+        ``OR``, quoted phrases) are honoured without raising FTS5
+        ``OperationalError``.
+        """
+        translated = translate_lexical_query(query)
+        effective_filters = filters or SearchFilters()
+        if translated.speaker:
+            effective_filters = replace(effective_filters, speaker=translated.speaker)
         if mode == SearchMode.LEXICAL:
-            rows = self._lexical(query, limit=limit, filters=filters)
+            if not translated.fts_match:
+                return []
+            rows = self._lexical(translated.fts_match, limit=limit, filters=effective_filters)
             return [self._row_to_hit(r, MatchType.LEXICAL) for r in rows]
         if mode == SearchMode.SEMANTIC:
-            query_embedding = self.embedding_model.encode_one(query)
-            rows = self._semantic(query_embedding, limit=limit, filters=filters)
+            query_embedding = self.embedding_model.encode_one(translated.embedding_text)
+            rows = self._semantic(query_embedding, limit=limit, filters=effective_filters)
             return [self._row_to_hit(r, MatchType.SEMANTIC) for r in rows][:limit]
         if mode == SearchMode.HYBRID:
-            query_embedding = self.embedding_model.encode_one(query)
-            return self._hybrid(query, query_embedding, limit=limit, filters=filters)
+            query_embedding = self.embedding_model.encode_one(translated.embedding_text)
+            return self._hybrid(
+                translated.fts_match,
+                query_embedding,
+                limit=limit,
+                filters=effective_filters,
+            )
         raise ValueError(f"unknown SearchMode: {mode!r}")
 
     # ------------------------------------------------------------------
@@ -151,6 +170,13 @@ class SqliteVecBackend:
                 "EXISTS (SELECT 1 FROM entity_mentions em " "WHERE em.episode_id = c.episode_id AND em.entity_id = ?)"
             )
             params.append(entity_id)
+        if filters.speaker:
+            # Diarisation labels vary per podcast — a substring match
+            # is the right shape (matches "Friedberg", "David Friedberg",
+            # "DAVID FRIEDBERG"). Indexed scan is fine; chunks per
+            # episode is small.
+            parts.append("LOWER(c.speaker) LIKE ?")
+            params.append(f"%{filters.speaker.lower()}%")
         if not parts:
             return "", []
         return " AND " + " AND ".join(parts), params
@@ -226,7 +252,9 @@ class SqliteVecBackend:
         limit: int,
         filters: Optional[SearchFilters],
     ) -> List[ResolvedHit]:
-        lex_rows = self._lexical(query, limit=_HYBRID_FETCH, filters=filters)
+        # Operator-only or speaker-only inputs leave the FTS expression
+        # empty — semantic still has the cleaned text to work with.
+        lex_rows = self._lexical(query, limit=_HYBRID_FETCH, filters=filters) if query else []
         sem_rows = self._semantic(query_embedding, limit=_HYBRID_FETCH, filters=filters)
 
         scores: dict[int, float] = {}

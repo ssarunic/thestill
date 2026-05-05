@@ -84,6 +84,12 @@ class SearchFilters:
     date_from: Optional[str] = None
     date_to: Optional[str] = None
     has_entity: Tuple[str, ...] = field(default_factory=tuple)
+    # Spec #28 §O2 — case-insensitive substring filter on
+    # ``chunks.speaker`` (diarised label). Populated by the query
+    # translator when the input contains ``speaker:foo``; not exposed
+    # on the wire as its own param because the typing UX always goes
+    # via the operator syntax.
+    speaker: Optional[str] = None
 
 
 @dataclass(frozen=True)
