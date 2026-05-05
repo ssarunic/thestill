@@ -545,7 +545,9 @@ export async function quickSearch(
   params.set('q', q)
   if (opts.limit_per_group !== undefined) params.set('limit_per_group', String(opts.limit_per_group))
   if (opts.podcast_id) params.set('podcast_id', opts.podcast_id)
+  if (opts.podcast_slug) params.set('podcast_slug', opts.podcast_slug)
   if (opts.date_from) params.set('date_from', opts.date_from)
+  if (opts.date_to) params.set('date_to', opts.date_to)
   if (opts.has_entity) {
     for (const id of opts.has_entity) params.append('has_entity', id)
   }

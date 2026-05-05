@@ -136,25 +136,33 @@ export default function TopPodcasts() {
                     Apple
                   </a>
                 )}
-                <button
-                  onClick={() => handleAdd(podcast)}
-                  disabled={status === 'pending' || status === 'done'}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium ${
-                    status === 'done'
-                      ? 'bg-green-100 text-green-800 cursor-default'
-                      : status === 'error'
-                        ? 'bg-red-100 text-red-800 hover:bg-red-200'
-                        : 'bg-primary-900 text-white hover:bg-primary-800 disabled:opacity-50'
-                  }`}
-                >
-                  {status === 'pending'
-                    ? 'Adding…'
-                    : status === 'done'
-                      ? 'Queued'
-                      : status === 'error'
-                        ? 'Retry'
-                        : 'Add'}
-                </button>
+                {(() => {
+                  const isFollowed = podcast.is_following || status === 'done'
+                  const effectiveStatus: 'idle' | 'pending' | 'done' | 'error' = isFollowed
+                    ? 'done'
+                    : status
+                  return (
+                    <button
+                      onClick={() => handleAdd(podcast)}
+                      disabled={effectiveStatus === 'pending' || effectiveStatus === 'done'}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium ${
+                        effectiveStatus === 'done'
+                          ? 'bg-green-100 text-green-800 cursor-default'
+                          : effectiveStatus === 'error'
+                            ? 'bg-red-100 text-red-800 hover:bg-red-200'
+                            : 'bg-primary-900 text-white hover:bg-primary-800 disabled:opacity-50'
+                      }`}
+                    >
+                      {effectiveStatus === 'pending'
+                        ? 'Following…'
+                        : effectiveStatus === 'done'
+                          ? 'Following ✓'
+                          : effectiveStatus === 'error'
+                            ? 'Retry'
+                            : 'Follow'}
+                    </button>
+                  )
+                })()}
               </div>
             </li>
           )

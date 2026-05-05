@@ -316,3 +316,131 @@ class TestRebuildEntitiesCommand:
                 (eid,),
             ).fetchone()[0]
         assert n == 1
+
+
+# ---------------------------------------------------------------------------
+# DLQ auto-supersedence: stale dead/failed rows disappear when the same
+# episode reaches a later stage in the same branch through a fresh run.
+# ---------------------------------------------------------------------------
+
+
+class TestSupersedeStaleTasks:
+    """``QueueManager.supersede_stale_tasks`` auto-resolves stale DLQ rows.
+
+    Failure scenario this exists to fix: user has a dead ``transcribe``
+    row because their ElevenLabs key was wrong, fixes the key, re-runs
+    the pipeline, the episode reaches ``summarize``. The original dead
+    transcribe row is now obsolete — Retry on it would race the current
+    state — so it should drop out of the DLQ.
+    """
+
+    def _seed_episode(self, db_path: str) -> str:
+        podcast_id = str(uuid.uuid4())
+        eid = str(uuid.uuid4())
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (?, ?, ?, ?)",
+                (podcast_id, "https://example.com/x.xml", "Pod", "pod"),
+            )
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url) " "VALUES (?, ?, ?, ?, ?)",
+                (eid, podcast_id, "ext-1", "Ep", "https://example.com/e.mp3"),
+            )
+            conn.commit()
+        return eid
+
+    def test_supersedes_earlier_user_chain_stages(self, tmp_path):
+        """A successful ``summarize`` supersedes dead rows for any stage
+        in ``download..summarize`` for the same episode."""
+        db_path = str(tmp_path / "x.db")
+        SqlitePodcastRepository(db_path=db_path)
+        eid = self._seed_episode(db_path)
+        qm = QueueManager(db_path)
+
+        dead_transcribe = qm.add_task(episode_id=eid, stage=TaskStage.TRANSCRIBE)
+        qm.mark_dead(dead_transcribe.id, "elevenlabs key bad")
+        dead_clean = qm.add_task(episode_id=eid, stage=TaskStage.CLEAN)
+        qm.mark_dead(dead_clean.id, "openai 500")
+
+        count = qm.supersede_stale_tasks(eid, TaskStage.SUMMARIZE)
+        assert count == 2
+
+        # Both rows are out of the DLQ view.
+        assert qm.get_dead_tasks(limit=100) == []
+
+        # Status persisted as ``superseded``.
+        assert qm.get_task(dead_transcribe.id).status.value == "superseded"
+        assert qm.get_task(dead_clean.id).status.value == "superseded"
+
+    def test_does_not_cross_branches(self, tmp_path):
+        """A successful ``summarize`` (user chain) must NOT supersede a
+        dead ``extract-entities`` (entity branch). The two are
+        independent failure domains by design."""
+        db_path = str(tmp_path / "x.db")
+        SqlitePodcastRepository(db_path=db_path)
+        eid = self._seed_episode(db_path)
+        qm = QueueManager(db_path)
+
+        dead_extract = qm.add_task(episode_id=eid, stage=TaskStage.EXTRACT_ENTITIES)
+        qm.mark_dead(dead_extract.id, "gliner crashed")
+
+        count = qm.supersede_stale_tasks(eid, TaskStage.SUMMARIZE)
+        assert count == 0
+
+        survivors = {t.id for t in qm.get_dead_tasks(limit=100)}
+        assert dead_extract.id in survivors
+
+    def test_only_acts_on_terminal_failures(self, tmp_path):
+        """Pending and processing rows for the same stage are untouched
+        — supersedence only applies to dead/failed terminal states."""
+        db_path = str(tmp_path / "x.db")
+        SqlitePodcastRepository(db_path=db_path)
+        eid = self._seed_episode(db_path)
+        qm = QueueManager(db_path)
+
+        pending = qm.add_task(episode_id=eid, stage=TaskStage.TRANSCRIBE)
+
+        count = qm.supersede_stale_tasks(eid, TaskStage.SUMMARIZE)
+        assert count == 0
+        assert qm.get_task(pending.id).status.value == "pending"
+
+    def test_supersedes_within_entity_branch(self, tmp_path):
+        """A successful ``reindex`` supersedes earlier entity-branch
+        DLQ rows for the same episode."""
+        db_path = str(tmp_path / "x.db")
+        SqlitePodcastRepository(db_path=db_path)
+        eid = self._seed_episode(db_path)
+        qm = QueueManager(db_path)
+
+        dead_extract = qm.add_task(episode_id=eid, stage=TaskStage.EXTRACT_ENTITIES)
+        qm.mark_dead(dead_extract.id, "gliner crashed")
+
+        count = qm.supersede_stale_tasks(eid, TaskStage.REINDEX)
+        assert count == 1
+        assert qm.get_task(dead_extract.id).status.value == "superseded"
+
+    def test_does_not_touch_other_episodes(self, tmp_path):
+        """Supersedence is scoped to a single episode_id."""
+        db_path = str(tmp_path / "x.db")
+        SqlitePodcastRepository(db_path=db_path)
+        eid_a = self._seed_episode(db_path)
+
+        # Second episode under the same podcast row.
+        eid_b = str(uuid.uuid4())
+        with sqlite3.connect(db_path) as conn:
+            podcast_id = conn.execute("SELECT id FROM podcasts LIMIT 1").fetchone()[0]
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url) " "VALUES (?, ?, ?, ?, ?)",
+                (eid_b, podcast_id, "ext-2", "Ep2", "https://example.com/e2.mp3"),
+            )
+            conn.commit()
+
+        qm = QueueManager(db_path)
+        dead_a = qm.add_task(episode_id=eid_a, stage=TaskStage.TRANSCRIBE)
+        qm.mark_dead(dead_a.id, "x")
+        dead_b = qm.add_task(episode_id=eid_b, stage=TaskStage.TRANSCRIBE)
+        qm.mark_dead(dead_b.id, "y")
+
+        qm.supersede_stale_tasks(eid_a, TaskStage.SUMMARIZE)
+        assert qm.get_task(dead_a.id).status.value == "superseded"
+        assert qm.get_task(dead_b.id).status.value == "dead"

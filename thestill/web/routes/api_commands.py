@@ -1472,6 +1472,15 @@ async def list_dlq_tasks(
     on transient errors. They need manual intervention — either retry
     after fixing the issue, or skip.
 
+    Auto-supersedence: when an episode reaches a later stage in the
+    same branch through a fresh run, older dead/failed rows for that
+    episode at the same stage or earlier get marked ``superseded`` by
+    ``QueueManager.supersede_stale_tasks`` and disappear from this
+    list. Retry on a stale row would race the current state, so we
+    hide them rather than keep showing buttons that no longer make
+    sense. The user and entity branches are independent: a successful
+    ``summarize`` does not supersede a dead ``extract-entities``.
+
     Args:
         limit: Maximum number of tasks to return (default 100)
         branch: Filter by pipeline branch. ``all`` (default) returns

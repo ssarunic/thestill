@@ -3448,6 +3448,86 @@ def quotes_by(ctx, speaker, topic, podcast_id, since, limit, json_output):
     _print_citation_rows(rows, json_output=json_output, header=header + ":")
 
 
+@main.command("search")
+@click.argument("query")
+@click.option(
+    "--mode",
+    type=click.Choice(["lexical", "semantic", "hybrid"]),
+    default="hybrid",
+    show_default=True,
+    help="Backend strategy. Hybrid is the LLM-friendly default.",
+)
+@click.option("--limit", "-l", default=10, type=int, help="Max rows.")
+@click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
+@click.option("--since", help="Time window like 30d, 6m, 24h. Sets date_from.")
+@click.option(
+    "--has-entity",
+    "has_entity",
+    multiple=True,
+    help="Entity id (e.g. person:elon-musk) that must appear in the episode. Repeatable.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit one JSON row per line.")
+@click.pass_context
+@require_config
+@log_command
+def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
+    """Lexical, semantic, or hybrid search over the corpus.
+
+    Mirrors the MCP ``search_corpus`` tool and ``GET /api/search/corpus``.
+    QUERY supports the same operator syntax as the MCP tool — quoted
+    phrases, ``-term`` exclusion, ``speaker:foo`` for diarised filters.
+    """
+    from .models.entities import CitationRow, MatchType
+    from .search.base import SearchFilters, SearchMode
+
+    backend = ctx.obj.search_backend
+    if backend is None:
+        click.echo("❌ Search backend not initialised (install thestill[entities]?)", err=True)
+        ctx.exit(1)
+
+    # Slug → UUID convenience: ``thestill search --podcast-id my-show``
+    # is friendlier than copy-pasting the UUID. Accept either by trying
+    # slug-lookup first and falling back to the raw value.
+    resolved_podcast_id = podcast_id
+    if podcast_id:
+        podcast = ctx.obj.repository.get_by_slug(podcast_id)
+        if podcast is not None:
+            resolved_podcast_id = podcast.id
+
+    date_from = None
+    if since:
+        days = parse_time_window(since)
+        date_from = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    filters = SearchFilters(
+        podcast_id=resolved_podcast_id,
+        date_from=date_from,
+        date_to=None,
+        has_entity=tuple(has_entity or ()),
+    )
+    hits = backend.search(query, mode=SearchMode(mode), limit=limit, filters=filters)
+    rows = [
+        CitationRow(
+            episode_id=h.episode_id,
+            podcast_id=h.podcast_id,
+            podcast_title=h.podcast_title,
+            episode_title=h.episode_title,
+            published_at=h.published_at,
+            start_ms=h.start_ms,
+            end_ms=h.end_ms,
+            speaker=h.speaker,
+            quote=h.text[:600],
+            score=h.score,
+            match_type=h.match_type,
+            deeplink=f"thestill://episode/{h.episode_id}?t={h.start_ms // 1000}",
+            web_url=f"/episodes/{h.episode_id}?t={h.start_ms // 1000}",
+        )
+        for h in hits
+    ]
+    header = f"{len(rows)} hit(s) for {query!r} (mode={mode}):"
+    _print_citation_rows(rows, json_output=json_output, header=header)
+
+
 @main.group("entity")
 def entity_group():
     """Inspect or manually adjust the entities table."""

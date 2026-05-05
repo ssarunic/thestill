@@ -425,10 +425,13 @@ class SqliteEntityRepository:
 
         Filters resolved mentions to those whose ``speaker`` field
         matches (case-insensitive substring — diarisation labels vary
-        slightly across episodes). ``topic_entity_id`` adds an
-        intersect: episodes where the speaker spoke AND the topic was
-        mentioned somewhere in the same episode (not necessarily by
-        the same speaker).
+        slightly across episodes). ``topic_entity_id`` constrains the
+        intersect to the same diarisation segment, not just episode
+        membership: a Galloway quote in a segment that doesn't mention
+        SpaceX is filtered out even if the episode covers SpaceX in a
+        different segment. This is the contract behind "what has X
+        said about Y" — the topic must surface in the same speech
+        window as the speaker's words.
         """
         sql = """
             SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
@@ -445,9 +448,12 @@ class SqliteEntityRepository:
         params: list = [f"%{speaker}%"]
         if topic_entity_id is not None:
             sql += """
-                AND m.episode_id IN (
-                    SELECT episode_id FROM entity_mentions
-                    WHERE entity_id = ? AND resolution_status = 'resolved'
+                AND EXISTS (
+                    SELECT 1 FROM entity_mentions m2
+                    WHERE m2.episode_id = m.episode_id
+                      AND m2.segment_id = m.segment_id
+                      AND m2.entity_id = ?
+                      AND m2.resolution_status = 'resolved'
                 )
             """
             params.append(topic_entity_id)

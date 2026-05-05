@@ -348,6 +348,13 @@ class TaskWorker:
                 self.queue_manager.complete_task(task.id)
                 logger.info("task_completed_successfully")
 
+                # Auto-resolve any stale DLQ rows for this episode at the
+                # same stage or earlier in the same branch. After a user
+                # fixes (e.g.) a bad API key and reruns transcription,
+                # the old dead transcribe row is obsolete — keeping it
+                # around just trains users to ignore the queue.
+                self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
+
                 # Chain enqueue next stage if running full pipeline
                 self._maybe_enqueue_next_stage(task)
 

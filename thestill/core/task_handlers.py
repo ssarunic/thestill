@@ -770,63 +770,65 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
     repo = state.entity_repository
 
     pending = repo.list_pending_mentions(episode_id=episode.id)
-    if not pending:
-        logger.info(
-            "entity_resolution_no_pending",
-            episode_id=episode.id,
-            podcast_slug=podcast.slug,
-        )
-        return
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
-        resolver = _get_or_create_entity_resolver(state)
+        results: list = []
+        coref_decisions: list = []
+        forced_results: list = []
 
-        # Spec §1.13.7 — overrides apply BEFORE we even hand the
-        # mention to ReFinED. Pre-route mentions matching a stored
-        # override into their forced bucket; only un-overridden rows
-        # go through model resolution. This is the "human corrections
-        # survive reindex" invariant.
-        forced_results, remaining = _apply_overrides(repo, pending)
+        if pending:
+            resolver = _get_or_create_entity_resolver(state)
 
-        # The resolver consults the blacklist for every QID candidate
-        # before accepting it (see ``EntityResolver.resolve``).
-        resolver_results = resolver.resolve(remaining, is_blacklisted=repo.is_blacklisted)
+            # Spec §1.13.7 — overrides apply BEFORE we even hand the
+            # mention to ReFinED. Pre-route mentions matching a stored
+            # override into their forced bucket; only un-overridden rows
+            # go through model resolution. This is the "human corrections
+            # survive reindex" invariant.
+            forced_results, remaining = _apply_overrides(repo, pending)
 
-        results = forced_results + resolver_results
+            # The resolver consults the blacklist for every QID candidate
+            # before accepting it (see ``EntityResolver.resolve``).
+            resolver_results = resolver.resolve(remaining, is_blacklisted=repo.is_blacklisted)
 
-        touched_entity_ids: set[str] = set()
-        for r in results:
-            repo.upsert_entity(r.entity)
-            entity_id_for_mention = r.entity.id if r.status == "resolved" else None
-            repo.resolve_mention(
-                mention_id=r.mention_id,
-                entity_id=entity_id_for_mention,
-                status=r.status,
-                method=r.method.value,
-            )
-            touched_entity_ids.add(r.entity.id)
+            results = forced_results + resolver_results
 
-        # Spec §1.13.5 — within-episode coref pass. Walks unresolved
-        # person mentions, looks for a single resolved long-form
-        # anchor whose canonical name contains the surface as a
-        # token, and either repoints (RESOLVED) or marks AMBIGUOUS.
-        from .entity_coref import resolve_coreferences_for_episode
+            touched_entity_ids: set[str] = set()
+            for r in results:
+                repo.upsert_entity(r.entity)
+                entity_id_for_mention = r.entity.id if r.status == "resolved" else None
+                repo.resolve_mention(
+                    mention_id=r.mention_id,
+                    entity_id=entity_id_for_mention,
+                    status=r.status,
+                    method=r.method.value,
+                )
+                touched_entity_ids.add(r.entity.id)
 
-        coref_decisions = resolve_coreferences_for_episode(repo, episode.id)
+            # Spec §1.13.5 — within-episode coref pass. Walks unresolved
+            # person mentions, looks for a single resolved long-form
+            # anchor whose canonical name contains the surface as a
+            # token, and either repoints (RESOLVED) or marks AMBIGUOUS.
+            from .entity_coref import resolve_coreferences_for_episode
 
-        # Spec §1.6 — inline scoped alias-merge for the entities just
-        # touched. Cheap (only checks duplicates whose QID matches one
-        # of the entities resolved in this episode); the full-corpus
-        # sweep runs via ``thestill merge-aliases``.
-        merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
-        if merged:
-            logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
+            coref_decisions = resolve_coreferences_for_episode(repo, episode.id)
+
+            # Spec §1.6 — inline scoped alias-merge for the entities just
+            # touched. Cheap (only checks duplicates whose QID matches one
+            # of the entities resolved in this episode); the full-corpus
+            # sweep runs via ``thestill merge-aliases``.
+            merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
+            if merged:
+                logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
 
         # Spec §1.7 — refresh cooccurrences for any pair touching this
         # episode's entities. Per spec, the table holds corpus-wide
         # episode_count per pair, so the rebuild has to recompute
         # full counts (it does that internally — see
-        # ``rebuild_cooccurrences`` docstring).
+        # ``rebuild_cooccurrences`` docstring). Runs even when no rows
+        # were pending: anchor-only episodes (everything pre-resolved
+        # by the extractor) still need their pairs in the graph, and
+        # ``rebuild_cooccurrences`` returns 0 cheaply when the episode
+        # has no resolved mentions.
         repo.rebuild_cooccurrences(episode_ids=[episode.id])
 
         logger.info(

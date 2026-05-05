@@ -151,13 +151,19 @@ class TestHappyPath:
 
 
 class TestNoPending:
-    def test_episode_with_zero_pending_mentions_is_noop(self):
+    def test_episode_with_zero_pending_skips_resolver_but_rebuilds_cooccurrences(self):
+        # Spec #28 §1.7 — the extractor can insert already-resolved
+        # anchor + speaker mentions, leaving zero pending rows. The
+        # cooccurrence graph still needs the pairs from those resolved
+        # rows. ``rebuild_cooccurrences`` is cheap when the episode has
+        # no resolved mentions (returns 0 after one indexed SELECT) so
+        # always running it is the right default.
         state = _build_state([])
         handle_resolve_entities(_make_task(), state)
 
         state.entity_repository.upsert_entity.assert_not_called()
         state.entity_repository.resolve_mention.assert_not_called()
-        state.entity_repository.rebuild_cooccurrences.assert_not_called()
+        state.entity_repository.rebuild_cooccurrences.assert_called_once_with(episode_ids=["ep-uuid"])
 
 
 class TestInlineAliasMerge:

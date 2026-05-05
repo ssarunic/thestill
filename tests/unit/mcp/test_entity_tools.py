@@ -161,10 +161,13 @@ class TestListQuotesByTool:
 
     def test_topic_filter(self, populated_db):
         repo, _, _, _ = populated_db
-        # Galloway said something on the episode that mentions SpaceX,
-        # so the topic filter intersects to ep1's two mentions.
+        # Spec contract: "Galloway said about SpaceX" requires SpaceX to
+        # surface in the SAME diarised segment as Galloway's words. The
+        # ep1 fixture has Musk in segment 1 and SpaceX in segment 2 — the
+        # Musk mention is filtered out, only the SpaceX mention qualifies.
         result = _payload(dispatch_entity_tool("list_quotes_by", {"speaker": "Galloway", "topic": "SpaceX"}, repo))
-        assert len(result["results"]) == 2
+        assert len(result["results"]) == 1
+        assert result["results"][0]["quote"].startswith("… SpaceX")
 
     def test_missing_speaker_errors(self, populated_db):
         repo, _, _, _ = populated_db

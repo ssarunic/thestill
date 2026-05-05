@@ -796,6 +796,12 @@ export type SearchMode = 'lexical' | 'semantic' | 'hybrid'
 export interface SearchResult {
   episode_id: string
   podcast_id: string
+  // Slugs are populated by the API layer (api_search.py); they may be
+  // null for legacy episode rows that pre-date the slug migration. The
+  // wire-format `web_url`/`deeplink` carry the legacy `/episodes/<id>`
+  // shape for MCP/desktop callers — the web client uses slugs instead.
+  podcast_slug: string | null
+  episode_slug: string | null
   podcast_title: string
   episode_title: string
   published_at: string | null
@@ -885,7 +891,9 @@ export interface QuickSearchResponse {
 export interface QuickSearchOptions {
   limit_per_group?: number
   podcast_id?: string
+  podcast_slug?: string
   date_from?: string
+  date_to?: string
   has_entity?: string[]
 }
 
