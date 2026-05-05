@@ -33,6 +33,8 @@ router = APIRouter()
 class SearchResult(BaseModel):
     episode_id: str
     podcast_id: str
+    podcast_slug: Optional[str] = None
+    episode_slug: Optional[str] = None
     podcast_title: str
     episode_title: str
     published_at: Optional[str] = None
@@ -129,12 +131,43 @@ def search_corpus(
         date_to=date_to,
         has_entity=tuple(has_entity or ()),
     )
-    hits = backend.search(q, mode=SearchMode(mode), limit=limit, filters=filters)
+    requested_mode = SearchMode(mode)
+    effective_mode = requested_mode
+    try:
+        hits = backend.search(q, mode=requested_mode, limit=limit, filters=filters)
+    except ModuleNotFoundError as exc:
+        # ``sentence-transformers`` is an optional dep — semantic and
+        # hybrid both require it. Fall back to lexical so the page
+        # returns BM25 results instead of going offline; log so the
+        # operator knows recall is degraded.
+        if requested_mode == SearchMode.LEXICAL or "sentence_transformers" not in str(exc):
+            raise
+        logger.warning(
+            "search_corpus_embedding_unavailable_fallback_lexical",
+            requested_mode=requested_mode.value,
+            error=str(exc),
+        )
+        effective_mode = SearchMode.LEXICAL
+        hits = backend.search(q, mode=effective_mode, limit=limit, filters=filters)
+    # Resolve slugs so the React client can build /podcasts/<p>/episodes/<e>
+    # routes directly. The citation's web_url is /episodes/<id> — kept on
+    # the wire for MCP/desktop callers but the web doesn't have that route.
+    slug_map = _resolve_episode_slugs(
+        db_path=str(state.repository.db_path),
+        episode_ids=[h.episode_id for h in hits],
+    )
+    results: list[SearchResult] = []
+    for h in hits:
+        row = SearchResult(**h.as_citation())
+        slugs = slug_map.get(h.episode_id)
+        if slugs is not None:
+            row.podcast_slug, row.episode_slug = slugs
+        results.append(row)
     return SearchResponse(
         query=q,
-        mode=mode,
-        total=len(hits),
-        results=[SearchResult(**h.as_citation()) for h in hits],
+        mode=effective_mode.value,
+        total=len(results),
+        results=results,
     )
 
 
@@ -155,7 +188,12 @@ def search_quick(
     q: str = Query(..., min_length=1, description="Free-form search text."),
     limit_per_group: int = Query(5, ge=1, le=10),
     podcast_id: Optional[str] = Query(None),
+    podcast_slug: Optional[str] = Query(
+        None,
+        description="Podcast slug; resolved to podcast_id server-side. Wins over podcast_id if both set.",
+    ),
     date_from: Optional[str] = Query(None, description="ISO-8601 lower bound on pub_date."),
+    date_to: Optional[str] = Query(None, description="ISO-8601 upper bound on pub_date."),
     has_entity: Optional[List[str]] = Query(None),
     state: AppState = Depends(get_app_state),
 ):
@@ -173,10 +211,24 @@ def search_quick(
 
     started = time.perf_counter()
     query = q.strip()
+    # The CommandBar parses ``podcast:<slug>`` client-side and forwards
+    # the slug. Resolve to id here so the rest of the pipeline (which
+    # only knows about podcast_id) doesn't need a slug-aware code path.
+    resolved_podcast_id = podcast_id
+    if podcast_slug:
+        podcast = state.repository.get_by_slug(podcast_slug)
+        if podcast is None:
+            # An unknown slug shouldn't 500 the typeahead — just drop
+            # the filter and let the broader query stand. The client
+            # already shows the slug in its idle hint, so the user
+            # knows what they typed.
+            resolved_podcast_id = None
+        else:
+            resolved_podcast_id = podcast.id
     filters = SearchFilters(
-        podcast_id=podcast_id,
+        podcast_id=resolved_podcast_id,
         date_from=date_from,
-        date_to=None,
+        date_to=date_to,
         has_entity=tuple(has_entity or ()),
     )
 
@@ -196,8 +248,9 @@ def search_quick(
         db_path=str(state.repository.db_path),
         prefix=query,
         limit=limit_per_group,
-        podcast_id=podcast_id,
+        podcast_id=resolved_podcast_id,
         date_from=date_from,
+        date_to=date_to,
     )
 
     # 3) Entities — single repo call returns hits across all four
@@ -234,13 +287,13 @@ def search_quick(
             slugs = slug_map.get(h.episode_id)
             if slugs is None:
                 continue  # episode metadata missing — skip rather than render a broken row
-            podcast_slug, episode_slug = slugs
+            pslug, eslug = slugs
             quote_items.append(
                 QuickQuoteItem(
                     episode_id=h.episode_id,
                     podcast_id=h.podcast_id,
-                    podcast_slug=podcast_slug,
-                    episode_slug=episode_slug,
+                    podcast_slug=pslug,
+                    episode_slug=eslug,
                     podcast_title=h.podcast_title,
                     episode_title=h.episode_title,
                     speaker=h.speaker,
@@ -289,6 +342,7 @@ def _episode_typeahead(
     limit: int,
     podcast_id: Optional[str],
     date_from: Optional[str],
+    date_to: Optional[str] = None,
 ) -> List[QuickEpisodeItem]:
     """LIKE-match episode titles, joined to podcasts for slug.
 
@@ -306,6 +360,9 @@ def _episode_typeahead(
     if date_from:
         where_parts.append("e.pub_date >= ?")
         params.append(date_from)
+    if date_to:
+        where_parts.append("e.pub_date <= ?")
+        params.append(date_to)
     where_clause = " AND ".join(where_parts)
     sql = f"""
         SELECT e.id            AS episode_id,
