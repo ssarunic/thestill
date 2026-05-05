@@ -45,6 +45,20 @@ logger = get_logger(__name__)
 _MTIME_EPSILON = 1e-6
 
 
+def _normalize_artwork_url(url: Optional[str]) -> Optional[str]:
+    """Upgrade ``http://`` artwork URLs to ``https://`` before storage.
+
+    The web UI's CSP is ``img-src 'self' data: https:`` — any stored
+    ``http://`` URL is silently dropped by the browser. Every podcast/episode
+    artwork CDN we've seen serves the same path over TLS, so an unconditional
+    upgrade is safe and idempotent. Anything not ``http://`` is returned
+    unchanged.
+    """
+    if url and url.startswith("http://"):
+        return "https://" + url[len("http://") :]
+    return url
+
+
 class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     """
     SQLite-based podcast repository.
@@ -1712,7 +1726,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     podcast.title,
                     podcast.slug,
                     podcast.description,
-                    podcast.image_url,
+                    _normalize_artwork_url(podcast.image_url),
                     podcast.language,
                     primary_cat_id,
                     secondary_cat_id,
@@ -1780,12 +1794,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 last_processed_str = podcast.last_processed.isoformat() if podcast.last_processed else None
                 existing_last_processed = existing["last_processed"]
                 explicit_int = 1 if podcast.explicit is True else (0 if podcast.explicit is False else None)
+                normalized_image_url = _normalize_artwork_url(podcast.image_url)
 
                 changed = (
                     existing["title"] != podcast.title
                     or existing["slug"] != podcast.slug
                     or existing["description"] != podcast.description
-                    or existing["image_url"] != podcast.image_url
+                    or existing["image_url"] != normalized_image_url
                     or existing["language"] != podcast.language
                     or existing["primary_category_id"] != primary_cat_id
                     or existing["secondary_category_id"] != secondary_cat_id
@@ -1815,7 +1830,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                             podcast.title,
                             podcast.slug,
                             podcast.description,
-                            podcast.image_url,
+                            normalized_image_url,
                             podcast.language,
                             primary_cat_id,
                             secondary_cat_id,
@@ -1853,7 +1868,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         podcast.title,
                         podcast.slug,
                         podcast.description,
-                        podcast.image_url,
+                        _normalize_artwork_url(podcast.image_url),
                         podcast.language,
                         primary_cat_id,
                         secondary_cat_id,
@@ -1956,7 +1971,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     p.title,
                     p.slug,
                     p.description,
-                    p.image_url,
+                    _normalize_artwork_url(p.image_url),
                     p.language,
                     self._resolve_category_strings_to_id(p.primary_category, p.primary_subcategory),
                     self._resolve_category_strings_to_id(p.secondary_category, p.secondary_subcategory),
@@ -2004,7 +2019,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     ep.pub_date.isoformat() if ep.pub_date else None,
                     str(ep.audio_url),
                     ep.duration,
-                    ep.image_url,
+                    _normalize_artwork_url(ep.image_url),
                     1 if ep.explicit is True else (0 if ep.explicit is False else None),
                     ep.episode_type,
                     ep.episode_number,
@@ -2068,6 +2083,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Compare fields to see if anything changed
             pub_date_str = episode.pub_date.isoformat() if episode.pub_date else None
             explicit_int = 1 if episode.explicit is True else (0 if episode.explicit is False else None)
+            normalized_image_url = _normalize_artwork_url(episode.image_url)
 
             changed = (
                 existing["title"] != episode.title
@@ -2077,7 +2093,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 or existing["pub_date"] != pub_date_str
                 or existing["audio_url"] != str(episode.audio_url)
                 or existing["duration"] != episode.duration
-                or existing["image_url"] != episode.image_url
+                or existing["image_url"] != normalized_image_url
                 or existing["explicit"] != explicit_int
                 or existing["episode_type"] != episode.episode_type
                 or existing["episode_number"] != episode.episode_number
@@ -2118,7 +2134,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         pub_date_str,
                         str(episode.audio_url),
                         episode.duration,
-                        episode.image_url,
+                        normalized_image_url,
                         explicit_int,
                         episode.episode_type,
                         episode.episode_number,
@@ -2168,7 +2184,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode.pub_date.isoformat() if episode.pub_date else None,
                     str(episode.audio_url),
                     episode.duration,
-                    episode.image_url,
+                    _normalize_artwork_url(episode.image_url),
                     1 if episode.explicit is True else (0 if episode.explicit is False else None),
                     episode.episode_type,
                     episode.episode_number,
@@ -2889,7 +2905,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.pub_date.isoformat() if episode.pub_date else None,
                 str(episode.audio_url),
                 episode.duration,
-                episode.image_url,
+                _normalize_artwork_url(episode.image_url),
                 # THES-142: New fields
                 1 if episode.explicit is True else (0 if episode.explicit is False else None),
                 episode.episode_type,

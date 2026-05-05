@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from thestill.models.podcast import Episode, EpisodeState, Podcast
-from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository, _normalize_artwork_url
 
 
 @pytest.fixture
@@ -1388,3 +1388,89 @@ def test_get_top_podcasts_category_q_user_id_combined(temp_db):
     assert rows[0]["name"] == "Pod History"
     assert rows[0]["category"] == "History"
     assert rows[0]["is_following"] is True
+
+
+# ============================================================================
+# Artwork URL normalization (CSP `img-src 'self' data: https:` would block
+# stored http:// URLs, so every write site must upgrade them.)
+# ============================================================================
+
+
+def test_normalize_artwork_url_upgrades_http():
+    assert (
+        _normalize_artwork_url("http://ichef.bbci.co.uk/images/ic/3000x3000/p0njb134.jpg")
+        == "https://ichef.bbci.co.uk/images/ic/3000x3000/p0njb134.jpg"
+    )
+
+
+def test_normalize_artwork_url_passes_through_https_and_none():
+    assert _normalize_artwork_url("https://example.com/x.jpg") == "https://example.com/x.jpg"
+    assert _normalize_artwork_url(None) is None
+    assert _normalize_artwork_url("") == ""
+
+
+def test_save_podcast_normalizes_http_artwork(temp_db):
+    podcast = Podcast(
+        id="550e8400-e29b-41d4-a716-446655440100",
+        rss_url="https://example.com/http-art.xml",
+        title="HTTP Art",
+        description="",
+        image_url="http://cdn.example.com/cover.jpg",
+        episodes=[],
+    )
+    temp_db.save_podcast(podcast)
+    found = temp_db.get_by_url("https://example.com/http-art.xml")
+    assert found is not None
+    assert found.image_url == "https://cdn.example.com/cover.jpg"
+
+
+def test_save_episode_normalizes_http_artwork(temp_db, sample_podcast):
+    temp_db.save(sample_podcast)
+    episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440101",
+        podcast_id=sample_podcast.id,
+        external_id="ep-http-art",
+        title="Episode With Http Art",
+        description="",
+        pub_date=datetime(2026, 5, 4, 23, 0),
+        audio_url="https://example.com/a.mp3",
+        duration=60,
+        image_url="http://cdn.example.com/ep.jpg",
+    )
+    temp_db.save_episode(episode)
+    found = temp_db.get_episode_by_external_id(str(sample_podcast.rss_url), "ep-http-art")
+    assert found is not None
+    assert found.image_url == "https://cdn.example.com/ep.jpg"
+
+
+def test_save_refresh_batch_normalizes_http_artwork(temp_db):
+    podcast = Podcast(
+        id="550e8400-e29b-41d4-a716-446655440200",
+        rss_url="https://example.com/refresh-art.xml",
+        title="Refresh Art",
+        description="",
+        image_url="https://cdn.example.com/orig.jpg",
+        episodes=[],
+    )
+    temp_db.save_podcast(podcast)
+    podcast.image_url = "http://cdn.example.com/new-cover.jpg"
+    new_episode = Episode(
+        id="660e8400-e29b-41d4-a716-446655440201",
+        podcast_id=podcast.id,
+        external_id="ep-refresh-art",
+        title="Refresh Episode",
+        description="",
+        pub_date=datetime(2026, 5, 4, 23, 0),
+        audio_url="https://example.com/b.mp3",
+        duration=60,
+        image_url="http://cdn.example.com/new-ep.jpg",
+    )
+    temp_db.save_refresh_batch([podcast], [new_episode])
+
+    found_podcast = temp_db.get_by_url("https://example.com/refresh-art.xml")
+    assert found_podcast is not None
+    assert found_podcast.image_url == "https://cdn.example.com/new-cover.jpg"
+
+    found_episode = temp_db.get_episode_by_external_id(str(podcast.rss_url), "ep-refresh-art")
+    assert found_episode is not None
+    assert found_episode.image_url == "https://cdn.example.com/new-ep.jpg"
