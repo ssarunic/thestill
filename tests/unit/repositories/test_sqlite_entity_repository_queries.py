@@ -171,6 +171,77 @@ class TestListMentionsBySpeaker:
         results = repo.list_mentions_by_speaker(speaker="Yang", topic_entity_id="topic:ai-job-loss")
         assert len(results) == 1
 
+    def test_topic_filter_constrains_to_same_segment(self, tmp_path):
+        # Spec contract: ``list_quotes_by(speaker, topic)`` must only
+        # return mentions where the topic surfaced in the SAME diarised
+        # segment as the speaker's words. A broad episode where the
+        # speaker talks about something else and the topic is mentioned
+        # by someone else in another segment must NOT pollute the
+        # speaker's quotes.
+        db_path = tmp_path / "thestill.db"
+        SqlitePodcastRepository(db_path=str(db_path))
+        podcast_id = str(uuid.uuid4())
+        episode_id = str(uuid.uuid4())
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (?, ?, ?, ?)",
+                (podcast_id, "https://example.com/x.xml", "Show", "show"),
+            )
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url, pub_date) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (episode_id, podcast_id, "e", "Mixed Episode", "https://x/e.mp3", "2026-04-01T00:00:00"),
+            )
+            conn.commit()
+
+        repo = SqliteEntityRepository(db_path=str(db_path))
+        repo.upsert_entity(EntityRecord(id="company:spacex", type=EntityType.COMPANY, canonical_name="SpaceX"))
+        repo.upsert_entity(EntityRecord(id="company:apple", type=EntityType.COMPANY, canonical_name="Apple"))
+
+        def _m(segment, surface, entity_id, speaker):
+            return EntityMention(
+                episode_id=episode_id,
+                segment_id=segment,
+                start_ms=segment * 10_000,
+                end_ms=segment * 10_000 + 8_000,
+                speaker=speaker,
+                role=MentionRole.MENTIONED,
+                surface_form=surface,
+                quote_excerpt=f"… {surface} …",
+                confidence=0.9,
+                extractor="test",
+            )
+
+        # Galloway talks about Apple in segment 1; SpaceX is mentioned
+        # by a different speaker in segment 5 (same episode).
+        repo.insert_mentions(
+            [
+                _m(1, "Apple", "company:apple", "Scott Galloway"),
+                _m(5, "SpaceX", "company:spacex", "Other Host"),
+            ]
+        )
+        for m in repo.list_pending_mentions():
+            repo.resolve_mention(
+                mention_id=m.id,
+                entity_id="company:apple" if m.surface_form == "Apple" else "company:spacex",
+                status="resolved",
+            )
+
+        # Old (buggy) behaviour returned the Apple mention because the
+        # episode contained SpaceX somewhere. New behaviour requires
+        # SpaceX in the SAME segment as Galloway's mention → empty.
+        results = repo.list_mentions_by_speaker(
+            speaker="Galloway",
+            topic_entity_id="company:spacex",
+        )
+        assert results == []
+
+        # Sanity check: same query without the topic filter still
+        # returns Galloway's Apple mention.
+        results = repo.list_mentions_by_speaker(speaker="Galloway")
+        assert len(results) == 1
+        assert results[0].mention.surface_form == "Apple"
+
 
 class TestGetMentionForClip:
     def test_straddling_match(self, populated_db):
