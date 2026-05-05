@@ -1252,8 +1252,152 @@ is validated.
   wiki-link rendering with hover cards. Right rail: "People in this
   episode", "Companies mentioned", "Related episodes" (vector
   similarity from qmd `query`).
+
+  **Visual rules for inline entities (the transcript body):**
+  - Color **by type, not by entity**: four swatches only — Person,
+    Company, Product, Topic. Render as a thin type-colored underline
+    plus a small dot on hover; never as a filled chip. Rainbow-per-
+    entity is explicitly rejected — a typical episode produces dozens
+    of entities and full chips destroy readability.
+  - **Confidence gating**: mentions below the extractor confidence
+    threshold or with `resolution_status='unresolvable'` render as
+    plain text, never as clickable links. The reader is the wrong
+    place to surface noisy NER output.
+  - **Hover card** (≤200px wide): name, type, 1-line Wikidata gloss,
+    last 3 mentions of this entity on the same feed, "Go to entity
+    page" link. No images in v1.
+
+  **Right rail (desktop ≥ md breakpoint):**
+  - Sections in order: "People in this episode", "Companies
+    mentioned", "Related episodes".
+  - Persons sorted by `role='participant'` first (hosts/guests
+    surfaced from speaker diarisation/episode metadata), then
+    `mentioned`, each within their bucket sorted by mention count
+    descending.
+  - Each row shows entity name, mention count badge (`12×`), and a
+    play-▷ affordance on hover that seeks `<FloatingPlayer/>` to the
+    first mention's `start_ms`.
+  - Companies section uses the same pattern, count-sorted only.
+  - Related episodes pulls from qmd vector similarity; cap at 5.
+
+  **Episode header "key entities" strip (above the fold, mobile-first):**
+  - Horizontal strip rendered between the episode header card and the
+    transcript/summary tabs. Shows the top 5 entities by mention count
+    (any type), color-coded by type using the same four-swatch palette
+    as inline rendering. Each pill: type-colored dot + name +
+    mention count. Click → entity page; play-▷ on hover seeks to first
+    mention.
+  - This is the mobile substitute for the right rail (which collapses
+    below `md`); on desktop it remains visible as a compact gist
+    above the fold so the reader doesn't have to scroll to see who
+    matters in the episode.
+
+  **Mention density timeline (left of the audio scrubber):**
+  - Thin vertical strip alongside `<FloatingPlayer/>` showing one row
+    per top-N entity (configurable, default N=5, same set as the key
+    entities strip). Each row plots dots at each mention's `start_ms`
+    along the episode duration. Click a dot → seek + scroll the
+    corresponding transcript segment into view (re-uses
+    `entity_mentions.segment_id`).
+  - Provides "where in the episode" navigation cheaply; no new data
+    required beyond what `extract-entities` already writes.
+
+  **Inline entity filter bar (top of transcript view):**
+  - Multi-select chip bar above the transcript: "Show only segments
+    mentioning …". Selecting one or more entities collapses the
+    transcript to segments containing any of them. Pure client-side
+    filter — `entity_mentions` already carries `segment_id`, so no
+    new endpoint needed.
+  - Resets when switching tabs or episodes. Empty selection = full
+    transcript (the default).
+
+  **Additional reader affordances (numbered for traceability):**
+
+  1. **Keyboard nav `[` / `]`**: jump to previous/next mention of
+     the currently focused entity inside the transcript. Lightweight,
+     reuses existing keyboard handler in `<SegmentedTranscriptViewer/>`.
+  2. **`E` toggle**: show/hide entity highlights entirely. Some users
+     read better without underlines; preference persisted per user
+     in `localStorage`.
+  3. **Type filter toggles in the entity strip**: small `P / C / Pr / T`
+     toggles let the reader hide whole categories (e.g. "topics off")
+     without losing per-entity state.
+  4. **First-mention anchor links** in the right rail rows: the entity
+     name itself is a deeplink to the _first_ mention timestamp, in
+     addition to the play-▷ affordance. Right-click → "Open entity page".
+  5. **"New on this feed" badge**: when an entity appears in this
+     episode but has zero prior mentions on the same podcast feed,
+     show a small `NEW` dot on the strip pill and right-rail row.
+     Cheap signal; surfaces "first time Galloway talked about Anthropic".
+  6. **Co-mention sparkline on hover**: hover card for a person
+     entity adds a 1-line "appears with: X, Y, Z" pulled from
+     `entity_cooccurrences` scoped to the current episode. Caps at 3
+     names. No extra round trip — the data is in `get_entity`.
+  7. **Quote pull-out for top mention**: each right-rail row
+     expandable to reveal the highest-confidence quote from this
+     episode (uses `<NotableQuotes/>` row schema). Click the quote →
+     seek + scroll. Collapsed by default; chevron-toggle.
+  8. **Selection-to-entity context menu**: select transcript text
+     → small popover offers "Search corpus for this", "Find this
+     entity" (resolves selection to nearest entity if one overlaps).
+     Bridges the reader to the command bar without leaving the page.
+  9. **Entity-aware copy**: when the user copies a transcript
+     selection that contains entity mentions, append a footer like
+     `— [Episode title], 12:34 (mentions: Musk, Neuralink)`. Rendered
+     via clipboard `text/plain` + `text/html`.
+  10. **Density heatmap fallback** for very long episodes (>120min):
+      collapse the per-entity dot-rows in the left timeline into a
+      single heatmap row colored by _total_ mention density. Toggleable.
+  11. **Mention count delta vs. feed average**: in the entity hover
+      card, show `12× this episode (avg 3× on this feed)`. One
+      pre-aggregated number from `entity_mentions` grouped by
+      `(podcast_id, entity_id)`. Surfaces "unusually heavy episode".
+  12. **Speaker × entity matrix toggle** (transcript tab only): a
+      compact matrix in a collapsed `<details>` showing, per speaker,
+      which entities they introduced (first-mentioner) vs. just
+      mentioned. Useful for multi-host podcasts.
+  13. **Disambiguation pill**: when two extractions resolve to
+      different Wikidata QIDs but share a surface form (e.g. two
+      "Sam"s), the inline link renders with a small superscript
+      `¹`/`²` and the hover card shows both candidates. Uses
+      existing `resolution_status` and QID data; no new fields.
+  14. **`#` permalinks for mentions**: `#m=<entity_id>:<segment_id>`
+      hash routing scrolls to and pulses the mention. Lets us share
+      "this exact moment, this entity" links from MCP tool output.
+  15. **Reader minimap glyphs**: existing scroll minimap (if
+      present) gets type-colored ticks at every mention. If no
+      minimap exists yet, this becomes a dependency to introduce
+      one — gated behind a feature flag for now.
+  16. **Right-rail "expand all"**: a single button that flips every
+      collapsible row to its quote pull-out. Power-reader mode.
+  17. **Topic clustering in the strip overflow**: if more than 5
+      topics rank in the top 5 by raw count, cluster semantically
+      (cosine over qmd embeddings) into ≤3 super-topics for strip
+      display, keeping the raw list available in the rail. Avoids
+      a strip dominated by near-duplicate topic entities.
+  18. **Entity-segment count badge in the segment gutter**: each
+      segment in `<SegmentedTranscriptViewer/>` gets a tiny number
+      in its left gutter showing how many distinct entities it
+      mentions. Clicking it opens the per-segment entity list as
+      a popover. Cheap density signal while scanning.
+  19. **Cross-episode "previously" hint**: hover card on a person
+      entity surfaces the most recent prior episode (any feed)
+      where they were a `participant`. One-line link. Useful for
+      cross-show following without leaving the reader.
+  20. **A11y baseline**: every entity link is a real `<a>` with an
+      aria-label `"<name>, <type>, <count> mentions, first at MM:SS"`.
+      Type colors paired with shape/underline-style so colorblind
+      users still discriminate. Tab order through the rail and the
+      strip is logical (header → strip → transcript → rail), and
+      the `[` / `]` keys announce the destination via an `aria-live`
+      region.
+
 - **5.3** Empty states (entities with 0–2 mentions, etc.) reviewed
-  by Sasa.
+  by Sasa. Specifically: episode with 0 resolved entities hides the
+  key entities strip, the right rail collapses to "Related episodes"
+  only, the inline filter bar is not rendered, and the left timeline
+  is not rendered. Mid-density episodes (1–2 entities) keep the strip
+  but skip the timeline.
 - **5.4** Update [README.md](README.md) (this index), bump status to
   `✅ Complete`.
 
