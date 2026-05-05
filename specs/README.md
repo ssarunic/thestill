@@ -47,6 +47,7 @@ describing current phase and gates.
 | 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
 | 26 | [pre-deploy-security-checklist](26-pre-deploy-security-checklist.md) | 📋 Planned (2026-04-23) | LLM-runnable + runtime smoke-test checklist that must return GO before any deploy; regression harness for spec #25 |
 | 28 | [corpus-search-and-entities](28-corpus-search-and-entities.md) | 🚧 Phases 0–3 complete; Phase 4 (search UI) next | Native person/company/topic entity index over real podcast corpus; sqlite-vec hybrid search shipped (Phase 2.10), entity branch productionised with DLQ separation, latency budget in CI, `rebuild-entities` backfill, and skipped-legacy visibility (Phase 3); `⌘K` command bar + entity pages still pending (Phases 4–5) |
+| 29 | [per-user-inbox-fanout](29-per-user-inbox-fanout.md) | 📝 Draft | Per-user Inbox replacing shared "recent episodes" list: write-fan-out on publish, seed-on-follow, per-user read/save/dismiss state; sets the steady-state delivery model for full automation |
 
 ## Completed
 
