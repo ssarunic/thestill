@@ -139,3 +139,127 @@ class TestRoleNullability:
         ).fetchone()
         conn.close()
         assert row[0] is None
+
+
+class TestUpsertEntityAtomicity:
+    """Spec #28 §1.5/§1.6 — upsert_entity must survive concurrent
+    cascade-deletes from the inline alias-merge step.
+
+    The pre-fix implementation did SELECT-then-INSERT-or-UPDATE; if
+    another worker deleted the row between the SELECT and the INSERT,
+    the second worker would INSERT a fresh row — fine on its own, but
+    a subsequent ``resolve_mention`` could FK-fail if the entity got
+    deleted again before the mention update committed. The fix uses a
+    single atomic ``INSERT ... ON CONFLICT DO UPDATE``.
+    """
+
+    def test_insert_creates_a_new_row(self, seeded):
+        tmp_db, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        from thestill.models.entities import EntityRecord, EntityType
+
+        ent = EntityRecord(
+            id="person:elon-musk",
+            type=EntityType.PERSON,
+            canonical_name="Elon Musk",
+            wikidata_qid="Q317521",
+            aliases=["Musk", "@elonmusk"],
+        )
+        returned_id = repo.upsert_entity(ent)
+        assert returned_id == "person:elon-musk"
+        roundtrip = repo.get_entity("person:elon-musk")
+        assert roundtrip is not None
+        assert roundtrip.canonical_name == "Elon Musk"
+        assert sorted(roundtrip.aliases) == sorted(["Musk", "@elonmusk"])
+
+    def test_repeat_upsert_unions_aliases_without_duplicates(self, seeded):
+        tmp_db, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        from thestill.models.entities import EntityRecord, EntityType
+
+        first = EntityRecord(
+            id="company:openai",
+            type=EntityType.COMPANY,
+            canonical_name="OpenAI",
+            aliases=["OAI"],
+        )
+        second = EntityRecord(
+            id="company:openai",
+            type=EntityType.COMPANY,
+            canonical_name="OpenAI",
+            aliases=["OAI", "Open AI"],  # one overlap, one new
+        )
+        repo.upsert_entity(first)
+        repo.upsert_entity(second)
+        # The aliases column should be the deduplicated union.
+        roundtrip = repo.get_entity("company:openai")
+        assert roundtrip is not None
+        assert sorted(roundtrip.aliases) == ["OAI", "Open AI"]
+
+    def test_upsert_succeeds_when_row_was_just_cascade_deleted(self, seeded):
+        """Race regression: another worker just deleted the entity row
+        (e.g. via _merge_qid_duplicates_for repointing then deleting
+        the loser of a duplicate pair). The next upsert must re-create
+        the row cleanly, not error out — and a subsequent FK-bound
+        write that references it must succeed.
+        """
+        tmp_db, episode_id = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        from thestill.models.entities import EntityRecord, EntityType
+
+        ent = EntityRecord(
+            id="person:scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway",
+            wikidata_qid="Q7437099",
+        )
+        repo.upsert_entity(ent)
+        # Simulate the merge step: delete the row out from under us.
+        assert repo.delete_entity("person:scott-galloway") is True
+        # Re-upsert should succeed (no SELECT-then-INSERT race).
+        repo.upsert_entity(ent)
+        # And a downstream FK-bound write should land cleanly.
+        repo.insert_mentions([_mention(episode_id, 1)])
+        conn = sqlite3.connect(str(tmp_db))
+        try:
+            row = conn.execute(
+                "SELECT id FROM entity_mentions WHERE episode_id = ?",
+                (episode_id,),
+            ).fetchone()
+            mention_id = row["id"] if hasattr(row, "keys") else row[0]
+        finally:
+            conn.close()
+        # This is the operation that would FK-fail if the entity row
+        # were missing or in a half-state.
+        ok = repo.resolve_mention(
+            mention_id=mention_id,
+            entity_id="person:scott-galloway",
+            status="resolved",
+        )
+        assert ok is True
+
+    def test_atomic_upsert_preserves_qid_when_caller_passes_none(self, seeded):
+        """COALESCE behaviour: an upsert with wikidata_qid=None must
+        not blank out a QID written by an earlier resolve.
+        """
+        tmp_db, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        from thestill.models.entities import EntityRecord, EntityType
+
+        with_qid = EntityRecord(
+            id="company:spacex",
+            type=EntityType.COMPANY,
+            canonical_name="SpaceX",
+            wikidata_qid="Q193701",
+        )
+        without_qid = EntityRecord(
+            id="company:spacex",
+            type=EntityType.COMPANY,
+            canonical_name="SpaceX",
+            wikidata_qid=None,
+        )
+        repo.upsert_entity(with_qid)
+        repo.upsert_entity(without_qid)
+        roundtrip = repo.get_entity("company:spacex")
+        assert roundtrip is not None
+        assert roundtrip.wikidata_qid == "Q193701"
