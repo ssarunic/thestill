@@ -180,7 +180,7 @@ function LayoutContent() {
                 {showLabels && (
                   <div>
                     <h1 className="text-xl font-bold text-primary-900">Thestill</h1>
-                    <p className="text-sm text-gray-500 mt-1">Podcast Intelligence</p>
+                    <p className="text-sm text-gray-500 mt-1">Podcast Transcription</p>
                   </div>
                 )}
               </div>

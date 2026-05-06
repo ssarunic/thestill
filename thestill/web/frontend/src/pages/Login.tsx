@@ -35,7 +35,7 @@ export default function Login() {
             <span className="text-white font-bold text-2xl">ts</span>
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Thestill</h1>
-          <p className="text-gray-500 mt-2">Podcast Intelligence</p>
+          <p className="text-gray-500 mt-2">Podcast Transcription & Summarization</p>
         </div>
 
         {/* Login card */}
