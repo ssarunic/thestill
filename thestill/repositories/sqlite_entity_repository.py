@@ -91,65 +91,63 @@ class SqliteEntityRepository:
     def upsert_entity(self, entity: EntityRecord) -> str:
         """Create or update an ``entities`` row, returning its id.
 
-        Idempotent: insert when ``id`` is unseen, refresh
-        ``canonical_name``/``description``/``aliases`` and bump
-        ``updated_at`` on conflict. Aliases are *merged* (union of
-        existing + incoming), not replaced — repeated calls with
-        partial alias sets accumulate rather than overwrite.
+        Single atomic ``INSERT ... ON CONFLICT(id) DO UPDATE`` rather
+        than a SELECT-then-INSERT/UPDATE pair: under the entity-branch
+        worker pool's parallelism (``RESOLVE_ENTITIES_PARALLEL_JOBS>1``
+        plus the inline ``_merge_qid_duplicates_for`` step that deletes
+        loser entities), the SELECT-gap could race with another
+        worker's CASCADE delete and produce a phantom INSERT that
+        FK-failed downstream. The atomic upsert closes that window.
+
+        Aliases are merged with the existing column value via the
+        ``json_each`` aggregate inside the ON CONFLICT clause —
+        repeated calls with partial alias sets accumulate rather than
+        overwrite, same contract as before.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
+        new_aliases_json = json.dumps(entity.aliases)
         with self._get_connection() as conn:
-            existing = conn.execute(
-                "SELECT aliases FROM entities WHERE id = ?",
-                (entity.id,),
-            ).fetchone()
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO entities (
-                        id, type, canonical_name, wikidata_qid,
-                        aliases, description, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        entity.id,
-                        entity.type.value,
-                        entity.canonical_name,
-                        entity.wikidata_qid,
-                        json.dumps(entity.aliases),
-                        entity.description,
-                        entity.created_at.isoformat(),
-                        now_iso,
+            cursor = conn.execute(
+                """
+                INSERT INTO entities (
+                    id, type, canonical_name, wikidata_qid,
+                    aliases, description, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    canonical_name = excluded.canonical_name,
+                    wikidata_qid   = COALESCE(excluded.wikidata_qid, entities.wikidata_qid),
+                    aliases        = (
+                        SELECT json_group_array(value) FROM (
+                            SELECT DISTINCT value FROM (
+                                SELECT value FROM json_each(entities.aliases)
+                                UNION
+                                SELECT value FROM json_each(excluded.aliases)
+                            ) ORDER BY value
+                        )
                     ),
-                )
+                    description    = COALESCE(excluded.description, entities.description),
+                    updated_at     = excluded.updated_at
+                """,
+                (
+                    entity.id,
+                    entity.type.value,
+                    entity.canonical_name,
+                    entity.wikidata_qid,
+                    new_aliases_json,
+                    entity.description,
+                    entity.created_at.isoformat(),
+                    now_iso,
+                ),
+            )
+            # ``rowcount`` is 1 on either INSERT or DO UPDATE; the log
+            # distinction is only useful on real INSERTs but we can't
+            # cheaply tell them apart without another query, so log all
+            # successful upserts under a single key.
+            if cursor.rowcount == 1:
                 logger.info(
-                    "entity_inserted",
+                    "entity_upserted",
                     entity_id=entity.id,
                     qid=entity.wikidata_qid,
-                )
-            else:
-                # Union the alias sets (case-sensitive — matches how
-                # ReFinED returns surface forms).
-                existing_aliases = set(json.loads(existing["aliases"] or "[]"))
-                merged_aliases = sorted(existing_aliases | set(entity.aliases))
-                conn.execute(
-                    """
-                    UPDATE entities SET
-                        canonical_name = ?,
-                        wikidata_qid   = COALESCE(?, wikidata_qid),
-                        aliases        = ?,
-                        description    = COALESCE(?, description),
-                        updated_at     = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        entity.canonical_name,
-                        entity.wikidata_qid,
-                        json.dumps(merged_aliases),
-                        entity.description,
-                        now_iso,
-                        entity.id,
-                    ),
                 )
         return entity.id
 
