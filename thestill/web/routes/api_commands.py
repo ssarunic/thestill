@@ -594,8 +594,8 @@ class RunPipelineRequest(BaseModel):
     (e.g. ``"summarized"``), the worker stops chaining once the
     episode reaches that user-facing state. When omitted (the
     default), the chain runs all the way through the entity branch
-    (``extract-entities`` → ``resolve-entities`` → ``write-corpus``
-    → ``reindex``) so newly-summarised episodes land with their
+    (``extract-entities`` → ``resolve-entities`` → ``reindex``) so
+    newly-summarised episodes land with their
     entity index populated automatically — without it, every
     episode the user processes via the web "Run pipeline" button
     would silently leave the entity index empty.

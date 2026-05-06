@@ -419,7 +419,7 @@ class TaskWorker:
 
         The chain is purely linear (spec #28 §0.5):
         ``download → downsample → transcribe → clean → summarize →
-        extract-entities → resolve-entities → write-corpus → reindex``.
+        extract-entities → resolve-entities → reindex``.
 
         Two distinct chaining policies:
 
@@ -430,7 +430,7 @@ class TaskWorker:
           marker — callers passing ``target_state="summarized"`` stop
           after the user chain.
         - **Entity branch** (``extract-entities``→``resolve-entities``→
-          ``write-corpus``→``reindex``): ALWAYS chains. The entity
+          ``reindex``): ALWAYS chains. The entity
           stages are atomic — running ``extract-entities`` alone leaves
           orphan ``pending`` mentions that nothing will ever resolve;
           there's no legitimate caller that wants extract without
