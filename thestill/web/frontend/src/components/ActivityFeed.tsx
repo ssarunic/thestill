@@ -25,6 +25,19 @@ function formatTimestamp(timestamp: string): string {
   return date.toLocaleDateString()
 }
 
+function formatPubDate(pubDate: string | null): string | null {
+  if (!pubDate) return null
+  const date = new Date(pubDate)
+  if (Number.isNaN(date.getTime())) return null
+  const now = new Date()
+  const sameYear = date.getFullYear() === now.getFullYear()
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  })
+}
+
 function formatDuration(durationFormatted: string | null): string | null {
   if (!durationFormatted) return null
   // Convert "1:24:32" to "1h 24m" or "24:32" to "24m"
@@ -155,6 +168,12 @@ export default function ActivityFeed({
             </div>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <span className="truncate">{item.podcast_title}</span>
+              {formatPubDate(item.pub_date) && (
+                <>
+                  <span className="text-gray-300">•</span>
+                  <span className="flex-shrink-0">{formatPubDate(item.pub_date)}</span>
+                </>
+              )}
               {item.duration_formatted && (
                 <>
                   <span className="text-gray-300">•</span>
