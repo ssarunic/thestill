@@ -7,9 +7,12 @@ spec called for a fan-out at CLEAN; the design evolved to fully
 linear when we realised the per-episode mutex serialised it anyway
 and a future GLiNER variant may consume summary text).
 
-``target_state`` is honoured as an explicit early-stop: callers that
-pass ``target_state="summarized"`` stop after summarize, callers that
-omit ``target_state`` run the chain through to reindex.
+``target_state`` is honoured as an explicit early-stop for the *user
+chain* (downloaded…summarized). It does NOT block the entity branch:
+``target_state="summarized"`` stops new user-chain work but the
+entity-branch successor (``extract-entities``) still kicks off so
+search/index keep working. Callers that omit ``target_state`` run the
+chain through to reindex either way.
 """
 
 from unittest.mock import MagicMock
@@ -72,25 +75,30 @@ class TestLinearChain:
 
 
 class TestTargetState:
-    def test_explicit_summarized_target_stops_at_summarize(self):
-        # api_commands.py callers pass target_state="summarized" by
-        # default — they keep stopping at summarize unless the operator
-        # explicitly extends the target.
+    def test_summarized_target_still_starts_entity_branch(self):
+        # Regression: api_commands.py callers pass
+        # target_state="summarized" by default. The early-stop is a
+        # *user-chain* concept (its valid values are user-chain
+        # stages). The entity branch — extract → resolve → reindex —
+        # is a separate failure domain that must run after summarize
+        # so search/index stays populated. Previously this returned
+        # ``[]``, leaving 27 episodes stranded with no chunks/mentions.
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.SUMMARIZE, target_state="summarized"))
-        assert _enqueued_stages(queue) == []
+        assert _enqueued_stages(queue) == [TaskStage.EXTRACT_ENTITIES]
 
     def test_unset_target_runs_chain_to_reindex(self):
         # api_episodes.py + batch_processor.py omit target_state — they
-        # should now flow into the entity branch automatically.
+        # should also flow into the entity branch automatically.
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.SUMMARIZE))
         assert _enqueued_stages(queue) == [TaskStage.EXTRACT_ENTITIES]
 
     def test_explicit_earlier_target_stops_user_chain(self):
         # target_state="cleaned" stops at clean; the entity branch
-        # never starts because clean's successor is summarize and we
-        # match the target before enqueueing it.
+        # never starts because clean's successor is summarize (a
+        # user-chain stage), and we filter user-chain successors
+        # away once the target is reached.
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.CLEAN, target_state="cleaned"))
         assert _enqueued_stages(queue) == []
@@ -107,4 +115,50 @@ class TestRunFullPipelineFlag:
             metadata={"run_full_pipeline": False},
         )
         worker._maybe_enqueue_next_stage(task)
+        queue.add_task.assert_not_called()
+
+
+class TestEntityBranchAlwaysChains:
+    """Spec #28 §0.5 — the entity branch is atomic. Standalone enqueues
+    of ``extract-entities`` (admin rebuilds, repair scripts, the CLI
+    ``rebuild-entities``) MUST chain into ``resolve-entities`` and on
+    to ``reindex`` regardless of the ``run_full_pipeline`` metadata
+    flag. Without this, extract writes orphan ``pending`` mentions
+    that nothing ever resolves — which is exactly the bug that hit the
+    370-episode ``complete-but-empty`` bucket.
+    """
+
+    @staticmethod
+    def _bare_task(stage: TaskStage) -> Task:
+        # No metadata at all — simulates queue_manager.add_task(...) with
+        # the default metadata=None used by repair scripts.
+        return Task(
+            id="t",
+            episode_id="ep",
+            stage=stage,
+            status=TaskStatus.COMPLETED,
+            metadata={},
+        )
+
+    def test_extract_entities_chains_resolve_without_full_pipeline_flag(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.EXTRACT_ENTITIES))
+        assert _enqueued_stages(queue) == [TaskStage.RESOLVE_ENTITIES]
+
+    def test_resolve_entities_chains_reindex_without_full_pipeline_flag(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.RESOLVE_ENTITIES))
+        assert _enqueued_stages(queue) == [TaskStage.REINDEX]
+
+    def test_reindex_terminates_without_full_pipeline_flag(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.REINDEX))
+        assert _enqueued_stages(queue) == []
+
+    def test_user_chain_still_requires_full_pipeline_flag(self):
+        # Regression guard: the entity-branch carve-out must NOT
+        # accidentally make user-chain stages auto-chain on standalone
+        # retries. A bare CLEAN must still stop where it is.
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.CLEAN))
         queue.add_task.assert_not_called()

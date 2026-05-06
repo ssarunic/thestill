@@ -588,11 +588,22 @@ class CancelTaskResponse(BaseModel):
 
 
 class RunPipelineRequest(BaseModel):
-    """Request body for running the full pipeline."""
+    """Request body for running the full pipeline.
+
+    ``target_state`` is the optional early-stop marker. When set
+    (e.g. ``"summarized"``), the worker stops chaining once the
+    episode reaches that user-facing state. When omitted (the
+    default), the chain runs all the way through the entity branch
+    (``extract-entities`` → ``resolve-entities`` → ``write-corpus``
+    → ``reindex``) so newly-summarised episodes land with their
+    entity index populated automatically — without it, every
+    episode the user processes via the web "Run pipeline" button
+    would silently leave the entity index empty.
+    """
 
     podcast_slug: str
     episode_slug: str
-    target_state: str = "summarized"  # Target state to reach (default: full pipeline)
+    target_state: Optional[str] = None
 
 
 class RunPipelineResponse(BaseModel):
@@ -602,7 +613,9 @@ class RunPipelineResponse(BaseModel):
     status: str
     message: str
     starting_stage: str
-    target_state: str
+    # ``None`` when the caller didn't pin an early-stop and the chain
+    # is allowed to run through to ``reindex``.
+    target_state: Optional[str]
     episode_id: str
     episode_title: str
 
@@ -892,24 +905,24 @@ async def run_pipeline(
             detail=f"Episode is already in {episode.state.value} state (fully processed)",
         )
 
-    # Validate target_state
-    valid_target_states = ["downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
-    if request.target_state not in valid_target_states:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid target_state: {request.target_state}. Must be one of: {valid_target_states}",
-        )
-
-    # Check if target state is achievable (not before current state)
-    state_order = ["discovered", "downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
-    current_idx = state_order.index(episode.state.value)
-    target_idx = state_order.index(request.target_state)
-
-    if target_idx <= current_idx:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Episode is already at {episode.state.value} state, cannot reach {request.target_state}",
-        )
+    # Validate target_state when explicitly pinned. ``None`` means "run
+    # to the end of the chain (through the entity branch)".
+    if request.target_state is not None:
+        valid_target_states = ["downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
+        if request.target_state not in valid_target_states:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid target_state: {request.target_state}. Must be one of: {valid_target_states}",
+            )
+        # Check the target state is achievable (not before current state)
+        state_order = ["discovered", "downloaded", "downsampled", "transcribed", "cleaned", "summarized"]
+        current_idx = state_order.index(episode.state.value)
+        target_idx = state_order.index(request.target_state)
+        if target_idx <= current_idx:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Episode is already at {episode.state.value} state, cannot reach {request.target_state}",
+            )
 
     # Check for existing pending/processing task for starting stage
     if state.queue_manager.has_pending_task(episode.id, starting_stage):
@@ -918,12 +931,16 @@ async def run_pipeline(
             detail=f"A {starting_stage.value} task is already queued or processing for this episode",
         )
 
-    # Create task with run_full_pipeline metadata
-    metadata = {
+    # Build metadata. ``target_state`` is only included when the caller
+    # explicitly pinned an early-stop — omitting it tells the worker's
+    # ``_maybe_enqueue_next_stage`` to chain all the way through the
+    # entity branch.
+    metadata: dict = {
         "run_full_pipeline": True,
-        "target_state": request.target_state,
         "initiated_by": "api",
     }
+    if request.target_state is not None:
+        metadata["target_state"] = request.target_state
 
     task = state.queue_manager.add_task(
         episode_id=episode.id,
@@ -931,10 +948,11 @@ async def run_pipeline(
         metadata=metadata,
     )
 
+    target_label = request.target_state or "reindex (full chain)"
     return RunPipelineResponse(
         task_id=task.id,
         status="queued",
-        message=f"Pipeline started for {episode.title}: {starting_stage.value} → {request.target_state}",
+        message=f"Pipeline started for {episode.title}: {starting_stage.value} → {target_label}",
         starting_stage=starting_stage.value,
         target_state=request.target_state,
         episode_id=episode.id,

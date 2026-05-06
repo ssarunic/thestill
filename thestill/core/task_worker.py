@@ -415,32 +415,49 @@ class TaskWorker:
     }
 
     def _maybe_enqueue_next_stage(self, task: Task) -> None:
-        """If ``run_full_pipeline`` is set, advance the chain by one step.
+        """Advance the pipeline chain by one step.
 
         The chain is purely linear (spec #28 §0.5):
         ``download → downsample → transcribe → clean → summarize →
         extract-entities → resolve-entities → write-corpus → reindex``.
 
-        ``target_state`` is honoured as an early-stop marker: callers
-        that explicitly pass ``target_state="summarized"`` (e.g. the
-        ``run_pipeline`` API route's default) stop after the user
-        chain. Callers that don't pass ``target_state`` at all (e.g.
-        process-episode + batch digest flows) run the full chain
-        through to ``reindex`` so the entity branch lands without
-        further opt-in. Entity-branch stages are absent from
-        ``_STAGE_TO_STATE`` on purpose — they're not user-visible
-        states and target_state never matches one.
+        Two distinct chaining policies:
+
+        - **User chain** (``download``…``summarize``): only chains when
+          ``run_full_pipeline`` is set, so single-stage retry buttons
+          and admin re-runs don't accidentally re-process a whole
+          episode. ``target_state`` is honoured as an early-stop
+          marker — callers passing ``target_state="summarized"`` stop
+          after the user chain.
+        - **Entity branch** (``extract-entities``→``resolve-entities``→
+          ``write-corpus``→``reindex``): ALWAYS chains. The entity
+          stages are atomic — running ``extract-entities`` alone leaves
+          orphan ``pending`` mentions that nothing will ever resolve;
+          there's no legitimate caller that wants extract without
+          resolve. Standalone ``extract-entities`` enqueues (admin
+          rebuilds, repair scripts) need this auto-chain so the
+          mentions actually land as ``resolved``.
         """
-        if not task.metadata.get("run_full_pipeline"):
+        in_entity_branch = is_entity_branch_stage(task.stage)
+        if not in_entity_branch and not task.metadata.get("run_full_pipeline"):
             return
 
         target_state = task.metadata.get("target_state")
         resulting_state = self._STAGE_TO_STATE.get(task.stage.value)
-        if target_state is not None and resulting_state == target_state:
-            logger.info("pipeline_target_reached", target_state=target_state)
-            return
+        target_reached = target_state is not None and resulting_state == target_state
 
         successors = get_next_stages(task.stage)
+        if target_reached:
+            # ``target_state`` only takes valid values from the user
+            # chain (downloaded…summarized — see api_commands.py). The
+            # entity branch is a separate failure domain and should
+            # always run after summarize regardless of the user's
+            # early-stop marker. Drop user-chain successors but keep
+            # entity-branch successors so search/index keep working.
+            successors = [s for s in successors if is_entity_branch_stage(s)]
+            if not successors:
+                logger.info("pipeline_target_reached", target_state=target_state)
+                return
         if not successors:
             logger.info("pipeline_complete", stage=task.stage.value)
             return
