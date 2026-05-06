@@ -1,0 +1,158 @@
+import { Link } from 'react-router-dom'
+import type { EpisodeEntity, EntityType } from '../../api/types'
+import { entityHref, entityStyle } from '../../utils/entityColors'
+
+// Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
+// "Companies mentioned", "Related episodes". Hosts/guests/recurring
+// surfaced first within the People bucket; mention-count desc within
+// each bucket. Affordance #4: the entity name itself deeplinks to the
+// first mention timestamp; play-▷ on hover seeks to it.
+//
+// Related episodes pulls from vector similarity (qmd was the original
+// backend; spec §2.10 swapped to sqlite-vec). The endpoint isn't wired
+// yet — render a placeholder so the rail's geometry is stable when it
+// lands later, rather than thrashing the layout when it appears.
+
+export interface EntityRailProps {
+  entities: EpisodeEntity[]
+  onSeek?: (seconds: number) => void
+  onFocusEntity?: (entityId: string) => void
+}
+
+function formatTimestamp(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const hh = Math.floor(total / 3600)
+  const mm = Math.floor((total % 3600) / 60)
+  const ss = total % 60
+  if (hh > 0) {
+    return `${hh}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`
+  }
+  return `${mm}:${ss.toString().padStart(2, '0')}`
+}
+
+interface RailRowProps {
+  entity: EpisodeEntity
+  onSeek?: (seconds: number) => void
+  onFocusEntity?: (entityId: string) => void
+}
+
+function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps) {
+  const { entity, mention_count, first_mention_ms, speaker_kind } = episodeEntity
+  const style = entityStyle(entity.type)
+  const seekSeconds = first_mention_ms / 1000
+  const isParticipant = speaker_kind !== 'unknown'
+
+  return (
+    <li
+      className="group flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-gray-50"
+      onMouseEnter={() => onFocusEntity?.(entity.id)}
+    >
+      <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${style.dot}`} aria-hidden="true" />
+      <Link
+        to={entityHref(entity.type, entity.id)}
+        // Affordance #4 — first-mention deeplink: name links to entity
+        // page on click, but option-click (or the explicit play-▷
+        // button) seeks. We can't easily distinguish modifier clicks
+        // here without overriding default browser behavior; the
+        // play-▷ button is the dedicated seek path.
+        className="min-w-0 flex-1 truncate font-medium text-gray-800 hover:text-primary-700"
+      >
+        {entity.canonical_name}
+        {isParticipant && (
+          <span className="ml-1.5 rounded bg-gray-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-gray-600">
+            {speaker_kind}
+          </span>
+        )}
+      </Link>
+      <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">{mention_count}×</span>
+      {onSeek && (
+        <button
+          type="button"
+          onClick={() => onSeek(seekSeconds)}
+          title={`Play first mention at ${formatTimestamp(first_mention_ms)}`}
+          aria-label={`Play first mention of ${entity.canonical_name} at ${formatTimestamp(first_mention_ms)}`}
+          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-gray-400 opacity-0 hover:bg-white hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        </button>
+      )}
+    </li>
+  )
+}
+
+export default function EntityRail({ entities, onSeek, onFocusEntity }: EntityRailProps) {
+  // Group by type for the section labels. The payload is already
+  // sorted host/guest/recurring/unknown then count desc within each
+  // bucket, so we just need to bucket by type while preserving order.
+  const buckets: Record<EntityType, EpisodeEntity[]> = {
+    person: [],
+    company: [],
+    product: [],
+    topic: [],
+  }
+  for (const e of entities) {
+    buckets[e.entity.type].push(e)
+  }
+
+  const hasAny = entities.length > 0
+
+  return (
+    <aside
+      aria-label="Episode entities"
+      className="space-y-4 text-sm"
+      data-testid="entity-rail"
+    >
+      {hasAny && buckets.person.length > 0 && (
+        <RailSection title="People in this episode" entities={buckets.person} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+      )}
+      {hasAny && buckets.company.length > 0 && (
+        <RailSection title="Companies mentioned" entities={buckets.company} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+      )}
+      {hasAny && buckets.product.length > 0 && (
+        <RailSection title="Products" entities={buckets.product} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+      )}
+      {hasAny && buckets.topic.length > 0 && (
+        <RailSection title="Topics" entities={buckets.topic} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+      )}
+
+      {/* Spec §5.2 right rail: "Related episodes pulls from qmd vector
+          similarity; cap at 5." Endpoint isn't wired in this PR — render
+          a placeholder so the rail height stays stable when the data
+          eventually lands. */}
+      <section>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Related episodes</h2>
+        <p className="mt-1 px-2 text-xs italic text-gray-400">
+          Coming soon — vector similarity from the corpus index.
+        </p>
+      </section>
+
+      {!hasAny && (
+        <p className="px-2 text-xs italic text-gray-400">
+          No entities extracted for this episode yet.
+        </p>
+      )}
+    </aside>
+  )
+}
+
+interface RailSectionProps {
+  title: string
+  entities: EpisodeEntity[]
+  onSeek?: (seconds: number) => void
+  onFocusEntity?: (entityId: string) => void
+}
+
+function RailSection({ title, entities, onSeek, onFocusEntity }: RailSectionProps) {
+  return (
+    <section>
+      <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</h2>
+      <ul className="space-y-0.5">
+        {entities.map((e) => (
+          <RailRow key={e.entity.id} entity={e} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+        ))}
+      </ul>
+    </section>
+  )
+}

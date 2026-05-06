@@ -361,6 +361,7 @@ export type PipelineStage =
   | 'summarize'
   | 'extract-entities'
   | 'resolve-entities'
+  | 'write-corpus'
   | 'reindex'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
@@ -854,6 +855,8 @@ export interface QuickEntityItem {
   name: string
   matched_alias: string | null
   mention_count: number
+  role: 'guest' | 'host' | 'recurring' | null
+  role_episode_count: number
 }
 
 export interface QuickQuoteItem {
@@ -909,4 +912,96 @@ export interface DigestPreviewResponse {
     ready_only: boolean
     exclude_digested: boolean
   }
+}
+
+// ---------------------------------------------------------------------------
+// Spec #28 §5.2 — episode-page entity UX
+// ---------------------------------------------------------------------------
+
+export type EntityType = 'person' | 'company' | 'product' | 'topic'
+export type SpeakerKind = 'host' | 'guest' | 'recurring' | 'unknown'
+
+export interface EntityRef {
+  id: string
+  type: EntityType
+  canonical_name: string
+  wikidata_qid: string | null
+}
+
+export interface MentionLite {
+  id: number
+  entity_id: string
+  segment_id: number
+  start_ms: number
+  end_ms: number
+  speaker: string | null
+  role: string | null
+  surface_form: string
+  quote_excerpt: string
+  confidence: number
+  sentiment: number | null
+}
+
+export interface EpisodeEntity {
+  entity: EntityRef
+  mention_count: number
+  first_mention_ms: number
+  speaker_kind: SpeakerKind
+  mentions: MentionLite[]
+}
+
+export interface EpisodeEntitiesResponse {
+  episode_id: string
+  podcast_id: string
+  entities: EpisodeEntity[]
+}
+
+export interface EntityCooccurrenceRef {
+  entity: EntityRef
+  episode_count: number
+  last_seen_at: string | null
+}
+
+export interface EntityCitationRow {
+  episode_id: string
+  podcast_id: string
+  podcast_slug: string | null
+  episode_slug: string | null
+  podcast_title: string
+  episode_title: string
+  published_at: string | null
+  start_ms: number
+  end_ms: number
+  speaker: string | null
+  quote: string
+  surface_form: string
+}
+
+export interface HostedPodcastRef {
+  podcast_id: string
+  podcast_slug: string | null
+  podcast_title: string
+  episode_count: number
+}
+
+export interface GuestEpisodeRef {
+  episode_id: string
+  episode_slug: string | null
+  episode_title: string
+  podcast_id: string
+  podcast_slug: string | null
+  podcast_title: string
+  published_at: string | null
+}
+
+export interface EntitySummaryResponse {
+  entity: EntityRef
+  aliases: string[]
+  description: string | null
+  mention_count: number
+  cooccurring: EntityCooccurrenceRef[]
+  recent_mentions: EntityCitationRow[]
+  hosts_podcasts: HostedPodcastRef[]
+  recurring_podcasts: HostedPodcastRef[]
+  guest_episodes: GuestEpisodeRef[]
 }

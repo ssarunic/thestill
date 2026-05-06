@@ -1,9 +1,9 @@
-import { useState, useCallback, useEffect, lazy, Suspense } from 'react'
+import { useMemo, useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
-import { usePlayer } from '../contexts/PlayerContext'
+import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('../components/TranscriptViewer'))
@@ -15,7 +15,12 @@ import { ExplicitBadge } from '../components/ExplicitBadge'
 import PipelineActionButton from '../components/PipelineActionButton'
 import FailureBanner from '../components/FailureBanner'
 import ShareButton from '../components/ShareButton'
-import type { PipelineStage, FailureType } from '../api/types'
+import KeyEntitiesStrip from '../components/episode-entities/KeyEntitiesStrip'
+import EntityRail from '../components/episode-entities/EntityRail'
+import EntityFilterBar from '../components/episode-entities/EntityFilterBar'
+import MentionDensityTimeline from '../components/episode-entities/MentionDensityTimeline'
+import EntityBranchProgress from '../components/EntityBranchProgress'
+import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
 type TranscriptSubTab = 'segmented' | 'legacy' | 'shadow'
@@ -55,6 +60,72 @@ export default function EpisodeDetail() {
   useReadingPosition(episodeData?.episode?.id)
 
   const episode = episodeData?.episode
+
+  // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
+  // rail, inline highlights, filter bar, and timeline.
+  const { data: entitiesData } = useEpisodeEntities(episode?.id ?? null)
+  const entities = entitiesData?.entities ?? []
+
+  const [hiddenEntityTypes, setHiddenEntityTypes] = useState<Set<EntityType>>(() => new Set())
+  const [filterEntityIds, setFilterEntityIds] = useState<Set<string>>(() => new Set())
+  const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null)
+
+  const visibleEntities = useMemo(
+    () => entities.filter((e) => !hiddenEntityTypes.has(e.entity.type)),
+    [entities, hiddenEntityTypes],
+  )
+
+  const entitiesById = useMemo(() => {
+    const m = new Map<string, EpisodeEntity>()
+    for (const e of visibleEntities) m.set(e.entity.id, e)
+    return m
+  }, [visibleEntities])
+
+  const mentionsBySegmentId = useMemo(() => {
+    const m = new Map<number, MentionLite[]>()
+    for (const e of visibleEntities) {
+      for (const mention of e.mentions) {
+        const list = m.get(mention.segment_id) ?? []
+        list.push(mention)
+        m.set(mention.segment_id, list)
+      }
+    }
+    return m
+  }, [visibleEntities])
+
+  // When an entity filter is active, derive the set of segment ids
+  // that should remain visible in the transcript viewer. Pure
+  // client-side filter — `mentions[].segment_id` already carries
+  // everything we need.
+  const visibleSegmentIds = useMemo(() => {
+    if (filterEntityIds.size === 0) return null
+    const ids = new Set<number>()
+    for (const e of entities) {
+      if (!filterEntityIds.has(e.entity.id)) continue
+      for (const m of e.mentions) ids.add(m.segment_id)
+    }
+    return ids
+  }, [entities, filterEntityIds])
+
+  const toggleEntityType = useCallback((type: EntityType) => {
+    setHiddenEntityTypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
+      return next
+    })
+  }, [])
+
+  const toggleEntityFilter = useCallback((entityId: string) => {
+    setFilterEntityIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(entityId)) next.delete(entityId)
+      else next.add(entityId)
+      return next
+    })
+  }, [])
+
+  const clearEntityFilter = useCallback(() => setFilterEntityIds(new Set()), [])
   const handleSegmentSeek = useCallback(
     (seconds: number) => {
       if (!episode) return
@@ -291,6 +362,13 @@ export default function EpisodeDetail() {
             })()}
           </div>
 
+          {/* Spec #28 §"Failure isolation" — entity branch is its own
+              status row, independent of the user chain. Renders only
+              when entity-branch tasks exist for this episode. */}
+          <div className="border-t border-gray-100 pt-4">
+            <EntityBranchProgress episodeId={episode.id} />
+          </div>
+
           {(episode.description_html || episode.description) && (
             <div className="border-t border-gray-100 pt-4">
               <ExpandableDescription html={episode.description_html || episode.description} maxLines={3} />
@@ -299,70 +377,148 @@ export default function EpisodeDetail() {
         </div>
       ) : null}
 
-      {/* Content Tabs - show skeleton while loading to prevent CLS */}
-      <div className="bg-white rounded-lg border border-gray-200 min-h-[400px]">
-        {/* Tab Headers */}
-        <div className="border-b border-gray-200">
-          <nav className="flex">
-            <button
-              onClick={() => setActiveTab('summary')}
-              className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab === 'summary'
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Summary
-              {episode?.has_summary && (
-                <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
+      {/* Spec #28 §5.2 — Key entities strip, above the fold. Empty
+          state (zero entities) hides itself. */}
+      {entities.length > 0 && (
+        <KeyEntitiesStrip
+          entities={entities}
+          hiddenTypes={hiddenEntityTypes}
+          onToggleType={toggleEntityType}
+          onSeek={handleSegmentSeek}
+        />
+      )}
+
+      {/* Content Tabs + right rail. lg+ becomes a 2-col grid; below lg
+          the rail wraps under the panel. */}
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
+        <div className="bg-white rounded-lg border border-gray-200 min-h-[400px]">
+          {/* Tab Headers */}
+          <div className="border-b border-gray-200">
+            <nav className="flex">
+              <button
+                onClick={() => setActiveTab('summary')}
+                className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === 'summary'
+                    ? 'border-primary-600 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Summary
+                {episode?.has_summary && (
+                  <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('transcript')}
+                className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === 'transcript'
+                    ? 'border-primary-600 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                Transcript
+                {episode?.has_transcript && (
+                  <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
+                )}
+              </button>
+            </nav>
+          </div>
+
+          {/* Tab Content */}
+          <div className="p-4 sm:p-6">
+            <Suspense fallback={
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+              </div>
+            }>
+              {activeTab === 'summary' ? (
+                <SummaryViewer
+                  content={summaryData?.content ?? ''}
+                  isLoading={summaryLoading}
+                  available={summaryData?.available}
+                  episodeState={episode?.state}
+                />
+              ) : (
+                <TranscriptPanel
+                  transcriptData={transcriptData}
+                  transcriptLoading={transcriptLoading}
+                  episodeState={episode?.state}
+                  episodeId={episode?.id ?? null}
+                  audioUrl={episode?.audio_url ?? null}
+                  onSegmentSeek={handleSegmentSeek}
+                  subTab={transcriptSubTab}
+                  onSubTabChange={setTranscriptSubTab}
+                  entitiesById={entitiesById}
+                  mentionsBySegmentId={mentionsBySegmentId}
+                  visibleSegmentIds={visibleSegmentIds}
+                  focusedEntityId={focusedEntityId}
+                  onFocusEntity={setFocusedEntityId}
+                  entityFilterBar={
+                    entities.length > 0 ? (
+                      <EntityFilterBar
+                        entities={entities}
+                        selectedEntityIds={filterEntityIds}
+                        onToggle={toggleEntityFilter}
+                        onClear={clearEntityFilter}
+                      />
+                    ) : null
+                  }
+                />
               )}
-            </button>
-            <button
-              onClick={() => setActiveTab('transcript')}
-              className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab === 'transcript'
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Transcript
-              {episode?.has_transcript && (
-                <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
-              )}
-            </button>
-          </nav>
+            </Suspense>
+          </div>
         </div>
 
-        {/* Tab Content */}
-        <div className="p-4 sm:p-6">
-          <Suspense fallback={
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+        {/* Right rail — only on lg+; collapses below the breakpoint
+            (the strip carries the gist on mobile). */}
+        {entities.length > 0 && (
+          <div className="hidden lg:block">
+            <div className="sticky top-4 space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+              <EntityRail
+                entities={entities}
+                onSeek={handleSegmentSeek}
+                onFocusEntity={setFocusedEntityId}
+              />
             </div>
-          }>
-            {activeTab === 'summary' ? (
-              <SummaryViewer
-                content={summaryData?.content ?? ''}
-                isLoading={summaryLoading}
-                available={summaryData?.available}
-                episodeState={episode?.state}
-              />
-            ) : (
-              <TranscriptPanel
-                transcriptData={transcriptData}
-                transcriptLoading={transcriptLoading}
-                episodeState={episode?.state}
-                episodeId={episode?.id ?? null}
-                audioUrl={episode?.audio_url ?? null}
-                onSegmentSeek={handleSegmentSeek}
-                subTab={transcriptSubTab}
-                onSubTabChange={setTranscriptSubTab}
-              />
-            )}
-          </Suspense>
-        </div>
+          </div>
+        )}
       </div>
+
+      {/* Mention density timeline — fixed-position strip beside the
+          MiniPlayer when this episode is the current track. Only
+          rendered on md+ screens (hides itself when there's no room). */}
+      {episode && entities.length > 0 && episode.duration && (
+        <PlayerScopedTimeline
+          episodeId={episode.id}
+          entities={entities}
+          durationSeconds={episode.duration}
+          onSeek={handleSegmentSeek}
+        />
+      )}
     </div>
+  )
+}
+
+interface PlayerScopedTimelineProps {
+  episodeId: string
+  entities: EpisodeEntity[]
+  durationSeconds: number
+  onSeek: (seconds: number) => void
+}
+
+// Renders the MentionDensityTimeline only when the global player is
+// actually on this episode. We co-locate the gating here rather than
+// inside MentionDensityTimeline so the latter stays pure UI.
+function PlayerScopedTimeline({ episodeId, entities, durationSeconds, onSeek }: PlayerScopedTimelineProps) {
+  const player = usePlayer()
+  // Subscribing to the high-frequency time context here is a no-op
+  // outside React's rendering pass; it just ensures the component
+  // re-renders whenever playback changes — useful in case we add
+  // timeline cursor markers later.
+  usePlayerTime()
+  if (!player.isCurrent(episodeId)) return null
+  return (
+    <MentionDensityTimeline entities={entities} durationSeconds={durationSeconds} onSeek={onSeek} />
   )
 }
 
@@ -384,6 +540,16 @@ interface TranscriptPanelProps {
   onSegmentSeek: (seconds: number) => void
   subTab: TranscriptSubTab
   onSubTabChange: (next: TranscriptSubTab) => void
+  // Spec #28 §5.2 — episode-page entity UX. All optional so a viewer
+  // mounted without entity data (legacy episodes, tests) keeps working.
+  entitiesById?: Map<string, EpisodeEntity>
+  mentionsBySegmentId?: Map<number, MentionLite[]>
+  visibleSegmentIds?: Set<number> | null
+  focusedEntityId?: string | null
+  onFocusEntity?: (entityId: string) => void
+  // Slot for the filter bar — rendered above the segmented viewer so
+  // it shares the panel's padding and lives under the sub-tab toggle.
+  entityFilterBar?: React.ReactNode
 }
 
 // Passively probe an audio URL for its duration without playing it. We
@@ -457,6 +623,12 @@ function TranscriptPanel({
   onSegmentSeek,
   subTab,
   onSubTabChange,
+  entitiesById,
+  mentionsBySegmentId,
+  visibleSegmentIds,
+  focusedEntityId,
+  onFocusEntity,
+  entityFilterBar,
 }: TranscriptPanelProps) {
   const hasSegments = !!transcriptData?.segments
   const hasLegacy = !!transcriptData?.content && transcriptData.content.length > 0
@@ -540,11 +712,19 @@ function TranscriptPanel({
       )}
 
       {effectiveSubTab === 'segmented' && transcriptData?.segments ? (
-        <SegmentedTranscriptViewer
-          transcript={transcriptData.segments}
-          episodeId={episodeId}
-          onSeekRequest={onSegmentSeek}
-        />
+        <>
+          {entityFilterBar && <div className="mb-3">{entityFilterBar}</div>}
+          <SegmentedTranscriptViewer
+            transcript={transcriptData.segments}
+            episodeId={episodeId}
+            onSeekRequest={onSegmentSeek}
+            entitiesById={entitiesById}
+            mentionsBySegmentId={mentionsBySegmentId}
+            visibleSegmentIds={visibleSegmentIds}
+            focusedEntityId={focusedEntityId}
+            onFocusEntity={onFocusEntity}
+          />
+        </>
       ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
         <TranscriptViewer
           content={transcriptData.shadow.content}

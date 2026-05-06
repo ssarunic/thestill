@@ -16,6 +16,7 @@ const QueueViewer = lazy(() => import('./pages/QueueViewer'))
 const Settings = lazy(() => import('./pages/Settings'))
 const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
+const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 
 // Loading fallback for page transitions
@@ -101,6 +102,12 @@ function App() {
         <Route path="search" element={
           <Suspense fallback={<PageLoader />}>
             <SearchResults />
+          </Suspense>
+        } />
+        {/* Spec #28 §5.1 — entity page (person/company/product/topic). */}
+        <Route path="entities/:entityType/:idSlug" element={
+          <Suspense fallback={<PageLoader />}>
+            <Entities />
           </Suspense>
         } />
       </Route>

@@ -80,6 +80,12 @@ class QuickEntityItem(BaseModel):
     name: str
     matched_alias: Optional[str] = None
     mention_count: int
+    # Role this entity holds in the corpus, derived from
+    # podcasts.host_entity_ids / podcasts.recurring_entity_ids /
+    # episodes.guest_entity_ids. ``None`` for entities that only
+    # appear as transcript mentions.
+    role: Optional[str] = None  # guest | host | recurring | None
+    role_episode_count: int = 0
 
 
 class QuickQuoteItem(BaseModel):
@@ -270,6 +276,8 @@ def search_quick(
                     name=hit.canonical_name,
                     matched_alias=hit.matched_alias,
                     mention_count=hit.mention_count,
+                    role=hit.role,
+                    role_episode_count=hit.role_episode_count,
                 )
             )
 

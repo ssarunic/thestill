@@ -293,18 +293,39 @@ function EntityRow({ item }: { item: QuickEntityItem }) {
         {entityBadge(item.entity_type)}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">
-          {item.name}
+        <div className="flex items-center gap-2 truncate font-medium">
+          <span className="truncate">{item.name}</span>
+          {item.role && (
+            <span
+              className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${roleBadgeClasses(item.role)}`}
+            >
+              {item.role}
+            </span>
+          )}
           {item.matched_alias && (
-            <span className="ml-2 text-xs font-normal text-gray-500">aka {item.matched_alias}</span>
+            <span className="ml-1 text-xs font-normal text-gray-500">aka {item.matched_alias}</span>
           )}
         </div>
         <div className="truncate text-xs text-gray-500">
-          {item.mention_count} mention{item.mention_count === 1 ? '' : 's'}
+          {entityRowSummary(item)}
         </div>
       </div>
     </div>
   )
+}
+
+function roleBadgeClasses(role: 'guest' | 'host' | 'recurring'): string {
+  if (role === 'guest') return 'bg-emerald-100 text-emerald-800 ring-emerald-200'
+  if (role === 'host') return 'bg-blue-100 text-blue-800 ring-blue-200'
+  return 'bg-violet-100 text-violet-800 ring-violet-200'
+}
+
+function entityRowSummary(item: QuickEntityItem): string {
+  if (item.role && item.role_episode_count > 0) {
+    const word = item.role === 'guest' ? 'on' : 'across'
+    return `${word} ${item.role_episode_count} episode${item.role_episode_count === 1 ? '' : 's'}`
+  }
+  return `${item.mention_count} mention${item.mention_count === 1 ? '' : 's'}`
 }
 
 function QuoteRow({ item }: { item: QuickQuoteItem }) {
@@ -467,8 +488,10 @@ function handleActivate(item: QuickSearchItem, navigate: ReturnType<typeof useNa
     navigate(`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}?t=${seconds}`)
     return
   }
-  // Entity hits — Phase 5 lands /entities/:type/:id; until then, fall
-  // back to a name-keyed episode search so the user still gets relevant
-  // episodes. TODO(spec#28 phase 5): swap to /entities/${type}/${slug}.
-  navigate(`/episodes?search=${encodeURIComponent(item.name)}`)
+  // Entity hits — Phase 5.1 entity page is now live. The entity id is
+  // ``"{type}:{slug}"`` so we strip the prefix for the URL path
+  // (entityHref builds the canonical /entities/<type>/<slug> shape).
+  const colon = item.id.indexOf(':')
+  const slug = colon === -1 ? item.id : item.id.slice(colon + 1)
+  navigate(`/entities/${item.entity_type}/${slug}`)
 }
