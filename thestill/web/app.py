@@ -250,6 +250,22 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.start()
         logger.info("task_worker_started")
 
+        # Warm the embedding model in the background. The first
+        # semantic/hybrid search request would otherwise pay a 5-30s
+        # cold-load (model deserialization, plus the HuggingFace
+        # download on a fresh cache). Running it on a daemon thread
+        # keeps boot non-blocking; ``EmbeddingModel._get_model`` is
+        # lock-guarded so a search arriving mid-warmup waits for the
+        # in-progress load instead of starting a second one.
+        import threading as _threading
+
+        _threading.Thread(
+            target=embedding_model.warmup,
+            name="embedding-model-warmup",
+            daemon=True,
+        ).start()
+        logger.info("embedding_model_warmup_scheduled", model=embedding_model.model_name)
+
         yield
 
         # Cleanup on shutdown

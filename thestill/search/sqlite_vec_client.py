@@ -73,6 +73,16 @@ _HYBRID_WEIGHT_SEM = 0.5
 # while staying cheap for unfiltered ones.
 _SEMANTIC_FILTER_OVERFETCH = 10
 
+# Maximum cosine distance admitted as a real semantic match.
+# Calibration on the live corpus (May 2026): real-match queries
+# ("Elon Musk", "open source", "Sequoia Capital") top out at
+# d≈0.83. Out-of-corpus queries ("Sarah Palin") and gibberish bottom
+# out at d≈0.96. 0.85 is the natural break — keep good hits, drop
+# the model's phonetic hallucinations (e.g. "Sarah Palantir" for
+# "Sarah Palin"). Without this, hybrid mode renders pure noise as
+# legitimate matches when the corpus has nothing relevant.
+_SEMANTIC_MAX_DISTANCE = 0.85
+
 
 class SqliteVecBackend:
     """In-process SearchBackend over the ``chunks`` index.
@@ -182,6 +192,10 @@ class SqliteVecBackend:
         return " AND " + " AND ".join(parts), params
 
     def _lexical(self, query: str, *, limit: int, filters: Optional[SearchFilters]) -> List[sqlite3.Row]:
+        # The leading ``+`` on c.embedding_model deopts ``idx_chunks_model``.
+        # Without it SQLite drives the join from chunks (filtered by model,
+        # which today matches every row) and probes FTS by rowid — a 100k+
+        # row scan that takes 2-36s. The deopt forces FTS-first; ~2ms.
         filter_sql, filter_params = self._filter_clauses(filters)
         sql = f"""
             SELECT c.id            AS chunk_id,
@@ -201,7 +215,7 @@ class SqliteVecBackend:
             JOIN episodes e ON e.id = c.episode_id
             JOIN podcasts p ON p.id = e.podcast_id
             WHERE chunks_fts MATCH ?
-              AND c.embedding_model = ?
+              AND +c.embedding_model = ?
               {filter_sql}
             ORDER BY score DESC
             LIMIT ?
@@ -236,13 +250,19 @@ class SqliteVecBackend:
             JOIN podcasts p ON p.id = e.podcast_id
             WHERE v.embedding MATCH ?
               AND k = ?
-              AND c.embedding_model = ?
+              AND +c.embedding_model = ?
               {filter_sql}
             ORDER BY v.distance ASC
         """
         params = [query_embedding, knn_k, self.embedding_model_name, *filter_params]
         with self._get_connection() as conn:
-            return list(conn.execute(sql, params).fetchall())
+            rows = conn.execute(sql, params).fetchall()
+        # Drop noise hits before returning. Filtering here (not in SQL
+        # via ``v.distance < ?``) is intentional: vec0 doesn't push
+        # range predicates into the kNN scan, so the WHERE form would
+        # still fetch ``k`` rows then filter — same result, slightly
+        # less obvious. Doing it in Python keeps the SQL minimal.
+        return [r for r in rows if r["score"] <= _SEMANTIC_MAX_DISTANCE]
 
     def _hybrid(
         self,
