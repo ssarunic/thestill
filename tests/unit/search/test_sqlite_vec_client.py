@@ -178,12 +178,31 @@ class TestSemanticMode:
         )
         # Backend reuses the stub for query encoding → same hash, same
         # vector as the "alpha text" segment, so it wins the k-NN.
+        # The "beta text" chunk gets a hash-orthogonal vector that's
+        # well past the noise threshold; it's correctly dropped.
         backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
         hits = backend.search("Host: alpha text", mode=SearchMode.SEMANTIC, limit=2, filters=None)
-        assert len(hits) == 2
+        assert len(hits) == 1
         assert hits[0].segment_id == 0
         assert hits[0].match_type == MatchType.SEMANTIC
-        assert hits[0].score < hits[1].score
+
+    def test_drops_high_distance_noise(self, tmp_path):
+        """Sarah-Palin scenario: the kNN returns hits but they're all
+        past the noise threshold, so we surface zero rather than
+        rendering hallucinated matches."""
+        db_path, fixtures = _seed_db(tmp_path)
+        e1 = fixtures["episodes"]["e1"]["id"]
+        _populate_chunks(
+            db_path,
+            e1,
+            [
+                (0, 1.0, 5.0, "completely unrelated chunk one", "Host"),
+                (1, 5.0, 10.0, "completely unrelated chunk two", "Host"),
+            ],
+        )
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        hits = backend.search("query with no relevant chunk", mode=SearchMode.SEMANTIC, limit=5, filters=None)
+        assert hits == []
 
 
 class TestHybridMode:

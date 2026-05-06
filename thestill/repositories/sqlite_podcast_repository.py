@@ -742,35 +742,179 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         UNIQUE (episode_id, segment_id, embedding_model)
                     );
                     CREATE INDEX IF NOT EXISTS idx_chunks_episode ON chunks(episode_id);
-                    CREATE INDEX IF NOT EXISTS idx_chunks_model ON chunks(embedding_model);
 
                     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
                         embedding float[{vec_dim}]
                     );
 
+                    -- Contentless FTS5: we manage rows via triggers and
+                    -- strip the speaker prefix (``Sarah Paine: ...``)
+                    -- before indexing. Without this, BM25 ranks short
+                    -- interjections from the named speaker above
+                    -- substantive content because length normalization
+                    -- rewards term-density and the speaker name can be
+                    -- half the chunk. Speaker-aware queries are still
+                    -- served by the ``speaker:`` operator on the
+                    -- ``chunks.speaker`` column.
                     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
-                        USING fts5(text, content='chunks', content_rowid='id');
+                        USING fts5(text, content='');
 
                     CREATE TRIGGER IF NOT EXISTS chunks_ai
                         AFTER INSERT ON chunks BEGIN
                         INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
-                        INSERT INTO chunks_fts(rowid, text)      VALUES (new.id, new.text);
+                        INSERT INTO chunks_fts(rowid, text) VALUES (
+                            new.id,
+                            CASE
+                                WHEN new.speaker IS NOT NULL
+                                 AND new.text LIKE new.speaker || ': %'
+                                THEN SUBSTR(new.text, LENGTH(new.speaker) + 3)
+                                ELSE new.text
+                            END
+                        );
                     END;
                     CREATE TRIGGER IF NOT EXISTS chunks_ad
                         AFTER DELETE ON chunks BEGIN
                         DELETE FROM chunks_vec WHERE rowid = old.id;
-                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES (
+                            'delete',
+                            old.id,
+                            CASE
+                                WHEN old.speaker IS NOT NULL
+                                 AND old.text LIKE old.speaker || ': %'
+                                THEN SUBSTR(old.text, LENGTH(old.speaker) + 3)
+                                ELSE old.text
+                            END
+                        );
                     END;
                     CREATE TRIGGER IF NOT EXISTS chunks_au
                         AFTER UPDATE ON chunks BEGIN
                         DELETE FROM chunks_vec WHERE rowid = old.id;
                         INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
-                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
-                        INSERT INTO chunks_fts(rowid, text)      VALUES (new.id, new.text);
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES (
+                            'delete',
+                            old.id,
+                            CASE
+                                WHEN old.speaker IS NOT NULL
+                                 AND old.text LIKE old.speaker || ': %'
+                                THEN SUBSTR(old.text, LENGTH(old.speaker) + 3)
+                                ELSE old.text
+                            END
+                        );
+                        INSERT INTO chunks_fts(rowid, text) VALUES (
+                            new.id,
+                            CASE
+                                WHEN new.speaker IS NOT NULL
+                                 AND new.text LIKE new.speaker || ': %'
+                                THEN SUBSTR(new.text, LENGTH(new.speaker) + 3)
+                                ELSE new.text
+                            END
+                        );
                     END;
                     """
                 )
                 logger.info("Migration complete: spec #28 §2.10 chunks tables created")
+
+        # Migration: rebuild chunks_fts as contentless and strip the
+        # ``"{speaker}: "`` prefix before indexing. Without this BM25
+        # promotes short interjections by named speakers above
+        # substantive content. Detect by inspecting the create-SQL: old
+        # form has ``content='chunks'``, new form has ``content=''``.
+        cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_fts'")
+        row = cursor.fetchone()
+        if row is not None and "content='chunks'" in (row["sql"] or ""):
+            try:
+                from ..utils.sqlite_ext import SqliteVecNotInstalledError, load_vec_extension
+
+                load_vec_extension(conn)
+            except SqliteVecNotInstalledError:
+                # Skip — the chunks tables exist but vec ext is gone;
+                # nothing to do here, the next env with the extension
+                # will run the rebuild.
+                pass
+            else:
+                logger.info("Migrating database: rebuilding chunks_fts as contentless (strip speaker prefix)")
+                conn.executescript(
+                    """
+                    DROP TRIGGER IF EXISTS chunks_ai;
+                    DROP TRIGGER IF EXISTS chunks_ad;
+                    DROP TRIGGER IF EXISTS chunks_au;
+                    DROP TABLE IF EXISTS chunks_fts;
+
+                    CREATE VIRTUAL TABLE chunks_fts USING fts5(text, content='');
+
+                    CREATE TRIGGER chunks_ai
+                        AFTER INSERT ON chunks BEGIN
+                        INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
+                        INSERT INTO chunks_fts(rowid, text) VALUES (
+                            new.id,
+                            CASE
+                                WHEN new.speaker IS NOT NULL
+                                 AND new.text LIKE new.speaker || ': %'
+                                THEN SUBSTR(new.text, LENGTH(new.speaker) + 3)
+                                ELSE new.text
+                            END
+                        );
+                    END;
+                    CREATE TRIGGER chunks_ad
+                        AFTER DELETE ON chunks BEGIN
+                        DELETE FROM chunks_vec WHERE rowid = old.id;
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES (
+                            'delete',
+                            old.id,
+                            CASE
+                                WHEN old.speaker IS NOT NULL
+                                 AND old.text LIKE old.speaker || ': %'
+                                THEN SUBSTR(old.text, LENGTH(old.speaker) + 3)
+                                ELSE old.text
+                            END
+                        );
+                    END;
+                    CREATE TRIGGER chunks_au
+                        AFTER UPDATE ON chunks BEGIN
+                        DELETE FROM chunks_vec WHERE rowid = old.id;
+                        INSERT INTO chunks_vec(rowid, embedding) VALUES (new.id, new.embedding);
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES (
+                            'delete',
+                            old.id,
+                            CASE
+                                WHEN old.speaker IS NOT NULL
+                                 AND old.text LIKE old.speaker || ': %'
+                                THEN SUBSTR(old.text, LENGTH(old.speaker) + 3)
+                                ELSE old.text
+                            END
+                        );
+                        INSERT INTO chunks_fts(rowid, text) VALUES (
+                            new.id,
+                            CASE
+                                WHEN new.speaker IS NOT NULL
+                                 AND new.text LIKE new.speaker || ': %'
+                                THEN SUBSTR(new.text, LENGTH(new.speaker) + 3)
+                                ELSE new.text
+                            END
+                        );
+                    END;
+
+                    INSERT INTO chunks_fts(rowid, text)
+                    SELECT id,
+                           CASE
+                               WHEN speaker IS NOT NULL
+                                AND text LIKE speaker || ': %'
+                               THEN SUBSTR(text, LENGTH(speaker) + 3)
+                               ELSE text
+                           END
+                    FROM chunks;
+                    """
+                )
+                logger.info("Migration complete: chunks_fts rebuilt without speaker prefix")
+
+        # Migration: drop idx_chunks_model. Every chunk shares a single
+        # embedding_model value, so the index is non-selective. Worse, it
+        # tricked the planner into a chunks-driven join for FTS5 queries
+        # (full 100k-row scan with per-row FTS probe → 2-36s). Lexical
+        # search now uses ``+c.embedding_model = ?`` to deopt the index,
+        # but dropping it removes the trap entirely so future queries
+        # can't fall back into it.
+        conn.execute("DROP INDEX IF EXISTS idx_chunks_model")
 
         # Migration: rewrite legacy http:// artwork URLs to https://
         # The web UI's CSP only allows `img-src https:`, so any stored

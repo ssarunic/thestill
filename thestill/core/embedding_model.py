@@ -31,6 +31,7 @@ there into ``chunks_vec`` via the ``chunks_ai`` trigger.
 from __future__ import annotations
 
 import struct
+import threading
 from typing import List, Optional
 
 from structlog import get_logger
@@ -45,24 +46,41 @@ class EmbeddingModel:
 
     The underlying model is constructed on first ``encode_*`` call —
     instantiation is essentially free, the cost is in the first
-    forward pass. Construction is not thread-safe; the caller is
-    expected to wrap creation in a lock at the AppState layer (the
-    same pattern as ``_get_or_create_entity_extractor``).
+    forward pass. ``_get_model`` is guarded by an internal lock so
+    background warmup at app startup can race with an early search
+    request without double-loading or corrupting the model.
     """
 
     def __init__(self, model_name: str = DEFAULT_EMBEDDING_MODEL):
         self.model_name = model_name
         self.dim = embedding_dim_for(model_name)
         self._model: Optional[object] = None
+        self._load_lock = threading.Lock()
 
     def _get_model(self):
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+        # Double-checked locking: the hot path (model already loaded)
+        # never touches the lock. Cold path serializes loaders so a
+        # search that arrives mid-warmup waits for the warmup to
+        # finish instead of kicking off a second SentenceTransformer.
+        if self._model is not None:
+            return self._model
+        with self._load_lock:
+            if self._model is None:
+                from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
-            logger.info("embedding_model_loading", model=self.model_name)
-            self._model = SentenceTransformer(self.model_name)
-            logger.info("embedding_model_loaded", model=self.model_name, dim=self.dim)
-        return self._model
+                logger.info("embedding_model_loading", model=self.model_name)
+                self._model = SentenceTransformer(self.model_name)
+                logger.info("embedding_model_loaded", model=self.model_name, dim=self.dim)
+            return self._model
+
+    def warmup(self) -> None:
+        """Force the underlying model to load now.
+
+        Safe to call from a background thread at app startup; the
+        ``_load_lock`` keeps a concurrent ``encode_one`` from racing
+        the load. No-op if the model is already resident.
+        """
+        self._get_model()
 
     def encode_one(self, text: str) -> bytes:
         """Embed one string, return packed float32 little-endian bytes."""
