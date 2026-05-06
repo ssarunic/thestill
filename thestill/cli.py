@@ -3765,6 +3765,77 @@ def episode_set_guests(ctx, episode_id, entity_ids):
     click.echo(f"✓ {episode_id}: guests = {', '.join(entity_ids)}")
 
 
+@main.command("backfill-roles")
+@click.option(
+    "--podcast-slug",
+    default=None,
+    help="Restrict backfill to one podcast (and its episodes). Omit to process the whole corpus.",
+)
+@click.pass_context
+@require_config
+@log_command
+def backfill_roles(ctx, podcast_slug):
+    """Link host/guest/recurring entities from existing facts files.
+
+    Reads the LLM-generated ``data/podcast_facts/*.facts.md`` and
+    ``data/episode_facts/**/*.facts.md`` files, resolves each named
+    person against the entity index (creating a ``person:`` entity if
+    none exists), and writes the ids into
+    ``podcasts.host_entity_ids`` / ``podcasts.recurring_entity_ids`` /
+    ``episodes.guest_entity_ids``.
+
+    No LLM calls — this is a pure parse-and-link pass over data the
+    summarize step already produced. Idempotent.
+    """
+    from .services.role_linker import backfill_all_roles, link_episode_roles, link_podcast_roles
+
+    state = ctx.obj
+    if podcast_slug:
+        podcast = state.repository.get_by_slug(podcast_slug)
+        if podcast is None:
+            click.echo(f"❌ No podcast with slug={podcast_slug}", err=True)
+            ctx.exit(1)
+        result = link_podcast_roles(
+            podcast_id=podcast.id,
+            podcast_slug=podcast.slug,
+            entity_repo=state.entity_repository,
+            path_manager=state.path_manager,
+        )
+        click.echo(f"✓ {podcast.slug}: hosts={len(result.hosts)} recurring={len(result.recurring)}")
+        eps_with_guests = 0
+        eps_total = 0
+        new_entities = len(set(result.created_entities))
+        for episode in podcast.episodes:
+            if not episode.slug:
+                continue
+            eps_total += 1
+            ep_result = link_episode_roles(
+                episode_id=episode.id,
+                podcast_slug=podcast.slug,
+                episode_slug=episode.slug,
+                entity_repo=state.entity_repository,
+                path_manager=state.path_manager,
+            )
+            if ep_result.guests:
+                eps_with_guests += 1
+            new_entities += len(set(ep_result.created_entities))
+        click.echo(f"✓ episodes: {eps_with_guests}/{eps_total} now have guests")
+        click.echo(f"✓ new entities created: {new_entities}")
+        return
+
+    summary = backfill_all_roles(
+        podcast_repo=state.repository,
+        entity_repo=state.entity_repository,
+        path_manager=state.path_manager,
+    )
+    click.echo(f"✓ podcasts: {summary.podcasts_with_hosts}/{summary.podcasts_processed} now have hosts")
+    click.echo(f"✓ episodes: {summary.episodes_with_guests}/{summary.episodes_processed} now have guests")
+    click.echo(f"✓ new entities created: {summary.entities_created}")
+    if summary.skipped_names:
+        unique = sorted(set(summary.skipped_names))
+        click.echo(f"  ({len(unique)} unique names skipped — first-name-only or generic role labels)")
+
+
 # ---------------------------------------------------------------------------
 # Spec #28 §1.13.7 — mention overrides + resolution blacklist
 # ---------------------------------------------------------------------------

@@ -497,6 +497,35 @@ def handle_clean(task: Task, state: "AppState") -> None:
             clean_transcript_json_path=clean_transcript_json_db_path,
         )
 
+        # Bridge LLM-extracted host/guest names → entity layer.
+        # Best-effort: a parse failure here shouldn't fail the
+        # cleaning task. The facts files were just produced by the
+        # cleaning pass above, so they're guaranteed fresh.
+        if state.entity_repository is not None and podcast.slug and episode.slug:
+            try:
+                from ..services.role_linker import link_episode_roles, link_podcast_roles
+
+                link_podcast_roles(
+                    podcast_id=podcast.id,
+                    podcast_slug=podcast.slug,
+                    entity_repo=state.entity_repository,
+                    path_manager=state.path_manager,
+                )
+                link_episode_roles(
+                    episode_id=episode.id,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
+                    entity_repo=state.entity_repository,
+                    path_manager=state.path_manager,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "role_linking_failed",
+                    episode_id=episode.id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
         logger.info(f"Transcript cleaning completed for episode: {episode.title}")
 
 
@@ -743,6 +772,17 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
 
 _extractor_init_lock = threading.Lock()
 _resolver_init_lock = threading.Lock()
+# Spec #28 §1.6 — serialise the inline alias-merge step across the
+# resolve-entities worker pool. ``_merge_qid_duplicates_for`` reads a
+# corpus-wide snapshot of duplicate QIDs then mutates entities; with
+# ``RESOLVE_ENTITIES_PARALLEL_JOBS > 1`` two workers can each take a
+# stale snapshot, both attempt to repoint+delete the same loser, and
+# trigger a FOREIGN KEY constraint failure when the second worker's
+# UPDATE references a row the first worker has already deleted.
+# The lock is process-scope (matching the worker pool boundary), not
+# DB-scope — multi-process deployments would need a different
+# mechanism, but this codebase is single-process.
+_qid_merge_lock = threading.Lock()
 
 
 def handle_resolve_entities(task: Task, state: "AppState") -> None:
@@ -816,7 +856,15 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             # touched. Cheap (only checks duplicates whose QID matches one
             # of the entities resolved in this episode); the full-corpus
             # sweep runs via ``thestill merge-aliases``.
-            merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
+            #
+            # Held under ``_qid_merge_lock`` so parallel resolve workers
+            # can't both pick the same duplicate pair off a stale
+            # ``find_duplicate_qid_pairs`` snapshot and race on the
+            # repoint+delete sequence. Without this, the second worker
+            # FK-fails when its UPDATE/INSERT references an entity row
+            # the first worker has already deleted.
+            with _qid_merge_lock:
+                merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
             if merged:
                 logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
 
