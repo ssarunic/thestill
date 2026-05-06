@@ -715,33 +715,81 @@ class SqliteEntityRepository:
             placeholders = ",".join("?" for _ in types)
             type_clause = f"AND e.type IN ({placeholders})"
             type_params = list(types)
+        # Roles boost: a guest on an episode (or a host of a podcast)
+        # is conceptually the most important entity for that show — the
+        # entire episode is *about* them — but they often don't say
+        # their own name, so mention_count alone ranks them at zero.
+        # We compute role_score = max(3 if guest, 2 if host, 1 if
+        # recurring, 0 otherwise) and order by that *before*
+        # mention_count, so anchor entities float to the top regardless
+        # of how often the transcript names them.
         sql = f"""
-            WITH ranked AS (
+            WITH role_index AS (
+                SELECT json_each.value AS entity_id,
+                       3 AS role_score, 'guest' AS role, episodes.id AS episode_id
+                FROM episodes, json_each(episodes.guest_entity_ids)
+                WHERE episodes.guest_entity_ids != '[]'
+                UNION ALL
+                SELECT json_each.value AS entity_id,
+                       2 AS role_score, 'host' AS role, episodes.id AS episode_id
+                FROM episodes
+                JOIN podcasts ON podcasts.id = episodes.podcast_id,
+                     json_each(podcasts.host_entity_ids)
+                WHERE podcasts.host_entity_ids != '[]'
+                UNION ALL
+                SELECT json_each.value AS entity_id,
+                       1 AS role_score, 'recurring' AS role, episodes.id AS episode_id
+                FROM episodes
+                JOIN podcasts ON podcasts.id = episodes.podcast_id,
+                     json_each(podcasts.recurring_entity_ids)
+                WHERE podcasts.recurring_entity_ids != '[]'
+            ),
+            role_agg AS (
+                SELECT entity_id,
+                       MAX(role_score) AS role_score,
+                       COUNT(DISTINCT episode_id) AS role_episode_count
+                FROM role_index
+                GROUP BY entity_id
+            ),
+            mention_agg AS (
+                SELECT entity_id, COUNT(*) AS mention_count
+                FROM entity_mentions
+                WHERE resolution_status = 'resolved'
+                GROUP BY entity_id
+            ),
+            ranked AS (
                 SELECT
-                    e.id            AS id,
-                    e.type          AS type,
-                    e.canonical_name AS canonical_name,
-                    e.aliases       AS aliases,
-                    (SELECT COUNT(*) FROM entity_mentions m
-                       WHERE m.entity_id = e.id
-                         AND m.resolution_status = 'resolved') AS mention_count,
+                    e.id              AS id,
+                    e.type            AS type,
+                    e.canonical_name  AS canonical_name,
+                    e.aliases         AS aliases,
+                    COALESCE(ma.mention_count, 0) AS mention_count,
+                    COALESCE(ra.role_score, 0)    AS role_score,
+                    COALESCE(ra.role_episode_count, 0) AS role_episode_count,
                     ROW_NUMBER() OVER (
                         PARTITION BY e.type
-                        ORDER BY (SELECT COUNT(*) FROM entity_mentions m2
-                                    WHERE m2.entity_id = e.id
-                                      AND m2.resolution_status = 'resolved') DESC,
-                                 LENGTH(e.canonical_name) ASC,
-                                 e.canonical_name ASC
+                        ORDER BY COALESCE(ra.role_score, 0)             DESC,
+                                 COALESCE(ra.role_episode_count, 0)     DESC,
+                                 COALESCE(ma.mention_count, 0)          DESC,
+                                 LENGTH(e.canonical_name)               ASC,
+                                 e.canonical_name                       ASC
                     ) AS rn
                 FROM entities e
+                LEFT JOIN role_agg    ra ON ra.entity_id = e.id
+                LEFT JOIN mention_agg ma ON ma.entity_id = e.id
                 WHERE (LOWER(e.canonical_name) LIKE ?
                        OR LOWER(e.aliases) LIKE ?)
                   {type_clause}
             )
-            SELECT id, type, canonical_name, aliases, mention_count
+            SELECT id, type, canonical_name, aliases, mention_count,
+                   role_score, role_episode_count
             FROM ranked
             WHERE rn <= ?
-            ORDER BY mention_count DESC, LENGTH(canonical_name) ASC, canonical_name ASC
+            ORDER BY role_score DESC,
+                     role_episode_count DESC,
+                     mention_count DESC,
+                     LENGTH(canonical_name) ASC,
+                     canonical_name ASC
         """
         params = [like_pattern, like_pattern, *type_params, limit_per_type]
         with self._get_connection() as conn:
@@ -756,6 +804,14 @@ class SqliteEntityRepository:
                     if prefix_lower in alias.lower():
                         matched_alias = alias
                         break
+            role_score = row["role_score"]
+            role: Optional[str] = None
+            if role_score == 3:
+                role = "guest"
+            elif role_score == 2:
+                role = "host"
+            elif role_score == 1:
+                role = "recurring"
             hits.append(
                 EntityHit(
                     id=row["id"],
@@ -763,6 +819,8 @@ class SqliteEntityRepository:
                     canonical_name=row["canonical_name"],
                     matched_alias=matched_alias,
                     mention_count=row["mention_count"],
+                    role=role,
+                    role_episode_count=row["role_episode_count"],
                 )
             )
         return hits
@@ -1161,6 +1219,12 @@ class EntityHit:
     canonical_name: str
     matched_alias: Optional[str]
     mention_count: int
+    # Role boost — non-``None`` when this entity is anchored as a host
+    # of a podcast or guest/recurring on episodes. Lets the typeahead
+    # surface anchor entities even when they have zero transcript
+    # mentions (a host who never says their own name).
+    role: Optional[str] = None
+    role_episode_count: int = 0
 
 
 @dataclass(frozen=True)

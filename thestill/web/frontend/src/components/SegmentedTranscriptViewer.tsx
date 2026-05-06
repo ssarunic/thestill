@@ -4,6 +4,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactElement,
@@ -11,6 +12,8 @@ import {
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
+  EpisodeEntity,
+  MentionLite,
   SegmentKind,
 } from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
@@ -22,6 +25,10 @@ import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSee
 import { getSpeakerBorderColor, getSpeakerColor } from '../utils/speakerColors'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { useToast } from './Toast'
+import {
+  applyEntityHighlights,
+  type SegmentMentionSet,
+} from './episode-entities/applyHighlights'
 
 const FOLLOW_STORAGE_KEY = 'thestill:transcript:followPlayback'
 const SHOW_FILLER_STORAGE_KEY = 'thestill:transcript:showFiller'
@@ -126,6 +133,20 @@ interface SegmentedTranscriptViewerProps {
   // keyboard-activates a segment. Parent decides whether to seek() an
   // already-playing track or play() a new one.
   onSeekRequest?: (seconds: number) => void
+  // Spec #28 §5.2 — episode-page entity UX. All optional; the viewer
+  // works without entity data (legacy / pre-extraction episodes).
+  // Passed in from EpisodeDetail rather than fetched here so the rail
+  // and the viewer share one fetch result.
+  entitiesById?: Map<string, EpisodeEntity>
+  mentionsBySegmentId?: Map<number, MentionLite[]>
+  entityHighlightsEnabled?: boolean
+  // When non-null, only segments whose id appears in the set are
+  // rendered. Spec §5.2 inline filter bar — pure client-side filter.
+  visibleSegmentIds?: Set<number> | null
+  // The entity the user last focused (hovered/clicked). Drives the
+  // `[`/`]` keyboard nav (spec §5.2 affordance #1).
+  focusedEntityId?: string | null
+  onFocusEntity?: (entityId: string) => void
 }
 
 function formatTimestamp(seconds: number): string {
@@ -223,6 +244,9 @@ interface BlockSegmentProps {
   // When true, collapse to a compact "[00:02] AD BREAK — NAVAN" chip.
   // When false, render the full cleaned ad body with a subtle coloured rail.
   collapsed: boolean
+  segmentMentions: SegmentMentionSet | null
+  entityHighlightsEnabled: boolean
+  onFocusEntity?: (entityId: string) => void
 }
 
 const BlockSegment = memo(function BlockSegment({
@@ -236,6 +260,9 @@ const BlockSegment = memo(function BlockSegment({
   searchQuery,
   dimmed,
   collapsed,
+  segmentMentions,
+  entityHighlightsEnabled,
+  onFocusEntity,
 }: BlockSegmentProps) {
   const style = BLOCK_STYLES[kind]
   const baseLabel = kind === 'ad_break' ? 'Ad break' : KIND_LABELS[kind]
@@ -298,7 +325,14 @@ const BlockSegment = memo(function BlockSegment({
           className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${style.accent}`}
         />
         {segment.text
-          ? highlightMatches(segment.text, searchQuery)
+          ? applyEntityHighlights({
+              text: segment.text,
+              segmentMentions,
+              enabled: entityHighlightsEnabled,
+              existingNodes: highlightMatches(segment.text, searchQuery),
+              onSeek,
+              onFocusEntity,
+            })
           : (
             <span className="text-gray-400 italic">
               (empty {baseLabel.toLowerCase()})
@@ -319,6 +353,9 @@ interface ContentSegmentProps {
   searchQuery: string
   dimmed: boolean
   isFiller: boolean
+  segmentMentions: SegmentMentionSet | null
+  entityHighlightsEnabled: boolean
+  onFocusEntity?: (entityId: string) => void
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -331,6 +368,9 @@ const ContentSegment = memo(function ContentSegment({
   searchQuery,
   dimmed,
   isFiller,
+  segmentMentions,
+  entityHighlightsEnabled,
+  onFocusEntity,
 }: ContentSegmentProps) {
   const speaker = segment.speaker ?? 'Unknown'
   const absoluteSeconds = segment.start + offset
@@ -376,7 +416,14 @@ const ContentSegment = memo(function ContentSegment({
           )}
           :
         </span>{' '}
-        {highlightMatches(segment.text, searchQuery)}
+        {applyEntityHighlights({
+          text: segment.text,
+          segmentMentions,
+          enabled: entityHighlightsEnabled,
+          existingNodes: highlightMatches(segment.text, searchQuery),
+          onSeek,
+          onFocusEntity,
+        })}
       </p>
     </div>
   )
@@ -426,10 +473,19 @@ type RenderRow =
   | { type: 'segment'; segment: AnnotatedSegment; expandedFromHidden: boolean }
   | { type: 'hidden'; firstId: number; count: number }
 
+// Spec #28 §5.2 affordance #2 — `E` toggle persistence key.
+const SHOW_ENTITY_HIGHLIGHTS_STORAGE_KEY = 'thestill:transcript:showEntityHighlights'
+
 export default function SegmentedTranscriptViewer({
   transcript,
   episodeId,
   onSeekRequest,
+  entitiesById,
+  mentionsBySegmentId,
+  entityHighlightsEnabled: entityHighlightsEnabledProp,
+  visibleSegmentIds,
+  focusedEntityId: focusedEntityIdProp,
+  onFocusEntity: onFocusEntityProp,
 }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
@@ -440,6 +496,34 @@ export default function SegmentedTranscriptViewer({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0)
   const [expandedHiddenGroups, setExpandedHiddenGroups] = useState<Set<number>>(
     () => new Set(),
+  )
+  // Affordance #2: `E` toggle to show/hide entity highlights. The
+  // parent can override the default-on behavior by passing
+  // `entityHighlightsEnabled` explicitly; otherwise we fall back to
+  // the persisted user pref (default on).
+  const [entityHighlightsLocal, setEntityHighlightsLocal] = usePersistedBoolean(
+    SHOW_ENTITY_HIGHLIGHTS_STORAGE_KEY,
+    true,
+  )
+  // The keydown handler reads through this ref so a held / rapid `E`
+  // press doesn't see a stale closure value between renders.
+  const entityHighlightsLocalRef = useRef(entityHighlightsLocal)
+  useEffect(() => {
+    entityHighlightsLocalRef.current = entityHighlightsLocal
+  }, [entityHighlightsLocal])
+  const entityHighlightsEnabled =
+    entityHighlightsEnabledProp ?? entityHighlightsLocal
+  // The focused entity is also kept locally if no parent state is
+  // wired in. Useful for embedding the viewer in contexts that don't
+  // care about coordinating with a strip / rail.
+  const [focusedEntityIdLocal, setFocusedEntityIdLocal] = useState<string | null>(null)
+  const focusedEntityId = focusedEntityIdProp ?? focusedEntityIdLocal
+  const onFocusEntity = useCallback(
+    (entityId: string) => {
+      if (onFocusEntityProp) onFocusEntityProp(entityId)
+      else setFocusedEntityIdLocal(entityId)
+    },
+    [onFocusEntityProp],
   )
   const { showToast } = useToast()
 
@@ -455,6 +539,10 @@ export default function SegmentedTranscriptViewer({
 
   // Togglable kinds are always in the rendered list — toggling the pill
   // flips them between compact chip and full-text; it never drops them.
+  // Spec §5.2 inline filter bar: when `visibleSegmentIds` is non-null,
+  // also drop any segment whose id isn't in the set. This is applied
+  // on top of the existing kind/filler filters so the user can stack
+  // both ("show only segments mentioning X, with ads hidden").
   const { presentKinds, renderedSegments } = useMemo(() => {
     const present = new Set<TogglableKind>()
     const visible: AnnotatedSegment[] = []
@@ -468,11 +556,14 @@ export default function SegmentedTranscriptViewer({
       }
       visible.push(seg)
     }
+    const filtered = visibleSegmentIds
+      ? visible.filter((s) => visibleSegmentIds.has(s.id))
+      : visible
     return {
       presentKinds: TOGGLE_ORDER.filter((kind) => present.has(kind)),
-      renderedSegments: visible,
+      renderedSegments: filtered,
     }
-  }, [transcript.segments, showFiller])
+  }, [transcript.segments, showFiller, visibleSegmentIds])
 
   const currentTime = usePlayerTime()
   const { track } = usePlayer()
@@ -570,6 +661,92 @@ export default function SegmentedTranscriptViewer({
       return next
     })
   }, [])
+
+  // Spec #28 §5.2 — per-segment mention sets, scoped down to entities
+  // we have records for. Computed once per (entitiesById x mentions)
+  // change rather than per segment render.
+  const segmentMentionSets = useMemo<Map<number, SegmentMentionSet>>(() => {
+    const out = new Map<number, SegmentMentionSet>()
+    if (!entitiesById || !mentionsBySegmentId) return out
+    for (const [segId, mentions] of mentionsBySegmentId) {
+      const eligible = mentions.filter((m) => entitiesById.has(m.entity_id))
+      if (eligible.length === 0) continue
+      out.set(segId, {
+        entityById: entitiesById,
+        mentions: eligible,
+      })
+    }
+    return out
+  }, [entitiesById, mentionsBySegmentId])
+
+  // Affordances #1 (`[` / `]` jump prev/next mention of focused entity)
+  // and #2 (`E` toggle highlights). Bind globally on the viewer root —
+  // we only react when no input is focused, so typing in the search
+  // box doesn't fight the bindings.
+  useEffect(() => {
+    function isTyping(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false
+      const tag = target.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
+    }
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (isTyping(e.target)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'e' || e.key === 'E') {
+        if (entityHighlightsEnabledProp !== undefined) return
+        e.preventDefault()
+        setEntityHighlightsLocal(!entityHighlightsLocalRef.current)
+        return
+      }
+      if (e.key === '[' || e.key === ']') {
+        if (!focusedEntityId) return
+        const direction = e.key === ']' ? 1 : -1
+        const targetMentions: { segmentId: number; startMs: number }[] = []
+        if (mentionsBySegmentId) {
+          for (const [segId, mentions] of mentionsBySegmentId) {
+            for (const m of mentions) {
+              if (m.entity_id === focusedEntityId) {
+                targetMentions.push({ segmentId: segId, startMs: m.start_ms })
+              }
+            }
+          }
+        }
+        if (targetMentions.length === 0) return
+        targetMentions.sort((a, b) => a.startMs - b.startMs)
+        const currentTimeMs = currentTime * 1000
+        let nextIdx: number
+        if (direction === 1) {
+          nextIdx = targetMentions.findIndex((m) => m.startMs > currentTimeMs)
+          if (nextIdx === -1) nextIdx = 0
+        } else {
+          // Walk backwards to find the most recent mention before now.
+          let candidate = -1
+          for (let i = targetMentions.length - 1; i >= 0; i -= 1) {
+            if (targetMentions[i].startMs < currentTimeMs) {
+              candidate = i
+              break
+            }
+          }
+          nextIdx = candidate === -1 ? targetMentions.length - 1 : candidate
+        }
+        e.preventDefault()
+        const target = targetMentions[nextIdx]
+        if (onSeekRequest) onSeekRequest(target.startMs / 1000 + offset)
+        follow.scrollToKey(target.segmentId)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [
+    focusedEntityId,
+    mentionsBySegmentId,
+    currentTime,
+    onSeekRequest,
+    offset,
+    follow,
+    entityHighlightsEnabledProp,
+    setEntityHighlightsLocal,
+  ])
 
   const renderRows = useMemo<RenderRow[]>(() => {
     if (!matchingIds) {
@@ -725,6 +902,7 @@ export default function SegmentedTranscriptViewer({
             }
             const { segment, expandedFromHidden } = row
             const isActive = segment.id === activeSegmentId
+            const segmentMentions = segmentMentionSets.get(segment.id) ?? null
             if (segment.kind === 'content' || segment.kind === 'filler') {
               return (
                 <ContentSegment
@@ -738,6 +916,9 @@ export default function SegmentedTranscriptViewer({
                   searchQuery={searchQuery}
                   dimmed={expandedFromHidden}
                   isFiller={segment.kind === 'filler'}
+                  segmentMentions={segmentMentions}
+                  entityHighlightsEnabled={entityHighlightsEnabled}
+                  onFocusEntity={onFocusEntity}
                 />
               )
             }
@@ -755,6 +936,9 @@ export default function SegmentedTranscriptViewer({
                 searchQuery={searchQuery}
                 dimmed={expandedFromHidden}
                 collapsed={hiddenKinds.has(togglableKind)}
+                segmentMentions={segmentMentions}
+                entityHighlightsEnabled={entityHighlightsEnabled}
+                onFocusEntity={onFocusEntity}
               />
             )
           })}

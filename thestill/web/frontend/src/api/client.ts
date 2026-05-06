@@ -47,6 +47,9 @@ import type {
   QuickSearchOptions,
   QuickSearchResponse,
   SearchResponse,
+  EpisodeEntitiesResponse,
+  EntitySummaryResponse,
+  EntityType,
 } from './types'
 
 const API_BASE = '/api'
@@ -604,4 +607,26 @@ export async function createMorningBriefing(): Promise<CreateDigestResponse> {
   }
 
   return response.json()
+}
+
+// Spec #28 §5.2 — episode-page entity UX. Two endpoints, both wrap
+// existing repository methods on the backend.
+
+export async function getEpisodeEntities(
+  episodeId: string,
+  minConfidence = 0,
+): Promise<EpisodeEntitiesResponse> {
+  const params = new URLSearchParams()
+  if (minConfidence > 0) params.set('min_confidence', String(minConfidence))
+  const qs = params.toString()
+  return fetchApi<EpisodeEntitiesResponse>(
+    `/episodes/${episodeId}/entities${qs ? `?${qs}` : ''}`,
+  )
+}
+
+export async function getEntitySummary(
+  entityType: EntityType,
+  idSlug: string,
+): Promise<EntitySummaryResponse> {
+  return fetchApi<EntitySummaryResponse>(`/entities/${entityType}/${idSlug}`)
 }

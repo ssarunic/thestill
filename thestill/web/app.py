@@ -57,6 +57,7 @@ from .routes import (
     api_commands,
     api_dashboard,
     api_digests,
+    api_entities,
     api_episodes,
     api_podcasts,
     api_search,
@@ -352,6 +353,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
     app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+    # Spec #28 §5.2 — episode-page entity UX (mention list per episode +
+    # entity summary). Routes span /api/episodes/.../entities and
+    # /api/entities/..., so the router declares full paths internally
+    # and mounts under the bare /api prefix.
+    app.include_router(api_entities.router, prefix="/api", tags=["entities"])
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])

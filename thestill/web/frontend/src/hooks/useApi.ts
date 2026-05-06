@@ -42,8 +42,10 @@ import {
   createMorningBriefing,
   quickSearch,
   corpusSearch,
+  getEpisodeEntities,
+  getEntitySummary,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -609,5 +611,27 @@ export function useCorpusSearch(query: string, options: CorpusSearchOptions = {}
     enabled: trimmed.length >= 2,
     staleTime: 30_000,
     placeholderData: (previous) => previous,
+  })
+}
+
+// Spec #28 §5.2 — episode-page entity UX. The episode endpoint is
+// fetched once per episode and feeds the strip + rail + inline
+// highlights + filter bar from a single payload, so the components
+// don't each issue their own request.
+export function useEpisodeEntities(episodeId: string | null | undefined, minConfidence = 0) {
+  return useQuery({
+    queryKey: ['episodes', episodeId, 'entities', minConfidence],
+    queryFn: () => getEpisodeEntities(episodeId!, minConfidence),
+    enabled: !!episodeId,
+    staleTime: 60_000,
+  })
+}
+
+export function useEntitySummary(entityType: EntityType | null, idSlug: string | null) {
+  return useQuery({
+    queryKey: ['entities', entityType, idSlug],
+    queryFn: () => getEntitySummary(entityType!, idSlug!),
+    enabled: !!entityType && !!idSlug,
+    staleTime: 60_000,
   })
 }
