@@ -566,11 +566,86 @@ class SqliteEntityRepository:
                 }
             )
         recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
+        roles = self.get_entity_roles(entity_id)
         return {
             "entity": entity,
             "mention_count": mention_count,
             "cooccurring": cooccurring,
             "recent_mentions": recent_mentions,
+            "hosts_podcasts": roles["hosts_podcasts"],
+            "recurring_podcasts": roles["recurring_podcasts"],
+            "guest_episodes": roles["guest_episodes"],
+        }
+
+    def get_entity_roles(
+        self,
+        entity_id: str,
+        *,
+        guest_episodes_limit: int = 50,
+    ) -> dict:
+        """Return podcasts where this entity is a host/recurring and
+        episodes where it appears as a guest.
+
+        Spec #28 §1.13.1: host/guest is a property of the
+        entity↔podcast (or entity↔episode) relationship, stored on
+        ``podcasts.host_entity_ids`` / ``podcasts.recurring_entity_ids`` /
+        ``episodes.guest_entity_ids``, *not* derived from
+        ``entity_mentions``. Surface these so a host who never says
+        their own name on the show still has their affiliation
+        rendered on the entity page.
+        """
+        with self._get_connection() as conn:
+            host_rows = conn.execute(
+                """
+                SELECT p.id           AS podcast_id,
+                       p.slug         AS podcast_slug,
+                       p.title        AS podcast_title,
+                       (SELECT COUNT(*) FROM episodes WHERE podcast_id = p.id) AS episode_count
+                FROM podcasts p
+                WHERE EXISTS (
+                    SELECT 1 FROM json_each(p.host_entity_ids) WHERE value = ?
+                )
+                ORDER BY p.title
+                """,
+                (entity_id,),
+            ).fetchall()
+            recurring_rows = conn.execute(
+                """
+                SELECT p.id           AS podcast_id,
+                       p.slug         AS podcast_slug,
+                       p.title        AS podcast_title,
+                       (SELECT COUNT(*) FROM episodes WHERE podcast_id = p.id) AS episode_count
+                FROM podcasts p
+                WHERE EXISTS (
+                    SELECT 1 FROM json_each(p.recurring_entity_ids) WHERE value = ?
+                )
+                ORDER BY p.title
+                """,
+                (entity_id,),
+            ).fetchall()
+            guest_rows = conn.execute(
+                """
+                SELECT e.id           AS episode_id,
+                       e.slug         AS episode_slug,
+                       e.title        AS episode_title,
+                       e.pub_date     AS published_at,
+                       p.id           AS podcast_id,
+                       p.slug         AS podcast_slug,
+                       p.title        AS podcast_title
+                FROM episodes e
+                JOIN podcasts p ON p.id = e.podcast_id
+                WHERE EXISTS (
+                    SELECT 1 FROM json_each(e.guest_entity_ids) WHERE value = ?
+                )
+                ORDER BY COALESCE(e.pub_date, '') DESC, e.title
+                LIMIT ?
+                """,
+                (entity_id, guest_episodes_limit),
+            ).fetchall()
+        return {
+            "hosts_podcasts": [dict(r) for r in host_rows],
+            "recurring_podcasts": [dict(r) for r in recurring_rows],
+            "guest_episodes": [dict(r) for r in guest_rows],
         }
 
     def find_entity_by_name(self, name: str, *, entity_type: Optional[str] = None) -> Optional[EntityRecord]:

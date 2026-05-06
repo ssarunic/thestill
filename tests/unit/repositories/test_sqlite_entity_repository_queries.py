@@ -280,6 +280,61 @@ class TestGetEntitySummary:
         repo, _, _, _ = populated_db
         assert repo.get_entity_summary("person:nobody") is None
 
+    def test_summary_includes_role_anchors(self, populated_db):
+        """Spec #28 §1.13.1: host/recurring/guest anchors are stored on
+        ``podcasts``/``episodes``, not in ``entity_mentions``. The
+        summary must surface them so a host who never says their own
+        name still has their affiliation rendered.
+        """
+        repo, podcast_id, ep1, _ = populated_db
+        with repo._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET host_entity_ids = ? WHERE id = ?",
+                ('["person:elon-musk"]', podcast_id),
+            )
+            conn.execute(
+                "UPDATE episodes SET guest_entity_ids = ? WHERE id = ?",
+                ('["person:elon-musk"]', ep1),
+            )
+        s = repo.get_entity_summary("person:elon-musk")
+        assert len(s["hosts_podcasts"]) == 1
+        assert s["hosts_podcasts"][0]["podcast_title"] == "Prof G Markets"
+        assert s["hosts_podcasts"][0]["episode_count"] == 2
+        assert s["recurring_podcasts"] == []
+        assert len(s["guest_episodes"]) == 1
+        assert s["guest_episodes"][0]["episode_title"] == "SpaceX IPO"
+
+
+class TestGetEntityRoles:
+    def test_empty_when_no_anchors(self, populated_db):
+        repo, _, _, _ = populated_db
+        roles = repo.get_entity_roles("company:spacex")
+        assert roles == {"hosts_podcasts": [], "recurring_podcasts": [], "guest_episodes": []}
+
+    def test_recurring_anchor(self, populated_db):
+        repo, podcast_id, _, _ = populated_db
+        with repo._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET recurring_entity_ids = ? WHERE id = ?",
+                ('["person:elon-musk"]', podcast_id),
+            )
+        roles = repo.get_entity_roles("person:elon-musk")
+        assert roles["hosts_podcasts"] == []
+        assert len(roles["recurring_podcasts"]) == 1
+        assert roles["recurring_podcasts"][0]["podcast_slug"] == "prof-g-markets"
+
+    def test_guest_episodes_ordered_by_pub_date_desc(self, populated_db):
+        repo, _, ep1, ep2 = populated_db
+        # ep1 pub_date = 2026-04-28 (newer); ep2 = 2026-04-24
+        with repo._get_connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET guest_entity_ids = ? WHERE id IN (?, ?)",
+                ('["person:elon-musk"]', ep1, ep2),
+            )
+        roles = repo.get_entity_roles("person:elon-musk")
+        titles = [ep["episode_title"] for ep in roles["guest_episodes"]]
+        assert titles == ["SpaceX IPO", "AI Job Crisis"]
+
 
 class TestFindEntityByName:
     def test_exact_id(self, populated_db):
