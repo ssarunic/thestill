@@ -351,8 +351,8 @@ export interface TopPodcastsResponse {
 }
 
 // Pipeline Task Types (Queue-based)
-// Spec #28 entity branch: extract-entities → resolve-entities → write-corpus → reindex
-// runs in parallel with summarize off the back of clean.
+// Spec #28 entity branch: extract-entities → resolve-entities → reindex
+// runs after summarize off the back of clean.
 export type PipelineStage =
   | 'download'
   | 'downsample'
@@ -361,7 +361,6 @@ export type PipelineStage =
   | 'summarize'
   | 'extract-entities'
   | 'resolve-entities'
-  | 'write-corpus'
   | 'reindex'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 

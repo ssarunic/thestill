@@ -55,7 +55,6 @@ describe('EntityBranchProgress', () => {
     expect(screen.getByText('Search indexing')).toBeInTheDocument()
     expect(screen.getByText('Extracting')).toBeInTheDocument()
     expect(screen.getByText('Resolving')).toBeInTheDocument()
-    expect(screen.getByText('Writing')).toBeInTheDocument()
     expect(screen.getByText('Indexing')).toBeInTheDocument()
   })
 
@@ -75,7 +74,6 @@ describe('EntityBranchProgress', () => {
     withTasks([
       task('extract-entities', 'completed'),
       task('resolve-entities', 'completed'),
-      task('write-corpus', 'completed'),
       task('reindex', 'completed'),
     ])
     render(<EntityBranchProgress episodeId="ep1" />)
@@ -89,7 +87,6 @@ describe('EntityBranchProgress', () => {
     withTasks([
       task('extract-entities', 'completed'),
       task('resolve-entities', 'completed'),
-      task('write-corpus', 'completed'),
       task('reindex', 'completed'),
     ])
     render(<EntityBranchProgress episodeId="ep1" collapseWhenIdle={false} />)

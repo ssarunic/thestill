@@ -37,8 +37,7 @@ export const STAGE_RANK: Record<PipelineStage, number> = {
   summarize: 4,
   'extract-entities': 5,
   'resolve-entities': 6,
-  'write-corpus': 7,
-  reindex: 8,
+  reindex: 7,
 }
 
 // Display labels in the queue viewer (verb form, present tense).
@@ -50,7 +49,6 @@ export const STAGE_LABEL: Record<PipelineStage, string> = {
   summarize: 'Summarize',
   'extract-entities': 'Extract entities',
   'resolve-entities': 'Resolve',
-  'write-corpus': 'Write corpus',
   reindex: 'Index chunks',
 }
 
@@ -63,7 +61,6 @@ export const STAGE_LABEL_ACTIVE: Record<PipelineStage, string> = {
   summarize: 'Summarizing',
   'extract-entities': 'Extracting entities',
   'resolve-entities': 'Resolving entities',
-  'write-corpus': 'Writing corpus',
   reindex: 'Indexing chunks',
 }
 
@@ -78,12 +75,11 @@ export const STAGE_LABEL_FAILURE: Record<string, string> = {
   summarize: 'Summary',
   'extract-entities': 'Extracting entities',
   'resolve-entities': 'Resolving',
-  'write-corpus': 'Writing corpus',
   reindex: 'Indexing chunks',
 }
 
 // Tailwind colour palette: blue→indigo→purple→amber→green for the
-// user chain, rose→pink→fuchsia→violet for the entity branch —
+// user chain, rose→pink→violet for the entity branch —
 // visually distinct so it's obvious at a glance which branch a task
 // belongs to.
 export const STAGE_BADGE_COLOR: Record<PipelineStage, string> = {
@@ -94,7 +90,6 @@ export const STAGE_BADGE_COLOR: Record<PipelineStage, string> = {
   summarize: 'bg-green-100 text-green-700',
   'extract-entities': 'bg-rose-100 text-rose-700',
   'resolve-entities': 'bg-pink-100 text-pink-700',
-  'write-corpus': 'bg-fuchsia-100 text-fuchsia-700',
   reindex: 'bg-violet-100 text-violet-700',
 }
 
@@ -107,7 +102,6 @@ export const STAGE_LANE_ACCENT: Record<PipelineStage, string> = {
   summarize: 'border-green-300',
   'extract-entities': 'border-rose-300',
   'resolve-entities': 'border-pink-300',
-  'write-corpus': 'border-fuchsia-300',
   reindex: 'border-violet-300',
 }
 
@@ -121,6 +115,5 @@ export const STAGE_BUTTON_COLOR: Record<PipelineStage, string> = {
   summarize: 'bg-green-600 hover:bg-green-700',
   'extract-entities': 'bg-rose-600 hover:bg-rose-700',
   'resolve-entities': 'bg-pink-600 hover:bg-pink-700',
-  'write-corpus': 'bg-fuchsia-600 hover:bg-fuchsia-700',
   reindex: 'bg-violet-600 hover:bg-violet-700',
 }
