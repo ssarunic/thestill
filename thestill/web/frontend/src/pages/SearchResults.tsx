@@ -20,10 +20,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useCorpusSearch, useQuickSearch } from '../hooks/useApi'
 import type {
+  EntityType,
   QuickEntityItem,
   SearchResult,
 } from '../api/types'
 import { parseQuery } from '../utils/searchOperators'
+import { entityHref, entityStyle } from '../utils/entityColors'
 
 type Tab = 'all' | 'quotes' | 'entities'
 
@@ -131,6 +133,31 @@ export default function SearchResults() {
       {!idle && isError && <ErrorState message={(corpus.error || quick.error)?.toString() ?? 'Search is offline'} />}
       {!idle && !isError && (
         <>
+          {showEntities && (
+            <Section title={tab === 'entities' ? undefined : 'Top matches'}>
+              {entityGroups.every((g) => g.items.length === 0) && !isLoading && (
+                <EmptySection label="entities" query={parsed.text} />
+              )}
+              <div className="space-y-4">
+                {entityGroups.map((group) => (
+                  group.items.length === 0 ? null : (
+                    <div key={group.type}>
+                      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                        {group.label}
+                      </h3>
+                      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {group.items.map((item) => (
+                          item.kind === 'entity' ? (
+                            <EntityResultCard key={item.id} item={item} />
+                          ) : null
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                ))}
+              </div>
+            </Section>
+          )}
           {showCorpus && (
             <Section title={tab === 'quotes' ? undefined : 'Quotes'}>
               {corpusResults.length === 0 && !isLoading && <EmptySection label="quotes" query={parsed.text} />}
@@ -139,31 +166,6 @@ export default function SearchResults() {
                   <QuoteResultRow key={`${r.episode_id}-${r.start_ms}-${i}`} result={r} />
                 ))}
               </ul>
-            </Section>
-          )}
-          {showEntities && (
-            <Section title={tab === 'entities' ? undefined : 'Entities'}>
-              {entityGroups.every((g) => g.items.length === 0) && !isLoading && (
-                <EmptySection label="entities" query={parsed.text} />
-              )}
-              <div className="space-y-4">
-                {entityGroups.map((group) => (
-                  group.items.length === 0 ? null : (
-                    <div key={group.type}>
-                      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                        {group.label}
-                      </h3>
-                      <ul className="space-y-1">
-                        {group.items.map((item) => (
-                          item.kind === 'entity' ? (
-                            <EntityResultRow key={item.id} item={item} />
-                          ) : null
-                        ))}
-                      </ul>
-                    </div>
-                  )
-                ))}
-              </div>
             </Section>
           )}
           {isLoading && <Loader />}
@@ -220,27 +222,67 @@ function QuoteResultRow({ result }: { result: SearchResult }) {
   )
 }
 
-function EntityResultRow({ item }: { item: QuickEntityItem }) {
-  // Entity pages are Phase 5; until then fall back to the episodes
-  // browser filtered by the entity name.
+function EntityResultCard({ item }: { item: QuickEntityItem }) {
+  const type = item.entity_type as EntityType
+  const style = entityStyle(type)
+  const roleSummary = formatRoleSummary(item)
   return (
     <li>
       <Link
-        to={`/episodes?search=${encodeURIComponent(item.name)}`}
-        className="flex items-center justify-between rounded px-3 py-2 hover:bg-gray-50"
+        to={entityHref(type, item.id)}
+        data-testid={`search-entity-card-${item.entity_type}`}
+        className={`flex items-center gap-3 rounded-lg border ${style.pillBorder} ${style.pillBg} px-4 py-3 transition hover:shadow-sm`}
       >
-        <div>
-          <span className="font-medium text-gray-900">{item.name}</span>
-          {item.matched_alias && (
-            <span className="ml-2 text-xs text-gray-500">aka {item.matched_alias}</span>
-          )}
+        <div
+          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${style.pillBg} ${style.pillText} text-sm font-bold ring-1 ring-inset ${style.pillBorder}`}
+        >
+          {style.shortCode}
         </div>
-        <span className="text-xs text-gray-500">
-          {item.mention_count} mention{item.mention_count === 1 ? '' : 's'}
-        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className="truncate font-semibold text-gray-900">{item.name}</span>
+            {item.role && <RoleBadge role={item.role} />}
+            {item.matched_alias && (
+              <span className="text-xs font-normal text-gray-500">aka {item.matched_alias}</span>
+            )}
+          </div>
+          <div className="text-xs text-gray-600">{roleSummary}</div>
+        </div>
+        <span className={`text-xs font-medium ${style.pillText}`}>View →</span>
       </Link>
     </li>
   )
+}
+
+function RoleBadge({ role }: { role: 'guest' | 'host' | 'recurring' }) {
+  const palette =
+    role === 'guest'
+      ? 'bg-emerald-100 text-emerald-800 ring-emerald-200'
+      : role === 'host'
+        ? 'bg-blue-100 text-blue-800 ring-blue-200'
+        : 'bg-violet-100 text-violet-800 ring-violet-200'
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${palette}`}>
+      {role}
+    </span>
+  )
+}
+
+function formatRoleSummary(item: QuickEntityItem): string {
+  const style = entityStyle(item.entity_type as EntityType)
+  if (item.role && item.role_episode_count > 0) {
+    const noun = item.role === 'host' ? 'episode' : 'episode'
+    const word = item.role === 'guest' ? 'on' : 'across'
+    return `${capitalize(item.role)} ${word} ${item.role_episode_count} ${noun}${item.role_episode_count === 1 ? '' : 's'}`
+  }
+  if (item.mention_count > 0) {
+    return `${style.label} · ${item.mention_count} mention${item.mention_count === 1 ? '' : 's'}`
+  }
+  return style.label
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
 function IdleState() {
