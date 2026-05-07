@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, Response
 from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...utils.duration import format_duration
-from ..dependencies import AppState, get_app_state, require_auth
+from ..dependencies import AppState, get_app_state, get_current_user, require_auth
 from ..responses import api_response, conflict, not_found, paginated_response
 
 router = APIRouter()
@@ -84,6 +84,7 @@ async def get_podcasts(
 async def get_podcast(
     podcast_slug: str,
     state: AppState = Depends(get_app_state),
+    user: Optional[User] = Depends(get_current_user),
 ) -> dict:
     """
     Get a specific podcast by slug.
@@ -103,6 +104,8 @@ async def get_podcast(
     podcasts = state.podcast_service.get_podcasts()
     podcast_info = next((p for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), None)
 
+    is_following = bool(user) and state.follower_repository.exists(user.id, podcast.id)
+
     return api_response(
         {
             "podcast": {
@@ -120,6 +123,7 @@ async def get_podcast(
                 "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
                 "episodes_count": len(podcast.episodes),
                 "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
+                "is_following": is_following,
                 # THES-146: New metadata fields
                 "author": podcast.author,
                 "explicit": podcast.explicit,

@@ -99,6 +99,7 @@ export interface PodcastDetail {
   last_processed: string | null
   episodes_count: number
   episodes_processed: number
+  is_following: boolean
   // THES-146: New metadata fields
   author?: string | null
   explicit?: boolean | null

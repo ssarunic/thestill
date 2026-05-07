@@ -126,28 +126,30 @@ export default function PodcastDetail() {
                   <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
                   <ExplicitBadge explicit={podcast.explicit} />
                 </div>
-                <Button
-                  variant="secondary"
-                  icon={<MinusIcon />}
-                  iconOnlyMobile
-                  isLoading={isUnfollowing}
-                  onClick={() => {
-                    if (isUnfollowing) return
-                    setIsUnfollowing(true)
-                    unfollow(podcastSlug!, {
-                      onSuccess: () => {
-                        showToast(`Unfollowed ${podcast.title}`, 'success')
-                        navigate('/podcasts')
-                      },
-                      onError: (error) => {
-                        showToast(`Failed to unfollow: ${error.message}`, 'error')
-                        setIsUnfollowing(false)
-                      },
-                    })
-                  }}
-                >
-                  Unfollow
-                </Button>
+                {podcast.is_following && (
+                  <Button
+                    variant="secondary"
+                    icon={<MinusIcon />}
+                    iconOnlyMobile
+                    isLoading={isUnfollowing}
+                    onClick={() => {
+                      if (isUnfollowing) return
+                      setIsUnfollowing(true)
+                      unfollow(podcastSlug!, {
+                        onSuccess: () => {
+                          showToast(`Unfollowed ${podcast.title}`, 'success')
+                          navigate('/podcasts')
+                        },
+                        onError: (error) => {
+                          showToast(`Failed to unfollow: ${error.message}`, 'error')
+                          setIsUnfollowing(false)
+                        },
+                      })
+                    }}
+                  >
+                    Unfollow
+                  </Button>
+                )}
               </div>
               {/* Author */}
               {podcast.author && (
