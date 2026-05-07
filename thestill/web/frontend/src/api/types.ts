@@ -947,6 +947,10 @@ export interface EpisodeEntity {
   mention_count: number
   first_mention_ms: number
   speaker_kind: SpeakerKind
+  // Spec #28 §5.2 — composite relevance score; see backend
+  // ``_compute_salience``. Used to sort the rail; the frontend can
+  // also use it to filter very-low-salience entries.
+  salience: number
   mentions: MentionLite[]
 }
 

@@ -112,6 +112,10 @@ class EntityRecord(BaseModel):
     wikidata_qid: Optional[str] = None
     aliases: List[str] = Field(default_factory=list)
     description: Optional[str] = None
+    # Spec #28 §5.2 — cached Wikidata ``instance of`` (P31) QIDs for
+    # bucket-gating in ``entity_type_rules``. Empty list when we haven't
+    # fetched yet, or when the entity has no QID (local-slug fallback).
+    wikidata_instance_of: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

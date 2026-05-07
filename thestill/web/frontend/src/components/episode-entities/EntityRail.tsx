@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { EpisodeEntity, EntityType } from '../../api/types'
 import { entityHref, entityStyle } from '../../utils/entityColors'
 
 // Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
 // "Companies mentioned", "Related episodes". Hosts/guests/recurring
-// surfaced first within the People bucket; mention-count desc within
+// surfaced first within the People bucket; salience desc within
 // each bucket. Affordance #4: the entity name itself deeplinks to the
 // first mention timestamp; play-▷ on hover seeks to it.
 //
@@ -12,6 +13,14 @@ import { entityHref, entityStyle } from '../../utils/entityColors'
 // backend; spec §2.10 swapped to sqlite-vec). The endpoint isn't wired
 // yet — render a placeholder so the rail's geometry is stable when it
 // lands later, rather than thrashing the layout when it appears.
+
+// Per-section visible cap. The full bucket is always sent over the
+// wire so the spec's "complete index" intent is preserved; we just
+// collapse the long tail behind a "Show all (N)" expander so the
+// default view stays scannable. 8 is wider than the above-the-fold
+// strip's 5 so the rail genuinely adds something rather than echoing
+// the strip.
+const DEFAULT_VISIBLE_COUNT = 8
 
 export interface EntityRailProps {
   entities: EpisodeEntity[]
@@ -145,14 +154,27 @@ interface RailSectionProps {
 }
 
 function RailSection({ title, entities, onSeek, onFocusEntity }: RailSectionProps) {
+  const [expanded, setExpanded] = useState(false)
+  const overflow = entities.length - DEFAULT_VISIBLE_COUNT
+  const visible = expanded || overflow <= 0 ? entities : entities.slice(0, DEFAULT_VISIBLE_COUNT)
   return (
     <section>
       <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</h2>
       <ul className="space-y-0.5">
-        {entities.map((e) => (
+        {visible.map((e) => (
           <RailRow key={e.entity.id} entity={e} onSeek={onSeek} onFocusEntity={onFocusEntity} />
         ))}
       </ul>
+      {overflow > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-1 ml-2 text-xs font-medium text-primary-700 hover:text-primary-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded"
+        >
+          {expanded ? 'Show fewer' : `Show all (${entities.length})`}
+        </button>
+      )}
     </section>
   )
 }

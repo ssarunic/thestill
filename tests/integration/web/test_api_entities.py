@@ -201,6 +201,144 @@ class TestEpisodeEntitiesEndpoint:
         resp = client.get("/api/episodes/no-such-episode/entities")
         assert resp.status_code == 404
 
+    def test_response_includes_salience_score(self, client, app_state):
+        # Spec #28 §5.2 — every entity row carries a positive salience.
+        _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
+        resp = client.get(f"/api/episodes/{episode_id}/entities")
+        assert resp.status_code == 200
+        for ent in resp.json()["entities"]:
+            assert "salience" in ent
+            assert ent["salience"] > 0.0
+
+    def test_salience_sort_beats_raw_count_for_broadly_spread_mentions(self, client, app_state):
+        """A 2-mention entity spread across the whole hour should outrank
+        a 3-mention entity clustered in a single tangent. Pure
+        mention-count sort would invert this."""
+        db_path = Path(app_state.repository.db_path)
+        # Build a fixture with two entities:
+        # - "Spread" — 2 mentions, 5 minutes apart, high confidence
+        # - "Cluster" — 3 mentions, all within 30 seconds, low confidence
+        podcast_id = str(uuid.uuid4())
+        episode_id = str(uuid.uuid4())
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (?, ?, ?, ?)",
+                (podcast_id, "https://example.com/spread.rss", "Spread Pod", "spread-pod"),
+            )
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url, slug, pub_date)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    episode_id,
+                    podcast_id,
+                    "ext-spread",
+                    "Spread Episode",
+                    "https://example.com/spread.mp3",
+                    "spread-ep",
+                    "2026-04-20T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        repo = SqliteEntityRepository(db_path=str(db_path))
+        spread = EntityRecord(
+            id="topic:spread",
+            type=EntityType.TOPIC,
+            canonical_name="Spread",
+            wikidata_qid="Q1001",
+        )
+        cluster = EntityRecord(
+            id="topic:cluster",
+            type=EntityType.TOPIC,
+            canonical_name="Cluster",
+            wikidata_qid="Q1002",
+        )
+        repo.upsert_entity(spread)
+        repo.upsert_entity(cluster)
+        mentions = [
+            # Spread — 2 mentions, 5 min apart, high confidence
+            EntityMention(
+                entity_id=spread.id,
+                episode_id=episode_id,
+                segment_id=1,
+                start_ms=10_000,
+                end_ms=12_000,
+                surface_form="Spread",
+                quote_excerpt="Spread first mention.",
+                confidence=0.95,
+                extractor="gliner:test",
+                role=MentionRole.MENTIONED,
+            ),
+            EntityMention(
+                entity_id=spread.id,
+                episode_id=episode_id,
+                segment_id=20,
+                start_ms=310_000,
+                end_ms=312_000,
+                surface_form="Spread",
+                quote_excerpt="Spread second mention.",
+                confidence=0.95,
+                extractor="gliner:test",
+                role=MentionRole.MENTIONED,
+            ),
+            # Cluster — 3 mentions, all within 30 seconds, low confidence
+            EntityMention(
+                entity_id=cluster.id,
+                episode_id=episode_id,
+                segment_id=10,
+                start_ms=100_000,
+                end_ms=101_000,
+                surface_form="Cluster",
+                quote_excerpt="Cluster first.",
+                confidence=0.55,
+                extractor="gliner:test",
+                role=MentionRole.MENTIONED,
+            ),
+            EntityMention(
+                entity_id=cluster.id,
+                episode_id=episode_id,
+                segment_id=10,
+                start_ms=110_000,
+                end_ms=111_000,
+                surface_form="Cluster",
+                quote_excerpt="Cluster second.",
+                confidence=0.55,
+                extractor="gliner:test",
+                role=MentionRole.MENTIONED,
+            ),
+            EntityMention(
+                entity_id=cluster.id,
+                episode_id=episode_id,
+                segment_id=10,
+                start_ms=120_000,
+                end_ms=121_000,
+                surface_form="Cluster",
+                quote_excerpt="Cluster third.",
+                confidence=0.55,
+                extractor="gliner:test",
+                role=MentionRole.MENTIONED,
+            ),
+        ]
+        repo.insert_mentions(mentions)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE entity_mentions SET resolution_status = 'resolved' WHERE episode_id = ?",
+                (episode_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        resp = client.get(f"/api/episodes/{episode_id}/entities")
+        assert resp.status_code == 200
+        ordered_names = [e["entity"]["canonical_name"] for e in resp.json()["entities"]]
+        # Salience sort wins: Spread above Cluster despite lower mention count.
+        assert ordered_names.index("Spread") < ordered_names.index("Cluster")
+
 
 class TestEntitySummaryEndpoint:
     def test_returns_full_summary_with_recent_mentions(self, client, app_state):

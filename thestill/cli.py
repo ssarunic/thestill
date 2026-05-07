@@ -2968,8 +2968,9 @@ def _get_or_create_cli_resolver(ctx):
     """
     if ctx.obj.entity_resolver is None:
         from .core.entity_resolver import EntityResolver
+        from .core.wikidata_client import WikidataClient
 
-        ctx.obj.entity_resolver = EntityResolver()
+        ctx.obj.entity_resolver = EntityResolver(wikidata_client=WikidataClient())
     return ctx.obj.entity_resolver
 
 
@@ -3111,6 +3112,131 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
 
     rows = repo.rebuild_cooccurrences(episode_ids=episode_ids)
     click.echo(f"✓ {rows} co-occurrence pair(s) materialised across {len(episode_ids)} episode(s)")
+
+
+@main.command("backfill-entity-types")
+@click.option("--episode-id", help="Scope backfill to entities mentioned in this episode")
+@click.option("--podcast-id", help="Scope backfill to entities mentioned in this podcast")
+@click.option("--limit", type=int, help="Cap the number of entities to process")
+@click.option("--dry-run", "-d", is_flag=True, help="Show reclassifications without writing")
+@click.pass_context
+@require_config
+@log_command
+def backfill_entity_types(ctx, episode_id, podcast_id, limit, dry_run):
+    """Spec #28 §5.2 — fetch Wikidata P31 and re-bucket existing entities.
+
+    Walks resolved entities with a ``wikidata_qid`` set, fetches
+    ``instance of`` (P31) via the Wikidata API, and applies the same
+    ``classify_entity_type`` rules the resolver runs on new resolutions.
+    Persists the P31 list on each entity row so subsequent calls are
+    cheap.
+
+    When the rules pick a different bucket than what's stored, a NEW
+    entity row is created at the corrected ``{type}:{slug}`` id and
+    every mention pointing at the old row is repointed to the new one.
+    The old row is left in place for safety — run ``merge-aliases``
+    afterwards to collapse the now-empty originals.
+
+    Scope by ``--episode-id`` or ``--podcast-id`` to test on a single
+    episode before running corpus-wide. ``--dry-run`` reports the
+    planned changes without writing.
+    """
+    from .core.entity_resolver import _build_entity_id
+    from .core.entity_type_rules import classify_entity_type
+    from .core.wikidata_client import WikidataClient
+    from .models.entities import EntityRecord, EntityType
+
+    repo = ctx.obj.entity_repository
+
+    sql = (
+        "SELECT DISTINCT ent.id "
+        "FROM entities ent "
+        "JOIN entity_mentions m ON m.entity_id = ent.id "
+        "WHERE ent.wikidata_qid IS NOT NULL "
+    )
+    params: list = []
+    if episode_id:
+        sql += "AND m.episode_id = ? "
+        params.append(episode_id)
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        sql += "AND m.episode_id IN (SELECT id FROM episodes WHERE podcast_id = ?) "
+        params.append(podcast.id)
+    sql += "ORDER BY ent.id "
+    if limit:
+        sql += f"LIMIT {int(limit)}"
+
+    with repo._get_connection() as conn:
+        entity_ids = [r[0] for r in conn.execute(sql, params).fetchall()]
+
+    if not entity_ids:
+        click.echo("No resolved entities with QIDs match the scope.")
+        return
+
+    click.echo(f"Backfilling P31 for {len(entity_ids)} entit(y/ies)…")
+    client = WikidataClient()
+    reclassified = 0
+    cached = 0
+    for entity_id in entity_ids:
+        entity = repo.get_entity(entity_id)
+        if entity is None or not entity.wikidata_qid:
+            continue
+        p31 = entity.wikidata_instance_of or client.fetch_p31(entity.wikidata_qid)
+        if not p31:
+            continue
+        classified = classify_entity_type(p31, entity.type)
+        if classified is None:
+            classified = entity.type
+        if classified == entity.type and entity.wikidata_instance_of == p31:
+            continue  # nothing to change
+        new_id = _build_entity_id(classified, entity.canonical_name, entity.wikidata_qid)
+        click.echo(f"  {entity.id} (type={entity.type.value}) → " f"{new_id} (type={classified.value}) [P31={p31}]")
+        if dry_run:
+            if classified != entity.type:
+                reclassified += 1
+            else:
+                cached += 1
+            continue
+        # Persist the P31 cache on the existing row regardless of
+        # whether the type changed.
+        updated_entity = EntityRecord(
+            id=entity.id,
+            type=entity.type,
+            canonical_name=entity.canonical_name,
+            wikidata_qid=entity.wikidata_qid,
+            aliases=entity.aliases,
+            description=entity.description,
+            wikidata_instance_of=p31,
+            created_at=entity.created_at,
+        )
+        repo.upsert_entity(updated_entity)
+        if classified != entity.type:
+            # Create the corrected entity, repoint mentions, leave the
+            # original row to be swept by merge-aliases.
+            new_entity = EntityRecord(
+                id=new_id,
+                type=classified,
+                canonical_name=entity.canonical_name,
+                wikidata_qid=entity.wikidata_qid,
+                aliases=entity.aliases,
+                description=entity.description,
+                wikidata_instance_of=p31,
+            )
+            repo.upsert_entity(new_entity)
+            moved = repo.repoint_mentions(from_entity_id=entity.id, to_entity_id=new_id)
+            click.echo(f"    repointed {moved} mention(s)")
+            reclassified += 1
+        else:
+            cached += 1
+
+    verb = "would be" if dry_run else "were"
+    click.echo(
+        f"\n🎉 backfill-entity-types: {reclassified} entit(y/ies) {verb} "
+        f"reclassified, {cached} P31 cache update(s)."
+    )
 
 
 @main.command("merge-aliases")

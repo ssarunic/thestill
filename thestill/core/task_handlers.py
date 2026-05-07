@@ -1021,8 +1021,9 @@ def _get_or_create_entity_resolver(state: "AppState"):
     with _resolver_init_lock:
         if state.entity_resolver is None:
             from .entity_resolver import EntityResolver
+            from .wikidata_client import WikidataClient
 
-            state.entity_resolver = EntityResolver()
+            state.entity_resolver = EntityResolver(wikidata_client=WikidataClient())
     return state.entity_resolver
 
 
