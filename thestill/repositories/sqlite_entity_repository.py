@@ -31,13 +31,18 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 
 logger = get_logger(__name__)
+
+# Keeper-tiebreak ranking for ``find_duplicate_qid_pairs``. Derived
+# from ``EntityType`` declaration order so adding/reordering a member
+# can't silently desync the rule.
+_TYPE_PRIORITY = {t.value: i for i, t in enumerate(EntityType)}
 
 
 class SqliteEntityRepository:
@@ -1164,28 +1169,122 @@ class SqliteEntityRepository:
     def find_duplicate_qid_pairs(self) -> List[Tuple[str, str, str]]:
         """Find pairs of entities sharing a Wikidata QID.
 
-        Returns list of ``(qid, keeper_id, loser_id)`` tuples. The
-        "keeper" is chosen deterministically as the alphabetically
-        first ``id``; the loser's mentions get repointed at the
-        keeper, then the loser is deleted by the caller.
+        Keeper rank: ``mention_count DESC, type_priority ASC, id ASC``.
+        Mention count is the strongest signal — for an entity with
+        hundreds of mentions, GLiNER's majority surface label tells us
+        what type the entity actually is. Type priority
+        (``person < company < product < topic``) only breaks ties when
+        counts are equal; ``id`` is the deterministic stabiliser.
+
+        Why this matters: an earlier ``MIN(id)`` rule tipped duplicates
+        toward whichever type prefix sorted first alphabetically — for
+        Q22686 (Donald Trump) that meant ``company:donald-trump`` beat
+        ``person:donald-trump`` even though 500+ mentions were labeled
+        ``person`` and a handful (e.g. "Trump administration") were
+        labeled ``company``.
+
+        Returns list of ``(qid, keeper_id, loser_id)`` tuples; the
+        loser's mentions get repointed at the keeper and the loser is
+        deleted by the caller.
         """
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT wikidata_qid, MIN(id) AS keeper_id, GROUP_CONCAT(id) AS all_ids
-                FROM entities
-                WHERE wikidata_qid IS NOT NULL
-                GROUP BY wikidata_qid
-                HAVING COUNT(*) > 1
+                SELECT
+                    e.wikidata_qid,
+                    e.id,
+                    e.type,
+                    COALESCE(
+                        (SELECT COUNT(*) FROM entity_mentions m WHERE m.entity_id = e.id),
+                        0
+                    ) AS mention_count
+                FROM entities e
+                WHERE e.wikidata_qid IS NOT NULL
+                  AND e.wikidata_qid IN (
+                      SELECT wikidata_qid FROM entities
+                      WHERE wikidata_qid IS NOT NULL
+                      GROUP BY wikidata_qid
+                      HAVING COUNT(*) > 1
+                  )
                 """
             ).fetchall()
-        pairs: List[Tuple[str, str, str]] = []
+
+        by_qid: Dict[str, List[sqlite3.Row]] = {}
         for row in rows:
-            keeper = row["keeper_id"]
-            for loser in row["all_ids"].split(","):
-                if loser != keeper:
-                    pairs.append((row["wikidata_qid"], keeper, loser))
+            by_qid.setdefault(row["wikidata_qid"], []).append(row)
+
+        pairs: List[Tuple[str, str, str]] = []
+        for qid, entries in by_qid.items():
+            entries.sort(
+                key=lambda r: (
+                    -r["mention_count"],
+                    _TYPE_PRIORITY.get(r["type"], len(_TYPE_PRIORITY)),
+                    r["id"],
+                )
+            )
+            keeper = entries[0]["id"]
+            for entry in entries[1:]:
+                pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def find_mistyped_entities(
+        self,
+        *,
+        min_mentions: int = 3,
+        min_majority_ratio: float = 0.6,
+    ) -> List[Tuple[str, str, str, int, int]]:
+        """Spec #28 §1.6 follow-up — return entities whose stored type
+        disagrees with the majority surface_label of their mentions.
+
+        Output: list of ``(entity_id, current_type, suggested_type,
+        majority_count, total_count)`` tuples.
+
+        Filters out entities where:
+
+        - total resolved mentions < ``min_mentions`` (not enough signal
+          to override the model's typing — default 3 is conservative).
+        - the majority surface_label fails to clear ``min_majority_ratio``
+          of the total (default 0.6 — when GLiNER itself is split, we
+          shouldn't bulldoze the existing type).
+        - the majority surface_label is not one of the four mappable
+          types (e.g. legacy ``MISC`` rows).
+        """
+        valid_types = {t.value for t in EntityType}
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    e.id AS entity_id,
+                    e.type AS current_type,
+                    m.surface_label AS surface_label,
+                    COUNT(*) AS label_count
+                FROM entities e
+                JOIN entity_mentions m ON m.entity_id = e.id
+                WHERE m.surface_label IS NOT NULL
+                GROUP BY e.id, m.surface_label
+                """
+            ).fetchall()
+
+        per_entity: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            per_entity.setdefault(row["entity_id"], {"current": row["current_type"], "labels": {}})
+            per_entity[row["entity_id"]]["labels"][row["surface_label"]] = row["label_count"]
+
+        out: List[Tuple[str, str, str, int, int]] = []
+        for entity_id, info in per_entity.items():
+            total = sum(info["labels"].values())
+            if total < min_mentions:
+                continue
+            top_label, top_count = max(info["labels"].items(), key=lambda kv: (kv[1], kv[0]))
+            if top_label not in valid_types:
+                continue
+            if top_label == info["current"]:
+                continue
+            if top_count / total < min_majority_ratio:
+                continue
+            out.append((entity_id, info["current"], top_label, top_count, total))
+        out.sort(key=lambda r: (-r[3], r[0]))
+        return out
 
 
 def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
