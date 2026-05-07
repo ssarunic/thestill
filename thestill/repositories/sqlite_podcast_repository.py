@@ -492,6 +492,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     wikidata_qid    TEXT NULL,
                     aliases         TEXT NOT NULL DEFAULT '[]',
                     description     TEXT NULL,
+                    wikidata_instance_of TEXT NOT NULL DEFAULT '[]',
                     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     CHECK (type IN ('person','company','product','topic'))
@@ -652,6 +653,19 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if "guest_entity_ids" not in episode_columns_now:
             logger.info("Migrating database: adding guest_entity_ids to episodes")
             conn.execute("ALTER TABLE episodes ADD COLUMN guest_entity_ids TEXT NOT NULL DEFAULT '[]'")
+
+        # spec #28 §5.2 — cached Wikidata ``instance of`` (P31) QIDs for
+        # bucket gating. JSON list of QID strings (e.g. ``["Q5"]`` for a
+        # human, ``["Q6256"]`` for a country). Empty/NULL means "not
+        # fetched yet"; the resolver fills it on first encounter and
+        # ``thestill backfill-entity-types`` updates existing rows.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entities'")
+        if cursor.fetchone() is not None:
+            cursor = conn.execute("PRAGMA table_info(entities)")
+            entity_columns_now = {row["name"] for row in cursor.fetchall()}
+            if "wikidata_instance_of" not in entity_columns_now:
+                logger.info("Migrating database: adding wikidata_instance_of to entities")
+                conn.execute("ALTER TABLE entities ADD COLUMN wikidata_instance_of TEXT NOT NULL DEFAULT '[]'")
 
         # spec #28 §1.13.7 — mention_overrides + resolution_blacklist tables.
         # The override layer is what guarantees human corrections survive

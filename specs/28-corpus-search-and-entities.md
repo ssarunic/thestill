@@ -1272,13 +1272,55 @@ is validated.
     mentioned", "Related episodes".
   - Persons sorted by `role='participant'` first (hosts/guests
     surfaced from speaker diarisation/episode metadata), then
-    `mentioned`, each within their bucket sorted by mention count
-    descending.
+    `mentioned`. Within each bucket sort by **salience** (see below)
+    descending, not by raw mention count.
   - Each row shows entity name, mention count badge (`12×`), and a
     play-▷ affordance on hover that seeks `<FloatingPlayer/>` to the
     first mention's `start_ms`.
-  - Companies section uses the same pattern, count-sorted only.
+  - Companies section uses the same pattern, salience-sorted.
   - Related episodes pulls from qmd vector similarity; cap at 5.
+
+  **Bucket gating via Wikidata P31 (post-1.5 correctness layer):**
+  - The base resolver assigns `EntityType` from GLiNER's
+    `surface_label` or ReFinED's `coarse_type`. Both are noisy:
+    GLiNER labels "Jews" (Q7325) as person, "Tory" (Q3433953) as
+    company; the ReFinED→`topic` map for `GPE` is overridden by the
+    GLiNER label for things like "Israel" → company.
+  - Once a QID is in hand the resolver fetches `instance of` (P31)
+    via `thestill.core.wikidata_client.WikidataClient` and applies
+    `entity_type_rules.classify_entity_type` to re-bucket. Rule
+    priority: `human` (Q5) → person; any geographic /
+    ethnic-group / political-party / abstract-concept /
+    intergovernmental-organization P31 → topic; commercial-
+    company P31 → company only when the fallback agreed; else
+    fall through to whichever bucket the resolver picked.
+  - The fetched P31 set is cached on the entity row
+    (`entities.wikidata_instance_of`, JSON list of QIDs) so
+    subsequent resolutions skip the network round-trip.
+  - Backfill for pre-existing data: `thestill backfill-entity-types`
+    walks resolved entities, fetches P31, applies the rules,
+    repoints mentions to the corrected `{type}:{slug}` id, and
+    leaves the original row to be swept by `merge-aliases`.
+
+  **Salience score (replaces raw count sort):**
+  - Definition (computed in `api_entities._compute_salience`):
+    `salience = mention_count × role_weight × (1 + spread_factor) ×
+    avg_confidence` where `role_weight ∈ {host:1.5, guest:1.5,
+    recurring:1.2, unknown:1.0}` and `spread_factor =
+    min(ln(1 + spread_seconds) / ln(3600), 1.0)`.
+  - `mention_count` stays the dominant term so the rail still
+    reads roughly by frequency. The role weight floats
+    participants above same-count peers; the spread factor
+    rewards entities discussed across the episode over those
+    clustered in one tangent; the confidence average down-weights
+    NER false positives (typically scoring 0.5–0.65).
+  - Exposed on the wire as `EpisodeEntity.salience` so the
+    frontend can surface the score (debug overlay) or filter
+    client-side without re-deriving the formula.
+  - Sort key in `GET /api/episodes/{id}/entities` is
+    `(kind_priority, -salience, canonical_name)` — kind priority
+    keeps the participant-first invariant; salience replaces the
+    legacy `-mention_count` term.
 
   **Episode header "key entities" strip (above the fold, mobile-first):**
   - Horizontal strip rendered between the episode header card and the

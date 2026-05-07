@@ -111,14 +111,17 @@ class SqliteEntityRepository:
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         new_aliases_json = json.dumps(entity.aliases)
+        new_p31_json = json.dumps(entity.wikidata_instance_of)
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO entities (
                     id, type, canonical_name, wikidata_qid,
-                    aliases, description, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    aliases, description, wikidata_instance_of,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    type           = excluded.type,
                     canonical_name = excluded.canonical_name,
                     wikidata_qid   = COALESCE(excluded.wikidata_qid, entities.wikidata_qid),
                     aliases        = (
@@ -131,6 +134,11 @@ class SqliteEntityRepository:
                         )
                     ),
                     description    = COALESCE(excluded.description, entities.description),
+                    wikidata_instance_of = CASE
+                        WHEN json_array_length(excluded.wikidata_instance_of) > 0
+                        THEN excluded.wikidata_instance_of
+                        ELSE entities.wikidata_instance_of
+                    END,
                     updated_at     = excluded.updated_at
                 """,
                 (
@@ -140,6 +148,7 @@ class SqliteEntityRepository:
                     entity.wikidata_qid,
                     new_aliases_json,
                     entity.description,
+                    new_p31_json,
                     entity.created_at.isoformat(),
                     now_iso,
                 ),
@@ -1288,6 +1297,10 @@ class SqliteEntityRepository:
 
 
 def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
+    # ``wikidata_instance_of`` was added by the spec #28 §5.2 migration;
+    # legacy rows pre-migration may have NULL even though the column has
+    # a DEFAULT '[]'. Guard with ``or '[]'`` to keep the JSON load happy.
+    p31_raw = _row_get(row, "wikidata_instance_of") or "[]"
     return EntityRecord(
         id=row["id"],
         type=EntityType(row["type"]),
@@ -1295,9 +1308,24 @@ def _row_to_entity(row: sqlite3.Row) -> EntityRecord:
         wikidata_qid=row["wikidata_qid"],
         aliases=json.loads(row["aliases"] or "[]"),
         description=row["description"],
+        wikidata_instance_of=json.loads(p31_raw),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+def _row_get(row: sqlite3.Row, key: str):
+    """Best-effort column read for sqlite3.Row.
+
+    ``sqlite3.Row.__getitem__`` raises ``IndexError`` for missing columns
+    rather than returning ``None``, which is awkward when reading rows
+    coming through legacy queries (e.g. tests that build a Row without
+    every column). Falls back to ``None`` so the caller can default.
+    """
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
 
 
 @dataclass(frozen=True)

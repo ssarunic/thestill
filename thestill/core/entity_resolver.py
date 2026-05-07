@@ -38,17 +38,29 @@ process scope on ``AppState.entity_resolver``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Iterable, List, Optional, Protocol
 
 from structlog import get_logger
 
 from ..models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ..utils.slug import generate_slug
+from .entity_type_rules import classify_entity_type
 
 if TYPE_CHECKING:
     # ``refined`` is an optional dep — imported lazily inside
     # ``_load_model`` so this module imports cleanly without it.
     from refined.inference.processor import Refined  # noqa: F401
+
+
+class _P31Lookup(Protocol):
+    """Structural type matching :class:`thestill.core.wikidata_client.WikidataClient`.
+
+    Lets the resolver accept either the real client or the
+    ``NullWikidataClient`` test stub without an import-time dependency.
+    """
+
+    def fetch_p31(self, qid: str) -> List[str]: ...
+
 
 logger = get_logger(__name__)
 
@@ -137,14 +149,23 @@ class EntityResolver:
         entity_set: str = DEFAULT_ENTITY_SET,
         min_qid_confidence: float = DEFAULT_MIN_QID_CONFIDENCE,
         preloaded_model: Optional["Refined"] = None,
+        wikidata_client: Optional[_P31Lookup] = None,
     ):
         """``preloaded_model`` is a test seam — pass a stub or
         pre-warmed real model and ``_load_model`` becomes a no-op.
+
+        ``wikidata_client`` enables spec #28 §5.2 P31-based bucket
+        gating: when set, every resolved QID has its ``instance of``
+        fetched and the type is reclassified via
+        ``entity_type_rules.classify_entity_type``. ``None`` disables
+        the check (current behavior — kept as default to keep the test
+        fixtures network-free).
         """
         self.model_name = model
         self.entity_set = entity_set
         self.min_qid_confidence = min_qid_confidence
         self._model: Optional["Refined"] = preloaded_model
+        self._wikidata_client = wikidata_client
 
     # ------------------------------------------------------------------
     # Public API
@@ -261,7 +282,28 @@ class EntityResolver:
             or getattr(match.predicted_entity, "human_readable_name", None)
             or mention.surface_form
         )
-        entity_type = self._infer_entity_type(mention, getattr(match, "coarse_type", None))
+        fallback_type = self._infer_entity_type(mention, getattr(match, "coarse_type", None))
+        # Spec #28 §5.2 — Wikidata P31 gating. Re-bucket entities whose
+        # ``instance of`` contradicts the GLiNER/coarse-type guess
+        # (e.g. countries that GLiNER labelled "company"). When the
+        # client isn't injected we fall through with the unchecked
+        # type — same behavior as before this commit.
+        p31_qids: List[str] = []
+        if self._wikidata_client is not None and wikidata_qid:
+            p31_qids = self._wikidata_client.fetch_p31(wikidata_qid)
+            classified = classify_entity_type(p31_qids, fallback_type)
+            if classified is not None and classified != fallback_type:
+                logger.info(
+                    "entity_type_reclassified",
+                    surface_form=mention.surface_form,
+                    qid=wikidata_qid,
+                    from_type=fallback_type.value,
+                    to_type=classified.value,
+                    p31=p31_qids,
+                )
+            entity_type = classified or fallback_type
+        else:
+            entity_type = fallback_type
         entity_id = _build_entity_id(entity_type, canonical_name, wikidata_qid)
         return ResolutionResult(
             mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
@@ -272,6 +314,7 @@ class EntityResolver:
                 wikidata_qid=wikidata_qid,
                 aliases=[mention.surface_form] if mention.surface_form != canonical_name else [],
                 description=getattr(match.predicted_entity, "description", None),
+                wikidata_instance_of=p31_qids,
             ),
             status="resolved",
             method=ResolutionMethod.DIRECT,

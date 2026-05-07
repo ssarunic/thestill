@@ -198,6 +198,72 @@ class TestCharOverlap:
     def test_shared_substring(self):
         assert _char_overlap("hello world", "world peace") == 5
 
+
+class _StubP31Client:
+    """Test stub matching the ``_P31Lookup`` protocol the resolver
+    expects. Returns the configured P31 list for matching QIDs and
+    ``[]`` otherwise.
+    """
+
+    def __init__(self, p31_by_qid: dict[str, list[str]] | None = None):
+        self.p31_by_qid = p31_by_qid or {}
+        self.calls: list[str] = []
+
+    def fetch_p31(self, qid: str) -> list[str]:
+        self.calls.append(qid)
+        return self.p31_by_qid.get(qid, [])
+
+
+class TestP31Gating:
+    """Spec #28 §5.2 — Wikidata P31 reclassifies the bucket when
+    GLiNER/coarse_type disagree with Wikidata's instance-of."""
+
+    def test_country_qid_demotes_company_to_topic(self):
+        # ``Israel`` mislabeled as company by GLiNER. Wikidata says Q801
+        # is instance-of Q6256 (country). Resolver should demote to topic.
+        predictions = {"Israel": ("Q801", "Israel", "ORG")}
+        client = _StubP31Client({"Q801": ["Q6256"]})
+        resolver = EntityResolver(
+            preloaded_model=StubReFinED(predictions),
+            wikidata_client=client,
+        )
+        results = resolver.resolve([_mention(1, "Israel", label="company")])
+        assert results[0].entity.type is EntityType.TOPIC
+        assert results[0].entity.id.startswith("topic:")
+        assert results[0].entity.wikidata_instance_of == ["Q6256"]
+
+    def test_human_qid_keeps_person_when_already_person(self):
+        predictions = {"Elon Musk": ("Q317521", "Elon Musk", "PER")}
+        client = _StubP31Client({"Q317521": ["Q5"]})
+        resolver = EntityResolver(
+            preloaded_model=StubReFinED(predictions),
+            wikidata_client=client,
+        )
+        results = resolver.resolve([_mention(1, "Elon Musk", label="person")])
+        assert results[0].entity.type is EntityType.PERSON
+        assert results[0].entity.wikidata_instance_of == ["Q5"]
+
+    def test_no_p31_signal_falls_back_to_inferred_type(self):
+        predictions = {"Mystery": ("Q9999", "Mystery", "WAT")}
+        # Empty P31 list — client returned nothing.
+        client = _StubP31Client({})
+        resolver = EntityResolver(
+            preloaded_model=StubReFinED(predictions),
+            wikidata_client=client,
+        )
+        results = resolver.resolve([_mention(1, "Mystery", label="company")])
+        # Falls back to GLiNER's surface label.
+        assert results[0].entity.type is EntityType.COMPANY
+        assert results[0].entity.wikidata_instance_of == []
+
+    def test_disabled_when_client_is_none(self):
+        # Default constructor — no Wikidata client — preserves the
+        # pre-spec-§5.2 behavior. No reclassification, no P31 cached.
+        resolver = EntityResolver(preloaded_model=StubReFinED())
+        results = resolver.resolve([_mention(1, "OpenAI", label="company")])
+        assert results[0].entity.type is EntityType.COMPANY
+        assert results[0].entity.wikidata_instance_of == []
+
     def test_no_overlap(self):
         assert _char_overlap("apple", "xyz") == 0
 

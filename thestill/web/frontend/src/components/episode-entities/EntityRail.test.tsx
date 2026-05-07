@@ -17,6 +17,7 @@ function entity(
     mention_count: count,
     first_mention_ms: firstMentionMs,
     speaker_kind: speakerKind,
+    salience: count,
     mentions: [],
   }
 }
@@ -73,5 +74,34 @@ describe('EntityRail', () => {
   it('always shows the Related episodes section as a placeholder', () => {
     renderRail([entity('person:a', 'Alice', 'person', 1)])
     expect(screen.getByText('Related episodes')).toBeInTheDocument()
+  })
+
+  it('caps a section at 8 visible entries by default and reveals the rest on expand', () => {
+    // Spec #28 §5.2 — sections beyond 8 collapse the tail behind a
+    // "Show all (N)" toggle so the default rail height stays scannable.
+    const persons = Array.from({ length: 12 }, (_, i) =>
+      entity(`person:${i}`, `Person ${i + 1}`, 'person', 12 - i),
+    )
+    renderRail(persons)
+    expect(screen.getByText('Person 1')).toBeInTheDocument()
+    expect(screen.getByText('Person 8')).toBeInTheDocument()
+    // 9..12 are collapsed
+    expect(screen.queryByText('Person 9')).toBeNull()
+    expect(screen.queryByText('Person 12')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: /Show all \(12\)/ })
+    fireEvent.click(toggle)
+    expect(screen.getByText('Person 9')).toBeInTheDocument()
+    expect(screen.getByText('Person 12')).toBeInTheDocument()
+    // The button flips to "Show fewer" when expanded.
+    expect(screen.getByRole('button', { name: /Show fewer/ })).toBeInTheDocument()
+  })
+
+  it('does not render the expander when a section already fits under the cap', () => {
+    renderRail([
+      entity('person:a', 'Alice', 'person', 5),
+      entity('person:b', 'Bob', 'person', 3),
+    ])
+    expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
   })
 })

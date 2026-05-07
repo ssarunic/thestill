@@ -26,6 +26,7 @@ URL.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import List, Literal, Optional
 
@@ -86,6 +87,13 @@ class EpisodeEntity(BaseModel):
     # ``role`` field. Spec §1.13.1: host/guest is a property of the
     # entity↔podcast relationship, not the mention.
     speaker_kind: Literal["host", "guest", "recurring", "unknown"]
+    # Spec #28 §5.2 — composite relevance score used to sort the rail.
+    # Combines mention_count, speaker_kind weight, log(time_spread), and
+    # average mention confidence so a 2× mention by a host across the
+    # whole episode outranks a 5× mention buried in one tangent. Exposed
+    # on the wire so the frontend can render diagnostics or filter
+    # client-side without re-deriving the formula.
+    salience: float = 0.0
     mentions: List[MentionLite]
 
 
@@ -93,6 +101,57 @@ class EpisodeEntitiesResponse(BaseModel):
     episode_id: str
     podcast_id: str
     entities: List[EpisodeEntity]
+
+
+# Spec #28 §5.2 — relative weights used in the salience composite.
+# Tuned so the final score keeps mention_count as the dominant term
+# (the rail is still "the things mentioned most") while letting hosts
+# and broadly-referenced entities float above raw-count peers.
+_SPEAKER_KIND_WEIGHT = {
+    "host": 1.5,
+    "guest": 1.5,
+    "recurring": 1.2,
+    "unknown": 1.0,
+}
+# Cap on log(time-spread-seconds) used to normalize the spread term to
+# roughly [0, 1]. ln(3600) ≈ 8.2 — covers a 1h episode; longer episodes
+# saturate without runaway influence.
+_TIME_SPREAD_LOG_CAP = math.log(3600.0)
+
+
+def _compute_salience(
+    *,
+    speaker_kind: str,
+    mentions: list,
+) -> float:
+    """Spec #28 §5.2 salience composite.
+
+    ``salience = mention_count × role_weight × (1 + spread_factor) × avg_confidence``
+
+    - ``mention_count``: dominant term — the rail still sorts roughly
+      by frequency.
+    - ``role_weight``: hosts/guests/recurring get a multiplicative boost
+      so participant entities don't lose to high-frequency one-off names.
+    - ``spread_factor``: ``ln(1 + spread_seconds) / ln(3600)``, capped at
+      1.0 — rewards entities mentioned across the episode over those
+      clustered in one segment.
+    - ``avg_confidence``: down-weights entities whose mentions are
+      borderline (NER often emits 0.5–0.65 false positives).
+
+    Returns 0.0 when ``mentions`` is empty (defensive — shouldn't
+    happen because grouped entries always carry at least one mention).
+    """
+    if not mentions:
+        return 0.0
+    role_weight = _SPEAKER_KIND_WEIGHT.get(speaker_kind, 1.0)
+    if len(mentions) >= 2:
+        spread_seconds = (mentions[-1].start_ms - mentions[0].start_ms) / 1000.0
+        spread_factor = math.log1p(max(spread_seconds, 0.0)) / _TIME_SPREAD_LOG_CAP
+        spread_factor = min(spread_factor, 1.0)
+    else:
+        spread_factor = 0.0
+    avg_confidence = sum(m.confidence for m in mentions) / len(mentions)
+    return len(mentions) * role_weight * (1.0 + spread_factor) * avg_confidence
 
 
 class EntityCooccurrenceRef(BaseModel):
@@ -261,16 +320,19 @@ def get_episode_entities(
                 mention_count=len(mentions),
                 first_mention_ms=mentions[0].start_ms,
                 speaker_kind=kind,
+                salience=_compute_salience(speaker_kind=kind, mentions=mentions),
                 mentions=mentions,
             )
         )
 
-    # Spec §5.2 right-rail sort order: hosts/guests/recurring first
-    # (participants), then mentioned-only, each bucket descending by
-    # mention count. The frontend can re-sort but the canonical order
-    # is set here so consumers other than the rail see the same shape.
+    # Spec §5.2 right-rail sort: hosts/guests/recurring first
+    # (participants), mentioned-only after. Within each bucket sort by
+    # salience descending — see ``_compute_salience`` for the formula.
+    # Tiebreak by canonical_name for deterministic output. Replaces the
+    # raw ``mention_count`` sort that let one-shot tangents outrank
+    # broadly-referenced entities.
     kind_priority = {"host": 0, "guest": 1, "recurring": 2, "unknown": 3}
-    items.sort(key=lambda i: (kind_priority[i.speaker_kind], -i.mention_count, i.entity.canonical_name))
+    items.sort(key=lambda i: (kind_priority[i.speaker_kind], -i.salience, i.entity.canonical_name))
 
     return EpisodeEntitiesResponse(
         episode_id=episode_id,
