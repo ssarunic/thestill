@@ -63,7 +63,13 @@ def _entity(id_: str, *, type_: EntityType = EntityType.PERSON, qid: str | None 
     )
 
 
-def _mention(episode_id: str, segment_id: int, surface: str = "Elon Musk") -> EntityMention:
+def _mention(
+    episode_id: str,
+    segment_id: int,
+    surface: str = "Elon Musk",
+    *,
+    surface_label: str = "person",
+) -> EntityMention:
     return EntityMention(
         episode_id=episode_id,
         segment_id=segment_id,
@@ -72,7 +78,7 @@ def _mention(episode_id: str, segment_id: int, surface: str = "Elon Musk") -> En
         speaker="Host",
         role=MentionRole.MENTIONED,
         surface_form=surface,
-        surface_label="person",
+        surface_label=surface_label,
         quote_excerpt=f"… mentioning {surface} …",
         confidence=0.9,
         extractor="gliner:test",
@@ -240,9 +246,51 @@ class TestAliasMergeHelpers:
         assert len(pairs) == 1
         qid, keeper, loser = pairs[0]
         assert qid == "Q317521"
-        # Keeper is alphabetically first (MIN(id))
+        # Both entries are type=person with 0 mentions, so the
+        # tiebreak is id ASC — "person:elon-musk" wins.
         assert keeper == "person:elon-musk"
         assert loser == "person:musk"
+
+    def test_find_duplicate_qid_pairs_prefers_mention_majority(self, seeded):
+        """The Donald Trump case: ``company:donald-trump`` and
+        ``person:donald-trump`` share QID Q22686, but the person row
+        has hundreds of mentions and the company row only a handful.
+        Mention count is the primary keeper signal — person wins.
+        """
+        tmp_db, ep1, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("company:donald-trump", type_=EntityType.COMPANY, qid="Q22686"))
+        repo.upsert_entity(_entity("person:donald-trump", type_=EntityType.PERSON, qid="Q22686"))
+        # Five person mentions, one company mention — majority is person.
+        for i in range(5):
+            repo.insert_mentions([_mention(ep1, i + 1, "Trump")])
+        repo.insert_mentions([_mention(ep1, 6, "Trump administration")])
+        pendings = repo.list_pending_mentions(episode_id=ep1)
+        for m in pendings[:5]:
+            repo.resolve_mention(mention_id=m.id, entity_id="person:donald-trump", status="resolved")
+        repo.resolve_mention(mention_id=pendings[5].id, entity_id="company:donald-trump", status="resolved")
+
+        pairs = repo.find_duplicate_qid_pairs()
+        assert len(pairs) == 1
+        qid, keeper, loser = pairs[0]
+        assert qid == "Q22686"
+        assert keeper == "person:donald-trump"
+        assert loser == "company:donald-trump"
+
+    def test_find_duplicate_qid_pairs_type_priority_tiebreak(self, seeded):
+        """When mention counts tie, type priority kicks in:
+        person > company > product > topic.
+        """
+        tmp_db, _, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("topic:ethereum", type_=EntityType.TOPIC, qid="Q16783523"))
+        repo.upsert_entity(_entity("company:ethereum", type_=EntityType.COMPANY, qid="Q16783523"))
+
+        pairs = repo.find_duplicate_qid_pairs()
+        assert len(pairs) == 1
+        _, keeper, loser = pairs[0]
+        assert keeper == "company:ethereum"
+        assert loser == "topic:ethereum"
 
     def test_repoint_mentions_then_delete_entity(self, seeded):
         tmp_db, ep1, _ = seeded
@@ -270,3 +318,69 @@ class TestAliasMergeHelpers:
         assert {p.id for p in people} == {"person:a", "person:b"}
         companies = repo.list_entities_by_type("company")
         assert {c.id for c in companies} == {"company:c"}
+
+
+class TestFindMistypedEntities:
+    """Spec #28 §1.6 follow-up — relabel entities whose stored type
+    disagrees with the majority surface_label of their mentions.
+    """
+
+    def _resolve_all(self, repo, episode_id, entity_id):
+        for m in repo.list_pending_mentions(episode_id=episode_id):
+            repo.resolve_mention(mention_id=m.id, entity_id=entity_id, status="resolved")
+
+    def test_flags_entity_when_majority_label_disagrees(self, seeded):
+        tmp_db, ep1, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("company:donald-trump", type_=EntityType.COMPANY, qid="Q22686"))
+        # 5 person-labeled mentions, 1 company-labeled — the entity is
+        # stored as ``company`` but should be ``person``.
+        for i in range(5):
+            repo.insert_mentions([_mention(ep1, i + 1, "Trump", surface_label="person")])
+        repo.insert_mentions([_mention(ep1, 6, "Trump administration", surface_label="company")])
+        self._resolve_all(repo, ep1, "company:donald-trump")
+
+        out = repo.find_mistyped_entities(min_mentions=3, min_majority_ratio=0.6)
+        assert len(out) == 1
+        entity_id, current, suggested, top_count, total = out[0]
+        assert entity_id == "company:donald-trump"
+        assert current == "company"
+        assert suggested == "person"
+        assert top_count == 5
+        assert total == 6
+
+    def test_skips_when_majority_below_ratio(self, seeded):
+        tmp_db, ep1, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("topic:ambiguous", type_=EntityType.TOPIC, qid="Q1"))
+        # Roughly 50/50 — no clear majority, leave the type alone.
+        for i in range(3):
+            repo.insert_mentions([_mention(ep1, i + 1, "ambiguous", surface_label="person")])
+        for i in range(3):
+            repo.insert_mentions([_mention(ep1, 10 + i, "ambiguous", surface_label="company")])
+        self._resolve_all(repo, ep1, "topic:ambiguous")
+
+        out = repo.find_mistyped_entities(min_mentions=3, min_majority_ratio=0.6)
+        assert out == []
+
+    def test_skips_when_below_min_mentions(self, seeded):
+        tmp_db, ep1, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("company:lone", type_=EntityType.COMPANY, qid="Q2"))
+        repo.insert_mentions([_mention(ep1, 1, "Lone", surface_label="person")])
+        repo.insert_mentions([_mention(ep1, 2, "Lone", surface_label="person")])
+        self._resolve_all(repo, ep1, "company:lone")
+
+        out = repo.find_mistyped_entities(min_mentions=3, min_majority_ratio=0.6)
+        assert out == []
+
+    def test_skips_when_already_correctly_typed(self, seeded):
+        tmp_db, ep1, _ = seeded
+        repo = SqliteEntityRepository(db_path=str(tmp_db))
+        repo.upsert_entity(_entity("person:elon-musk", type_=EntityType.PERSON, qid="Q317521"))
+        for i in range(5):
+            repo.insert_mentions([_mention(ep1, i + 1, "Musk", surface_label="person")])
+        self._resolve_all(repo, ep1, "person:elon-musk")
+
+        out = repo.find_mistyped_entities(min_mentions=3, min_majority_ratio=0.6)
+        assert out == []

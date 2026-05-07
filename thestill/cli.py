@@ -3130,14 +3130,17 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
     Two-step nightly job:
 
     1. **QID dedupe.** Any pair of entities sharing a Wikidata QID
-       collapses into the alphabetically-first id; the loser's
-       mentions are repointed and the loser deleted.
+       collapses into the keeper picked by ``find_duplicate_qid_pairs``
+       (mention count > type priority > id); the loser's mentions are
+       repointed and the loser deleted.
     2. **Fuzzy merge.** Within each entity type, pairs whose
        canonical-name edit distance is < ``levenshtein-threshold``
        times the longer name's length collapse the same way. The
        default of 0.1 is the spec's recommended threshold.
 
     Idempotent: running again is a no-op once duplicates are gone.
+    Run ``thestill repair-entity-types`` first if you suspect entities
+    are stored under the wrong ``type`` (spec §1.6 follow-up).
     """
     from rapidfuzz.distance import Levenshtein
 
@@ -3202,6 +3205,101 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
+
+
+@main.command("repair-entity-types")
+@click.option(
+    "--min-mentions",
+    default=3,
+    type=int,
+    help="Skip entities with fewer resolved mentions than this (default 3)",
+)
+@click.option(
+    "--min-majority-ratio",
+    default=0.8,
+    type=float,
+    help="Skip entities whose majority surface_label is below this ratio (default 0.8)",
+)
+@click.option("--dry-run", "-d", is_flag=True, help="Report repairs without writing")
+@click.pass_context
+@require_config
+@log_command
+def repair_entity_types(ctx, min_mentions, min_majority_ratio, dry_run):
+    """Relabel entities whose stored type disagrees with the majority
+    surface_label of their mentions (spec #28 §1.6 follow-up).
+
+    Backfills the bug where the older QID-dedupe keeper rule sorted by
+    alphabetical id, leaving entities like "Donald Trump" typed as
+    ``company`` despite hundreds of person-labeled mentions. The new
+    ``find_duplicate_qid_pairs`` ranking prevents recurrence; this
+    command corrects the legacy rows.
+
+    For each candidate the slug stays the same and only the type
+    prefix changes. If the corrected ``id`` already exists, mentions
+    are repointed onto it and the mistyped row is deleted; otherwise
+    a fresh entity row is created (canonical_name, QID, aliases,
+    description preserved).
+    """
+    from .models.entities import EntityRecord, EntityType
+
+    repo = ctx.obj.entity_repository
+    candidates = repo.find_mistyped_entities(
+        min_mentions=min_mentions,
+        min_majority_ratio=min_majority_ratio,
+    )
+    if not candidates:
+        click.echo("No mistyped entities to repair.")
+        return
+
+    repaired = 0
+    skipped = 0
+    label = "would relabel" if dry_run else "relabeled"
+    for entity_id, current_type, suggested_type, top_count, total in candidates:
+        old = repo.get_entity(entity_id)
+        if old is None:
+            continue
+        slug = entity_id.split(":", 1)[1]
+        new_id = f"{suggested_type}:{slug}"
+
+        existing_target = repo.get_entity(new_id)
+        if (
+            existing_target is not None
+            and existing_target.wikidata_qid
+            and old.wikidata_qid
+            and existing_target.wikidata_qid != old.wikidata_qid
+        ):
+            click.echo(
+                f"  [skip] {entity_id} → {new_id}: target exists with different QID "
+                f"({existing_target.wikidata_qid} vs {old.wikidata_qid})"
+            )
+            skipped += 1
+            continue
+
+        if dry_run:
+            click.echo(
+                f"  [dry-run] {entity_id} → {new_id} " f"({top_count}/{total} mentions labeled {suggested_type})"
+            )
+            repaired += 1
+            continue
+
+        if existing_target is None:
+            # ``list`` is a registered click command at module scope; spread instead.
+            repo.upsert_entity(
+                EntityRecord(
+                    id=new_id,
+                    type=EntityType(suggested_type),
+                    canonical_name=old.canonical_name,
+                    wikidata_qid=old.wikidata_qid,
+                    aliases=[*old.aliases],
+                    description=old.description,
+                )
+            )
+        repo.repoint_mentions(from_entity_id=entity_id, to_entity_id=new_id)
+        repo.delete_entity(entity_id)
+        repaired += 1
+        click.echo(f"  ✓ {entity_id} → {new_id} ({top_count}/{total})")
+
+    click.echo(f"\nType repair: {repaired} {label}, {skipped} skipped")
 
 
 # ---------------------------------------------------------------------------
