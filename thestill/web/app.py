@@ -54,6 +54,7 @@ from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
 from ..services.briefing_service import BriefingService
 from ..services.digest_generator import DigestGenerator
+from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
@@ -66,6 +67,7 @@ from .routes import (
     api_digests,
     api_entities,
     api_episodes,
+    api_imports,
     api_inbox,
     api_podcasts,
     api_search,
@@ -147,6 +149,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     inbox_service = InboxService.from_config(config, inbox_repository, follower_repository)
     follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
 
+    import_service = ImportService(
+        repository=repository,
+        inbox_repository=inbox_repository,
+        queue_manager=queue_manager,
+    )
+
     # Initialize digest repository
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
 
@@ -201,6 +209,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_service=follower_service,
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
+        import_service=import_service,
         digest_repository=digest_repository,
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
@@ -410,6 +419,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
     app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
+    app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files

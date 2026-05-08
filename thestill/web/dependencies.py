@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
     from ..services.briefing_service import BriefingService
+    from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -102,6 +103,7 @@ class AppState:
     follower_service: "FollowerService"
     inbox_repository: "InboxRepository"
     inbox_service: "InboxService"
+    import_service: "ImportService"
     digest_repository: "DigestRepository"
     briefing_repository: "BriefingRepository"
     briefing_service: "BriefingService"

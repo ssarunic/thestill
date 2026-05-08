@@ -49,6 +49,7 @@ from typing import Final
 # quantifiers, no alternation over overlapping groups.
 YOUTUBE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"youtube\.com/watch"),
+    re.compile(r"youtube\.com/shorts/"),
     re.compile(r"youtube\.com/playlist"),
     re.compile(r"youtube\.com/@[\w-]+"),
     re.compile(r"youtube\.com/channel/"),
@@ -87,7 +88,7 @@ def looks_like_rss(url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Apple Podcasts numeric ID
+# Apple Podcasts numeric IDs
 # ---------------------------------------------------------------------------
 
 # Apple URLs embed the show ID as ``/id<digits>`` in the path. The bound
@@ -96,11 +97,28 @@ def looks_like_rss(url: str) -> bool:
 # through a multi-megabyte numeric string.
 APPLE_PODCAST_ID_RE: Final[re.Pattern[str]] = re.compile(r"id(\d{1,12})")
 
+# Apple episode share links carry the iTunes track id as a ``?i=<digits>``
+# query param. Same length bound as the show id.
+APPLE_EPISODE_ID_RE: Final[re.Pattern[str]] = re.compile(r"[?&]i=(\d{1,15})")
+
+APPLE_PODCAST_HOST_RE: Final[re.Pattern[str]] = re.compile(r"podcasts\.apple\.com/", re.IGNORECASE)
+
 
 def extract_apple_podcast_id(text: str) -> str | None:
     """Return the first ``id<digits>`` match in ``text``, or None."""
     match = APPLE_PODCAST_ID_RE.search(text)
     return match.group(1) if match else None
+
+
+def extract_apple_episode_id(text: str) -> str | None:
+    """Return the ``?i=<digits>`` Apple episode track id, or None."""
+    match = APPLE_EPISODE_ID_RE.search(text)
+    return match.group(1) if match else None
+
+
+def is_apple_podcast_url(url: str) -> bool:
+    """Return True iff ``url`` is a podcasts.apple.com link."""
+    return bool(APPLE_PODCAST_HOST_RE.search(url))
 
 
 # ---------------------------------------------------------------------------
@@ -114,4 +132,6 @@ ALL_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     *YOUTUBE_PATTERNS,
     *RSS_HINT_PATTERNS,
     APPLE_PODCAST_ID_RE,
+    APPLE_EPISODE_ID_RE,
+    APPLE_PODCAST_HOST_RE,
 )

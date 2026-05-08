@@ -16,11 +16,15 @@
 Per-user inbox models.
 
 The inbox decouples *what exists* (episodes in the system) from *what each
-user sees* (rows in their inbox). A row is created by either:
+user sees* (rows in their inbox). A row is created by one of:
 
-- ``follow_new``: an episode the user follows just published.
+- ``follow_new``: an episode the user follows just published (spec #29).
 - ``follow_seed``: a few recent episodes pulled in when the user follows
-  a podcast for the first time.
+  a podcast for the first time (spec #29).
+- ``ad_hoc``: the user actively saved an existing episode to their inbox
+  (spec #31).
+- ``import``: the user pasted an external URL and we materialised a brand
+  new episode for it (spec #31).
 
 Per-user state (unread / read / saved / dismissed) lives on the row, not on
 the episode — two users following the same podcast can have completely
@@ -35,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from .podcast import Episode
 
-InboxSource = Literal["follow_new", "follow_seed"]
+InboxSource = Literal["follow_new", "follow_seed", "ad_hoc", "import"]
 InboxState = Literal["unread", "read", "saved", "dismissed"]
 
 # Tuples derived from the Literal types so the runtime values can't drift

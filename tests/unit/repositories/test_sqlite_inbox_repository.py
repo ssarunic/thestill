@@ -504,3 +504,72 @@ def test_list_episode_ids_in_window_returns_empty_for_empty_states(inbox_repo, u
     base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     ids = inbox_repo.list_episode_ids_in_window(user.id, since=base, until=base + timedelta(hours=1), states=())
     assert ids == []
+
+
+# ============================================================================
+# count_imports_for_user_since (quota plumbing)
+# ============================================================================
+
+
+def test_count_imports_for_user_since_only_counts_import_source(inbox_repo, user_repo, podcast_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep1 = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep1")
+    ep2 = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep2")
+
+    # One follow_new (does NOT count) + one import (counts).
+    inbox_repo.insert_many(
+        [
+            InboxEntry(user_id=alice.id, episode_id=ep1.id, source="follow_new"),
+            InboxEntry(user_id=alice.id, episode_id=ep2.id, source="import"),
+        ]
+    )
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert inbox_repo.count_imports_for_user_since(alice.id, since) == 1
+
+
+def test_count_imports_for_user_since_respects_window(inbox_repo, user_repo, podcast_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_old = _make_episode(podcast_repo, podcast_id=podcast.id, title="old")
+    ep_new = _make_episode(podcast_repo, podcast_id=podcast.id, title="new")
+
+    now = datetime.now(timezone.utc)
+    inbox_repo.insert_many(
+        [
+            InboxEntry(
+                user_id=alice.id,
+                episode_id=ep_old.id,
+                source="import",
+                delivered_at=now - timedelta(hours=48),
+            ),
+            InboxEntry(
+                user_id=alice.id,
+                episode_id=ep_new.id,
+                source="import",
+                delivered_at=now - timedelta(minutes=10),
+            ),
+        ]
+    )
+
+    # 24h window — only the new one is in scope.
+    since = now - timedelta(hours=24)
+    assert inbox_repo.count_imports_for_user_since(alice.id, since) == 1
+
+
+def test_count_imports_for_user_since_is_per_user(inbox_repo, user_repo, podcast_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_a = _make_episode(podcast_repo, podcast_id=podcast.id, title="a")
+    ep_b = _make_episode(podcast_repo, podcast_id=podcast.id, title="b")
+
+    inbox_repo.insert_many(
+        [
+            InboxEntry(user_id=alice.id, episode_id=ep_a.id, source="import"),
+            InboxEntry(user_id=bob.id, episode_id=ep_b.id, source="import"),
+        ]
+    )
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert inbox_repo.count_imports_for_user_since(alice.id, since) == 1
+    assert inbox_repo.count_imports_for_user_since(bob.id, since) == 1

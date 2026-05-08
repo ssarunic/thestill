@@ -22,7 +22,7 @@ episodes to pick) live in ``InboxService``.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState
 
@@ -43,6 +43,20 @@ class InboxRepository(ABC):
 
         Returns the number of rows actually inserted (existing pairs are a
         no-op so the count can be less than ``len(entries)``).
+        """
+
+    @abstractmethod
+    def find_or_create(self, *, user_id: str, episode_id: str, source: str) -> Tuple[InboxEntry, bool]:
+        """
+        Idempotent single-row insert (spec #31).
+
+        Used by import / ad-hoc paths where the caller wants to know
+        whether the inbox row was newly created (so it can drive a
+        toast / progress indicator) or already existed.
+
+        Returns ``(entry, created)``. When ``created=False``, ``source``
+        on the returned entry reflects the *original* row, not the
+        argument — re-importing an episode does not change provenance.
         """
 
     @abstractmethod
@@ -116,4 +130,15 @@ class InboxRepository(ABC):
 
         Returns the number of rows that were (or would be) inserted.
         ``dry_run=True`` reports the candidate count without writing.
+        """
+
+    @abstractmethod
+    def count_imports_for_user_since(self, user_id: str, since: datetime) -> int:
+        """
+        Number of ``source='import'`` rows for ``user_id`` whose
+        ``delivered_at`` is at or after ``since``.
+
+        Plumbing for a future per-user import quota: the current import
+        flow only emits the count as a structured-log field; nothing is
+        enforced yet.
         """

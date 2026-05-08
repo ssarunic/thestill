@@ -1,7 +1,10 @@
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useInbox } from '../hooks/useApi'
-import type { InboxItem, InboxState } from '../api/types'
+import type { Episode, InboxItem, InboxState } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
+import Button, { PlusIcon } from '../components/Button'
+import ImportEpisodeModal from '../components/ImportEpisodeModal'
 
 function formatDelivered(iso: string): string {
   const date = new Date(iso)
@@ -30,9 +33,65 @@ function StateBadge({ state }: { state: InboxState }) {
   )
 }
 
+// Pipeline progress as the user perceives it. Derived from episode state +
+// failure flags so two users sharing an imported episode see consistent
+// progress without storing per-user pipeline state.
+type ProgressKind = 'failed' | 'processing' | 'ready'
+
+interface ProgressStatus {
+  kind: ProgressKind
+  label: string
+}
+
+function deriveProgress(episode: Episode): ProgressStatus {
+  if (episode.is_failed) {
+    return { kind: 'failed', label: 'Failed' }
+  }
+  switch (episode.state) {
+    case 'discovered':
+      return { kind: 'processing', label: 'Downloading…' }
+    case 'downloaded':
+    case 'downsampled':
+      return { kind: 'processing', label: 'Transcribing…' }
+    case 'transcribed':
+      return { kind: 'processing', label: 'Cleaning…' }
+    case 'cleaned':
+      return { kind: 'processing', label: 'Summarising…' }
+    case 'summarized':
+      return { kind: 'ready', label: 'Ready' }
+    default:
+      return { kind: 'processing', label: 'Processing…' }
+  }
+}
+
+function ProgressPill({ status }: { status: ProgressStatus }) {
+  const cls =
+    status.kind === 'failed'
+      ? 'bg-red-100 text-red-700'
+      : status.kind === 'ready'
+        ? 'bg-green-100 text-green-700'
+        : 'bg-amber-100 text-amber-800'
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${cls}`}>
+      {status.kind === 'processing' && (
+        <span
+          aria-hidden="true"
+          className="inline-block w-2 h-2 rounded-full bg-current animate-pulse"
+        />
+      )}
+      {status.label}
+    </span>
+  )
+}
+
 function InboxRow({ item }: { item: InboxItem }) {
   const { entry, episode, podcast } = item
   const episodeHref = `/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`
+  const progress = deriveProgress(episode)
+  // Only surface the progress pill while the row hasn't reached the inbox's
+  // "ready to read" state — once summarised, the regular state badge is
+  // enough signal.
+  const showProgress = progress.kind !== 'ready'
   return (
     <li>
       <Link
@@ -53,19 +112,41 @@ function InboxRow({ item }: { item: InboxItem }) {
             <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
             <span className="text-gray-300">·</span>
             <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
+            {entry.source === 'import' && (
+              <span className="text-xs text-gray-400 italic">imported</span>
+            )}
           </div>
           <p className="text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
             {episode.title}
           </p>
         </div>
-        <StateBadge state={entry.state} />
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <StateBadge state={entry.state} />
+          {showProgress && <ProgressPill status={progress} />}
+        </div>
       </Link>
     </li>
   )
 }
 
 export default function Inbox() {
-  const { data, isLoading, error } = useInbox()
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+
+  // Poll while at least one episode is still working through the pipeline.
+  // Once everything is summarised or failed the query goes back to its
+  // default 15s staleTime.
+  const POLL_INTERVAL_MS = 5_000
+  const { data, isLoading, error } = useInbox({
+    refetchInterval: (query) => {
+      const items = query.state.data?.items
+      if (!items) return false
+      return items.some((it) => deriveProgress(it.episode).kind === 'processing')
+        ? POLL_INTERVAL_MS
+        : false
+    },
+  })
+
+  const items = useMemo(() => data?.items ?? [], [data])
 
   if (error) {
     return (
@@ -78,15 +159,22 @@ export default function Inbox() {
     )
   }
 
-  const items = data?.items ?? []
-
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Inbox</h1>
-        <p className="text-gray-500 mt-1">
-          {isLoading ? 'Loading…' : `${items.length} delivered`}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Inbox</h1>
+          <p className="text-gray-500 mt-1">
+            {isLoading ? 'Loading…' : `${items.length} delivered`}
+          </p>
+        </div>
+        <Button
+          onClick={() => setIsImportModalOpen(true)}
+          icon={<PlusIcon />}
+          iconOnlyMobile
+        >
+          Import
+        </Button>
       </div>
 
       <BriefingCard />
@@ -100,9 +188,12 @@ export default function Inbox() {
       ) : items.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
           <h3 className="text-lg font-medium text-gray-900 mb-2">No deliveries yet</h3>
-          <p className="text-gray-500">
-            Follow a podcast to receive new episodes in your inbox.
+          <p className="text-gray-500 mb-4">
+            Follow a podcast to receive new episodes — or paste a link to import one.
           </p>
+          <Button onClick={() => setIsImportModalOpen(true)} icon={<PlusIcon />}>
+            Import episode
+          </Button>
         </div>
       ) : (
         <ul className="space-y-3">
@@ -111,6 +202,11 @@ export default function Inbox() {
           ))}
         </ul>
       )}
+
+      <ImportEpisodeModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+      />
     </div>
   )
 }

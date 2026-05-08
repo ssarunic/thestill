@@ -30,7 +30,9 @@ import pytest
 from thestill.utils.url_patterns import (
     ALL_PATTERNS,
     APPLE_PODCAST_ID_RE,
+    extract_apple_episode_id,
     extract_apple_podcast_id,
+    is_apple_podcast_url,
     is_youtube_url,
     looks_like_rss,
 )
@@ -74,6 +76,9 @@ class TestIsYoutubeUrl:
 
     def test_short_url(self):
         assert is_youtube_url("https://youtu.be/abc")
+
+    def test_shorts_url(self):
+        assert is_youtube_url("https://www.youtube.com/shorts/dQw4w9WgXcQ")
 
     def test_channel_handle(self):
         assert is_youtube_url("https://www.youtube.com/@somechannel")
@@ -128,3 +133,35 @@ class TestExtractApplePodcastId:
         result = APPLE_PODCAST_ID_RE.search("id" + "9" * 13)
         assert result is not None
         assert len(result.group(1)) == 12
+
+
+class TestExtractAppleEpisodeId:
+    def test_url_with_episode_query(self):
+        url = "https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000"
+        assert extract_apple_episode_id(url) == "1000620312000"
+
+    def test_url_without_i_param(self):
+        url = "https://podcasts.apple.com/us/podcast/the-daily/id1200361736"
+        assert extract_apple_episode_id(url) is None
+
+    def test_picks_only_the_i_param_not_other_digits(self):
+        url = "https://podcasts.apple.com/us/podcast/x/id123?other=999&i=42"
+        assert extract_apple_episode_id(url) == "42"
+
+
+class TestIsApplePodcastUrl:
+    def test_canonical_share_link(self):
+        assert is_apple_podcast_url(
+            "https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000"
+        )
+
+    def test_show_only_link_still_classifies_as_apple(self):
+        # Resolver rejects show-only links separately; the URL classifier
+        # only cares about the host.
+        assert is_apple_podcast_url("https://podcasts.apple.com/us/podcast/foo/id123")
+
+    def test_apple_music_is_not_apple_podcasts(self):
+        assert not is_apple_podcast_url("https://music.apple.com/us/album/foo/id1")
+
+    def test_youtube_is_not_apple(self):
+        assert not is_apple_podcast_url("https://www.youtube.com/watch?v=abc")

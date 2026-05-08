@@ -56,6 +56,8 @@ import type {
   InboxState,
   InboxStateResponse,
   InboxUnreadCountResponse,
+  ImportRequest,
+  ImportResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -708,6 +710,31 @@ export async function markBriefingListened(briefingId: string): Promise<Briefing
   const response = await fetch(`${API_BASE}/briefings/${briefingId}/listened`, {
     method: 'POST',
     credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+// ============================================================================
+// Imports (spec #31) — POST /api/imports
+// ============================================================================
+
+export async function importEpisode(request: ImportRequest): Promise<ImportResponse> {
+  const response = await fetch(`${API_BASE}/imports`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
   })
 
   if (!response.ok) {
