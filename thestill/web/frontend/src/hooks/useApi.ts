@@ -44,6 +44,8 @@ import {
   corpusSearch,
   getEpisodeEntities,
   getEntitySummary,
+  getInbox,
+  type GetInboxOptions,
 } from '../api/client'
 import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType } from '../api/types'
 
@@ -633,5 +635,13 @@ export function useEntitySummary(entityType: EntityType | null, idSlug: string |
     queryFn: () => getEntitySummary(entityType!, idSlug!),
     enabled: !!entityType && !!idSlug,
     staleTime: 60_000,
+  })
+}
+
+export function useInbox(options: GetInboxOptions = {}) {
+  return useQuery({
+    queryKey: ['inbox', options],
+    queryFn: () => getInbox(options),
+    staleTime: 15_000,
   })
 }

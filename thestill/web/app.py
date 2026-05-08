@@ -61,6 +61,7 @@ from .routes import (
     api_digests,
     api_entities,
     api_episodes,
+    api_inbox,
     api_podcasts,
     api_search,
     api_status,
@@ -384,6 +385,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
+    app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files
