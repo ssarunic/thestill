@@ -160,6 +160,14 @@ TOPIC_P31 = frozenset(
         "Q483394",  # literary genre
         # Languages
         "Q34770",  # language
+        # Professions / occupations / positions — gliner often tags role
+        # nouns ("product manager", "first officer") with surface_label=
+        # "person", but Wikidata is unambiguous: a job title is not a
+        # human. Demote to topic so the People rail stays clean.
+        "Q28640",  # profession
+        "Q12737077",  # occupation
+        "Q4164871",  # position
+        "Q11488158",  # officeholder
         # Political parties + factions — orgs by definition but the
         # rail's "Companies mentioned" reads as commerce, so we surface
         # them as topics.
