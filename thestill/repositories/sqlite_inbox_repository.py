@@ -21,8 +21,9 @@ round-trip per row.
 """
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
@@ -258,19 +259,12 @@ class SqliteInboxRepository(InboxRepository):
             return 0
 
         # ROW_NUMBER picks the top-N most-recently-aired episodes per
-        # podcast in a single query, ordered by ``pub_date`` so the
-        # selection matches RSS chronology rather than pipeline-finish
-        # order. The outer JOIN against ``podcast_followers`` then
-        # yields one row per (user, episode) pair. The LEFT JOIN ...
-        # IS NULL filter excludes pairs that are already in the inbox
+        # podcast (by ``pub_date``, not pipeline-finish time). The LEFT
+        # JOIN ... IS NULL filter excludes pairs already in the inbox
         # so dry-run and real-run agree on the count (without it,
-        # dry-run would over-report by counting rows that ON CONFLICT
-        # would silently skip).
-        #
-        # ``rn`` is also used downstream as the row's intra-podcast
-        # rank: rn=1 is the newest, rn=N the oldest. We use it to
-        # synthesize a per-(user, podcast) ``delivered_at`` so the
-        # newest seed lands at the top of the inbox.
+        # dry-run would over-report rows that ON CONFLICT would skip).
+        # ``rn`` then drives the per-(user, podcast) ``delivered_at``
+        # stagger below so the newest seed lands at the top.
         select_sql = """
             SELECT f.user_id, ranked.id AS episode_id, ranked.rn
               FROM podcast_followers f
@@ -294,9 +288,6 @@ class SqliteInboxRepository(InboxRepository):
             if dry_run or not candidates:
                 return len(candidates)
 
-            import uuid
-            from datetime import datetime, timedelta, timezone
-
             base = datetime.now(timezone.utc)
             rows = [
                 (
@@ -305,8 +296,6 @@ class SqliteInboxRepository(InboxRepository):
                     row["episode_id"],
                     "follow_seed",
                     "unread",
-                    # rn=1 (newest) gets the latest delivered_at,
-                    # rn=N (oldest) gets the earliest, 1ms apart.
                     (base - timedelta(milliseconds=row["rn"] - 1)).isoformat(),
                 )
                 for row in candidates

@@ -148,9 +148,6 @@ class InboxService:
             logger.debug("inbox_seed_no_published_episodes", user_id=user_id, podcast_id=podcast_id)
             return 0
 
-        # Reverse to oldest-first and stamp with monotonically increasing
-        # delivered_at (1ms apart) so the newest seeded episode has the
-        # largest delivered_at and lands at the top of the inbox.
         ordered = list(reversed(episode_ids))
         base = datetime.now(timezone.utc)
         entries = [

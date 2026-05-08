@@ -53,7 +53,7 @@ function InboxRow({ item }: { item: InboxItem }) {
             <span className="text-gray-300">·</span>
             <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
           </div>
-          <p className="block text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
+          <p className="text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
             {episode.title}
           </p>
         </div>

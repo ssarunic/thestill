@@ -1,4 +1,4 @@
-import { Fragment, type ReactElement, type ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { EpisodeEntity, MentionLite } from '../../api/types'
 import EntityHighlight from './EntityHighlight'
 import { INLINE_HIGHLIGHT_CONFIDENCE_FLOOR } from '../../utils/entityColors'
@@ -20,19 +20,15 @@ import { INLINE_HIGHLIGHT_CONFIDENCE_FLOOR } from '../../utils/entityColors'
 
 // Wrap every case-insensitive occurrence of `query` in `text` with a
 // yellow `<mark>`. Returns the original string when the query is empty
-// or has no matches, so callers can compose results without changing
-// type-shape between the hit / no-hit cases.
-export function highlightMatches(
-  text: string,
-  query: string,
-): string | (string | ReactElement)[] {
+// or has no matches.
+export function highlightMatches(text: string, query: string): ReactNode {
   if (!query) return text
   const needle = query.toLowerCase()
   const hay = text.toLowerCase()
-  const out: (string | ReactElement)[] = []
-  let cursor = 0
-  let idx = hay.indexOf(needle, cursor)
+  let idx = hay.indexOf(needle)
   if (idx === -1) return text
+  const out: ReactNode[] = []
+  let cursor = 0
   let markKey = 0
   while (idx !== -1) {
     if (idx > cursor) out.push(text.slice(cursor, idx))
@@ -115,25 +111,14 @@ export function applyEntityHighlights({
   onFocusEntity,
 }: ApplyEntityHighlightsOptions): ReactNode {
   const query = searchQuery ?? ''
-  const searchOnly = (): ReactNode => highlightMatches(text, query) as ReactNode
+  if (!enabled || !segmentMentions) return highlightMatches(text, query)
 
-  if (!enabled || !segmentMentions || segmentMentions.mentions.length === 0) {
-    return searchOnly()
-  }
-
-  // Apply confidence floor (spec §5.2 visual rules: mentions below the
-  // extractor confidence threshold render as plain text).
+  // Mentions below the spec §5.2 confidence floor render as plain text.
   const eligible = segmentMentions.mentions.filter(
     (m) => m.confidence >= INLINE_HIGHLIGHT_CONFIDENCE_FLOOR,
   )
-  if (eligible.length === 0) {
-    return searchOnly()
-  }
-
   const spans = buildSpans(text, eligible)
-  if (spans.length === 0) {
-    return searchOnly()
-  }
+  if (spans.length === 0) return highlightMatches(text, query)
 
   // Compose React keys from the span position rather than mention.id.
   // mention.id is the SQLite AUTOINCREMENT pk and is normally unique,
