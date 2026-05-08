@@ -32,6 +32,7 @@ from ..repositories.inbox_repository import InboxRepository
 
 if TYPE_CHECKING:
     from ..utils.config import Config
+    from .briefing_renderer import BriefingRenderer
 
 logger = get_logger(__name__)
 
@@ -64,13 +65,19 @@ class BriefingService:
         inbox_repository: InboxRepository,
         *,
         min_interval_seconds: int,
+        renderer: Optional["BriefingRenderer"] = None,
     ) -> None:
         if min_interval_seconds < 0:
             raise ValueError("min_interval_seconds must be non-negative")
         self._briefings = briefing_repository
         self._inbox = inbox_repository
         self._min_interval = timedelta(seconds=min_interval_seconds)
-        logger.info("BriefingService initialized", min_interval_seconds=min_interval_seconds)
+        self._renderer = renderer
+        logger.info(
+            "BriefingService initialized",
+            min_interval_seconds=min_interval_seconds,
+            rendering_enabled=renderer is not None,
+        )
 
     @classmethod
     def from_config(
@@ -78,12 +85,15 @@ class BriefingService:
         config: "Config",
         briefing_repository: BriefingRepository,
         inbox_repository: InboxRepository,
+        *,
+        renderer: Optional["BriefingRenderer"] = None,
     ) -> "BriefingService":
         """Builder that pulls ``briefing_min_interval_seconds`` from ``Config``."""
         return cls(
             briefing_repository,
             inbox_repository,
             min_interval_seconds=config.briefing_min_interval_seconds,
+            renderer=renderer,
         )
 
     def generate_for_user(
@@ -141,6 +151,12 @@ class BriefingService:
             episode_count=len(episode_ids),
             created_at=clock_now,
         )
+        # Render before insert so a render failure leaves no orphan row
+        # and the cursor doesn't advance — the next call retries the
+        # same window cleanly.
+        if self._renderer is not None:
+            script_path = self._renderer.render(briefing, episode_ids)
+            briefing.script_path = str(script_path)
         self._briefings.insert(briefing)
         logger.info(
             "briefing_generated",
@@ -149,6 +165,7 @@ class BriefingService:
             episode_count=briefing.episode_count,
             cursor_from=cursor_from.isoformat(),
             cursor_to=cursor_to.isoformat(),
+            script_path=briefing.script_path,
         )
         return briefing
 

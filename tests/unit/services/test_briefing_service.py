@@ -26,7 +26,10 @@ from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepos
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
+from thestill.services.briefing_renderer import BriefingRenderer
 from thestill.services.briefing_service import BriefingNotFoundError, BriefingService
+from thestill.services.digest_generator import DigestGenerator
+from thestill.utils.path_manager import PathManager
 
 # Six hours: matches the production default. Tests opt out of the throttle
 # by passing ``force=True`` or by advancing ``now`` past this window.
@@ -58,6 +61,35 @@ def briefing_repo(db_path):
 @pytest.fixture
 def service(briefing_repo, inbox_repo):
     return BriefingService(briefing_repo, inbox_repo, min_interval_seconds=THROTTLE_SECONDS)
+
+
+@pytest.fixture
+def path_manager(tmp_path):
+    return PathManager(storage_path=str(tmp_path))
+
+
+@pytest.fixture
+def podcast_repo(db_path):
+    return SqlitePodcastRepository(db_path)
+
+
+@pytest.fixture
+def renderer(path_manager, podcast_repo):
+    return BriefingRenderer(
+        DigestGenerator(path_manager),
+        podcast_repo,
+        path_manager,
+    )
+
+
+@pytest.fixture
+def service_with_rendering(briefing_repo, inbox_repo, renderer):
+    return BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=THROTTLE_SECONDS,
+        renderer=renderer,
+    )
 
 
 def _make_user(user_repo, email: str) -> User:
@@ -309,6 +341,87 @@ def test_mark_listened_sets_timestamp(service, db_path, user_repo, inbox_repo):
 def test_mark_listened_raises_for_unknown_briefing(service):
     with pytest.raises(BriefingNotFoundError):
         service.mark_listened("00000000-0000-0000-0000-000000000000")
+
+
+# ============================================================================
+# Rendering (Phase 1.5)
+# ============================================================================
+
+
+def test_generate_for_user_with_renderer_writes_script_and_persists_path(
+    service_with_rendering, briefing_repo, db_path, user_repo, inbox_repo, path_manager
+):
+    user = _make_user(user_repo, "alice@example.com")
+    podcast_id = str(uuid.uuid4())
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    for i in range(2):
+        ep_id = _publish_episode(db_path, podcast_id, f"Episode-{i}")
+        _deliver_to_inbox(
+            inbox_repo,
+            user_id=user.id,
+            episode_id=ep_id,
+            delivered_at=base + timedelta(minutes=i),
+        )
+
+    briefing = service_with_rendering.generate_for_user(user.id, now=base + timedelta(hours=1))
+
+    assert briefing is not None
+    assert briefing.script_path is not None
+    expected_dir = path_manager.briefings_dir() / user.id / briefing.id
+    expected_path = expected_dir / "script.md"
+    assert briefing.script_path == str(expected_path)
+    assert expected_path.exists()
+    contents = expected_path.read_text(encoding="utf-8")
+    assert "Episode-0" in contents and "Episode-1" in contents
+
+    # ``script_path`` round-trips through the repo as well.
+    refetched = briefing_repo.get(briefing.id)
+    assert refetched is not None
+    assert refetched.script_path == str(expected_path)
+
+
+def test_generate_for_user_without_renderer_leaves_script_path_null(service, db_path, user_repo, inbox_repo):
+    """The renderer is optional; without it the row persists with script_path=None."""
+    user = _make_user(user_repo, "alice@example.com")
+    podcast_id = str(uuid.uuid4())
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ep_id = _publish_episode(db_path, podcast_id, "ep")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep_id, delivered_at=base)
+
+    briefing = service.generate_for_user(user.id, now=base + timedelta(hours=1))
+    assert briefing is not None
+    assert briefing.script_path is None
+
+
+def test_generate_for_user_skips_episodes_deleted_between_delivery_and_render(
+    service_with_rendering, db_path, user_repo, inbox_repo, path_manager
+):
+    """A removed episode is logged and skipped; the briefing still lands."""
+    user = _make_user(user_repo, "alice@example.com")
+    podcast_id = str(uuid.uuid4())
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ep_keep = _publish_episode(db_path, podcast_id, "Kept")
+    ep_drop = _publish_episode(db_path, podcast_id, "Dropped")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep_keep, delivered_at=base)
+    _deliver_to_inbox(
+        inbox_repo,
+        user_id=user.id,
+        episode_id=ep_drop,
+        delivered_at=base + timedelta(minutes=1),
+    )
+
+    # Simulate deletion of one episode between delivery and render.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM episodes WHERE id = ?", (ep_drop,))
+        conn.commit()
+
+    briefing = service_with_rendering.generate_for_user(user.id, now=base + timedelta(hours=1))
+    assert briefing is not None
+    # episode_count reflects what was *delivered*, not what survived to render.
+    assert briefing.episode_count == 2
+    rendered = (path_manager.briefings_dir() / user.id / briefing.id / "script.md").read_text("utf-8")
+    assert "Kept" in rendered
+    assert "Dropped" not in rendered
 
 
 # ============================================================================
