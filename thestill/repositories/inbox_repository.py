@@ -91,6 +91,25 @@ class InboxRepository(ABC):
         """
 
     @abstractmethod
+    def list_episode_ids_in_window(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        states: tuple[str, ...] = ("unread", "saved"),
+    ) -> List[str]:
+        """
+        Return episode IDs of inbox rows delivered in ``[since, until)`` whose
+        ``state`` is in ``states``, ordered oldest-delivered first.
+
+        Used by the briefing path (spec #36) to compose the candidate set for
+        a single briefing window. Default state filter excludes ``read`` and
+        ``dismissed`` — the briefing only covers items the user hasn't acted
+        on yet.
+        """
+
+    @abstractmethod
     def backfill_existing_followers(self, limit: int, *, dry_run: bool = False) -> int:
         """
         Seed every existing follower's inbox with the podcast's most recent

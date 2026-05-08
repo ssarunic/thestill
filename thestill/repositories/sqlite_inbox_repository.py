@@ -254,6 +254,32 @@ class SqliteInboxRepository(InboxRepository):
             ).fetchall()
             return [row["id"] for row in rows]
 
+    def list_episode_ids_in_window(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        states: tuple[str, ...] = ("unread", "saved"),
+    ) -> List[str]:
+        if not states:
+            return []
+        placeholders = ",".join("?" for _ in states)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT episode_id
+                  FROM user_episode_inbox
+                 WHERE user_id = ?
+                   AND delivered_at >= ?
+                   AND delivered_at < ?
+                   AND state IN ({placeholders})
+                 ORDER BY delivered_at ASC
+                """,
+                (user_id, since.isoformat(), until.isoformat(), *states),
+            ).fetchall()
+            return [row["episode_id"] for row in rows]
+
     def backfill_existing_followers(self, limit: int, *, dry_run: bool = False) -> int:
         if limit <= 0:
             return 0

@@ -434,3 +434,73 @@ def test_recent_published_episode_ids_excludes_unpublished(inbox_repo, podcast_r
     _make_episode(podcast_repo, podcast_id=podcast.id, title="never", published_at=None)
     ids = inbox_repo.recent_published_episode_ids(podcast.id, limit=10)
     assert ids == []
+
+
+# ============================================================================
+# list_episode_ids_in_window (used by BriefingService, spec #36)
+# ============================================================================
+
+
+def test_list_episode_ids_in_window_filters_window_and_states(inbox_repo, user_repo, podcast_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    eps = [_make_episode(podcast_repo, podcast_id=podcast.id, title=f"ep-{i}") for i in range(5)]
+    rows = [
+        # Inside window, eligible.
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[0].id,
+            source="follow_seed",
+            state="unread",
+            delivered_at=base + timedelta(minutes=0),
+        ),
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[1].id,
+            source="follow_seed",
+            state="saved",
+            delivered_at=base + timedelta(minutes=10),
+        ),
+        # Inside window, but read/dismissed → excluded by state filter.
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[2].id,
+            source="follow_seed",
+            state="read",
+            delivered_at=base + timedelta(minutes=20),
+            state_changed_at=base + timedelta(hours=1),
+        ),
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[3].id,
+            source="follow_seed",
+            state="dismissed",
+            delivered_at=base + timedelta(minutes=30),
+            state_changed_at=base + timedelta(hours=1),
+        ),
+        # Outside window (after ``until``).
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[4].id,
+            source="follow_seed",
+            state="unread",
+            delivered_at=base + timedelta(hours=3),
+        ),
+    ]
+    inbox_repo.insert_many(rows)
+
+    ids = inbox_repo.list_episode_ids_in_window(
+        user.id,
+        since=base,
+        until=base + timedelta(hours=2),
+    )
+    assert ids == [eps[0].id, eps[1].id]
+
+
+def test_list_episode_ids_in_window_returns_empty_for_empty_states(inbox_repo, user_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ids = inbox_repo.list_episode_ids_in_window(user.id, since=base, until=base + timedelta(hours=1), states=())
+    assert ids == []
