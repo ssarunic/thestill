@@ -140,6 +140,17 @@ class TestEntityBranchAlwaysChains:
             metadata={},
         )
 
+    def test_summarize_chains_entity_branch_without_full_pipeline_flag(self):
+        # Regression: ``thestill summarize`` and single-stage retries
+        # don't set ``run_full_pipeline``. Before this fix, those
+        # paths left summarized episodes silently unindexed (52
+        # episodes had no extract-entities task at all). The entity
+        # branch is non-destructive and idempotent — successful
+        # summarize should always start it.
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.SUMMARIZE))
+        assert _enqueued_stages(queue) == [TaskStage.EXTRACT_ENTITIES]
+
     def test_extract_entities_chains_resolve_without_full_pipeline_flag(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.EXTRACT_ENTITIES))

@@ -4252,6 +4252,99 @@ def chunks_group():
     """Manage the sqlite-vec chunk index that backs corpus search."""
 
 
+@main.command("reindex")
+@click.option(
+    "--status",
+    type=click.Choice(["missing-chunks", "missing-mentions", "missing-any"]),
+    default="missing-any",
+    show_default=True,
+    help="Which episodes to consider 'not indexed'.",
+)
+@click.option("--max-episodes", "-m", type=int, default=None, help="Cap the number of episodes enqueued.")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be enqueued; don't write.")
+@click.pass_context
+@require_config
+@log_command
+def reindex(ctx, status, max_episodes, dry_run):
+    """Re-enqueue indexing for summarized episodes that aren't fully indexed.
+
+    Scans for episodes where ``summary_path`` is set but the
+    indexing artifacts (``chunks`` / ``entity_mentions``) are
+    missing, and enqueues an ``extract-entities`` task for each —
+    the worker chains through to ``resolve-entities`` and ``reindex``
+    automatically (spec #28 §0.5).
+
+    Episodes without a JSON transcript sidecar (legacy Markdown-only
+    cleaning) are reported but skipped: the entity-branch handlers
+    no-op as ``skipped_legacy`` for them, so re-enqueueing wouldn't
+    help. Re-clean those through the spec #18 segment-preserving
+    path first.
+    """
+    import sqlite3
+
+    from .core.queue_manager import QueueManager, TaskStage
+
+    config = ctx.obj.config
+
+    if status == "missing-chunks":
+        missing_predicate = "(SELECT COUNT(*) FROM chunks WHERE episode_id = e.id) = 0"
+    elif status == "missing-mentions":
+        missing_predicate = "(SELECT COUNT(*) FROM entity_mentions WHERE episode_id = e.id) = 0"
+    else:  # missing-any
+        missing_predicate = (
+            "((SELECT COUNT(*) FROM chunks WHERE episode_id = e.id) = 0"
+            " OR (SELECT COUNT(*) FROM entity_mentions WHERE episode_id = e.id) = 0)"
+        )
+
+    sql = f"""
+        SELECT e.id, e.title,
+               CASE WHEN e.clean_transcript_json_path IS NULL THEN 0 ELSE 1 END AS has_sidecar
+          FROM episodes e
+         WHERE e.summary_path IS NOT NULL
+           AND {missing_predicate}
+         ORDER BY e.created_at DESC
+    """
+    conn = sqlite3.connect(str(config.database_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(sql).fetchall()
+    finally:
+        conn.close()
+
+    fixable = [r for r in rows if r["has_sidecar"]]
+    legacy = [r for r in rows if not r["has_sidecar"]]
+
+    if max_episodes:
+        fixable = fixable[:max_episodes]
+
+    click.echo(f"Eligible episodes ({status}): {len(rows)} total")
+    click.echo(f"  Fixable (has JSON sidecar): {len(fixable)}")
+    click.echo(f"  Legacy (no sidecar — needs re-cleaning): {len(legacy)}")
+
+    if dry_run or not fixable:
+        for r in fixable[:20]:
+            click.echo(f"  - {r['title'][:80]}")
+        if len(fixable) > 20:
+            click.echo(f"  … (+{len(fixable) - 20} more)")
+        if not fixable:
+            click.echo("Nothing to enqueue.")
+        return
+
+    queue = QueueManager(str(config.database_path))
+    enqueued = 0
+    skipped_existing = 0
+    for r in fixable:
+        if queue.has_pending_task(r["id"], TaskStage.EXTRACT_ENTITIES):
+            skipped_existing += 1
+            continue
+        queue.add_task(r["id"], TaskStage.EXTRACT_ENTITIES)
+        enqueued += 1
+
+    click.echo(f"✓ reindex: {enqueued} enqueued, {skipped_existing} skipped (already queued)")
+    if legacy:
+        click.echo(f"  ({len(legacy)} legacy episode(s) without JSON sidecar still need re-cleaning)")
+
+
 @chunks_group.command("backfill")
 @click.option("--podcast-id", default=None, help="Restrict to one podcast.")
 @click.option("--max-episodes", "-m", default=None, type=int, help="Cap episodes processed.")
