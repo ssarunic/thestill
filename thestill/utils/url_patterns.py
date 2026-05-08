@@ -49,6 +49,7 @@ from typing import Final
 # quantifiers, no alternation over overlapping groups.
 YOUTUBE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"youtube\.com/watch"),
+    re.compile(r"youtube\.com/shorts/"),
     re.compile(r"youtube\.com/playlist"),
     re.compile(r"youtube\.com/@[\w-]+"),
     re.compile(r"youtube\.com/channel/"),

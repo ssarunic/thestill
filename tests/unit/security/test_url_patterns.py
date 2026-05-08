@@ -75,6 +75,9 @@ class TestIsYoutubeUrl:
     def test_short_url(self):
         assert is_youtube_url("https://youtu.be/abc")
 
+    def test_shorts_url(self):
+        assert is_youtube_url("https://www.youtube.com/shorts/dQw4w9WgXcQ")
+
     def test_channel_handle(self):
         assert is_youtube_url("https://www.youtube.com/@somechannel")
 

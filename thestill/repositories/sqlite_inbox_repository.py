@@ -21,10 +21,11 @@ round-trip per row.
 """
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
@@ -130,6 +131,39 @@ class SqliteInboxRepository(InboxRepository):
                 rows,
             )
             return cursor.rowcount if cursor.rowcount is not None else 0
+
+    def find_or_create(
+        self, *, user_id: str, episode_id: str, source: str
+    ) -> Tuple[InboxEntry, bool]:
+        # Single-statement insert-or-noop avoids the SELECT/INSERT race
+        # between concurrent imports of the same URL by the same user.
+        # RETURNING only fires when the row was actually inserted; an empty
+        # result means a prior row already exists, which we then load.
+        row_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        with self._get_connection() as conn:
+            inserted = conn.execute(
+                """
+                INSERT INTO user_episode_inbox
+                    (id, user_id, episode_id, source, state, delivered_at)
+                VALUES (?, ?, ?, ?, 'unread', ?)
+                ON CONFLICT(user_id, episode_id) DO NOTHING
+                RETURNING id, user_id, episode_id, source, state, delivered_at, state_changed_at
+                """,
+                (row_id, user_id, episode_id, source, now.isoformat()),
+            ).fetchone()
+            if inserted is not None:
+                return self._row_to_entry(inserted), True
+
+            existing = conn.execute(
+                """
+                SELECT id, user_id, episode_id, source, state, delivered_at, state_changed_at
+                  FROM user_episode_inbox
+                 WHERE user_id = ? AND episode_id = ?
+                """,
+                (user_id, episode_id),
+            ).fetchone()
+            return self._row_to_entry(existing), False
 
     def update_state(
         self, user_id: str, episode_id: str, state: str, state_changed_at: datetime
