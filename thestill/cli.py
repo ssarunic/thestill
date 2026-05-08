@@ -39,6 +39,8 @@ from .models.digest import Digest, DigestStatus
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_digest_repository import SqliteDigestRepository
+from .repositories.sqlite_inbox_repository import SqliteInboxRepository
+from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
 from .services import (
@@ -51,6 +53,7 @@ from .services import (
     StatsService,
 )
 from .services.auth_service import AuthService
+from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
 from .utils.cli_logging import log_command
 from .utils.config import load_config
@@ -77,6 +80,9 @@ class CLIContext:
         console: ConsoleOutput,
         auth_service: AuthService,
         digest_repository: SqliteDigestRepository,
+        follower_repository: SqlitePodcastFollowerRepository,
+        inbox_repository: SqliteInboxRepository,
+        inbox_service: InboxService,
         entity_repository=None,
         search_backend=None,
         embedding_model=None,
@@ -93,6 +99,9 @@ class CLIContext:
         self.console = console
         self.auth_service = auth_service
         self.entity_repository = entity_repository
+        self.follower_repository = follower_repository
+        self.inbox_repository = inbox_repository
+        self.inbox_service = inbox_service
         # Spec #28 §1.5 — lazy ReFinED resolver, constructed on first
         # use by ``thestill resolve-entities`` and
         # ``rebuild-cooccurrences``; CLI invocations that don't touch
@@ -183,6 +192,16 @@ def main(ctx, config, quiet):
         # Initialize digest repository for digest persistence
         digest_repository = SqliteDigestRepository(str(config_obj.database_path))
 
+        # Per-user inbox plumbing: the backfill / follow-seed CLI paths
+        # need both the repository and the service.
+        follower_repository = SqlitePodcastFollowerRepository(db_path=config_obj.database_path)
+        inbox_repository = SqliteInboxRepository(db_path=config_obj.database_path)
+        inbox_service = InboxService(
+            inbox_repository,
+            follower_repository,
+            seed_on_follow_count=config_obj.inbox_seed_on_follow,
+        )
+
         # Spec #28 — entity-layer repository (always-on; the schema
         # is created by SqlitePodcastRepository's migration block).
         from .core.embedding_model import EmbeddingModel
@@ -210,6 +229,9 @@ def main(ctx, config, quiet):
             console=console,
             auth_service=auth_service,
             digest_repository=digest_repository,
+            follower_repository=follower_repository,
+            inbox_repository=inbox_repository,
+            inbox_service=inbox_service,
             entity_repository=entity_repository,
             search_backend=search_backend,
             embedding_model=embedding_model,
@@ -4058,6 +4080,58 @@ def backfill_roles(ctx, podcast_slug):
     if summary.skipped_names:
         unique = sorted(set(summary.skipped_names))
         click.echo(f"  ({len(unique)} unique names skipped — first-name-only or generic role labels)")
+
+
+@main.command("backfill-inbox")
+@click.option("--dry-run", is_flag=True, help="Show what would be delivered without writing rows.")
+@click.pass_context
+@require_config
+@log_command
+def backfill_inbox(ctx, dry_run):
+    """Seed existing followers' inboxes with recent published episodes.
+
+    Run once per database after the inbox migration lands. For every
+    ``(user, podcast)`` follow row, ``InboxService.seed_on_follow`` delivers
+    up to ``INBOX_SEED_ON_FOLLOW`` recent published episodes. Idempotent:
+    re-running is safe — already-delivered rows are skipped via the
+    ``(user_id, episode_id)`` unique constraint.
+    """
+    state = ctx.obj
+    follower_repo = state.follower_repository
+    inbox_service = state.inbox_service
+    seed_count = state.config.inbox_seed_on_follow
+
+    # Walk every follow row by visiting every podcast and its followers.
+    # ``podcast_repository`` exposes the corpus; ``follower_repository``
+    # gives us the per-podcast user list.
+    podcasts = state.repository.get_all()
+    total_followers = 0
+    total_inserted = 0
+
+    for podcast in podcasts:
+        user_ids = follower_repo.get_follower_user_ids(podcast.id)
+        if not user_ids:
+            continue
+
+        candidate_ids = state.inbox_repository.recent_published_episode_ids(podcast.id, seed_count)
+        if not candidate_ids:
+            continue
+
+        for user_id in user_ids:
+            total_followers += 1
+            if dry_run:
+                click.echo(
+                    f"  [dry-run] {podcast.slug or podcast.id}: would seed user={user_id} "
+                    f"with up to {len(candidate_ids)} episodes"
+                )
+                continue
+            inserted = inbox_service.seed_on_follow(user_id, podcast.id)
+            total_inserted += inserted
+
+    if dry_run:
+        click.echo(f"✓ Dry run: {total_followers} (user, podcast) pairs would be seeded.")
+    else:
+        click.echo(f"✓ Backfill complete: {total_inserted} inbox rows delivered across {total_followers} pairs.")
 
 
 # ---------------------------------------------------------------------------

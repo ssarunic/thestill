@@ -1474,3 +1474,24 @@ def test_save_refresh_batch_normalizes_http_artwork(temp_db):
     found_episode = temp_db.get_episode_by_external_id(str(podcast.rss_url), "ep-refresh-art")
     assert found_episode is not None
     assert found_episode.image_url == "https://cdn.example.com/new-ep.jpg"
+
+
+def test_mark_episode_published_transitions_then_is_idempotent(temp_db, sample_podcast, sample_episode):
+    """First call sets ``published_at`` and returns True; re-runs no-op."""
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    # First publish: NULL → set, returns True.
+    assert temp_db.mark_episode_published(sample_episode.id) is True
+
+    # Re-running the conditional UPDATE is a no-op once published_at is set.
+    assert temp_db.mark_episode_published(sample_episode.id) is False
+
+    found = temp_db.get_episode_by_external_id(str(sample_podcast.rss_url), sample_episode.external_id)
+    assert found is not None
+    assert found.published_at is not None
+
+
+def test_mark_episode_published_unknown_episode_returns_false(temp_db):
+    """Calling against a non-existent id reports no transition."""
+    assert temp_db.mark_episode_published("does-not-exist") is False

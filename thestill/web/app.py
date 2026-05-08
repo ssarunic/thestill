@@ -44,10 +44,12 @@ from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
 from ..repositories.sqlite_digest_repository import SqliteDigestRepository
+from ..repositories.sqlite_inbox_repository import SqliteInboxRepository
 from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
+from ..services.inbox_service import InboxService
 from ..services.auth_service import AuthService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
@@ -132,9 +134,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)
 
-    # Initialize follower services
+    # Initialize follower + inbox services. The inbox service is injected
+    # into FollowerService so ``follow`` can seed the new follower's inbox.
     follower_repository = SqlitePodcastFollowerRepository(db_path=config.database_path)
-    follower_service = FollowerService(follower_repository, repository)
+    inbox_repository = SqliteInboxRepository(db_path=config.database_path)
+    inbox_service = InboxService(
+        inbox_repository,
+        follower_repository,
+        seed_on_follow_count=config.inbox_seed_on_follow,
+    )
+    follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
 
     # Initialize digest repository
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
@@ -172,6 +181,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         auth_service=auth_service,
         follower_repository=follower_repository,
         follower_service=follower_service,
+        inbox_repository=inbox_repository,
+        inbox_service=inbox_service,
         digest_repository=digest_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,

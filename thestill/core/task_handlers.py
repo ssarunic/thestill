@@ -614,6 +614,13 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
         logger.info(f"Summarization completed for episode: {episode.title}")
 
+        # Publish + fan out to follower inboxes. The conditional UPDATE in
+        # ``mark_episode_published`` makes re-running summarize a no-op
+        # (already-published episodes do not re-deliver). Fan-out runs
+        # only on the actual NULL → set transition.
+        if state.repository.mark_episode_published(episode.id):
+            state.inbox_service.fanout_on_publish(episode.id, podcast.id)
+
 
 def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
     """Spec #28 §0.5 — shared no-op handler for entity stages still in Phase 0 mode.

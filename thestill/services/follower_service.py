@@ -20,7 +20,7 @@ supporting the multi-user shared podcasts architecture.
 """
 
 import sqlite3
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from structlog import get_logger
 
@@ -28,6 +28,9 @@ from ..models.podcast import Podcast
 from ..models.user import PodcastFollower
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 from ..repositories.podcast_repository import PodcastRepository
+
+if TYPE_CHECKING:
+    from .inbox_service import InboxService
 
 logger = get_logger(__name__)
 
@@ -67,6 +70,7 @@ class FollowerService:
         self,
         follower_repository: PodcastFollowerRepository,
         podcast_repository: PodcastRepository,
+        inbox_service: Optional["InboxService"] = None,
     ):
         """
         Initialize the follower service.
@@ -74,11 +78,15 @@ class FollowerService:
         Args:
             follower_repository: Repository for follower persistence
             podcast_repository: Repository for podcast data (for validation)
+            inbox_service: Optional inbox service. When provided, ``follow``
+                seeds the new follower's inbox with recent published episodes
+                (best-effort — seed failures do not roll back the follow).
         """
         self.follower_repository = follower_repository
         self.podcast_repository = podcast_repository
+        self._inbox_service = inbox_service
 
-        logger.info("FollowerService initialized")
+        logger.info("FollowerService initialized", inbox_seeding=inbox_service is not None)
 
     def follow(self, user_id: str, podcast_id: str) -> PodcastFollower:
         """
@@ -110,10 +118,24 @@ class FollowerService:
         try:
             saved = self.follower_repository.add(follower)
             logger.info(f"User {user_id} followed podcast {podcast_id}")
-            return saved
         except sqlite3.IntegrityError as e:
             # Handle race condition where another request created the relationship
             raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}") from e
+
+        # Seed the new follower's inbox best-effort. The follow itself has
+        # already committed; a seed failure must not surface as a follow
+        # failure to the caller.
+        if self._inbox_service is not None:
+            try:
+                self._inbox_service.seed_on_follow(user_id, podcast_id)
+            except Exception:
+                logger.exception(
+                    "inbox_seed_on_follow_failed",
+                    user_id=user_id,
+                    podcast_id=podcast_id,
+                )
+
+        return saved
 
     def unfollow(self, user_id: str, podcast_id: str) -> bool:
         """

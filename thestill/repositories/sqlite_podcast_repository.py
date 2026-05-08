@@ -2551,6 +2551,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 logger.debug(f"Updated episode {episode_external_id}: {list(update_fields.keys())}")
             return updated
 
+    def mark_episode_published(self, episode_id: str) -> bool:
+        """Set ``published_at`` if not already set; return whether it transitioned."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                   SET published_at = ?, updated_at = ?
+                 WHERE id = ? AND published_at IS NULL
+                """,
+                (now, now, episode_id),
+            )
+            return cursor.rowcount == 1
+
     def mark_episode_failed(
         self,
         episode_id: str,
