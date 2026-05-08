@@ -1,10 +1,38 @@
 # Corpus Search & Entity Index
 
-**Status**: 📝 Draft
+**Status**: 🚧 Phases 0–4 complete, Phase 5 in progress
 **Created**: 2026-04-28
-**Updated**: 2026-04-28
+**Updated**: 2026-05-07
 **Priority**: High (unlocks the next product surface; LLM-harness use is the
 hero use case)
+
+## Implementation status (2026-05-07)
+
+Read this before cross-checking against code. Per-phase markers below
+are the source of truth; sub-items inside each phase carry their own
+markers where the picture is mixed.
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase 0 — Spike, evals, foundations | ✅ Complete | qmd spike, migrations, queue extension, eval fixtures, models, repo stub all landed |
+| Phase 1 (1.1–1.12) — Entity extraction + MCP alpha | ✅ Complete | GLiNER + ReFinED, alias merging, co-occurrences, 5 MCP entity tools, CLI peers, harness eval gate |
+| Phase 1.13 — Speaker indexing, coref, overrides | ✅ Complete | Anchor injection, within-episode coref, ReFinED confidence floor, `mention_overrides` + admin CLI |
+| Phase 2 — qmd hybrid search | ⛔ Superseded by 2.10 | Shipped, then ripped out in 2.10 (no longer in tree) |
+| Phase 2.10 — sqlite-vec backend | ✅ Complete | `SearchBackend` Protocol + `SqliteVecBackend`; qmd removed; `chunks` table + FTS5/vec0 mirrors live |
+| Phase 3 — Productionisation | ✅ Complete | `rebuild-entities`, DLQ separation, CI latency budgets, `skipped_legacy` in `thestill status` |
+| Phase 4 — ⌘K + search UI | ✅ Complete | CommandBar, `/search` slug routes, query translator, entity hit chips, lexical fallback, `cmdk-typeahead.spec.ts` |
+| Phase 5 — Entity pages + augmented reader | 🚧 In progress | See per-sub-item table inside §"Phase 5" |
+
+**What's left in spec scope:** Phase 5.1 entity-page polish (timeline,
+notable quotes, paginated feed), 13 of 20 reader affordances in §5.2,
+empty-states review (5.3), and the README/status flip (5.4). Plus
+test-plan deferrals: the 50 Q/E recall bench wasn't re-run against
+`SqliteVecBackend`, and the Playwright suite only has
+`cmdk-typeahead.spec.ts` of the six listed.
+
+**Explicitly deferred / out of scope:** D.1 (`trends` + sentiment
+chart), D.2 (Postgres), D.3 (web merge/split admin), D.4 (personalised
+ranking), D.5 (non-English).
 
 ## Overview
 
@@ -709,7 +737,7 @@ the qmd integration and the web UI to phases that depend on a validated
 entity foundation. Each phase produces a user-visible artefact and is
 shippable as its own PR.
 
-### Phase 0 — Spike, evals, and foundations (3–4 days)
+### Phase 0 — Spike, evals, and foundations (3–4 days) ✅ Complete
 
 The point of Phase 0 is to **lock down the unknowns and the measurement
 sticks before writing any production code.** Three deliverables, all
@@ -756,7 +784,13 @@ small, all upfront.
 - **0.8** Stub `SqliteEntityRepository` with empty methods + type
   signatures the rest of the work will fill in.
 
-### Phase 1 — Entity extraction, resolution, and MCP alpha (5–7 days)
+### Phase 1 — Entity extraction, resolution, and MCP alpha (5–7 days) ✅ Complete
+
+All sub-items 1.1–1.12 shipped. The MCP alpha (`find_mentions`,
+`list_quotes_by`, `get_episode_clip`, `get_entity`,
+`list_episodes_by_entity`) and the CLI peers (`thestill find-mentions`,
+`quotes-by`, `entity get|merge|split`) are wired and exercised by
+`thestill harness-eval`.
 
 The hero phase. By the end, **Claude Desktop pointed at our MCP server
 can answer "what has X said about Y" with cited clips, on real corpus
@@ -828,7 +862,17 @@ validation of the product claim.
   moving to Phase 2.** **First user-visible artefact, and the O1+O5
   validation gate.**
 
-### Phase 1.13 — Speaker indexing, coreference, and human-correction layer (~2 days)
+### Phase 1.13 — Speaker indexing, coreference, and human-correction layer (~2 days) ✅ Complete
+
+All sub-items 1.13.1–1.13.8 shipped:
+`podcasts.host_entity_ids` / `recurring_entity_ids` /
+`episodes.guest_entity_ids` columns; `thestill podcast set-hosts |
+set-recurring | detect-hosts`, `episode set-guests`, `mention drop |
+repoint`, `entity-alias-add`, `resolution-blacklist`; synthetic
+speaker mentions; anchor pass during extraction; within-episode coref
+pass; `resolution_method` + `candidate_entity_ids`;
+`mention_overrides` + `resolution_blacklist` tables; `backfill-roles`
+CLI.
 
 Surfaced from the post-Phase-1.12 reindex audit on 30 episodes (2026-05-01).
 Two real bugs hit:
@@ -982,7 +1026,13 @@ Acceptance:
 - Resolution rate on the 30-ep sample either improves or holds steady at
   ~51% (a drop is acceptable if false-positives have been culled).
 
-### Phase 2 — Hybrid corpus search via qmd (4–5 days)
+### Phase 2 — Hybrid corpus search via qmd (4–5 days) ⛔ Superseded by Phase 2.10
+
+Shipped end-to-end (`qmd_client.py`, `core/reindex.py`,
+`core/corpus_writer.py`, `qmd-up`/`qmd-down` make targets, `thestill
+corpus bootstrap`/`render`). Removed in 2.10 — none of these files
+exist in the current tree. Retained in the spec as the reasoning trail
+that produced 2.10. Do not implement against the bullets below.
 
 Now that the entity layer is validated, add the lexical/semantic search
 layer for queries that aren't entity-scoped (O2, O3).
@@ -1019,9 +1069,18 @@ layer for queries that aren't entity-scoped (O2, O3).
   `search_corpus(mode=hybrid)`; record top-5 recall. Gate this phase on
   ≥ 0.8.
 
-### Phase 2.10 — Replace qmd with sqlite-vec, behind a SearchBackend seam (3 days)
+### Phase 2.10 — Replace qmd with sqlite-vec, behind a SearchBackend seam (3 days) ✅ Complete
 
-**Status: planned, post-2.7 deviation.**
+**Status: shipped 2026-05-02.** All sub-items 2.10.1–2.10.6 landed.
+`SearchBackend` Protocol in [thestill/search/base.py](../thestill/search/base.py),
+`SqliteVecBackend` in [thestill/search/sqlite_vec_client.py](../thestill/search/sqlite_vec_client.py),
+chunk writer in [thestill/core/chunk_writer.py](../thestill/core/chunk_writer.py),
+qmd modules + `corpus_writer.py` + `data/corpus/episodes/` removed.
+`thestill chunks backfill` populates the new tables.
+
+The 50-question recall bench (§2.10.5 acceptance) wasn't re-run on
+`SqliteVecBackend` — see Test plan note. Post-merge follow-up (PR #64)
+added embedding-model warmup + sqlite-vec query fixes.
 
 Surfaced from a post-2.7 review on 2026-05-02. Three concerns about the
 qmd-backed search path drove this:
@@ -1227,22 +1286,67 @@ edges need polish before it's hands-off.
   on the fixture corpus (Test plan). Fail PRs that regress.
 - **3.4** ✅ Skipped-legacy episode count visible in `thestill status`.
 
-### Phase 4 — Command bar and search UI (4–5 days)
+### Phase 4 — Command bar and search UI (4–5 days) ✅ Complete
 
 The web UI lands only after the MCP surface is real and the entity layer
 is validated.
 
-- **4.1** Add `⌘K` global command bar to `Layout.tsx`. Typeahead
-  grouped by `Episodes / Persons / Companies / Topics / Quotes`. Hits
-  `/api/search/quick` which calls `search_corpus(mode=lexical)` —
-  pinned to lexical for typing-latency, never silently upgraded
-  (Strategy §2). Operators (`person:`, `company:`, `after:`) parsed
-  client-side.
-- **4.2** Search results page (the ⌘K "see all results" escape hatch).
-  Three tabs: All / Quotes / Entities. Each row plays inline.
-- **4.3** Empty/error states across the new surface.
+- **4.1** ✅ `⌘K` global command bar in
+  [Layout.tsx](../thestill/web/frontend/src/components/Layout.tsx) /
+  [CommandBar.tsx](../thestill/web/frontend/src/components/CommandBar.tsx).
+  Typeahead grouped by Episodes / Persons / Companies / Topics /
+  Quotes. Hits `/api/search/quick` (`search_corpus(mode=lexical)`,
+  never silently upgraded). Operators (`person:`, `company:`,
+  `topic:`, `after:`, `before:`) parsed client-side.
+- **4.2** ✅ [SearchResults.tsx](../thestill/web/frontend/src/pages/SearchResults.tsx)
+  — three tabs (All / Quotes / Entities), inline play through the
+  existing `MiniPlayer`/`PlayerProvider`. Quote rows deeplink with
+  `?t=<sec>`. Entity hit chips (PR #67) and `/search` slug routes +
+  lexical fallback (PR #57) shipped.
+- **4.3** ✅ Empty / error states wired through `useCorpusSearch` +
+  `useQuickSearch`.
+- **Tests:** `cmdk-typeahead.spec.ts` is the only Playwright spec
+  (the others listed in the test plan are still owed).
 
-### Phase 5 — Entity pages and graph exploration (4–6 days)
+### Phase 5 — Entity pages and graph exploration (4–6 days) 🚧 In progress
+
+**Sub-item status:**
+
+| Item | Status | Notes |
+|---|---|---|
+| 5.1 entity page route + minimal page | ⏳ Partial | Route + page live at [Entities.tsx](../thestill/web/frontend/src/pages/Entities.tsx) but flagged as "minimal" in source. Still owed: `<MentionTimeline/>` sparkline, `<NotableQuotes/>` (distinct from the recent-mentions list), paginated `<MentionFeed/>` with inline FloatingPlayer scrub |
+| 5.2 episode-page entity UX | 🚧 In progress | All six core components shipped: `EntityHighlight`, `EntityHoverCard`, `EntityRail`, `KeyEntitiesStrip`, `MentionDensityTimeline`, `EntityFilterBar`. P31 bucket gating, salience-sort, top-8 cap landed (PR a4ac46c). Right-rail "Related episodes" still a placeholder. Reader affordance status: see table below |
+| 5.3 empty states reviewed by Sasa | 📝 Not started | Components have inline empty branches (no entities → no strip, etc.) but no formal review pass |
+| 5.4 README + status flip to ✅ Complete | 📝 Not started | [specs/README.md](README.md) row #28 is also stale ("Phase 4 next" — Phase 4 is in fact done) |
+
+**Reader affordance status (the 20-item list further down §5.2):**
+
+| # | Affordance | Status |
+|---|---|---|
+| 1 | `[`/`]` keyboard nav | ✅ Done — [SegmentedTranscriptViewer.tsx](../thestill/web/frontend/src/components/SegmentedTranscriptViewer.tsx) |
+| 2 | `E` toggle (localStorage) | ✅ Done — same file |
+| 3 | P/C/Pr/T type filter toggles | ✅ Done — [KeyEntitiesStrip.tsx](../thestill/web/frontend/src/components/episode-entities/KeyEntitiesStrip.tsx) |
+| 4 | First-mention anchor links in rail rows | ✅ Done — [EntityRail.tsx](../thestill/web/frontend/src/components/episode-entities/EntityRail.tsx) |
+| 5 | "New on this feed" badge | 📝 Not started |
+| 6 | Co-mention sparkline on hover | ✅ Done — [EntityHoverCard.tsx](../thestill/web/frontend/src/components/episode-entities/EntityHoverCard.tsx) |
+| 7 | Quote pull-out for top mention in rail | 📝 Not started |
+| 8 | Selection-to-entity context menu | 📝 Not started |
+| 9 | Entity-aware copy (clipboard text/plain + text/html) | 📝 Not started |
+| 10 | Density heatmap fallback (>120 min) | 📝 Not started |
+| 11 | Mention count delta vs feed average | 📝 Not started |
+| 12 | Speaker × entity matrix toggle | 📝 Not started |
+| 13 | Disambiguation `¹`/`²` pill | 📝 Not started |
+| 14 | `#m=<entity_id>:<segment_id>` permalinks | ✅ Done — [EntityHighlight.tsx](../thestill/web/frontend/src/components/episode-entities/EntityHighlight.tsx) |
+| 15 | Reader minimap glyphs | 📝 Not started (depends on a minimap that doesn't exist yet) |
+| 16 | Right-rail "expand all" | 📝 Not started |
+| 17 | Topic clustering in strip overflow | 📝 Not started |
+| 18 | Per-segment entity count gutter badge | 📝 Not started |
+| 19 | Cross-episode "previously" hint | 📝 Not started |
+| 20 | A11y baseline (real `<a>`, aria-labels, tab order, aria-live) | ⏳ Partial — aria-labels present on the new components; explicit tab order and aria-live for `[`/`]` not verified |
+
+Score: **7 of 20** affordances landed.
+
+**Original sub-item list (kept for design reference):**
 
 - **5.1** Entity page route: `/entities/:type/:id`. Components:
   `<EntityHeader/>`, `<MentionTimeline/>` (sparkline by month),
@@ -1515,14 +1619,18 @@ Target: every tool's input/output schema is locked behind a golden file.
 Playwright suite under `thestill/web/frontend/tests/`. Same conventions as
 [09-single-user-web-ui.md](09-single-user-web-ui.md).
 
-| Test | Flow |
-|---|---|
-| `cmdk-typeahead.spec.ts` | Open ⌘K, type "musk", see grouped results, arrow-down to a person hit, Enter, land on entity page. |
-| `entity-page.spec.ts` | Visit `/entities/person/elon-musk`, verify timeline sparkline renders, "Notable quotes" populated, clicking a quote opens the floating player at the right timestamp. |
-| `cooccurrence-chip.spec.ts` | On the SpaceX entity page, click the "Elon Musk" co-occurrence chip → land on Musk page. |
-| `reader-wikilink-hover.spec.ts` | Open an episode, hover an entity link → hover card appears with summary + "Go to entity page" link. |
-| `search-results-fallback.spec.ts` | ⌘K → "see all results" → results page renders three tabs, each populated. |
-| `empty-states.spec.ts` | Entity with no mentions, search with no hits, episode with no extracted entities — each shows the designed empty state, not a blank screen. |
+**Status (2026-05-07):** only `cmdk-typeahead.spec.ts` exists. The
+remaining five are owed before Phase 5.4 can flip the spec to ✅
+Complete.
+
+| Test | Status | Flow |
+|---|---|---|
+| `cmdk-typeahead.spec.ts` | ✅ Done | Open ⌘K, type "musk", see grouped results, arrow-down to a person hit, Enter, land on entity page. |
+| `entity-page.spec.ts` | 📝 Not started | Visit `/entities/person/elon-musk`, verify timeline sparkline renders, "Notable quotes" populated, clicking a quote opens the floating player at the right timestamp. (Blocked on 5.1 timeline + notable-quotes work.) |
+| `cooccurrence-chip.spec.ts` | 📝 Not started | On the SpaceX entity page, click the "Elon Musk" co-occurrence chip → land on Musk page. |
+| `reader-wikilink-hover.spec.ts` | 📝 Not started | Open an episode, hover an entity link → hover card appears with summary + "Go to entity page" link. |
+| `search-results-fallback.spec.ts` | 📝 Not started | ⌘K → "see all results" → results page renders three tabs, each populated. |
+| `empty-states.spec.ts` | 📝 Not started | Entity with no mentions, search with no hits, episode with no extracted entities — each shows the designed empty state, not a blank screen. |
 
 ### End-to-end harness eval
 
@@ -1553,6 +1661,11 @@ clean session. Pass criteria for every run:
 The 50 question/episode pairs (also from Phase 0.3) are run against
 `search_corpus(mode=hybrid)` at the end of Phase 2 and gate top-5 recall
 ≥ 0.8 (O3).
+
+**Status (2026-05-07):** ⏳ The 50-question recall bench was not
+re-run on `SqliteVecBackend` after the Phase 2.10 rip-and-replace.
+The §2.10.5 acceptance gate is open; close it before Phase 5.4 flips
+the spec to ✅ Complete.
 
 ### Manual verification before ship
 
