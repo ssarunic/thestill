@@ -421,45 +421,44 @@ class TaskWorker:
         ``download → downsample → transcribe → clean → summarize →
         extract-entities → resolve-entities → reindex``.
 
-        Two distinct chaining policies:
+        Two distinct chaining policies, gated independently per
+        successor:
 
-        - **User chain** (``download``…``summarize``): only chains when
-          ``run_full_pipeline`` is set, so single-stage retry buttons
-          and admin re-runs don't accidentally re-process a whole
-          episode. ``target_state`` is honoured as an early-stop
-          marker — callers passing ``target_state="summarized"`` stop
-          after the user chain.
-        - **Entity branch** (``extract-entities``→``resolve-entities``→
-          ``reindex``): ALWAYS chains. The entity
-          stages are atomic — running ``extract-entities`` alone leaves
-          orphan ``pending`` mentions that nothing will ever resolve;
-          there's no legitimate caller that wants extract without
-          resolve. Standalone ``extract-entities`` enqueues (admin
-          rebuilds, repair scripts) need this auto-chain so the
-          mentions actually land as ``resolved``.
+        - **User-chain successors** (``download``…``summarize``): only
+          chain when ``run_full_pipeline`` is set, so single-stage
+          retry buttons and admin re-runs don't accidentally re-process
+          a whole episode. ``target_state`` is honoured as an early-
+          stop marker — callers passing ``target_state="summarized"``
+          stop after the user chain.
+        - **Entity-branch successors** (``extract-entities``,
+          ``resolve-entities``, ``reindex``): ALWAYS chain. The entity
+          stages are idempotent + atomic; search and discovery rely on
+          them. After a successful summarize the user expects the
+          episode to be fully indexed regardless of how the summarize
+          task was enqueued (CLI, retry button, admin re-run, queue).
+          Standalone ``extract-entities`` enqueues (admin rebuilds,
+          repair scripts) also need this auto-chain so mentions land
+          as ``resolved`` and the index gets the embeddings.
         """
         in_entity_branch = is_entity_branch_stage(task.stage)
-        if not in_entity_branch and not task.metadata.get("run_full_pipeline"):
-            return
+        allow_user_chain = in_entity_branch or bool(task.metadata.get("run_full_pipeline"))
 
         target_state = task.metadata.get("target_state")
         resulting_state = self._STAGE_TO_STATE.get(task.stage.value)
         target_reached = target_state is not None and resulting_state == target_state
 
         successors = get_next_stages(task.stage)
-        if target_reached:
-            # ``target_state`` only takes valid values from the user
-            # chain (downloaded…summarized — see api_commands.py). The
-            # entity branch is a separate failure domain and should
-            # always run after summarize regardless of the user's
-            # early-stop marker. Drop user-chain successors but keep
-            # entity-branch successors so search/index keep working.
+        if target_reached or not allow_user_chain:
+            # Filter to entity-branch successors only. ``target_reached``
+            # reflects an explicit early-stop on the user chain; the
+            # ``allow_user_chain`` gate handles single-stage retries
+            # that didn't opt into the full pipeline. In both cases
+            # the entity branch is non-destructive and should still
+            # run so the corpus stays consistent.
             successors = [s for s in successors if is_entity_branch_stage(s)]
-            if not successors:
-                logger.info("pipeline_target_reached", target_state=target_state)
-                return
         if not successors:
-            logger.info("pipeline_complete", stage=task.stage.value)
+            log_msg = "pipeline_target_reached" if target_reached else "pipeline_complete"
+            logger.info(log_msg, stage=task.stage.value, target_state=target_state)
             return
 
         for next_stage in successors:

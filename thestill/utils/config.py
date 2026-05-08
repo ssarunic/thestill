@@ -153,6 +153,13 @@ class Config(BaseModel):
     # episodes as the on-follow seed so the inbox is non-empty immediately.
     inbox_seed_on_follow: int = 2
 
+    # Throttle window for per-user briefings (spec #36): within this many
+    # seconds of the previous briefing, ``BriefingService.generate_for_user``
+    # returns the existing briefing rather than creating a new one. Default
+    # 6 hours — short enough to allow a same-day refresh, long enough to
+    # avoid double-coverage from accidental double-runs.
+    briefing_min_interval_seconds: int = 6 * 60 * 60
+
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
     google_client_id: str = ""  # Google OAuth client ID (required for multi-user)
@@ -416,6 +423,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
         "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
+        "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

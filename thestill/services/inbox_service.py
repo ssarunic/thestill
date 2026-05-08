@@ -25,7 +25,7 @@ Encapsulates the two delivery paths:
 Plus the read/state-mutation APIs used by the inbox view.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, List, Optional
 
 from structlog import get_logger
@@ -130,6 +130,12 @@ class InboxService:
         Deliver up to ``seed_on_follow_count`` recent published episodes to
         the user's inbox with ``source='follow_seed'``.
 
+        The repository returns candidates newest-first by ``pub_date``
+        (RSS air date, not pipeline-completion time). We deliver them
+        oldest-first with monotonically increasing ``delivered_at`` so
+        that a single follow event lands as a chronological run in the
+        inbox: the most recent episode sits at the top.
+
         Returns the number of rows actually inserted (may be 0 if the
         podcast has no published episodes yet, or if all the candidates were
         already delivered to this user via some prior path).
@@ -142,16 +148,17 @@ class InboxService:
             logger.debug("inbox_seed_no_published_episodes", user_id=user_id, podcast_id=podcast_id)
             return 0
 
-        now = datetime.now(timezone.utc)
+        ordered = list(reversed(episode_ids))
+        base = datetime.now(timezone.utc)
         entries = [
             InboxEntry(
                 user_id=user_id,
                 episode_id=episode_id,
                 source="follow_seed",
                 state="unread",
-                delivered_at=now,
+                delivered_at=base + timedelta(milliseconds=i),
             )
-            for episode_id in episode_ids
+            for i, episode_id in enumerate(ordered)
         ]
         inserted = self._repository.insert_many(entries)
         logger.info(

@@ -22,9 +22,9 @@ episodes to pick) live in ``InboxService``.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
-from ..models.inbox import InboxEntry, InboxItem
+from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState
 
 
 class InboxRepository(ABC):
@@ -46,9 +46,7 @@ class InboxRepository(ABC):
         """
 
     @abstractmethod
-    def find_or_create(
-        self, *, user_id: str, episode_id: str, source: str
-    ) -> Tuple[InboxEntry, bool]:
+    def find_or_create(self, *, user_id: str, episode_id: str, source: str) -> Tuple[InboxEntry, bool]:
         """
         Idempotent single-row insert (spec #31).
 
@@ -104,6 +102,23 @@ class InboxRepository(ABC):
         Return the ``limit`` most-recently-published episode IDs for a podcast,
         ordered by ``published_at DESC``. Episodes with NULL ``published_at``
         are excluded — they haven't been delivered to anyone yet.
+        """
+
+    @abstractmethod
+    def list_episode_ids_in_window(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+    ) -> List[str]:
+        """
+        Return episode IDs of inbox rows delivered in ``[since, until)`` whose
+        ``state`` is in ``states``, ordered oldest-delivered first.
+
+        Used by the briefing path (spec #36) to compose the candidate set for
+        a single briefing window.
         """
 
     @abstractmethod

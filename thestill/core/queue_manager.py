@@ -71,6 +71,7 @@ class TaskStage(str, Enum):
     EXTRACT_ENTITIES = "extract-entities"
     RESOLVE_ENTITIES = "resolve-entities"
     REINDEX = "reindex"
+    REBUILD_COOCCURRENCES = "rebuild-cooccurrences"
 
 
 # Spec #28 §6 — the entity branch is a separate failure domain. A
@@ -83,6 +84,7 @@ _NON_USER_FAILING_STAGES = frozenset(
         TaskStage.EXTRACT_ENTITIES,
         TaskStage.RESOLVE_ENTITIES,
         TaskStage.REINDEX,
+        TaskStage.REBUILD_COOCCURRENCES,
     }
 )
 
@@ -120,7 +122,8 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.SUMMARIZE: [TaskStage.EXTRACT_ENTITIES],
     TaskStage.EXTRACT_ENTITIES: [TaskStage.RESOLVE_ENTITIES],
     TaskStage.RESOLVE_ENTITIES: [TaskStage.REINDEX],
-    TaskStage.REINDEX: [],
+    TaskStage.REINDEX: [TaskStage.REBUILD_COOCCURRENCES],
+    TaskStage.REBUILD_COOCCURRENCES: [],
 }
 
 
@@ -150,6 +153,7 @@ _ENTITY_BRANCH_ORDER: List[TaskStage] = [
     TaskStage.EXTRACT_ENTITIES,
     TaskStage.RESOLVE_ENTITIES,
     TaskStage.REINDEX,
+    TaskStage.REBUILD_COOCCURRENCES,
 ]
 
 
@@ -831,6 +835,33 @@ class QueueManager:
             cursor = conn.execute("SELECT COUNT(*) as count FROM tasks WHERE status = 'pending'")
             row = cursor.fetchone()
             return row["count"] if row else 0
+
+    def claim_pending_for_coalescing(self, stage: TaskStage) -> List[str]:
+        """Atomically mark all ``pending`` rows for ``stage`` as completed
+        and return their ``episode_id``s.
+
+        Used by handlers whose work can be batched across episodes — the
+        cooccurrence rebuild folds many per-episode rows into one
+        corpus-scoped run. The handler holds a process lock while
+        calling this, so the claim+rebuild pair is effectively atomic
+        from the perspective of other workers.
+
+        Only ``pending`` rows are claimed: ``processing`` rows belong to
+        peer workers actively running the same handler, and ``retry_scheduled``
+        rows are waiting on backoff and may yet succeed on their own.
+        """
+        now = datetime.utcnow().isoformat()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, completed_at = ?, updated_at = ?
+                WHERE stage = ? AND status = ?
+                RETURNING episode_id
+                """,
+                (TaskStatus.COMPLETED.value, now, now, stage.value, TaskStatus.PENDING.value),
+            ).fetchall()
+        return [r["episode_id"] for r in rows]
 
     def get_queue_stats(self) -> dict:
         """

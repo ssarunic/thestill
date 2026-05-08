@@ -76,8 +76,9 @@ def _make_episode(
     podcast_id: str,
     title: str,
     published_at: datetime | None = None,
+    pub_date: datetime | None = None,
 ) -> Episode:
-    """Insert an episode and optionally set its ``published_at``."""
+    """Insert an episode and optionally set ``published_at`` and ``pub_date``."""
     episode = Episode(
         id=str(uuid.uuid4()),
         podcast_id=podcast_id,
@@ -85,6 +86,7 @@ def _make_episode(
         title=title,
         description="Episode description",
         audio_url=f"https://cdn.example.com/{title}.mp3",
+        pub_date=pub_date,
     )
 
     with sqlite3.connect(podcast_repo.db_path) as conn:
@@ -92,8 +94,8 @@ def _make_episode(
             """
             INSERT INTO episodes (
                 id, podcast_id, external_id, title, slug, description,
-                description_html, audio_url, published_at
-            ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)
+                description_html, audio_url, published_at, pub_date
+            ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)
             """,
             (
                 episode.id,
@@ -104,6 +106,7 @@ def _make_episode(
                 episode.description,
                 str(episode.audio_url),
                 published_at.isoformat() if published_at else None,
+                pub_date.isoformat() if pub_date else None,
             ),
         )
         conn.commit()
@@ -364,6 +367,7 @@ def test_unread_count_only_counts_unread(inbox_repo, user_repo, podcast_repo):
 
 
 def test_recent_published_episode_ids_orders_by_published_at_desc(inbox_repo, podcast_repo):
+    """When pub_date is missing the ordering falls back to published_at."""
     podcast = _make_podcast(podcast_repo, slug="p1")
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
     older = _make_episode(podcast_repo, podcast_id=podcast.id, title="older", published_at=base)
@@ -377,6 +381,38 @@ def test_recent_published_episode_ids_orders_by_published_at_desc(inbox_repo, po
 
     ids = inbox_repo.recent_published_episode_ids(podcast.id, limit=10)
     assert ids == [newer.id, older.id]
+
+
+def test_recent_published_episode_ids_prefers_pub_date_over_published_at(inbox_repo, podcast_repo):
+    """``pub_date`` (RSS air date) drives the ordering, not pipeline-finish time.
+
+    The pipeline can process an older episode after a newer one — using
+    ``published_at`` for the seed picks the wrong "most recent" pair.
+    """
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    air_jan_1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    air_jan_2 = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    pipeline_jan_3 = datetime(2026, 1, 3, 12, 0, tzinfo=timezone.utc)
+    pipeline_jan_4 = datetime(2026, 1, 4, 12, 0, tzinfo=timezone.utc)
+
+    # The episode that aired *first* (Jan 1) was processed *later* (Jan 4).
+    older_aired = _make_episode(
+        podcast_repo,
+        podcast_id=podcast.id,
+        title="older-aired-later-processed",
+        pub_date=air_jan_1,
+        published_at=pipeline_jan_4,
+    )
+    newer_aired = _make_episode(
+        podcast_repo,
+        podcast_id=podcast.id,
+        title="newer-aired-earlier-processed",
+        pub_date=air_jan_2,
+        published_at=pipeline_jan_3,
+    )
+
+    ids = inbox_repo.recent_published_episode_ids(podcast.id, limit=10)
+    assert ids == [newer_aired.id, older_aired.id]
 
 
 def test_recent_published_episode_ids_respects_limit(inbox_repo, podcast_repo):
@@ -401,13 +437,81 @@ def test_recent_published_episode_ids_excludes_unpublished(inbox_repo, podcast_r
 
 
 # ============================================================================
+# list_episode_ids_in_window (used by BriefingService, spec #36)
+# ============================================================================
+
+
+def test_list_episode_ids_in_window_filters_window_and_states(inbox_repo, user_repo, podcast_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    eps = [_make_episode(podcast_repo, podcast_id=podcast.id, title=f"ep-{i}") for i in range(5)]
+    rows = [
+        # Inside window, eligible.
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[0].id,
+            source="follow_seed",
+            state="unread",
+            delivered_at=base + timedelta(minutes=0),
+        ),
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[1].id,
+            source="follow_seed",
+            state="saved",
+            delivered_at=base + timedelta(minutes=10),
+        ),
+        # Inside window, but read/dismissed → excluded by state filter.
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[2].id,
+            source="follow_seed",
+            state="read",
+            delivered_at=base + timedelta(minutes=20),
+            state_changed_at=base + timedelta(hours=1),
+        ),
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[3].id,
+            source="follow_seed",
+            state="dismissed",
+            delivered_at=base + timedelta(minutes=30),
+            state_changed_at=base + timedelta(hours=1),
+        ),
+        # Outside window (after ``until``).
+        InboxEntry(
+            user_id=user.id,
+            episode_id=eps[4].id,
+            source="follow_seed",
+            state="unread",
+            delivered_at=base + timedelta(hours=3),
+        ),
+    ]
+    inbox_repo.insert_many(rows)
+
+    ids = inbox_repo.list_episode_ids_in_window(
+        user.id,
+        since=base,
+        until=base + timedelta(hours=2),
+    )
+    assert ids == [eps[0].id, eps[1].id]
+
+
+def test_list_episode_ids_in_window_returns_empty_for_empty_states(inbox_repo, user_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ids = inbox_repo.list_episode_ids_in_window(user.id, since=base, until=base + timedelta(hours=1), states=())
+    assert ids == []
+
+
+# ============================================================================
 # count_imports_for_user_since (quota plumbing)
 # ============================================================================
 
 
-def test_count_imports_for_user_since_only_counts_import_source(
-    inbox_repo, user_repo, podcast_repo
-):
+def test_count_imports_for_user_since_only_counts_import_source(inbox_repo, user_repo, podcast_repo):
     alice = _make_user(user_repo, "alice@example.com")
     podcast = _make_podcast(podcast_repo, slug="p1")
     ep1 = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep1")

@@ -690,6 +690,47 @@ def handle_reindex(task: Task, state: "AppState") -> None:
         )
 
 
+def handle_rebuild_cooccurrences(task: Task, state: "AppState") -> None:
+    """Spec #28 §1.7 — refresh ``entity_cooccurrences`` for the batch.
+
+    Runs as the terminal stage of the entity branch. The previous design
+    inlined this rebuild at the tail of every ``resolve-entities`` task,
+    which serialised parallel workers on the SQLite writer lock — a
+    corpus-wide self-join held inside a single write transaction is
+    long enough to push concurrent writers past ``busy_timeout`` and
+    produce transient ``database is locked`` failures.
+
+    Splitting the rebuild into its own stage lets resolve workers commit
+    their short transactions and move on; this handler then coalesces
+    sibling pending rows via ``claim_pending_for_coalescing`` and
+    issues one scoped rebuild over the union of episode_ids. Because
+    the table is a corpus-wide aggregate (``episode_count`` distinct
+    across episodes), a single rebuild covering the union is correctness-
+    equivalent to N per-episode rebuilds.
+
+    Held under ``_cooccurrence_rebuild_lock`` so two parallel workers
+    in this stage don't both run the heavy SELECT against the same
+    state — the second would block on the WAL writer for seconds and
+    burn ``busy_timeout``.
+    """
+    repo = state.entity_repository
+
+    with _handler_error_context(f"rebuilding cooccurrences for episode {task.episode_id}"):
+        with _cooccurrence_rebuild_lock:
+            coalesced = state.queue_manager.claim_pending_for_coalescing(TaskStage.REBUILD_COOCCURRENCES)
+            # Dedup in case a peer worker queued a duplicate row for the
+            # current episode between this task's claim-as-processing and
+            # the coalescing UPDATE.
+            episode_ids = sorted({task.episode_id, *coalesced})
+            inserted = repo.rebuild_cooccurrences(episode_ids=episode_ids)
+        logger.info(
+            "cooccurrences_rebuild_completed",
+            episode_id=task.episode_id,
+            coalesced_episode_count=len(coalesced),
+            rows=inserted,
+        )
+
+
 def handle_extract_entities(task: Task, state: "AppState") -> None:
     """Spec #28 §1.2 — run GLiNER over the cleaned-transcript JSON sidecar.
 
@@ -790,6 +831,15 @@ _resolver_init_lock = threading.Lock()
 # DB-scope — multi-process deployments would need a different
 # mechanism, but this codebase is single-process.
 _qid_merge_lock = threading.Lock()
+# Serialise ``rebuild_cooccurrences`` across the rebuild-cooccurrences
+# worker pool. The rebuild's INSERT…SELECT does a corpus-wide self-join
+# over ``entity_mentions`` under a single SQLite write transaction;
+# letting two workers run it concurrently would queue them on the
+# WAL writer lock, exceed ``busy_timeout``, and surface as transient
+# ``database is locked`` retries. The handler also uses this lock to
+# safely coalesce pending sibling tasks via
+# ``QueueManager.claim_pending_for_coalescing``.
+_cooccurrence_rebuild_lock = threading.Lock()
 
 
 def handle_resolve_entities(task: Task, state: "AppState") -> None:
@@ -875,17 +925,14 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             if merged:
                 logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
 
-        # Spec §1.7 — refresh cooccurrences for any pair touching this
-        # episode's entities. Per spec, the table holds corpus-wide
-        # episode_count per pair, so the rebuild has to recompute
-        # full counts (it does that internally — see
-        # ``rebuild_cooccurrences`` docstring). Runs even when no rows
-        # were pending: anchor-only episodes (everything pre-resolved
-        # by the extractor) still need their pairs in the graph, and
-        # ``rebuild_cooccurrences`` returns 0 cheaply when the episode
-        # has no resolved mentions.
-        repo.rebuild_cooccurrences(episode_ids=[episode.id])
-
+        # Spec §1.7 — cooccurrences are rebuilt by the dedicated
+        # ``rebuild-cooccurrences`` stage at the tail of the entity
+        # branch. Running the rebuild here would hold a corpus-wide
+        # write transaction inside every parallel resolve worker,
+        # serialising them on the SQLite writer lock and producing
+        # ``database is locked`` retries under load. The trailing
+        # stage coalesces sibling episodes' rebuilds into one call
+        # under a process-scope lock.
         logger.info(
             "entity_resolution_completed",
             episode_id=episode.id,
@@ -1056,4 +1103,5 @@ def create_task_handlers(
         TaskStage.EXTRACT_ENTITIES: lambda task, cb=None: handle_extract_entities(task, state),
         TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_resolve_entities(task, state),
         TaskStage.REINDEX: lambda task, cb=None: handle_reindex(task, state),
+        TaskStage.REBUILD_COOCCURRENCES: lambda task, cb=None: handle_rebuild_cooccurrences(task, state),
     }

@@ -18,16 +18,14 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
 
 from thestill.cli import main
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-from thestill.repositories.sqlite_podcast_follower_repository import (
-    SqlitePodcastFollowerRepository,
-)
+from thestill.repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
 
@@ -70,17 +68,18 @@ def _seed_user_and_podcast(db_path):
     return user_id, podcast_id
 
 
-def _publish_episode(db_path, podcast_id, title):
+def _publish_episode(db_path, podcast_id, title, *, published_at=None, pub_date=None):
     ep_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    if published_at is None:
+        published_at = datetime.now(timezone.utc)
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
             """
             INSERT INTO episodes (
                 id, podcast_id, external_id, title, slug, description,
-                description_html, audio_url, published_at
-            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?)
+                description_html, audio_url, published_at, pub_date
+            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?, ?)
             """,
             (
                 ep_id,
@@ -88,7 +87,8 @@ def _publish_episode(db_path, podcast_id, title):
                 f"ext-{title}",
                 title,
                 f"https://cdn.example.com/{title}.mp3",
-                now,
+                published_at.isoformat(),
+                pub_date.isoformat() if pub_date else None,
             ),
         )
         conn.commit()
@@ -135,6 +135,41 @@ def test_backfill_inbox_delivers_to_existing_followers(cli_db):
     inbox = SqliteInboxRepository(cli_db)
     delivered = {item.entry.episode_id for item in inbox.list_items(user_id)}
     assert delivered == {ep1, ep2}
+
+
+def test_backfill_inbox_orders_by_pub_date_and_seeds_oldest_first(cli_db):
+    """The backfill must pick episodes by pub_date and order delivered_at so
+    the newest-aired episode lands at the top of the inbox."""
+    user_id, podcast_id = _seed_user_and_podcast(cli_db)
+    air = datetime(2026, 4, 1, 8, 15, tzinfo=timezone.utc)
+    pipe = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    # Aired Apr 1 (older), processed an hour later than the Apr 2 episode.
+    older_aired = _publish_episode(
+        cli_db,
+        podcast_id,
+        "older",
+        pub_date=air,
+        published_at=pipe + timedelta(hours=1),
+    )
+    newer_aired = _publish_episode(
+        cli_db,
+        podcast_id,
+        "newer",
+        pub_date=air + timedelta(days=1),
+        published_at=pipe,
+    )
+    _add_follower(cli_db, user_id, podcast_id)
+
+    result = CliRunner().invoke(main, ["backfill-inbox"])
+    assert result.exit_code == 0, result.output
+
+    inbox = SqliteInboxRepository(cli_db)
+    items = inbox.list_items(user_id)
+    delivered_ids = [item.entry.episode_id for item in items]
+    # Newest-aired sits on top (delivered_at DESC); older below.
+    assert delivered_ids == [newer_aired, older_aired]
+    assert items[0].entry.delivered_at > items[1].entry.delivered_at
 
 
 def test_backfill_inbox_is_idempotent(cli_db):

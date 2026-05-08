@@ -23,13 +23,13 @@ round-trip per row.
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.inbox import InboxEntry, InboxItem, PodcastInboxSummary
+from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
 from .inbox_repository import InboxRepository
 from .sqlite_podcast_repository import episode_from_row
 
@@ -132,9 +132,7 @@ class SqliteInboxRepository(InboxRepository):
             )
             return cursor.rowcount if cursor.rowcount is not None else 0
 
-    def find_or_create(
-        self, *, user_id: str, episode_id: str, source: str
-    ) -> Tuple[InboxEntry, bool]:
+    def find_or_create(self, *, user_id: str, episode_id: str, source: str) -> Tuple[InboxEntry, bool]:
         # Single-statement insert-or-noop avoids the SELECT/INSERT race
         # between concurrent imports of the same URL by the same user.
         # RETURNING only fires when the row was actually inserted; an empty
@@ -282,6 +280,11 @@ class SqliteInboxRepository(InboxRepository):
     def recent_published_episode_ids(self, podcast_id: str, limit: int) -> List[str]:
         if limit <= 0:
             return []
+        # Order by ``pub_date`` (RSS air date) so the seed reflects what
+        # a listener thinks of as "the most recent episodes", not the
+        # accident of which one the pipeline finished first. Falls back
+        # to ``published_at`` for episodes whose feed entry lacks a
+        # pub_date.
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
@@ -289,32 +292,59 @@ class SqliteInboxRepository(InboxRepository):
                   FROM episodes
                  WHERE podcast_id = ?
                    AND published_at IS NOT NULL
-                 ORDER BY published_at DESC
+                 ORDER BY COALESCE(pub_date, published_at) DESC
                  LIMIT ?
                 """,
                 (podcast_id, limit),
             ).fetchall()
             return [row["id"] for row in rows]
 
+    def list_episode_ids_in_window(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+    ) -> List[str]:
+        state_list = tuple(states)
+        if not state_list:
+            return []
+        placeholders = ",".join("?" for _ in state_list)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT episode_id
+                  FROM user_episode_inbox
+                 WHERE user_id = ?
+                   AND delivered_at >= ?
+                   AND delivered_at < ?
+                   AND state IN ({placeholders})
+                 ORDER BY delivered_at ASC
+                """,
+                (user_id, since.isoformat(), until.isoformat(), *state_list),
+            ).fetchall()
+            return [row["episode_id"] for row in rows]
+
     def backfill_existing_followers(self, limit: int, *, dry_run: bool = False) -> int:
         if limit <= 0:
             return 0
 
-        # ROW_NUMBER picks the top-N most-recently-published episodes per
-        # podcast in a single query; the outer JOIN against
-        # ``podcast_followers`` then yields one row per (user, episode)
-        # pair. The LEFT JOIN ... IS NULL filter excludes pairs that are
-        # already in the inbox so dry-run and real-run agree on the
-        # count (without it, dry-run would over-report by counting rows
-        # that ON CONFLICT would silently skip).
+        # ROW_NUMBER picks the top-N most-recently-aired episodes per
+        # podcast (by ``pub_date``, not pipeline-finish time). The LEFT
+        # JOIN ... IS NULL filter excludes pairs already in the inbox
+        # so dry-run and real-run agree on the count (without it,
+        # dry-run would over-report rows that ON CONFLICT would skip).
+        # ``rn`` then drives the per-(user, podcast) ``delivered_at``
+        # stagger below so the newest seed lands at the top.
         select_sql = """
-            SELECT f.user_id, ranked.id AS episode_id, ranked.published_at
+            SELECT f.user_id, ranked.id AS episode_id, ranked.rn
               FROM podcast_followers f
               JOIN (
-                  SELECT id, podcast_id, published_at,
+                  SELECT id, podcast_id,
                          ROW_NUMBER() OVER (
                              PARTITION BY podcast_id
-                             ORDER BY published_at DESC
+                             ORDER BY COALESCE(pub_date, published_at) DESC
                          ) AS rn
                     FROM episodes
                    WHERE published_at IS NOT NULL
@@ -330,8 +360,7 @@ class SqliteInboxRepository(InboxRepository):
             if dry_run or not candidates:
                 return len(candidates)
 
-            import uuid
-
+            base = datetime.now(timezone.utc)
             rows = [
                 (
                     str(uuid.uuid4()),
@@ -339,7 +368,7 @@ class SqliteInboxRepository(InboxRepository):
                     row["episode_id"],
                     "follow_seed",
                     "unread",
-                    row["published_at"],
+                    (base - timedelta(milliseconds=row["rn"] - 1)).isoformat(),
                 )
                 for row in candidates
             ]

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
     from ..models.user import User
+    from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.digest_repository import DigestRepository
     from ..repositories.inbox_repository import InboxRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
+    from ..services.briefing_service import BriefingService
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..utils.config import Config
@@ -103,6 +105,8 @@ class AppState:
     inbox_service: "InboxService"
     import_service: "ImportService"
     digest_repository: "DigestRepository"
+    briefing_repository: "BriefingRepository"
+    briefing_service: "BriefingService"
     # Spec #28 — entity layer. Repository is always available; the
     # ``EntityExtractor`` model is loaded lazily on the first
     # ``extract-entities`` task because the GLiNER weights are large

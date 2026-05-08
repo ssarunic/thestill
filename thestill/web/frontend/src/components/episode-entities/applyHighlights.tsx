@@ -10,10 +10,39 @@ import { INLINE_HIGHLIGHT_CONFIDENCE_FLOOR } from '../../utils/entityColors'
 // surface form by case-insensitive substring search, picking
 // non-overlapping spans (longest surface form wins on conflict).
 //
-// This is run after the existing yellow search-highlight pass — entity
-// highlights are inert wrt the search highlight: when an entity span
-// overlaps a search match, both render (the entity wraps; the search
-// `<mark>` sits inside the entity's `<a>` text content).
+// Search-highlight integration: when a `searchQuery` is provided, the
+// function interleaves yellow `<mark>` spans for query matches both in
+// the gaps between entity spans and inside each entity anchor's
+// children. So a segment with an entity mention ("Stripe") and a
+// separate search hit ("outcome") shows both decorations, and a search
+// match that overlaps the entity surface form lands as a `<mark>`
+// inside the entity `<a>`.
+
+// Wrap every case-insensitive occurrence of `query` in `text` with a
+// yellow `<mark>`. Returns the original string when the query is empty
+// or has no matches.
+export function highlightMatches(text: string, query: string): ReactNode {
+  if (!query) return text
+  const needle = query.toLowerCase()
+  const hay = text.toLowerCase()
+  let idx = hay.indexOf(needle)
+  if (idx === -1) return text
+  const out: ReactNode[] = []
+  let cursor = 0
+  let markKey = 0
+  while (idx !== -1) {
+    if (idx > cursor) out.push(text.slice(cursor, idx))
+    out.push(
+      <mark key={markKey++} className="bg-yellow-100 text-gray-900 rounded px-0.5">
+        {text.slice(idx, idx + query.length)}
+      </mark>,
+    )
+    cursor = idx + query.length
+    idx = hay.indexOf(needle, cursor)
+  }
+  if (cursor < text.length) out.push(text.slice(cursor))
+  return out
+}
 
 export interface SegmentMentionSet {
   // Entity records for the entities mentioned in this segment, keyed by
@@ -61,50 +90,35 @@ export interface ApplyEntityHighlightsOptions {
   text: string
   segmentMentions: SegmentMentionSet | null
   enabled: boolean
-  // Already-rendered ReactNode array from the search-yellow highlight
-  // pass. We re-walk the original text by char offsets to wrap entity
-  // spans, then splice the existing nodes back in for the gaps. The
-  // search nodes are passed in so callers can interleave both passes.
-  existingNodes?: ReactNode | ReactNode[]
+  // The current transcript-search query. When non-empty, yellow
+  // `<mark>` spans are interleaved with the entity spans (both in
+  // the gaps and inside entity anchors).
+  searchQuery?: string
   onSeek?: (seconds: number) => void
   onFocusEntity?: (entityId: string) => void
 }
 
-// When entity highlighting is disabled or there are no mentions, fall
-// back to the search-rendered nodes. Otherwise wrap each span with an
-// `<EntityHighlight>` and return the recomposed node array.
-//
-// We deliberately discard the existing search-highlight nodes when
-// entity highlights are placed: re-interleaving search-mark
-// boundaries with entity-anchor boundaries is tricky and the spec
-// flags affordance #2 ("E toggle") for users who want to read without
-// underlines. The 99% case is that entity highlights are on and the
-// search is empty.
+// When entity highlighting is disabled or no spans land, fall back to
+// the search-only render. Otherwise place entity anchors and run the
+// search-mark pass on every text slice (gaps and entity children) so
+// both decorations appear at once.
 export function applyEntityHighlights({
   text,
   segmentMentions,
   enabled,
-  existingNodes,
+  searchQuery,
   onSeek,
   onFocusEntity,
 }: ApplyEntityHighlightsOptions): ReactNode {
-  if (!enabled || !segmentMentions || segmentMentions.mentions.length === 0) {
-    return existingNodes ?? text
-  }
+  const query = searchQuery ?? ''
+  if (!enabled || !segmentMentions) return highlightMatches(text, query)
 
-  // Apply confidence floor (spec §5.2 visual rules: mentions below the
-  // extractor confidence threshold render as plain text).
+  // Mentions below the spec §5.2 confidence floor render as plain text.
   const eligible = segmentMentions.mentions.filter(
     (m) => m.confidence >= INLINE_HIGHLIGHT_CONFIDENCE_FLOOR,
   )
-  if (eligible.length === 0) {
-    return existingNodes ?? text
-  }
-
   const spans = buildSpans(text, eligible)
-  if (spans.length === 0) {
-    return existingNodes ?? text
-  }
+  if (spans.length === 0) return highlightMatches(text, query)
 
   // Compose React keys from the span position rather than mention.id.
   // mention.id is the SQLite AUTOINCREMENT pk and is normally unique,
@@ -116,7 +130,10 @@ export function applyEntityHighlights({
   for (let i = 0; i < spans.length; i += 1) {
     const span = spans[i]
     if (span.start > cursor) {
-      nodes.push(<Fragment key={`pre-${span.start}`}>{text.slice(cursor, span.start)}</Fragment>)
+      const gap = text.slice(cursor, span.start)
+      nodes.push(
+        <Fragment key={`pre-${span.start}`}>{highlightMatches(gap, query)}</Fragment>,
+      )
     }
     const entity = segmentMentions.entityById.get(span.mention.entity_id)
     const matched = text.slice(span.start, span.end)
@@ -130,19 +147,22 @@ export function applyEntityHighlights({
           onSeek={onSeek}
           onFocusEntity={onFocusEntity}
         >
-          {matched}
+          {highlightMatches(matched, query)}
         </EntityHighlight>,
       )
     } else {
       // Defensive — should never happen because we filter `eligible`
       // off the same map. If it does, fall back to plain text rather
       // than dropping the span entirely.
-      nodes.push(<Fragment key={`m-fallback-${spanKey}`}>{matched}</Fragment>)
+      nodes.push(
+        <Fragment key={`m-fallback-${spanKey}`}>{highlightMatches(matched, query)}</Fragment>,
+      )
     }
     cursor = span.end
   }
   if (cursor < text.length) {
-    nodes.push(<Fragment key="tail">{text.slice(cursor)}</Fragment>)
+    const tail = text.slice(cursor)
+    nodes.push(<Fragment key="tail">{highlightMatches(tail, query)}</Fragment>)
   }
   return <>{nodes}</>
 }

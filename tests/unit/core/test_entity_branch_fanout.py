@@ -68,9 +68,14 @@ class TestLinearChain:
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.RESOLVE_ENTITIES))
         assert _enqueued_stages(queue) == [TaskStage.REINDEX]
 
-    def test_reindex_terminates(self):
+    def test_reindex_chains_rebuild_cooccurrences(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.REINDEX))
+        assert _enqueued_stages(queue) == [TaskStage.REBUILD_COOCCURRENCES]
+
+    def test_rebuild_cooccurrences_terminates(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.REBUILD_COOCCURRENCES))
         assert _enqueued_stages(queue) == []
 
 
@@ -140,6 +145,17 @@ class TestEntityBranchAlwaysChains:
             metadata={},
         )
 
+    def test_summarize_chains_entity_branch_without_full_pipeline_flag(self):
+        # Regression: ``thestill summarize`` and single-stage retries
+        # don't set ``run_full_pipeline``. Before this fix, those
+        # paths left summarized episodes silently unindexed (52
+        # episodes had no extract-entities task at all). The entity
+        # branch is non-destructive and idempotent — successful
+        # summarize should always start it.
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.SUMMARIZE))
+        assert _enqueued_stages(queue) == [TaskStage.EXTRACT_ENTITIES]
+
     def test_extract_entities_chains_resolve_without_full_pipeline_flag(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.EXTRACT_ENTITIES))
@@ -150,9 +166,14 @@ class TestEntityBranchAlwaysChains:
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.RESOLVE_ENTITIES))
         assert _enqueued_stages(queue) == [TaskStage.REINDEX]
 
-    def test_reindex_terminates_without_full_pipeline_flag(self):
+    def test_reindex_chains_rebuild_cooccurrences_without_full_pipeline_flag(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.REINDEX))
+        assert _enqueued_stages(queue) == [TaskStage.REBUILD_COOCCURRENCES]
+
+    def test_rebuild_cooccurrences_terminates_without_full_pipeline_flag(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.REBUILD_COOCCURRENCES))
         assert _enqueued_stages(queue) == []
 
     def test_user_chain_still_requires_full_pipeline_flag(self):

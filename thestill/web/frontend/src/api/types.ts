@@ -1073,6 +1073,37 @@ export interface InboxStateResponse {
   entry: InboxEntry
 }
 
+// Per-user briefings (spec #36)
+// ============================================================================
+//
+// A briefing is a recurring readout of the inbox subset the user hasn't
+// acted on yet. The window covered is ``[cursor_from, cursor_to)``;
+// ``script_path`` and ``audio_path`` are NULL when rendering hasn't run
+// yet (rare in practice — production wires a renderer in).
+
+export interface Briefing {
+  id: string
+  user_id: string
+  cursor_from: string  // ISO-8601
+  cursor_to: string    // ISO-8601
+  episode_count: number
+  script_path: string | null
+  audio_path: string | null
+  created_at: string
+  listened_at: string | null
+}
+
+export interface BriefingResponse extends Briefing {
+  status: string
+  timestamp: string
+}
+
+export interface BriefingScriptResponse {
+  status: string
+  timestamp: string
+  markdown: string
+}
+
 // ============================================================================
 // Imports (spec #31) — POST /api/imports
 // ============================================================================

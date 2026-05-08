@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useInbox } from '../hooks/useApi'
 import type { Episode, InboxItem, InboxState } from '../api/types'
+import BriefingCard from '../components/BriefingCard'
 import Button, { PlusIcon } from '../components/Button'
 import ImportEpisodeModal from '../components/ImportEpisodeModal'
 
@@ -92,36 +93,38 @@ function InboxRow({ item }: { item: InboxItem }) {
   // enough signal.
   const showProgress = progress.kind !== 'ready'
   return (
-    <li className="flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg">
-      {podcast.image_url ? (
-        <img
-          src={podcast.image_url}
-          alt=""
-          className="w-12 h-12 rounded object-cover flex-shrink-0"
-        />
-      ) : (
-        <div className="w-12 h-12 rounded bg-gray-100 flex-shrink-0" />
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
-          <span className="text-gray-300">·</span>
-          <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
-          {entry.source === 'import' && (
-            <span className="text-xs text-gray-400 italic">imported</span>
-          )}
+    <li>
+      <Link
+        to={episodeHref}
+        className="group flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
+      >
+        {podcast.image_url ? (
+          <img
+            src={podcast.image_url}
+            alt=""
+            className="w-12 h-12 rounded object-cover flex-shrink-0"
+          />
+        ) : (
+          <div className="w-12 h-12 rounded bg-gray-100 flex-shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
+            <span className="text-gray-300">·</span>
+            <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
+            {entry.source === 'import' && (
+              <span className="text-xs text-gray-400 italic">imported</span>
+            )}
+          </div>
+          <p className="text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
+            {episode.title}
+          </p>
         </div>
-        <Link
-          to={episodeHref}
-          className="block text-base font-medium text-gray-900 hover:text-primary-600 truncate"
-        >
-          {episode.title}
-        </Link>
-      </div>
-      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-        <StateBadge state={entry.state} />
-        {showProgress && <ProgressPill status={progress} />}
-      </div>
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <StateBadge state={entry.state} />
+          {showProgress && <ProgressPill status={progress} />}
+        </div>
+      </Link>
     </li>
   )
 }
@@ -173,6 +176,8 @@ export default function Inbox() {
           Import
         </Button>
       </div>
+
+      <BriefingCard />
 
       {isLoading ? (
         <ul className="space-y-3">

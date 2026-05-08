@@ -24,10 +24,15 @@ class TestStageSuccessors:
         # must be durable on disk before extraction starts.
         assert get_next_stages(TaskStage.SUMMARIZE) == [TaskStage.EXTRACT_ENTITIES]
 
-    def test_entity_branch_is_linear_to_reindex(self):
+    def test_entity_branch_is_linear_to_rebuild_cooccurrences(self):
+        # spec #28 §1.7 — cooccurrence rebuild was lifted out of
+        # resolve-entities into its own terminal stage so the heavy
+        # corpus-wide self-join no longer blocks the resolve workers'
+        # writer lock.
         assert get_next_stages(TaskStage.EXTRACT_ENTITIES) == [TaskStage.RESOLVE_ENTITIES]
         assert get_next_stages(TaskStage.RESOLVE_ENTITIES) == [TaskStage.REINDEX]
-        assert get_next_stages(TaskStage.REINDEX) == []
+        assert get_next_stages(TaskStage.REINDEX) == [TaskStage.REBUILD_COOCCURRENCES]
+        assert get_next_stages(TaskStage.REBUILD_COOCCURRENCES) == []
 
     def test_returned_list_is_a_copy(self):
         # Defensive: callers must be free to mutate the returned list
@@ -50,6 +55,7 @@ class TestEntityBranchClassifier:
             TaskStage.EXTRACT_ENTITIES,
             TaskStage.RESOLVE_ENTITIES,
             TaskStage.REINDEX,
+            TaskStage.REBUILD_COOCCURRENCES,
         ):
             assert is_entity_branch_stage(stage), f"{stage.value} should be entity-branch"
 

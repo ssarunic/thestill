@@ -131,6 +131,7 @@ class PathManager:
         self._pending_operations = "pending_operations"
         self._external_transcripts = "external_transcripts"
         self._digests = "digests"
+        self._briefings = "briefings"
         # Spec #28 — corpus holds the Obsidian-friendly per-entity
         # Markdown pages regenerated from the ``entities`` SQLite
         # tables. Episode pages were dropped in Phase 2.10 (chunks
@@ -213,6 +214,22 @@ class PathManager:
     def digests_dir(self) -> Path:
         """Get path to digests directory (stores generated digest markdown files)"""
         return self.storage_path / self._digests
+
+    def briefings_dir(self) -> Path:
+        """Per-user briefing artifacts root (spec #36).
+
+        Each briefing is rendered to ``briefings/<user_id>/<briefing_id>/``
+        so the on-disk layout matches the per-user state model.
+        """
+        return self.storage_path / self._briefings
+
+    def briefing_dir(self, user_id: str, briefing_id: str) -> Path:
+        """Resolve the per-briefing artifact directory under the briefings root.
+
+        Both segments are validated against the storage root (spec #25 traversal
+        guard) so a malformed id can't escape the briefings tree.
+        """
+        return self._assert_inside_root(self.briefings_dir() / user_id / briefing_id)
 
     # --- Spec #28 corpus paths -------------------------------------------------
     # The four entity-type subdirs are split because a rendered Markdown

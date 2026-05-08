@@ -137,8 +137,13 @@ class TestHappyPath:
         statuses = [c.kwargs["status"] for c in state.entity_repository.resolve_mention.call_args_list]
         assert statuses == ["resolved", "resolved"]
 
-        # Cooccurrences rebuild scoped to this episode
-        state.entity_repository.rebuild_cooccurrences.assert_called_once_with(episode_ids=["ep-uuid"])
+        # The cooccurrence rebuild moved out of this handler into the
+        # dedicated ``rebuild-cooccurrences`` stage (spec §1.7) — see
+        # ``handle_rebuild_cooccurrences``. Resolve must not run it
+        # inline anymore: doing so held the SQLite writer across a
+        # corpus-wide self-join and surfaced as ``database is locked``
+        # retries under parallel resolve workers.
+        state.entity_repository.rebuild_cooccurrences.assert_not_called()
 
     def test_unresolvable_mention_passes_null_entity_id(self):
         # Stub doesn't know about "Whoever" so it falls back to local-slug
@@ -151,19 +156,18 @@ class TestHappyPath:
 
 
 class TestNoPending:
-    def test_episode_with_zero_pending_skips_resolver_but_rebuilds_cooccurrences(self):
+    def test_episode_with_zero_pending_skips_resolver_and_no_inline_rebuild(self):
         # Spec #28 §1.7 — the extractor can insert already-resolved
         # anchor + speaker mentions, leaving zero pending rows. The
-        # cooccurrence graph still needs the pairs from those resolved
-        # rows. ``rebuild_cooccurrences`` is cheap when the episode has
-        # no resolved mentions (returns 0 after one indexed SELECT) so
-        # always running it is the right default.
+        # cooccurrence graph still needs those pairs, but the rebuild
+        # runs in the dedicated ``rebuild-cooccurrences`` stage at the
+        # tail of the entity branch, not inline here.
         state = _build_state([])
         handle_resolve_entities(_make_task(), state)
 
         state.entity_repository.upsert_entity.assert_not_called()
         state.entity_repository.resolve_mention.assert_not_called()
-        state.entity_repository.rebuild_cooccurrences.assert_called_once_with(episode_ids=["ep-uuid"])
+        state.entity_repository.rebuild_cooccurrences.assert_not_called()
 
 
 class TestInlineAliasMerge:

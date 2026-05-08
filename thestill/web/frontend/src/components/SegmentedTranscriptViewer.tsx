@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactElement,
 } from 'react'
 import type {
   AnnotatedSegment,
@@ -27,6 +26,7 @@ import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { useToast } from './Toast'
 import {
   applyEntityHighlights,
+  highlightMatches,
   type SegmentMentionSet,
 } from './episode-entities/applyHighlights'
 
@@ -186,29 +186,6 @@ function seekableProps(
   }
 }
 
-function highlightMatches(text: string, query: string) {
-  if (!query) return text
-  const needle = query.toLowerCase()
-  const hay = text.toLowerCase()
-  const out: (string | ReactElement)[] = []
-  let cursor = 0
-  let idx = hay.indexOf(needle, cursor)
-  if (idx === -1) return text
-  let markKey = 0
-  while (idx !== -1) {
-    if (idx > cursor) out.push(text.slice(cursor, idx))
-    out.push(
-      <mark key={markKey++} className="bg-yellow-100 text-gray-900 rounded px-0.5">
-        {text.slice(idx, idx + query.length)}
-      </mark>,
-    )
-    cursor = idx + query.length
-    idx = hay.indexOf(needle, cursor)
-  }
-  if (cursor < text.length) out.push(text.slice(cursor))
-  return out
-}
-
 interface TimestampLinkProps {
   seconds: number
   className: string
@@ -329,7 +306,7 @@ const BlockSegment = memo(function BlockSegment({
               text: segment.text,
               segmentMentions,
               enabled: entityHighlightsEnabled,
-              existingNodes: highlightMatches(segment.text, searchQuery),
+              searchQuery,
               onSeek,
               onFocusEntity,
             })
@@ -420,7 +397,7 @@ const ContentSegment = memo(function ContentSegment({
           text: segment.text,
           segmentMentions,
           enabled: entityHighlightsEnabled,
-          existingNodes: highlightMatches(segment.text, searchQuery),
+          searchQuery,
           onSeek,
           onFocusEntity,
         })}
