@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft
 > **Created:** 2026-05-06
-> **Updated:** 2026-05-06
+> **Updated:** 2026-05-08
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#32 episodes-as-first-class](32-episodes-as-first-class.md)
 
@@ -10,11 +10,11 @@
 
 ## Executive Summary
 
-Let users paste a URL — RSS episode, YouTube video, or bare audio file — and have it land in their inbox **immediately**, with the pipeline running in the background. The user does not need to follow the source podcast; the episode is associated with a synthetic parent ("youtube-imports", "ad-hoc-imports") for storage purposes only.
+Let users paste a URL — RSS episode, Apple Podcasts share link, YouTube video, or bare audio file — and have it land in their inbox **immediately**, with the pipeline running in the background. The user does not need to follow the source podcast; **adding a podcast to the system is decoupled from following it**. When a parent podcast can be deduced from the URL (RSS, Apple, YouTube channel), it is upserted into the regular `podcasts` table without subscribing the user. Bare audio URLs with no deducible parent fall back to a single synthetic `audio-imports` parent.
 
-**Mental model:** Personal transcription queue layered onto the podcast aggregator. The pipeline is reused as-is; the new surface is URL parsing, synthetic-parent management, and a live "processing" state on the inbox row.
+**Mental model:** Personal transcription queue layered onto the podcast aggregator. The pipeline is reused as-is; the new surface is URL parsing, parent deduction, and a live "processing" state on the inbox row.
 
-**Key principle:** Don't introduce a new pipeline. Imports become regular `episodes` rows under synthetic podcasts and run through the existing `transcribe → clean → summarize → entity branch` chain. The only new code is URL resolution, the synthetic-podcast bootstrap, and the inbox row that appears before processing finishes.
+**Key principle:** Don't introduce a new pipeline. Imports become regular `episodes` rows — under a real parent podcast where deducible, otherwise under a single synthetic fallback — and run through the existing `transcribe → clean → summarize → entity branch` chain. The only new code is URL resolution, optional parent upsert, the bare-audio fallback parent, and the inbox row that appears before processing finishes.
 
 ---
 
@@ -32,7 +32,7 @@ Let users paste a URL — RSS episode, YouTube video, or bare audio file — and
 10. [Frontend UX](#frontend-ux)
 11. [Migration Strategy](#migration-strategy)
 12. [Out of Scope (deferred to #32)](#out-of-scope-deferred-to-32)
-13. [Open Questions](#open-questions)
+13. [Resolved Decisions](#resolved-decisions)
 14. [Implementation Phases](#implementation-phases)
 
 ---
@@ -74,17 +74,15 @@ Spec #32 (episodes-as-first-class) is the cleaner long-term model. But it's a bi
    - YouTube watch / shorts / playlist-item URLs
    - RSS `<enclosure>` audio URLs (.mp3, .m4a, .opus, .ogg, .wav)
    - Direct audio file URLs not from an RSS feed
-   - **Out of scope:** Apple Podcasts / Spotify / Pocket Casts share links (these don't expose audio directly; resolving them needs platform-specific lookup, deferred to a follow-up).
+   - Apple Podcasts share links (resolved to underlying RSS feed; ships as a follow-up resolver, not v1)
+   - **Out of scope:** Spotify / Pocket Casts share links (Spotify exclusives have no audio enclosure; defer or reject).
 2. **Idempotency on canonical id.** Each resolver produces a typed canonical id (`youtube:<video_id>`, `audio:<sha256_url>`, `rss:<guid>`). Re-importing the same URL returns the existing episode row and adds the user's inbox row if they didn't already have one.
 3. **Inbox-first UX.** The inbox row is created **before** processing starts so the user sees the import immediately with a `processing` state. The row updates live as pipeline stages complete.
 4. **Ad-hoc and Import are different sources.**
-   - `inbox.source='ad_hoc'` — added from an episode already in the system (the (3.1) collapse from earlier discussions).
-   - `inbox.source='import'` — added from an external URL we hadn't seen before.
-5. **No follow side-effect.** Importing does not subscribe the user to the source. Future episodes from that channel/feed do NOT auto-arrive.
-6. **Privacy.** Imports go under one of two visibility models (decision in [Open Questions](#open-questions)):
-   - **(a) Shared canonical episode:** Two users importing the same YouTube video share the same `episodes` row, the Whisper run is shared, but each user sees it only via their own inbox row.
-   - **(b) Per-user episode:** Each user's import creates a separate `episodes` row, no sharing.
-   - Default recommended: **(a)** — Whisper / GPU time is the most expensive resource; sharing is the right tradeoff. The episode itself isn't sensitive (it's a public URL the user pasted).
+   - `user_episode_inbox.source='ad_hoc'` — added from an episode already in the system (the (3.1) collapse from earlier discussions).
+   - `user_episode_inbox.source='import'` — added from an external URL we hadn't seen before.
+5. **No follow side-effect.** Importing does not subscribe the user to the source. Future episodes from that channel/feed do NOT auto-arrive. Adding a podcast to the `podcasts` table (when the URL has a deducible parent) is decoupled from following it — the user's `follows` relation is not touched.
+6. **Shared episode rows.** Two users importing the same URL share the same `episodes` row (one Whisper run); each user gets their own inbox row pointing at it. Episodes are not sensitive — the user pasted a public URL.
 7. **Quotas (multi-user only).** A future hosted-multi-user mode needs per-user import quotas (e.g. N imports per day) to prevent runaway costs. Self-hosted single-user mode has no quota.
 
 ### Non-Goals
@@ -152,9 +150,12 @@ POST /api/imports {url}
    ▼
 ImportService.import_url(user_id, url)
    │
-   ├── resolve_url(url) → CanonicalSource(kind, canonical_id, audio_url, title, ...)
+   ├── resolve_url(url) → CanonicalSource(kind, canonical_id, ..., parent?)
    │
-   ├── ensure_synthetic_podcast(kind) → Podcast (e.g. "youtube-imports")
+   ├── if canonical.parent:
+   │      upsert_auto_added_podcast(parent)   # real podcast row, auto_added=1, no follow
+   │   else:
+   │      ensure_synthetic_audio_imports_parent()
    │
    ├── find_or_create_episode(canonical_id, ...) →
    │      • exists? return existing
@@ -182,21 +183,30 @@ class Resolver(Protocol):
     def resolve(self, url: str) -> CanonicalSource: ...
 ```
 
-`CanonicalSource` carries everything we need to mint an Episode:
+`CanonicalSource` carries everything we need to mint an Episode and (when deducible) its parent Podcast:
 
 ```python
 @dataclass
+class CanonicalParent:
+    """A real parent podcast deduced from the URL. None for bare audio."""
+    external_id: str              # YouTube channel_id, RSS feed URL, Apple show id
+    rss_url: str                  # feed URL the refresh loop will use IF followed
+    title: str                    # channel / show name
+    image_url: Optional[str]
+
+@dataclass
 class CanonicalSource:
     kind: Literal["youtube", "rss_episode", "bare_audio"]
-    canonical_id: str            # e.g. "youtube:dQw4w9WgXcQ"
-    audio_url: str               # what yt-dlp / downloader fetches
+    canonical_id: str             # e.g. "youtube:dQw4w9WgXcQ"
+    audio_url: str                # what yt-dlp / downloader fetches
     title: str
     description: Optional[str]
     duration_seconds: Optional[int]
     pub_date: Optional[datetime]
     image_url: Optional[str]
-    source_handle: str           # YouTube channel name, RSS feed name, hostname
-    external_id: str             # YouTube video id, RSS guid, sha256 of URL
+    source_handle: str            # YouTube channel name, RSS feed name, hostname
+    external_id: str              # YouTube video id, RSS guid, sha256 of URL
+    parent: Optional[CanonicalParent]  # None → falls back to synthetic audio-imports
 ```
 
 ### YouTubeResolver
@@ -204,63 +214,129 @@ class CanonicalSource:
 - **Match:** URLs whose host is `youtube.com`, `youtu.be`, or `m.youtube.com`.
 - **Resolve:** Run `yt-dlp --skip-download --print-json <url>` to get metadata. Map `id → external_id`, `webpage_url → audio_url`, `channel → source_handle`, `upload_date → pub_date`, `thumbnails[-1].url → image_url`.
 - **Canonical id:** `youtube:<video_id>`. Two URLs (e.g. `youtu.be/X` and `youtube.com/watch?v=X`) collapse to the same canonical id.
+- **Parent:** `CanonicalParent(external_id=channel_id, rss_url="https://www.youtube.com/feeds/videos.xml?channel_id=<id>", title=channel, image_url=channel_thumbnail)`.
 - Existing pipeline already supports YouTube via yt-dlp in the download stage — no changes needed there.
-
-### RssEnclosureResolver
-
-- **Match:** URL ends in a known audio extension (`.mp3`, `.m4a`, `.opus`, `.ogg`, `.wav`) AND is reachable via HEAD with `Content-Type: audio/*`.
-- **Resolve:** HEAD the URL for `Content-Length` and `Content-Type`. We don't have RSS-feed metadata for a bare enclosure URL, so synthesize a title from the filename and use `audio:<sha256_url>` as the external id (no RSS guid available).
-- **Canonical id:** `audio:<sha256_url>` after URL normalisation (drop tracking params, lowercase host).
 
 ### BareAudioResolver
 
-- Same as RssEnclosureResolver. The two are folded into one resolver in v1; the distinction matters only when we later add Apple/Spotify lookups that produce real RSS guids.
+- **Match:** URL ends in a known audio extension (`.mp3`, `.m4a`, `.opus`, `.ogg`, `.wav`) AND is reachable via HEAD with `Content-Type: audio/*`.
+- **Resolve:** HEAD the URL for `Content-Length` and `Content-Type`. Synthesize a title from the filename and use `audio:<sha256_url>` as the external id.
+- **Canonical id:** `audio:<sha256_url>` after URL normalisation (drop tracking params, lowercase host).
+- **Parent:** `None` — falls back to the synthetic `audio-imports` parent.
 
-### Future resolvers (deferred)
+### ApplePodcastsResolver (follow-up, not v1)
 
-- **Apple Podcasts share link** → resolve to RSS feed → lookup matching episode by guid.
-- **Spotify share link** → similar but Spotify exclusives have no enclosure (deferred or rejected).
+- **Match:** URLs whose host is `podcasts.apple.com`.
+- **Resolve:** Extract show id and episode id from the path / `?i=` query param. Hit the iTunes Search API to get the RSS feed URL, fetch the feed, locate the matching episode by guid.
+- **Canonical id:** `rss:<guid>` (real RSS guid available).
+- **Parent:** `CanonicalParent` from the resolved RSS feed. This is the cleanest case — both episode and parent are first-class.
+
+### Out-of-scope resolvers
+
+- **Spotify share links** — exclusives have no audio enclosure; non-exclusives need API auth and are not worth the complexity. Rejected with a clear error.
+- **Pocket Casts share links** — deferred until there's user demand.
 
 ---
 
-## Synthetic Parents
+## Parent Podcast Handling
 
-Imported episodes need a `podcast_id` (current schema requires it; spec #32 lifts that). We use one synthetic podcast row per resolver kind:
+Imported episodes need a `podcast_id` (current schema requires it; spec #32 lifts that). The parent comes from one of two paths:
+
+### Path A — Real parent (deducible)
+
+When the resolver can identify a parent, we upsert a normal row in `podcasts` and link the episode to it:
+
+| Resolver | Deduced parent | Notes |
+|---|---|---|
+| `RssEnclosureResolver` (with feed URL) | The RSS feed itself | Only when we have the feed URL, not for bare enclosures. |
+| `ApplePodcastsResolver` (follow-up) | RSS feed resolved via iTunes Search API | Apple share links always carry show id → feed → episode guid. |
+| `YouTubeResolver` | YouTube channel as a podcast (RSS: `youtube.com/feeds/videos.xml?channel_id=...`) | One channel = one parent podcast row. |
+
+These podcasts are inserted as **regular podcasts**, not synthetic. They are marked `auto_added=1` so behaviors that should not fire for un-followed auto-adds can filter on it (see [Refresh Behavior](#refresh-behavior) and [Discovery Behavior](#discovery-behavior) below).
+
+**No follow side-effect.** Inserting the parent podcast does NOT add a `follows` row for the importing user. Following remains a separate explicit action (and the post-import success state may offer it as a CTA per O4).
+
+### Path B — Synthetic fallback (no deducible parent)
+
+For bare audio URLs with no associated feed, we fall back to a single synthetic parent:
 
 | `id` | `slug` | `title` | `rss_url` |
 |---|---|---|---|
-| `synthetic:youtube-imports` | `youtube-imports` | YouTube imports | `synthetic://youtube-imports` |
 | `synthetic:audio-imports` | `audio-imports` | Audio imports | `synthetic://audio-imports` |
 
-These rows are:
+This row is:
 
-- **Marked synthetic** — a new column `podcasts.synthetic BOOLEAN DEFAULT 0` (or a magic prefix on the id; the column is more honest).
-- **Excluded from the main podcasts list and discovery.** Hidden from `/podcasts`, the subscribe-to-feed UI, the refresh loop.
-- **Created lazily** on first import of that kind.
-- **Never followed.** They have no role in the follow / inbox-fanout pipeline of #29.
+- **Marked synthetic** — column `podcasts.synthetic BOOLEAN DEFAULT 0`.
+- **Excluded from the main podcasts list, discovery, refresh.**
+- **Created lazily** on first bare-audio import.
+- **Never followed.** No role in the follow / inbox-fanout pipeline of #29.
 
-The synthetic podcast doesn't have its own page; clicking through from an imported episode takes the user to the source URL (YouTube channel page, original audio host).
+The synthetic fallback has no page; clicking through from an imported episode takes the user to the original audio URL.
+
+### Refresh Behavior
+
+The refresh loop must not poll auto-added podcasts that no user follows (otherwise importing one YouTube video makes us poll that channel forever).
+
+**Current state (verified):** `SqlitePodcastRepository.get_podcasts_for_refresh()` selects **all** rows from `podcasts` with no filter. The `podcast_followers` table exists (spec #29 is implemented) but the refresh predicate doesn't consult it.
+
+**Required change:** modify `get_podcasts_for_refresh()` to exclude `synthetic=1` and exclude `auto_added=1 AND no rows in podcast_followers`. Concretely:
+
+```sql
+SELECT p.id, ... FROM podcasts p
+WHERE p.synthetic = 0
+  AND (p.auto_added = 0
+       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = p.id))
+ORDER BY p.created_at DESC;
+```
+
+This is a Phase 1 deliverable, not a "verify" item.
+
+### Discovery Behavior
+
+**Current state (verified):**
+- `GET /api/podcasts` already filters to the calling user's follows (via `follower_repository.get_followed_podcast_ids`). Auto-added podcasts won't appear here unless the user follows them — no change required.
+- `GET /api/top-podcasts` reads from a separate curated `top_podcasts` table, not from `podcasts`. Unaffected by imports — no change required.
+
+So no listing-side filter work is required for v1. If a future endpoint exposes the raw `podcasts` table, it must filter `synthetic=0 AND (auto_added=0 OR has_followers)`.
 
 ---
 
 ## Database Schema Changes
 
 ```sql
--- Mark synthetic podcasts so listings/refresh skip them
+-- Mark synthetic podcasts (bare-audio fallback parent) so listings/refresh skip them
 ALTER TABLE podcasts ADD COLUMN synthetic BOOLEAN NOT NULL DEFAULT 0;
 CREATE INDEX idx_podcasts_synthetic ON podcasts(synthetic) WHERE synthetic = 1;
+
+-- Mark podcasts that were auto-inserted by an import (real parent, no follower yet)
+ALTER TABLE podcasts ADD COLUMN auto_added BOOLEAN NOT NULL DEFAULT 0;
+CREATE INDEX idx_podcasts_auto_added ON podcasts(auto_added) WHERE auto_added = 1;
 
 -- Canonical-id index on episodes for resolver-based dedup
 ALTER TABLE episodes ADD COLUMN canonical_id TEXT;  -- "youtube:abc", "audio:sha256:..."
 CREATE UNIQUE INDEX idx_episodes_canonical_id
   ON episodes(canonical_id) WHERE canonical_id IS NOT NULL;
 
--- Inbox source extension (additive enum value)
--- Existing values: 'fanout', 'follow_seed' (per spec #29)
--- New values:      'ad_hoc'  — episode existed in system, user added it
---                  'import'  — user pasted external URL, we materialised it
--- (No DDL change if source is TEXT; just document the new values.)
+-- Inbox source extension on user_episode_inbox.source
+-- The existing CHECK constraint allows ('follow_new', 'follow_seed').
+-- We extend it to ('follow_new', 'follow_seed', 'ad_hoc', 'import').
+--
+-- Naming note: spec #29 documents this value as 'fanout', but the implemented
+-- code uses 'follow_new'. We keep the implemented name 'follow_new' for the
+-- enum and treat 'fanout' as informal shorthand in prose only.
+--
+-- New values: 'ad_hoc'  — episode existed in system, user added it
+--             'import'  — user pasted external URL, we materialised it
+--
+-- SQLite has no ALTER COLUMN; the migration recreates the CHECK constraint
+-- via the standard table-rebuild pattern (CREATE NEW → INSERT SELECT →
+-- DROP OLD → RENAME) used elsewhere in _run_migrations.
 ```
+
+`synthetic` and `auto_added` are distinct flags:
+
+- `synthetic=1` — the bare-audio fallback parent only. Never user-facing.
+- `auto_added=1` — a real podcast row inserted as a side-effect of an import. Becomes a normal podcast as soon as any user follows it (the flag can stay on or be cleared on first follow; either is fine — listings filter on `auto_added=1 AND no_followers`).
 
 **Backfill:** existing episodes have `canonical_id = NULL`. They participate in idempotency only by `(podcast_id, external_id)` as before. Imports going forward set `canonical_id`, and dedup uses it. Future spec #32 may backfill `canonical_id` for all rows; not required here.
 
@@ -278,8 +354,13 @@ class ImportService:
 
     def import_url(self, user_id: str, url: str) -> ImportResult:
         canonical = self._resolve(url)
-        synthetic = self._ensure_synthetic_podcast(canonical.kind)
-        episode, created = self._find_or_create_episode(synthetic, canonical)
+        if canonical.parent is not None:
+            # Apple / RSS / YouTube: real parent deducible
+            parent = self._upsert_auto_added_podcast(canonical.parent)
+        else:
+            # Bare audio: synthetic fallback
+            parent = self._ensure_synthetic_audio_imports_parent()
+        episode, created = self._find_or_create_episode(parent, canonical)
         inbox_row, inbox_created = self._inbox_repo.find_or_create(
             user_id=user_id,
             episode_id=episode.id,
@@ -384,7 +465,9 @@ On submit:
 
 ### Errors
 
-- Unsupported URL → inline error in the modal: "We support YouTube and direct audio links right now. Apple Podcasts and Spotify links aren't supported yet."
+- Unsupported URL → inline error in the modal:
+  - v1: "We support YouTube and direct audio links right now. Apple Podcasts support is on the way; Spotify links aren't supported."
+  - After Apple resolver ships: "We support YouTube, Apple Podcasts, and direct audio links. Spotify links aren't supported."
 - Resolver failed → inline error with the resolver's message (e.g. "YouTube returned 'Video unavailable'").
 
 ---
@@ -396,7 +479,7 @@ Pure-additive. No data backfill required.
 1. Schema migrations: `podcasts.synthetic`, `episodes.canonical_id` and its unique index. Both wrapped in `IF NOT EXISTS` / `ALTER TABLE` patterns matching `_run_migrations`.
 2. Synthetic podcasts are created lazily on first import.
 3. Existing podcasts and episodes are unaffected.
-4. Inbox rows from imports use `source='import'`; other sources (`fanout`, `follow_seed`, `ad_hoc`) continue to behave per spec #29.
+4. Inbox rows from imports use `source='import'`; other sources (`follow_new`, `follow_seed`, `ad_hoc`) continue to behave per spec #29.
 
 If spec #32 lands later:
 
@@ -416,16 +499,30 @@ These all require the membership table from spec #32. Without #32, an imported Y
 
 ---
 
-## Open Questions
+## Resolved Decisions
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
-| O1 | Shared episode (one row, multi-user) vs per-user episode (one row per user) | Shared — Whisper time is precious; URLs aren't sensitive |
-| O2 | Should `synthetic:audio-imports` collapse all bare audio sources, or split by host? | Single — host-aware grouping is a UX nicety we can layer on later |
-| O3 | Do we proactively re-fetch metadata on imported YouTube videos that change titles? | No — imports are snapshots; users can re-import to refresh if needed |
-| O4 | Should a follow-the-channel CTA appear after a successful YouTube import? | Yes, on the post-import success state — but only if we already track that channel as a podcast (most YouTube channels won't be in our system) |
-| O5 | What happens if an Apple/Spotify link is pasted? | Show a clear "not supported yet" error; future resolver can add it |
-| O6 | Inbox `source` enum: are 4 values (`fanout`, `follow_seed`, `ad_hoc`, `import`) too many? | No — they distinguish provenance for analytics and UI hints |
+| O1 | Shared episode (one row, multi-user) vs per-user episode | **Shared.** One `episodes` row per canonical id; each user gets their own inbox row pointing at it. Whisper time is the expensive resource; pasted URLs are not sensitive. |
+| O2 | Synthetic parent for every import vs deduce a real parent when possible | **Deduce real parent when possible; synthetic only for bare audio.** RSS, Apple, and YouTube imports upsert a real `podcasts` row (`auto_added=1`). Bare-audio URLs fall back to the single `synthetic:audio-imports` parent. Adding a podcast is decoupled from following it. |
+| O3 | Re-fetch metadata on imported YouTube videos when titles change | **No.** Imports are snapshots. Re-pasting the URL is idempotent and can refresh metadata on that path. |
+| O4 | Follow-the-source CTA after a successful import | **Yes**, symmetric across kinds (Follow channel for YouTube, Follow podcast for RSS/Apple). Fires when the parent podcast exists in our system — which, post-O2, it always does for these kinds. CTA only adds a `follows` row; it does not change the import behavior. |
+| O5 | What to do with Apple Podcasts and Spotify share links | **Apple:** add `ApplePodcastsResolver` as a follow-up (resolves to RSS feed via iTunes Search API, then guid-matches the episode). **Spotify:** reject with a clear error; exclusives have no enclosure and non-exclusives aren't worth the lookup complexity. |
+| O6 | Inbox `source` enum size | **Keep all four** (`follow_new`, `follow_seed`, `ad_hoc`, `import`). Provenance is cheap to retain and useful for UI hints + analytics. (Spec #29 originally named the first value `fanout`; the implementation uses `follow_new`. We keep the implemented name.) |
+
+### Pre-implementation Audit Findings (2026-05-08)
+
+Code-reading audit complete. Status of each item:
+
+- **YouTube dispatch — works as-is.** `MediaSourceFactory.detect_source()` (`thestill/core/media_source.py:1325-1344`) routes by URL pattern, not by any podcast field. An episode whose `audio_url` is a YouTube URL gets `YouTubeMediaSource` automatically. No change needed.
+- **Refresh keying — change required.** `SqlitePodcastRepository.get_podcasts_for_refresh()` currently iterates all podcasts with no filter. See [Refresh Behavior](#refresh-behavior) above for the required predicate. Promoted from "verify" to a Phase 1 deliverable.
+- **Discovery filter — already safe.** `/api/podcasts` is follows-scoped; `/api/top-podcasts` reads from a curated table. Both are unaffected by imports. No change needed.
+- **Schema reality check — clean.** No collisions on `synthetic`, `auto_added`, or `canonical_id`. The inbox table is named `user_episode_inbox` (not `inbox`). Its `source` CHECK constraint currently allows `('follow_new', 'follow_seed')` and must be extended.
+
+### Remaining Open Items
+
+- **`auto_added` lifecycle.** Decide whether the flag stays on after first follow or gets cleared. Either works; pick one for consistency.
+- **Quota numbers.** Self-hosted v1 has no quota. When multi-user lands, pick a daily import limit (likely tied to user tier).
 
 ---
 
@@ -433,35 +530,43 @@ These all require the membership table from spec #32. Without #32, an imported Y
 
 ### Phase 1 — Schema + ImportService skeleton
 
-- Migrations: `podcasts.synthetic`, `episodes.canonical_id` + unique index.
-- `ImportService` with a `BareAudioResolver` only (simplest case).
+- Migrations:
+  - `podcasts.synthetic` and `podcasts.auto_added` columns + indexes.
+  - `episodes.canonical_id` column + unique partial index.
+  - Rebuild `user_episode_inbox` to extend the `source` CHECK constraint to include `'ad_hoc'` and `'import'`.
+- `SqlitePodcastRepository.get_podcasts_for_refresh()` updated with the predicate from [Refresh Behavior](#refresh-behavior) (excludes synthetic and excludes auto_added with no followers).
+- `ImportService` with a `BareAudioResolver` only (simplest case — no parent deduction).
+- `synthetic:audio-imports` parent created lazily on first bare-audio import.
 - `POST /api/imports` end-to-end for direct audio URLs.
 - Inbox source `'import'` plumbed through #29's listing.
-- Tests: idempotency, dedup on second import, inbox row appears immediately.
+- Tests: idempotency, dedup on second import, inbox row appears immediately, synthetic parent excluded from refresh, auto_added-without-followers excluded from refresh, refresh still picks up auto_added once a follower row exists.
 
-### Phase 2 — YouTubeResolver
+### Phase 2 — YouTubeResolver with real parent
 
-- `YouTubeResolver` with yt-dlp metadata fetch.
-- Synthetic `youtube-imports` podcast created on first YouTube import.
+- `YouTubeResolver` with yt-dlp metadata fetch + `CanonicalParent` (channel id, channel RSS feed URL, channel name, channel image).
+- `_upsert_auto_added_podcast` path: insert/update channel as `auto_added=1` podcast row.
 - Verify download handler runs yt-dlp for canonical YouTube ids.
-- E2E test: paste a known YouTube URL → episode appears → transcribe completes → entity layer populates.
+- E2E test: paste a known YouTube URL → channel appears in `podcasts` (auto_added, hidden from browse, not refreshed) → episode appears → transcribe completes → entity layer populates.
+- Idempotency tests: two users import the same URL → one episode row, one channel row, two inbox rows. User follows the channel → channel becomes visible in browse + starts refreshing.
 
 ### Phase 3 — Frontend modal + inbox progress UI
 
 - "Import episode" entry point in nav.
-- Modal + form with inline errors.
+- Modal + form with inline errors (incl. clear messaging for unsupported Spotify links).
 - Inbox row processing-state rendering.
+- Post-import success state offers "Follow this channel/podcast" CTA when import had a deducible parent (O4).
 - Empty-state hint: "Paste a link to import an episode."
 
-### Phase 4 — Polish
+### Phase 4 — Polish + ApplePodcastsResolver
 
+- `ApplePodcastsResolver` (iTunes Search API → RSS feed → guid match).
 - Quota plumbing (no enforcement yet; just instrumentation).
-- Hidden-from-discovery behavior verified for synthetic podcasts.
+- Hidden-from-discovery behavior verified for synthetic + auto_added podcasts.
 - Docs: `docs/imports.md` with supported URL kinds + examples.
 
 ---
 
 ## Cross-References
 
-- **Spec #29** — Inbox model. Imports use the same `inbox` table with `source='import'`. The inbox listing endpoint extends to derive a processing state.
+- **Spec #29** — Inbox model. Imports use the same `user_episode_inbox` table with `source='import'`. The inbox listing endpoint extends to derive a processing state.
 - **Spec #32** — Episodes-as-first-class. Imports are the first feature where the synthetic-parent workaround is visibly awkward; #32 cleans it up by making episodes carry their own identity and using a membership table for podcast-level grouping.
