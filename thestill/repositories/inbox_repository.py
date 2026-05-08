@@ -22,9 +22,9 @@ episodes to pick) live in ``InboxService``.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
-from ..models.inbox import InboxEntry, InboxItem
+from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState
 
 
 class InboxRepository(ABC):
@@ -97,16 +97,14 @@ class InboxRepository(ABC):
         *,
         since: datetime,
         until: datetime,
-        states: tuple[str, ...] = ("unread", "saved"),
+        states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
     ) -> List[str]:
         """
         Return episode IDs of inbox rows delivered in ``[since, until)`` whose
         ``state`` is in ``states``, ordered oldest-delivered first.
 
         Used by the briefing path (spec #36) to compose the candidate set for
-        a single briefing window. Default state filter excludes ``read`` and
-        ``dismissed`` — the briefing only covers items the user hasn't acted
-        on yet.
+        a single briefing window.
         """
 
     @abstractmethod

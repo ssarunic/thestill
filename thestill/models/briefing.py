@@ -21,9 +21,10 @@ inclusive-exclusive window of inbox deliveries this briefing covers, so
 "what episodes did this briefing cover" is reproducible without joining
 back to the inbox at the same moment in time.
 
-Phase 1 (this scope) persists the briefing row + cursor + episode count.
-Script and audio rendering land in a follow-up: ``script_path`` and
-``audio_path`` are nullable here and populated by a later phase.
+``script_path`` and ``audio_path`` are nullable: a briefing row can
+exist with the cursor + episode count alone (state-machine only) and
+have its rendered artifacts populated by a renderer (script today;
+audio when spec #34 lands).
 """
 
 import uuid

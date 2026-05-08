@@ -13,13 +13,10 @@
 # limitations under the License.
 
 """
-Briefing script renderer (spec #36, Phase 1.5).
+Briefing script renderer (spec #36).
 
-Composes the inbox-window episode IDs the BriefingService computed into a
-markdown script via the existing ``DigestGenerator``. Kept separate from
-the state machine so the cursor / throttle logic stays free of file-IO
-and so callers that want a row-only briefing (tests, future async paths)
-can omit rendering by passing ``renderer=None`` to ``BriefingService``.
+Renders a briefing's ``script.md`` from the inbox-window episode IDs
+computed by ``BriefingService``, via the existing ``DigestGenerator``.
 """
 
 from pathlib import Path

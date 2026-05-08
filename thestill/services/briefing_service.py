@@ -13,12 +13,12 @@
 # limitations under the License.
 
 """
-Per-user briefing service (spec #36, Phase 1).
+Per-user briefing service (spec #36).
 
-Phase 1 owns the state machine: cursor advancement, throttle window, the
-"no eligible items → no briefing" decision, and persistence. Script /
-audio rendering land in a follow-up; until then ``Briefing.script_path``
-and ``audio_path`` are populated as ``None``.
+Owns the state machine: cursor advancement, throttle window, the
+"no eligible items → no briefing" decision, and persistence. Script
+rendering is delegated to an optional ``BriefingRenderer`` so the
+cursor logic stays free of file IO and tests can run row-only.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -36,17 +36,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Briefings before any rows exist start their cursor at the Unix epoch so
-# the first run covers the whole inbox. Stored as a UTC datetime so the
-# repository's ISO serialization round-trips cleanly.
+# First-run cursor: epoch covers the whole inbox.
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-class BriefingServiceError(Exception):
-    """Base exception for briefing service errors."""
-
-
-class BriefingNotFoundError(BriefingServiceError):
+class BriefingNotFoundError(Exception):
     """Raised when ``mark_listened`` targets a briefing that does not exist."""
 
 
@@ -114,9 +108,6 @@ class BriefingService:
               ``force=False``).
             - ``None`` if no eligible inbox items fall in the window —
               callers should treat this as a no-op.
-
-        ``now`` defaults to ``datetime.now(timezone.utc)``; tests pass an
-        explicit value to make the throttle and cursor checks deterministic.
         """
         clock_now = now or datetime.now(timezone.utc)
         latest = self._briefings.latest_for_user(user_id)
@@ -182,9 +173,8 @@ class BriefingService:
         """
         Set ``listened_at`` on the briefing row.
 
-        Idempotent: re-marking a listened briefing overwrites
-        ``listened_at`` with the new clock value (callers that need the
-        first-listened timestamp should record it elsewhere).
+        Idempotent: re-marking overwrites ``listened_at``. Callers that
+        need the first-listened timestamp should capture it elsewhere.
 
         Raises:
             BriefingNotFoundError: if ``briefing_id`` is unknown.

@@ -29,7 +29,7 @@ from typing import Any, Iterable, List, Optional
 
 from structlog import get_logger
 
-from ..models.inbox import InboxEntry, InboxItem, PodcastInboxSummary
+from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
 from .inbox_repository import InboxRepository
 from .sqlite_podcast_repository import episode_from_row
 
@@ -260,11 +260,12 @@ class SqliteInboxRepository(InboxRepository):
         *,
         since: datetime,
         until: datetime,
-        states: tuple[str, ...] = ("unread", "saved"),
+        states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
     ) -> List[str]:
-        if not states:
+        state_list = tuple(states)
+        if not state_list:
             return []
-        placeholders = ",".join("?" for _ in states)
+        placeholders = ",".join("?" for _ in state_list)
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
@@ -276,7 +277,7 @@ class SqliteInboxRepository(InboxRepository):
                    AND state IN ({placeholders})
                  ORDER BY delivered_at ASC
                 """,
-                (user_id, since.isoformat(), until.isoformat(), *states),
+                (user_id, since.isoformat(), until.isoformat(), *state_list),
             ).fetchall()
             return [row["episode_id"] for row in rows]
 
