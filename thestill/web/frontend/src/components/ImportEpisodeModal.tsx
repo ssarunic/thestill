@@ -16,10 +16,11 @@ type ImportState =
   | { kind: 'success'; result: ImportPayload }
   | { kind: 'error'; message: string }
 
-// Spotify links are not supported (and probably never will be for exclusives).
-// Catch them client-side so we can show a clear message instead of a generic
-// "no resolver" error from the backend.
-const SPOTIFY_RE = /(?:^|\.)(open\.|play\.)?spotify\.com\//i
+// Spotify exclusives have no enclosure and probably never will, so catch
+// them client-side with a clear message instead of waiting for the backend
+// to return a generic "no resolver" 400. Word boundary ensures we don't
+// match "notspotify.com".
+const SPOTIFY_RE = /\bspotify\.com\//i
 
 function clientSideError(url: string): string | null {
   if (SPOTIFY_RE.test(url)) {

@@ -33,9 +33,8 @@ function StateBadge({ state }: { state: InboxState }) {
 }
 
 // Pipeline progress as the user perceives it. Derived from episode state +
-// failure flags rather than stored separately so two users on the same
-// episode see consistent progress (spec #31, "inbox row state computed from
-// (episode.state, entity_extraction_status)").
+// failure flags so two users sharing an imported episode see consistent
+// progress without storing per-user pipeline state.
 type ProgressKind = 'failed' | 'processing' | 'ready'
 
 interface ProgressStatus {

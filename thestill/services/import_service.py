@@ -300,12 +300,13 @@ class ImportResult:
     inbox_entry: InboxEntry
     episode_created: bool
     inbox_created: bool
-    # The materialised parent podcast id (auto_added or pre-existing). NULL
-    # when the import fell back to the synthetic ``audio-imports`` parent.
-    # Carries the channel/feed-following affordance to the caller without a
-    # second round-trip.
+    # The materialised parent podcast (auto_added or pre-existing). All
+    # three are NULL when the import fell back to the synthetic
+    # ``audio-imports`` parent. Carries enough for a "Follow this channel"
+    # CTA without a second DB round-trip on the API layer.
     parent_podcast_id: Optional[str] = None
     parent_title: Optional[str] = None
+    parent_slug: Optional[str] = None
 
 
 class ImportService:
@@ -340,7 +341,7 @@ class ImportService:
     def import_url(self, *, user_id: str, url: str) -> ImportResult:
         """Import ``url`` into ``user_id``'s inbox. See class docstring for idempotency."""
         canonical = self._resolve(url)
-        episode_id, episode_created, parent_podcast_id = self._find_or_create_episode(canonical)
+        episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
         inbox_entry, inbox_created = self._inbox_repo.find_or_create(
             user_id=user_id,
             episode_id=episode_id,
@@ -367,6 +368,7 @@ class ImportService:
             inbox_created=inbox_created,
             user_id=user_id,
         )
+        parent_id, parent_title, parent_slug = parent_summary if parent_summary else (None, None, None)
         return ImportResult(
             episode_id=episode_id,
             canonical_id=canonical.canonical_id,
@@ -376,8 +378,9 @@ class ImportService:
             inbox_entry=inbox_entry,
             episode_created=episode_created,
             inbox_created=inbox_created,
-            parent_podcast_id=parent_podcast_id,
-            parent_title=canonical.parent.title if canonical.parent is not None else None,
+            parent_podcast_id=parent_id,
+            parent_title=parent_title,
+            parent_slug=parent_slug,
         )
 
     # ------------------------------------------------------------------
@@ -402,29 +405,30 @@ class ImportService:
 
     def _find_or_create_episode(
         self, canonical: CanonicalSource
-    ) -> Tuple[str, bool, Optional[str]]:
-        """Return ``(episode_id, created, parent_podcast_id)``.
+    ) -> Tuple[str, bool, Optional[Tuple[str, str, str]]]:
+        """Return ``(episode_id, created, parent_summary)``.
 
-        ``parent_podcast_id`` is the real (non-synthetic) parent for both
-        fresh and dedup imports, or ``None`` when the import lives under
-        the synthetic ``audio-imports`` row (no follow target).
+        ``parent_summary`` is ``(id, title, slug)`` of the real parent for
+        both fresh and dedup imports, or ``None`` when the import lives
+        under the synthetic ``audio-imports`` row (no follow target).
         """
         existing_id = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id)
         if existing_id is not None:
-            parent_id = self._repository.get_real_parent_podcast_id_for_episode(existing_id)
-            return existing_id, False, parent_id
+            parent_summary = self._repository.get_real_parent_podcast_for_episode(existing_id)
+            return existing_id, False, parent_summary
 
         if canonical.parent is not None:
-            parent_id = self._repository.upsert_auto_added_podcast(
+            parent_summary = self._repository.upsert_auto_added_podcast(
                 rss_url=canonical.parent.rss_url,
                 title=canonical.parent.title,
                 description=canonical.parent.description,
                 image_url=canonical.parent.image_url,
             )
-            user_visible_parent_id: Optional[str] = parent_id
+            parent_id = parent_summary[0]
+            user_visible_parent: Optional[Tuple[str, str, str]] = parent_summary
         else:
             parent_id = self._repository.ensure_synthetic_audio_imports_parent()
-            user_visible_parent_id = None
+            user_visible_parent = None
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,
             canonical_id=canonical.canonical_id,
@@ -436,4 +440,4 @@ class ImportService:
             duration=canonical.duration_seconds,
             image_url=canonical.image_url,
         )
-        return episode_id, True, user_visible_parent_id
+        return episode_id, True, user_visible_parent

@@ -67,13 +67,11 @@ async def create_import(
 
     parent: dict | None = None
     if result.parent_podcast_id is not None:
-        parent_row = app_state.repository.get(result.parent_podcast_id)
-        if parent_row is not None:
-            parent = {
-                "id": parent_row.id,
-                "title": parent_row.title,
-                "slug": parent_row.slug or "",
-            }
+        parent = {
+            "id": result.parent_podcast_id,
+            "title": result.parent_title or "",
+            "slug": result.parent_slug or "",
+        }
 
     return api_response(
         {
