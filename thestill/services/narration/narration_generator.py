@@ -26,7 +26,6 @@ Subsequent phases layer on top without disturbing this skeleton:
 """
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +41,7 @@ from .models import (
     NarrationStats,
     QuoteCandidate,
     ScriptBlock,
+    word_count,
 )
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
 from .transcript_loader import TranscriptTurnLoader
@@ -90,43 +90,22 @@ class NarrationGenerator:
 
         Each episode is offered to the quote selector independently with
         its own facts-derived keywords and sponsor list. Episodes that
-        yield no quote (no sidecar, no resolvable speakers, or every
-        turn filtered) are routed to the rapid-fire tail.
+        yield no quote (no sidecar, no resolvable speakers, every turn
+        filtered) are routed to the rapid-fire tail.
         """
         cfg = config or NarrationConfig()
         per_episode_picks: List[Tuple[Podcast, Episode, List[QuoteCandidate]]] = []
 
-        running_quote_id = 1
+        next_quote_id = 1
         for podcast, episode in episodes:
-            turns = self.loader.load(podcast, episode)
-            episode_facts = self.loader.load_episode_facts(podcast, episode)
-            keywords: Tuple[str, ...] = (
-                tuple(episode_facts.topics_keywords)
-                if episode_facts and episode_facts.topics_keywords
-                else ()
+            picked = self._select_quotes_for_episode(
+                podcast, episode, cfg, starting_id=next_quote_id
             )
-            sponsors: Tuple[str, ...] = (
-                tuple(episode_facts.ad_sponsors)
-                if episode_facts and episode_facts.ad_sponsors
-                else ()
-            )
-            ep_duration = float(episode.duration or 0)
-            selector_cfg = QuoteSelectorConfig(
-                keywords=keywords,
-                sponsors=sponsors,
-                episode_duration_seconds=ep_duration,
-                boundary_trim_fraction=cfg.boundary_trim_fraction,
-                wpm=cfg.wpm,
-            )
-            picked = self.selector.select(turns, selector_cfg)
-            renumbered = self._renumber_quotes(picked, running_quote_id)
-            running_quote_id += len(renumbered)
-            per_episode_picks.append((podcast, episode, renumbered))
+            next_quote_id += len(picked)
+            per_episode_picks.append((podcast, episode, picked))
 
-        # Aggregate, then enforce the run-wide quote-share cap.
-        flat_quotes = [q for _, _, picked in per_episode_picks for q in picked]
         kept_ids = self._enforce_quote_share_cap(
-            flat_quotes,
+            [q for _, _, picked in per_episode_picks for q in picked],
             cfg.target_duration_seconds,
             cfg.max_quote_share,
         )
@@ -134,8 +113,8 @@ class NarrationGenerator:
             (podcast, episode, [q for q in picked if q.quote_id in kept_ids])
             for podcast, episode, picked in per_episode_picks
         ]
-        all_quotes = [q for _, _, picked in per_episode_picks for q in picked]
 
+        all_quotes = [q for _, _, picked in per_episode_picks for q in picked]
         episode_ids_covered = [
             episode.id for _, episode, picked in per_episode_picks if picked
         ]
@@ -144,26 +123,17 @@ class NarrationGenerator:
         ]
 
         blocks = self._render_skeleton_blocks(per_episode_picks, cfg)
-        for block in blocks:
-            if block.kind == "narration" and block.text:
-                block.duration_seconds = (
-                    _word_count(block.text) / cfg.wpm * 60.0 if cfg.wpm else 0.0
-                )
-
         narration_words = sum(
-            _word_count(b.text)
-            for b in blocks
-            if b.kind == "narration" and b.text
+            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
         )
         quote_seconds = sum(q.duration_seconds for q in all_quotes)
         narration_seconds = (
             (narration_words / cfg.wpm) * 60.0 if cfg.wpm else 0.0
         )
-        actual_seconds = narration_seconds + quote_seconds
 
         stats = NarrationStats(
             target_duration_seconds=cfg.target_duration_seconds,
-            actual_duration_seconds=actual_seconds,
+            actual_duration_seconds=narration_seconds + quote_seconds,
             narration_words=narration_words,
             quote_seconds=quote_seconds,
             episodes_covered=len(episode_ids_covered),
@@ -196,12 +166,12 @@ class NarrationGenerator:
     ) -> Path:
         """Write the JSON-script artefact under ``data/narrations/``.
 
-        Filename pattern: ``YYYY-MM-DD-<slug>.json`` (UTC date). The
-        slug defaults to ``morning`` and is overridable via
+        Filename pattern: ``YYYY-MM-DD-<slug>.json`` (UTC date). Slug
+        defaults to ``morning`` and is overridable via
         ``NarrationConfig.slug``.
         """
         cfg = config or NarrationConfig()
-        narrations_dir = self.path_manager.storage_path / "narrations"
+        narrations_dir = self.path_manager.narrations_dir()
         narrations_dir.mkdir(parents=True, exist_ok=True)
         date_str = content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
         path = narrations_dir / f"{date_str}-{cfg.slug}.json"
@@ -228,24 +198,33 @@ class NarrationGenerator:
         )
         return path
 
-    @staticmethod
-    def _renumber_quotes(
-        picked: List[QuoteCandidate], starting_at: int
+    def _select_quotes_for_episode(
+        self,
+        podcast: Podcast,
+        episode: Episode,
+        cfg: NarrationConfig,
+        starting_id: int,
     ) -> List[QuoteCandidate]:
-        return [
-            QuoteCandidate(
-                quote_id=f"q{starting_at + i}",
-                episode_id=q.episode_id,
-                podcast_title=q.podcast_title,
-                speaker=q.speaker,
-                speaker_role=q.speaker_role,
-                text=q.text,
-                start_seconds=q.start_seconds,
-                duration_seconds=q.duration_seconds,
-                score=q.score,
-            )
-            for i, q in enumerate(picked)
-        ]
+        turns = self.loader.load(podcast, episode)
+        episode_facts = self.loader.load_episode_facts(podcast, episode)
+        keywords: Tuple[str, ...] = (
+            tuple(episode_facts.topics_keywords)
+            if episode_facts and episode_facts.topics_keywords
+            else ()
+        )
+        sponsors: Tuple[str, ...] = (
+            tuple(episode_facts.ad_sponsors)
+            if episode_facts and episode_facts.ad_sponsors
+            else ()
+        )
+        selector_cfg = QuoteSelectorConfig(
+            keywords=keywords,
+            sponsors=sponsors,
+            episode_duration_seconds=float(episode.duration or 0),
+            boundary_trim_fraction=cfg.boundary_trim_fraction,
+            wpm=cfg.wpm,
+        )
+        return self.selector.select(turns, selector_cfg, starting_id=starting_id)
 
     @staticmethod
     def _enforce_quote_share_cap(
@@ -256,17 +235,16 @@ class NarrationGenerator:
         """Return the set of ``quote_id`` values that fit under the share cap.
 
         Greedy: rank by score descending, accept while we're under the
-        cap, drop otherwise. This is the spec #33 §"Word-Budget" rule
-        ("lowest-scoring quotes are dropped first until under the cap")
-        re-stated as a forward pack.
+        cap, drop otherwise — the spec #33 §"Word-Budget" rule
+        ("lowest-scoring quotes are dropped first") restated as a
+        forward pack.
         """
         cap = target_duration_seconds * max_quote_share
         if not quotes or cap <= 0:
             return {q.quote_id for q in quotes}
-        ranked = sorted(quotes, key=lambda q: (-q.score, q.quote_id))
         kept: set = set()
         used = 0.0
-        for q in ranked:
+        for q in sorted(quotes, key=lambda q: (-q.score, q.quote_id)):
             if used + q.duration_seconds <= cap:
                 kept.add(q.quote_id)
                 used += q.duration_seconds
@@ -282,22 +260,19 @@ class NarrationGenerator:
         Phase 2 replaces every narration block here with anchor-voiced
         prose generated by the script-generation LLM call. Quote blocks
         already carry the durable identifier triple
-        (``episode_id`` + ``start_seconds`` + ``duration_seconds``) so the
-        downstream TTS swap can splice in original audio without further
-        schema work.
+        (``episode_id`` + ``start_seconds`` + ``duration_seconds``) so
+        the downstream TTS swap can splice in original audio without
+        further schema work.
         """
-        blocks: List[ScriptBlock] = []
         date_label = datetime.now(timezone.utc).strftime("%B %d, %Y")
-        blocks.append(
-            ScriptBlock(
-                kind="narration",
-                section="opener",
-                text=(
-                    f"Briefing skeleton for {date_label}. "
-                    "Anchor-voiced prose lands in Phase 2."
-                ),
+        blocks: List[ScriptBlock] = [
+            self._narration_block(
+                "opener",
+                f"Briefing skeleton for {date_label}. "
+                "Anchor-voiced prose lands in Phase 2.",
+                cfg.wpm,
             )
-        )
+        ]
         seg_counter = 0
         for podcast, episode, picked in per_episode_picks:
             if not picked:
@@ -305,10 +280,10 @@ class NarrationGenerator:
             seg_counter += 1
             section = f"segment-{seg_counter}"
             blocks.append(
-                ScriptBlock(
-                    kind="narration",
-                    section=section,
-                    text=f"From {podcast.title}: {episode.title}.",
+                self._narration_block(
+                    section,
+                    f"From {podcast.title}: {episode.title}.",
+                    cfg.wpm,
                 )
             )
             for q in picked:
@@ -328,20 +303,25 @@ class NarrationGenerator:
         ]
         if tail_entries:
             blocks.append(
-                ScriptBlock(
-                    kind="narration",
-                    section="tail",
-                    text="Also today: " + "; ".join(tail_entries) + ".",
+                self._narration_block(
+                    "tail",
+                    "Also today: " + "; ".join(tail_entries) + ".",
+                    cfg.wpm,
                 )
             )
         blocks.append(
-            ScriptBlock(
-                kind="narration",
-                section="signoff",
-                text="That's the skeleton briefing.",
+            self._narration_block(
+                "signoff", "That's the skeleton briefing.", cfg.wpm,
             )
         )
         return blocks
+
+    @staticmethod
+    def _narration_block(section: str, text: str, wpm: float) -> ScriptBlock:
+        duration = (word_count(text) / wpm) * 60.0 if wpm else 0.0
+        return ScriptBlock(
+            kind="narration", section=section, text=text, duration_seconds=duration,
+        )
 
     @staticmethod
     def _block_to_dict(block: ScriptBlock, quotes: List[QuoteCandidate]) -> dict:
@@ -374,7 +354,3 @@ class NarrationGenerator:
             "duration_seconds": round(quote.duration_seconds, 2),
             "score": round(quote.score, 4),
         }
-
-
-def _word_count(text: str) -> int:
-    return len([w for w in re.split(r"\s+", text.strip()) if w])

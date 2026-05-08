@@ -14,12 +14,24 @@
 
 """Data models for narrated-digest generation (spec #33)."""
 
+import dataclasses
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional
 
 ScriptBlockKind = Literal["narration", "quote"]
+SpeakerRole = Literal["host", "guest", "unknown"]
+
+
+def word_count(text: str) -> int:
+    """Whitespace-delimited word count used for WPM-based duration math.
+
+    Defined here so the selector and the renderer agree on the
+    duration-vs-word conversion that anchors the time-budget model.
+    """
+    return len([w for w in re.split(r"\s+", text.strip()) if w])
 
 
 @dataclass(frozen=True)
@@ -36,11 +48,14 @@ class QuoteCandidate:
     episode_id: str
     podcast_title: str
     speaker: str
-    speaker_role: str
+    speaker_role: SpeakerRole
     text: str
     start_seconds: float
     duration_seconds: float
     score: float = 0.0
+
+    def with_id(self, new_id: str) -> "QuoteCandidate":
+        return dataclasses.replace(self, quote_id=new_id)
 
 
 @dataclass

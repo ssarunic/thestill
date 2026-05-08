@@ -15,18 +15,16 @@
 """Deterministic quote scoring + selection (spec #33 §"Quote Selection").
 
 The selector takes a list of resolved turns and returns the chosen
-quote candidates in stable order. Determinism guarantees: given the
-same turns and the same ``QuoteSelectorConfig``, ``select`` always
-returns the same list, in the same order, with the same ``quote_id``
-labels. This is the load-bearing property the per-run quote-id contract
-in the JSON script depends on.
+quote candidates in stable order. Determinism is load-bearing: the
+per-run ``quote_id`` contract in the JSON script depends on identical
+inputs producing identical outputs across reruns.
 """
 
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .models import QuoteCandidate
+from .models import QuoteCandidate, word_count
 from .transcript_loader import ResolvedTurn
 
 # Length fit — prefer 12–35 seconds of speech (~30–90 words at 150 wpm).
@@ -38,12 +36,10 @@ _HARD_MIN_WORDS = 12
 _HARD_TURN_DURATION_CAP_S = 60.0
 _DEFAULT_WPM = 150.0
 
-# Diversity suppression
 _NEIGHBOUR_SUPPRESS_S = 60.0
 _PER_SPEAKER_MAX_PER_EPISODE = 1
 _PER_EPISODE_MAX_DEFAULT = 2
 
-# Self-containment heuristics
 _LEADING_PRONOUNS = frozenset({
     "he", "she", "it", "they", "them", "him", "her", "his", "hers",
     "their", "theirs", "this", "that", "these", "those",
@@ -54,10 +50,6 @@ _DANGLING_PHRASES = (
     "what i was saying", "going back to",
 )
 _SENTENCE_END_RE = re.compile(r"[.!?][\"\')\]]?\s*$")
-
-
-def _word_count(text: str) -> int:
-    return len([w for w in re.split(r"\s+", text.strip()) if w])
 
 
 def _starts_with_pronoun(text: str) -> bool:
@@ -82,11 +74,10 @@ def truncate_to_sentence_prefix(
 ) -> Tuple[str, int]:
     """Clip ``text`` to a sentence-bounded prefix of at most ``max_words``.
 
-    Returns ``(prefix, word_count)``. Falls back to a hard word-count
-    truncation with a trailing ellipsis when no sentence boundary lies
-    inside the budget — that matches spec #33's "truncated to a
-    sentence-bounded prefix" intent without ever silently emitting a
-    mid-sentence quote.
+    Falls back to a hard word-count truncation with a trailing ellipsis
+    when no sentence boundary lies inside the budget — matches spec
+    #33's "truncated to a sentence-bounded prefix" intent without ever
+    silently emitting a mid-sentence quote.
     """
     tokens = re.split(r"(\s+)", text)
     rebuilt: List[str] = []
@@ -104,11 +95,11 @@ def truncate_to_sentence_prefix(
             rebuilt.append(tok)
     if last_sentence_end_idx is not None:
         prefix = "".join(rebuilt[:last_sentence_end_idx]).strip()
-        return prefix, _word_count(prefix)
+        return prefix, word_count(prefix)
     prefix = "".join(rebuilt).strip()
     if not prefix.endswith(("…", "...")):
         prefix = prefix + "…"
-    return prefix, _word_count(prefix)
+    return prefix, word_count(prefix)
 
 
 @dataclass
@@ -136,9 +127,9 @@ class QuoteSelector:
     """Deterministic quote scoring + selection.
 
     Phase 1 ships keyword-overlap relevance with a neutral fallback when
-    no keywords are supplied; embedding-based relevance is the planned
-    upgrade path (spec #33 Open Question O2). The interface is shaped so
-    a future ``EmbeddingQuoteSelector`` can drop in without touching
+    no keywords are supplied. Embedding-based relevance (spec #33 Open
+    Question O2) is the planned upgrade path; the interface is shaped
+    so a future ``EmbeddingQuoteSelector`` drops in without touching
     callers.
     """
 
@@ -146,10 +137,16 @@ class QuoteSelector:
         self,
         turns: List[ResolvedTurn],
         config: QuoteSelectorConfig,
+        starting_id: int = 1,
     ) -> List[QuoteCandidate]:
+        """Return the chosen quote candidates labelled ``q{starting_id}``,
+        ``q{starting_id+1}``, …
+
+        ``starting_id`` lets callers number across multiple selector
+        passes (e.g. one episode at a time) without a separate
+        post-renumbering step.
+        """
         scored = self._score_turns(turns, config)
-        # Stable order: highest score wins; ties broken by earliest start
-        # then by source segment_id, so reruns produce identical output.
         scored.sort(
             key=lambda c: (
                 -c.score,
@@ -181,22 +178,20 @@ class QuoteSelector:
             )
 
         chosen.sort(key=lambda c: (c.turn.episode_id, c.turn.start_seconds))
-        results: List[QuoteCandidate] = []
-        for idx, cand in enumerate(chosen, start=1):
-            results.append(
-                QuoteCandidate(
-                    quote_id=f"q{idx}",
-                    episode_id=cand.turn.episode_id,
-                    podcast_title=cand.turn.podcast_title,
-                    speaker=cand.turn.speaker_name or "Unknown",
-                    speaker_role=cand.turn.speaker_role,
-                    text=cand.text,
-                    start_seconds=cand.turn.start_seconds,
-                    duration_seconds=cand.duration_s,
-                    score=cand.score,
-                )
+        return [
+            QuoteCandidate(
+                quote_id=f"q{starting_id + idx}",
+                episode_id=cand.turn.episode_id,
+                podcast_title=cand.turn.podcast_title,
+                speaker=cand.turn.speaker_name or "Unknown",
+                speaker_role=cand.turn.speaker_role,
+                text=cand.text,
+                start_seconds=cand.turn.start_seconds,
+                duration_seconds=cand.duration_s,
+                score=cand.score,
             )
-        return results
+            for idx, cand in enumerate(chosen)
+        ]
 
     def _score_turns(
         self, turns: List[ResolvedTurn], config: QuoteSelectorConfig
@@ -218,7 +213,7 @@ class QuoteSelector:
             ):
                 continue
             duration_s = max(0.0, turn.end_seconds - turn.start_seconds)
-            words = _word_count(text)
+            words = word_count(text)
             if words < _HARD_MIN_WORDS:
                 continue
             # Long-turn truncation: clip to a sentence-bounded prefix
@@ -300,8 +295,8 @@ class QuoteSelector:
             hits = sum(1 for kw in keyword_terms if kw and kw in lower)
             relevance = min(1.0, hits / max(1, len(keyword_terms)))
         else:
-            # No angle keywords (Phase 1 default) — use a neutral mid-band
-            # so length and containment dominate ranking.
+            # No angle keywords (Phase 1 default) — neutral mid-band so
+            # length and containment dominate ranking.
             relevance = 0.5
 
         role_bonus = 0.05 if turn.speaker_role in ("host", "guest") else 0.0
