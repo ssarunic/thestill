@@ -323,6 +323,21 @@ class EpisodeRepository(ABC):
         pass
 
     @abstractmethod
+    def mark_episode_published(self, episode_id: str) -> bool:
+        """
+        Set ``published_at`` on an episode if it isn't already published.
+
+        The conditional ``WHERE published_at IS NULL`` makes the call
+        idempotent: re-running the publish transition is a no-op.
+
+        Returns:
+            True if the row transitioned from unpublished to published
+            (caller should fan out to follower inboxes); False if the row
+            was already published, or if the episode does not exist.
+        """
+        pass
+
+    @abstractmethod
     def get_unprocessed_episodes(self, state: str) -> List[tuple[Podcast, Episode]]:
         """
         Get episodes in specific processing state.

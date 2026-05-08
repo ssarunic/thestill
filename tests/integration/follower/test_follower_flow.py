@@ -459,6 +459,28 @@ class TestPodcastFollowerRepository:
 
         assert set(ids) == {p1.id, p2.id}
 
+    def test_get_follower_user_ids(self, follower_repo, user_repo, podcast_repo):
+        """get_follower_user_ids returns the user IDs that follow a podcast."""
+        alice = User(id=str(uuid.uuid4()), email="a@test.com")
+        bob = User(id=str(uuid.uuid4()), email="b@test.com")
+        carol = User(id=str(uuid.uuid4()), email="c@test.com")
+        user_repo.save(alice)
+        user_repo.save(bob)
+        user_repo.save(carol)
+
+        target = Podcast(id=str(uuid.uuid4()), title="T", slug="t", rss_url="https://test.com/t.xml", description="T")
+        other = Podcast(id=str(uuid.uuid4()), title="O", slug="o", rss_url="https://test.com/o.xml", description="O")
+        podcast_repo.save(target)
+        podcast_repo.save(other)
+
+        follower_repo.add(PodcastFollower(user_id=alice.id, podcast_id=target.id))
+        follower_repo.add(PodcastFollower(user_id=bob.id, podcast_id=target.id))
+        # Following an unrelated podcast must not bleed in.
+        follower_repo.add(PodcastFollower(user_id=carol.id, podcast_id=other.id))
+
+        assert set(follower_repo.get_follower_user_ids(target.id)) == {alice.id, bob.id}
+        assert follower_repo.get_follower_user_ids(other.id) == [carol.id]
+
     def test_count_by_podcast(self, follower_repo, user_repo, podcast_repo):
         """count_by_podcast returns correct count."""
         # Create users
@@ -551,3 +573,113 @@ class TestPodcastFollowerRepository:
         assert len(followers) == 2
         user_ids = {f.user_id for f in followers}
         assert user_ids == {user1.id, user2.id}
+
+
+def _make_follower_service_with_inbox(follower_repo, podcast_repo, inbox_service):
+    from thestill.services.follower_service import FollowerService
+
+    return FollowerService(follower_repo, podcast_repo, inbox_service=inbox_service)
+
+
+def _make_inbox_service(db_path, follower_repo, *, seed_count=2):
+    from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
+    from thestill.services.inbox_service import InboxService
+
+    return InboxService(SqliteInboxRepository(db_path), follower_repo, seed_on_follow_count=seed_count)
+
+
+def _insert_published_episode(db_path, podcast_id, title, *, days_ago=0):
+    import sqlite3
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    ep_id = str(uuid.uuid4())
+    published = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO episodes (
+                id, podcast_id, external_id, title, slug, description,
+                description_html, audio_url, published_at
+            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?)
+            """,
+            (
+                ep_id,
+                podcast_id,
+                f"ext-{title}",
+                title,
+                f"https://cdn.example.com/{title}.mp3",
+                published.isoformat(),
+            ),
+        )
+        conn.commit()
+    return ep_id
+
+
+class TestFollowSeedHook:
+    """``FollowerService.follow`` seeds the new follower's inbox with recent
+    published episodes via ``InboxService``."""
+
+    def test_follow_delivers_seed_when_inbox_service_provided(
+        self, temp_db, follower_repo, podcast_repo, user_repo, test_user, test_podcast
+    ):
+        from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
+
+        ep1 = _insert_published_episode(temp_db, test_podcast.id, "ep1", days_ago=2)
+        ep2 = _insert_published_episode(temp_db, test_podcast.id, "ep2", days_ago=1)
+
+        inbox_repo = SqliteInboxRepository(temp_db)
+        service = _make_follower_service_with_inbox(
+            follower_repo,
+            podcast_repo,
+            _make_inbox_service(temp_db, follower_repo),
+        )
+
+        service.follow(test_user.id, test_podcast.id)
+
+        delivered = {item.entry.episode_id for item in inbox_repo.list_items(test_user.id)}
+        assert delivered == {ep1, ep2}
+
+    def test_follow_succeeds_when_seed_raises(self, follower_repo, podcast_repo, test_user, test_podcast):
+        """Best-effort semantics: seed failure must not roll back the follow."""
+        from unittest.mock import Mock
+
+        from thestill.services.inbox_service import InboxService
+
+        boom = Mock(spec=InboxService)
+        boom.seed_on_follow.side_effect = RuntimeError("inbox is on fire")
+
+        service = _make_follower_service_with_inbox(follower_repo, podcast_repo, boom)
+        result = service.follow(test_user.id, test_podcast.id)
+
+        assert result.user_id == test_user.id
+        assert follower_repo.exists(test_user.id, test_podcast.id) is True
+        boom.seed_on_follow.assert_called_once_with(test_user.id, test_podcast.id)
+
+    def test_follow_without_inbox_service_skips_seeding(self, follower_repo, podcast_repo, test_user, test_podcast):
+        """When no inbox service is wired, follow still works (CLI mode)."""
+        service = _make_follower_service_with_inbox(follower_repo, podcast_repo, inbox_service=None)
+        service.follow(test_user.id, test_podcast.id)
+        assert follower_repo.exists(test_user.id, test_podcast.id) is True
+
+    def test_re_follow_after_unfollow_is_idempotent_on_seed(
+        self, temp_db, follower_repo, podcast_repo, user_repo, test_user, test_podcast
+    ):
+        """Unfollow does not retract delivered rows; the second follow's seed
+        is a no-op on already-delivered episodes."""
+        from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
+
+        ep_id = _insert_published_episode(temp_db, test_podcast.id, "only", days_ago=0)
+        inbox_repo = SqliteInboxRepository(temp_db)
+        service = _make_follower_service_with_inbox(
+            follower_repo,
+            podcast_repo,
+            _make_inbox_service(temp_db, follower_repo),
+        )
+
+        service.follow(test_user.id, test_podcast.id)
+        service.unfollow(test_user.id, test_podcast.id)
+        service.follow(test_user.id, test_podcast.id)
+
+        items = inbox_repo.list_items(test_user.id)
+        assert [item.entry.episode_id for item in items] == [ep_id]

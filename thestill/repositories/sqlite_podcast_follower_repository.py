@@ -182,6 +182,20 @@ class SqlitePodcastFollowerRepository(PodcastFollowerRepository):
 
             return [row["podcast_id"] for row in cursor.fetchall()]
 
+    def get_follower_user_ids(self, podcast_id: str) -> List[str]:
+        """Get IDs of users that follow a podcast."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT user_id
+                FROM podcast_followers
+                WHERE podcast_id = ?
+                """,
+                (podcast_id,),
+            )
+
+            return [row["user_id"] for row in cursor.fetchall()]
+
     def _row_to_follower(self, row: sqlite3.Row) -> PodcastFollower:
         """Convert database row to PodcastFollower model."""
         return PodcastFollower(

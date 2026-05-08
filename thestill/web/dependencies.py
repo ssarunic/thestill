@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from ..core.task_worker import TaskWorker
     from ..models.user import User
     from ..repositories.digest_repository import DigestRepository
+    from ..repositories.inbox_repository import InboxRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
+    from ..services.inbox_service import InboxService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
     from .task_manager import TaskManager
@@ -96,6 +98,8 @@ class AppState:
     auth_service: "AuthService"
     follower_repository: "PodcastFollowerRepository"
     follower_service: "FollowerService"
+    inbox_repository: "InboxRepository"
+    inbox_service: "InboxService"
     digest_repository: "DigestRepository"
     # Spec #28 — entity layer. Repository is always available; the
     # ``EntityExtractor`` model is loaded lazily on the first

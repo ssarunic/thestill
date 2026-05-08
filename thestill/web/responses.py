@@ -20,7 +20,7 @@ across all endpoints, reducing code duplication (DRY principle).
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, NoReturn
+from typing import Any, Dict, List, NoReturn, Optional
 
 from fastapi import HTTPException
 
@@ -137,6 +137,23 @@ def bad_request(message: str) -> NoReturn:
         # Raises HTTPException(status_code=400, detail="Invalid date format")
     """
     raise HTTPException(status_code=400, detail=message)
+
+
+def parse_iso_datetime(value: Optional[str], *, field_name: str) -> Optional[datetime]:
+    """
+    Parse a query-string ISO-8601 timestamp or raise 400.
+
+    ``Z`` suffixes are normalized to ``+00:00`` so RFC 3339 inputs accepted by
+    most clients still parse with stdlib ``fromisoformat``. Returns ``None``
+    when ``value`` is empty so callers can pass through optional cursors
+    without an extra null-check.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name} format: {value}")
 
 
 def conflict(message: str) -> NoReturn:

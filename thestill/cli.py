@@ -39,6 +39,8 @@ from .models.digest import Digest, DigestStatus
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_digest_repository import SqliteDigestRepository
+from .repositories.sqlite_inbox_repository import SqliteInboxRepository
+from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
 from .services import (
@@ -51,6 +53,7 @@ from .services import (
     StatsService,
 )
 from .services.auth_service import AuthService
+from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
 from .utils.cli_logging import log_command
 from .utils.config import load_config
@@ -77,6 +80,9 @@ class CLIContext:
         console: ConsoleOutput,
         auth_service: AuthService,
         digest_repository: SqliteDigestRepository,
+        follower_repository: SqlitePodcastFollowerRepository,
+        inbox_repository: SqliteInboxRepository,
+        inbox_service: InboxService,
         entity_repository=None,
         search_backend=None,
         embedding_model=None,
@@ -93,6 +99,9 @@ class CLIContext:
         self.console = console
         self.auth_service = auth_service
         self.entity_repository = entity_repository
+        self.follower_repository = follower_repository
+        self.inbox_repository = inbox_repository
+        self.inbox_service = inbox_service
         # Spec #28 §1.5 — lazy ReFinED resolver, constructed on first
         # use by ``thestill resolve-entities`` and
         # ``rebuild-cooccurrences``; CLI invocations that don't touch
@@ -183,6 +192,12 @@ def main(ctx, config, quiet):
         # Initialize digest repository for digest persistence
         digest_repository = SqliteDigestRepository(str(config_obj.database_path))
 
+        # Per-user inbox plumbing: the backfill / follow-seed CLI paths
+        # need both the repository and the service.
+        follower_repository = SqlitePodcastFollowerRepository(db_path=config_obj.database_path)
+        inbox_repository = SqliteInboxRepository(db_path=config_obj.database_path)
+        inbox_service = InboxService.from_config(config_obj, inbox_repository, follower_repository)
+
         # Spec #28 — entity-layer repository (always-on; the schema
         # is created by SqlitePodcastRepository's migration block).
         from .core.embedding_model import EmbeddingModel
@@ -210,6 +225,9 @@ def main(ctx, config, quiet):
             console=console,
             auth_service=auth_service,
             digest_repository=digest_repository,
+            follower_repository=follower_repository,
+            inbox_repository=inbox_repository,
+            inbox_service=inbox_service,
             entity_repository=entity_repository,
             search_backend=search_backend,
             embedding_model=embedding_model,
@@ -4058,6 +4076,25 @@ def backfill_roles(ctx, podcast_slug):
     if summary.skipped_names:
         unique = sorted(set(summary.skipped_names))
         click.echo(f"  ({len(unique)} unique names skipped — first-name-only or generic role labels)")
+
+
+@main.command("backfill-inbox")
+@click.option("--dry-run", is_flag=True, help="Show what would be delivered without writing rows.")
+@click.pass_context
+@require_config
+@log_command
+def backfill_inbox(ctx, dry_run):
+    """Seed existing followers' inboxes with recent published episodes.
+
+    Run once per database after the inbox migration lands. Idempotent —
+    re-running is safe; already-delivered rows are skipped via the
+    ``(user_id, episode_id)`` unique constraint.
+    """
+    count = ctx.obj.inbox_service.backfill_existing_followers(dry_run=dry_run)
+    if dry_run:
+        click.echo(f"✓ Dry run: {count} inbox rows would be delivered.")
+    else:
+        click.echo(f"✓ Backfill complete: {count} inbox rows delivered.")
 
 
 # ---------------------------------------------------------------------------

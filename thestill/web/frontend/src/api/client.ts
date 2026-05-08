@@ -50,6 +50,10 @@ import type {
   EpisodeEntitiesResponse,
   EntitySummaryResponse,
   EntityType,
+  InboxListResponse,
+  InboxState,
+  InboxStateResponse,
+  InboxUnreadCountResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -629,4 +633,56 @@ export async function getEntitySummary(
   idSlug: string,
 ): Promise<EntitySummaryResponse> {
   return fetchApi<EntitySummaryResponse>(`/entities/${entityType}/${idSlug}`)
+}
+
+// ============================================================================
+// Inbox API
+// ============================================================================
+// Endpoints correspond to ``InboxService`` on the backend. Routes are added
+// in a follow-up; the client surface is defined now so the frontend
+// integration can move in parallel.
+
+export interface GetInboxOptions {
+  state?: InboxState
+  limit?: number
+  before?: string  // ISO-8601 cursor — return rows older than this delivered_at
+}
+
+export async function getInbox(
+  options: GetInboxOptions = {},
+): Promise<InboxListResponse> {
+  const params = new URLSearchParams()
+  if (options.state) params.set('state', options.state)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  if (options.before) params.set('before', options.before)
+  const qs = params.toString()
+  return fetchApi<InboxListResponse>(`/inbox${qs ? `?${qs}` : ''}`)
+}
+
+export async function getInboxUnreadCount(): Promise<InboxUnreadCountResponse> {
+  return fetchApi<InboxUnreadCountResponse>('/inbox/unread-count')
+}
+
+export async function setInboxState(
+  episodeId: string,
+  state: InboxState,
+): Promise<InboxStateResponse> {
+  const response = await fetch(`${API_BASE}/inbox/${episodeId}/state`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ state }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
 }

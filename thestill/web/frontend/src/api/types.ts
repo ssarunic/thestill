@@ -1009,3 +1009,66 @@ export interface EntitySummaryResponse {
   recurring_podcasts: HostedPodcastRef[]
   guest_episodes: GuestEpisodeRef[]
 }
+
+// ============================================================================
+// Inbox API
+// ============================================================================
+//
+// Two write paths fill the inbox:
+//   - follow_new:  an episode the user follows just published.
+//   - follow_seed: a few recent episodes pulled in when the user follows.
+// State is per-user; two users following the same podcast keep independent
+// state on the same episode.
+
+export type InboxSource = 'follow_new' | 'follow_seed'
+export type InboxState = 'unread' | 'read' | 'saved' | 'dismissed'
+
+export interface InboxEntry {
+  id: string
+  user_id: string
+  episode_id: string
+  source: InboxSource
+  state: InboxState
+  delivered_at: string  // ISO-8601
+  state_changed_at: string | null
+}
+
+// Minimal podcast subset rendered alongside each inbox row.
+export interface InboxPodcastSummary {
+  id: string
+  title: string
+  slug: string
+  image_url: string | null
+}
+
+// Composed read view: an inbox row + the episode + minimal podcast info.
+export interface InboxItem {
+  entry: InboxEntry
+  episode: Episode
+  podcast: InboxPodcastSummary
+}
+
+export interface InboxListResponse {
+  status: string
+  timestamp: string
+  items: InboxItem[]
+  count: number
+  // Cursor for the next page — pass back as ``before=`` to fetch older rows.
+  next_before: string | null
+}
+
+export interface InboxUnreadCountResponse {
+  status: string
+  timestamp: string
+  unread_count: number
+}
+
+export interface InboxStateRequest {
+  state: InboxState
+}
+
+export interface InboxStateResponse {
+  status: string
+  timestamp: string
+  entry: InboxEntry
+}
