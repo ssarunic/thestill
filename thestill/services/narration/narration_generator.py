@@ -14,36 +14,54 @@
 
 """Top-level orchestrator for narrated-digest generation (spec #33).
 
-Phase 1 ships:
-  - Quote selection with deterministic scoring and speaker resolution.
-  - Skeleton JSON script: chrome blocks + verbatim quote cues.
+The generator chains the fixed pipeline:
 
-Subsequent phases layer on top without disturbing this skeleton:
-  - Phase 2: theme clustering + anchor-prose script generation, markdown
-    renderer, validation contract, fallback.
-  - Phase 3: ``thestill narrate`` CLI + ``/api/narrations`` endpoints.
-  - Phase 4: frontend reader + length switcher.
+  episodes
+   └─► quote selection (deterministic, spec §"Quote Selection")
+       ├─► theme clustering (LLM #1, spec §"Pipeline Stage 1")
+       └─► script generation (LLM #2, spec §"Pipeline Stage 4")
+            ├─► validation contract (placeholder ids, no-verbatim-leak,
+            │   word-budget tolerance) — regenerate once on failure
+            └─► markdown read-through + JSON script
+
+When the LLM stages are unavailable (no provider configured) or when
+script-generation fails twice, the generator falls back to a Phase 1
+skeleton script so callers always get a usable artefact. When the
+fallback fires after a script-generation failure, the markdown is the
+existing link-index digest with a "narration unavailable" banner so
+users keep their morning briefing on a degraded day.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
 from ...core.facts_manager import FactsManager
+from ...core.llm_provider import LLMProvider
 from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager
+from ...utils.url_generator import UrlGenerator
+from ..digest_generator import DigestGenerator, extract_gist
+from ..narration_prompts import load_default_anchor_prompt
+from .markdown_renderer import NarrationMarkdownRenderer
 from .models import (
+    EpisodeBrief,
     NarrationContent,
     NarrationStats,
     QuoteCandidate,
     ScriptBlock,
+    Segment,
+    ThemePlan,
+    ValidationFailure,
     word_count,
 )
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
+from .script_writer import ScriptWriter
+from .theme_clusterer import ThemeClusterer
 from .transcript_loader import TranscriptTurnLoader
 
 logger = get_logger(__name__)
@@ -53,6 +71,9 @@ DEFAULT_WPM = 150.0
 DEFAULT_MAX_QUOTE_SHARE = 0.40
 DEFAULT_TARGET_DURATION_SECONDS = 300
 DEFAULT_BOUNDARY_TRIM_FRACTION = 0.05
+DEFAULT_TAIL_SHARE = 0.15
+DEFAULT_OPENER_SHARE = 0.05
+DEFAULT_SIGNOFF_SHARE = 0.03
 
 
 @dataclass
@@ -63,11 +84,40 @@ class NarrationConfig:
     wpm: float = DEFAULT_WPM
     max_quote_share: float = DEFAULT_MAX_QUOTE_SHARE
     boundary_trim_fraction: float = DEFAULT_BOUNDARY_TRIM_FRACTION
+    tail_share: float = DEFAULT_TAIL_SHARE
+    opener_share: float = DEFAULT_OPENER_SHARE
+    signoff_share: float = DEFAULT_SIGNOFF_SHARE
     slug: str = "morning"
 
 
+@dataclass
+class _PerEpisodeBucket:
+    podcast: Podcast
+    episode: Episode
+    picked: List[QuoteCandidate]
+    brief: EpisodeBrief
+    summary_text: Optional[str] = None
+
+
+@dataclass
+class _Pipeline:
+    """Mutable scratch state passed between the orchestrator's stages."""
+
+    episodes: Sequence[Tuple[Podcast, Episode]]
+    cfg: NarrationConfig
+    buckets: List[_PerEpisodeBucket] = field(default_factory=list)
+    plan: ThemePlan = field(default_factory=lambda: ThemePlan(segments=(), tail_ids=()))
+    fallback_reason: Optional[str] = None
+
+
 class NarrationGenerator:
-    """Generate a narrated-digest skeleton from a list of selected episodes."""
+    """Generate a narrated-digest from a list of selected episodes.
+
+    ``llm_provider`` is optional; when ``None`` the generator skips
+    Phase 2 LLM stages and returns the Phase 1 skeleton (spec
+    §"Migration Strategy" allows narration to be opt-in until fallback
+    rates are measured in production).
+    """
 
     def __init__(
         self,
@@ -75,89 +125,56 @@ class NarrationGenerator:
         facts_manager: Optional[FactsManager] = None,
         loader: Optional[TranscriptTurnLoader] = None,
         selector: Optional[QuoteSelector] = None,
+        llm_provider: Optional[LLMProvider] = None,
+        clusterer: Optional[ThemeClusterer] = None,
+        script_writer: Optional[ScriptWriter] = None,
+        markdown_renderer: Optional[NarrationMarkdownRenderer] = None,
+        digest_generator: Optional[DigestGenerator] = None,
+        url_generator: Optional[UrlGenerator] = None,
+        anchor_prompt: Optional[str] = None,
     ):
         self.path_manager = path_manager
         self.facts_manager = facts_manager or FactsManager(path_manager)
         self.loader = loader or TranscriptTurnLoader(path_manager, self.facts_manager)
         self.selector = selector or QuoteSelector()
+        self.url_generator = url_generator or UrlGenerator()
+        self.markdown_renderer = markdown_renderer or NarrationMarkdownRenderer(
+            url_generator=self.url_generator
+        )
+        self.digest_generator = digest_generator or DigestGenerator(
+            path_manager, url_generator=self.url_generator
+        )
+        self.llm_provider = llm_provider
+        self._anchor_prompt = anchor_prompt
+        self._explicit_clusterer = clusterer
+        self._explicit_script_writer = script_writer
 
     def generate(
         self,
         episodes: List[Tuple[Podcast, Episode]],
         config: Optional[NarrationConfig] = None,
     ) -> NarrationContent:
-        """Build a Phase-1 narration from ``episodes`` (in selection order).
-
-        Each episode is offered to the quote selector independently with
-        its own facts-derived keywords and sponsor list. Episodes that
-        yield no quote (no sidecar, no resolvable speakers, every turn
-        filtered) are routed to the rapid-fire tail.
-        """
+        """Run the full Phase 2 pipeline (or fall back when LLM is absent)."""
         cfg = config or NarrationConfig()
-        per_episode_picks: List[Tuple[Podcast, Episode, List[QuoteCandidate]]] = []
+        pipeline = _Pipeline(episodes=episodes, cfg=cfg)
+        self._stage_quote_selection(pipeline)
 
-        next_quote_id = 1
-        for podcast, episode in episodes:
-            picked = self._select_quotes_for_episode(
-                podcast, episode, cfg, starting_id=next_quote_id
+        if not self._llm_available():
+            logger.info(
+                "narration: no LLM provider configured; emitting phase-1 skeleton",
+                episodes_total=len(pipeline.buckets),
             )
-            next_quote_id += len(picked)
-            per_episode_picks.append((podcast, episode, picked))
+            return self._build_skeleton_narration(pipeline)
 
-        kept_ids = self._enforce_quote_share_cap(
-            [q for _, _, picked in per_episode_picks for q in picked],
-            cfg.target_duration_seconds,
-            cfg.max_quote_share,
-        )
-        per_episode_picks = [
-            (podcast, episode, [q for q in picked if q.quote_id in kept_ids])
-            for podcast, episode, picked in per_episode_picks
-        ]
+        self._stage_theme_clustering(pipeline)
+        if pipeline.fallback_reason is not None:
+            return self._build_fallback_narration(pipeline)
 
-        all_quotes = [q for _, _, picked in per_episode_picks for q in picked]
-        episode_ids_covered = [
-            episode.id for _, episode, picked in per_episode_picks if picked
-        ]
-        episode_ids_in_tail = [
-            episode.id for _, episode, picked in per_episode_picks if not picked
-        ]
-
-        blocks = self._render_skeleton_blocks(per_episode_picks, cfg)
-        narration_words = sum(
-            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
-        )
-        quote_seconds = sum(q.duration_seconds for q in all_quotes)
-        narration_seconds = (
-            (narration_words / cfg.wpm) * 60.0 if cfg.wpm else 0.0
-        )
-
-        stats = NarrationStats(
-            target_duration_seconds=cfg.target_duration_seconds,
-            actual_duration_seconds=narration_seconds + quote_seconds,
-            narration_words=narration_words,
-            quote_seconds=quote_seconds,
-            episodes_covered=len(episode_ids_covered),
-            episodes_in_tail=len(episode_ids_in_tail),
-            quote_count=len(all_quotes),
-        )
-
-        logger.info(
-            "narration generated (phase 1 skeleton)",
-            episodes_total=len(per_episode_picks),
-            episodes_covered=stats.episodes_covered,
-            episodes_in_tail=stats.episodes_in_tail,
-            quote_count=stats.quote_count,
-            target_seconds=stats.target_duration_seconds,
-            actual_seconds=round(stats.actual_duration_seconds, 1),
-        )
-
-        return NarrationContent(
-            blocks=blocks,
-            quotes=all_quotes,
-            stats=stats,
-            episode_ids_covered=episode_ids_covered,
-            episode_ids_in_tail=episode_ids_in_tail,
-        )
+        narration_word_budget = self._narration_word_budget(pipeline)
+        script = self._stage_script_generation(pipeline, narration_word_budget)
+        if not script:
+            return self._build_fallback_narration(pipeline)
+        return self._build_narrated(pipeline, script)
 
     def write_json_script(
         self,
@@ -180,7 +197,9 @@ class NarrationGenerator:
             "target_duration_seconds": content.stats.target_duration_seconds,
             "actual_duration_seconds": round(content.stats.actual_duration_seconds, 2),
             "wpm": cfg.wpm,
-            "schema_version": "phase1",
+            "schema_version": "phase2",
+            "mode": content.mode,
+            "fallback_reason": content.stats.fallback_reason,
             "blocks": [
                 self._block_to_dict(b, content.quotes) for b in content.blocks
             ],
@@ -194,9 +213,241 @@ class NarrationGenerator:
         logger.info(
             "narration json script written",
             path=str(path),
+            mode=content.mode,
             quote_count=len(content.quotes),
         )
         return path
+
+    def write_markdown(
+        self,
+        content: NarrationContent,
+        config: Optional[NarrationConfig] = None,
+    ) -> Optional[Path]:
+        """Write the markdown read-through (or fallback link index) to disk."""
+        if not content.markdown:
+            return None
+        cfg = config or NarrationConfig()
+        narrations_dir = self.path_manager.narrations_dir()
+        narrations_dir.mkdir(parents=True, exist_ok=True)
+        date_str = content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        path = narrations_dir / f"{date_str}-{cfg.slug}.md"
+        path.write_text(content.markdown, encoding="utf-8")
+        content.markdown_path = path
+        logger.info(
+            "narration markdown written",
+            path=str(path),
+            mode=content.mode,
+        )
+        return path
+
+    # --- Pipeline stages -------------------------------------------------
+
+    def _stage_quote_selection(self, pipeline: _Pipeline) -> None:
+        next_quote_id = 1
+        for podcast, episode in pipeline.episodes:
+            picked = self._select_quotes_for_episode(
+                podcast, episode, pipeline.cfg, starting_id=next_quote_id
+            )
+            next_quote_id += len(picked)
+            brief = self._build_episode_brief(podcast, episode)
+            summary_text = self._read_summary(episode)
+            pipeline.buckets.append(
+                _PerEpisodeBucket(
+                    podcast=podcast,
+                    episode=episode,
+                    picked=picked,
+                    brief=brief,
+                    summary_text=summary_text,
+                )
+            )
+
+        kept_ids = self._enforce_quote_share_cap(
+            [q for b in pipeline.buckets for q in b.picked],
+            pipeline.cfg.target_duration_seconds,
+            pipeline.cfg.max_quote_share,
+        )
+        for bucket in pipeline.buckets:
+            bucket.picked = [q for q in bucket.picked if q.quote_id in kept_ids]
+
+    def _stage_theme_clustering(self, pipeline: _Pipeline) -> None:
+        clusterer = self._theme_clusterer()
+        if clusterer is None:
+            pipeline.fallback_reason = "llm_provider_missing"
+            return
+        plan = clusterer.cluster(
+            briefs=[b.brief for b in pipeline.buckets],
+            target_duration_seconds=pipeline.cfg.target_duration_seconds,
+        )
+        pipeline.plan = plan
+
+    def _stage_script_generation(
+        self, pipeline: _Pipeline, narration_word_budget: int
+    ) -> Optional[Sequence[ScriptBlock]]:
+        writer = self._script_writer()
+        if writer is None:
+            pipeline.fallback_reason = "llm_provider_missing"
+            return None
+        briefs_by_id = {b.brief.episode_id: b.brief for b in pipeline.buckets}
+        quotes = [q for b in pipeline.buckets for q in b.picked]
+        result = writer.write(
+            plan=pipeline.plan,
+            briefs_by_id=briefs_by_id,
+            quotes=quotes,
+            narration_word_budget=narration_word_budget,
+        )
+        if not result.blocks:
+            pipeline.fallback_reason = self._summarise_failures(result.failures)
+            return None
+        return result.blocks
+
+    # --- Outputs --------------------------------------------------------
+
+    def _build_narrated(
+        self, pipeline: _Pipeline, blocks: Sequence[ScriptBlock]
+    ) -> NarrationContent:
+        cfg = pipeline.cfg
+        all_quotes = [q for b in pipeline.buckets for q in b.picked]
+        episode_ids_covered, episode_ids_in_tail = self._covered_and_tail(pipeline.plan, pipeline)
+        for block in blocks:
+            if block.kind == "narration" and block.text:
+                block.duration_seconds = (
+                    word_count(block.text) / cfg.wpm * 60.0 if cfg.wpm else 0.0
+                )
+
+        narration_words = sum(
+            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
+        )
+        quote_seconds = sum(q.duration_seconds for q in all_quotes)
+        narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
+
+        stats = NarrationStats(
+            target_duration_seconds=cfg.target_duration_seconds,
+            actual_duration_seconds=narration_seconds + quote_seconds,
+            narration_words=narration_words,
+            quote_seconds=quote_seconds,
+            episodes_covered=len(episode_ids_covered),
+            episodes_in_tail=len(episode_ids_in_tail),
+            quote_count=len(all_quotes),
+        )
+
+        content = NarrationContent(
+            blocks=list(blocks),
+            quotes=all_quotes,
+            stats=stats,
+            episode_ids_covered=episode_ids_covered,
+            episode_ids_in_tail=episode_ids_in_tail,
+            mode="narrated",
+        )
+        content.markdown = self.markdown_renderer.render(
+            blocks=content.blocks,
+            quotes=content.quotes,
+            plan=pipeline.plan,
+            episodes=pipeline.episodes,
+            stats=content.stats,
+            generated_at=content.generated_at,
+        )
+
+        logger.info(
+            "narration generated",
+            mode="narrated",
+            episodes_total=len(pipeline.buckets),
+            episodes_covered=stats.episodes_covered,
+            episodes_in_tail=stats.episodes_in_tail,
+            quote_count=stats.quote_count,
+            target_seconds=stats.target_duration_seconds,
+            actual_seconds=round(stats.actual_duration_seconds, 1),
+        )
+        return content
+
+    def _build_skeleton_narration(self, pipeline: _Pipeline) -> NarrationContent:
+        cfg = pipeline.cfg
+        all_quotes = [q for b in pipeline.buckets for q in b.picked]
+        episode_ids_covered = [b.episode.id for b in pipeline.buckets if b.picked]
+        episode_ids_in_tail = [b.episode.id for b in pipeline.buckets if not b.picked]
+        blocks = self._render_skeleton_blocks(pipeline)
+        narration_words = sum(
+            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
+        )
+        quote_seconds = sum(q.duration_seconds for q in all_quotes)
+        narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
+
+        stats = NarrationStats(
+            target_duration_seconds=cfg.target_duration_seconds,
+            actual_duration_seconds=narration_seconds + quote_seconds,
+            narration_words=narration_words,
+            quote_seconds=quote_seconds,
+            episodes_covered=len(episode_ids_covered),
+            episodes_in_tail=len(episode_ids_in_tail),
+            quote_count=len(all_quotes),
+        )
+        return NarrationContent(
+            blocks=blocks,
+            quotes=all_quotes,
+            stats=stats,
+            episode_ids_covered=episode_ids_covered,
+            episode_ids_in_tail=episode_ids_in_tail,
+            mode="narrated",
+        )
+
+    def _build_fallback_narration(self, pipeline: _Pipeline) -> NarrationContent:
+        all_quotes = [q for b in pipeline.buckets for q in b.picked]
+        episode_ids_in_tail = [b.episode.id for b in pipeline.buckets]
+        digest_content = self.digest_generator.generate(
+            [(b.podcast, b.episode) for b in pipeline.buckets]
+        )
+        markdown = (
+            "> _Today's narration is unavailable; here is the link-index briefing"
+            " instead._\n\n"
+            + digest_content.markdown
+        )
+        stats = NarrationStats(
+            target_duration_seconds=pipeline.cfg.target_duration_seconds,
+            actual_duration_seconds=0.0,
+            narration_words=0,
+            quote_seconds=sum(q.duration_seconds for q in all_quotes),
+            episodes_covered=0,
+            episodes_in_tail=len(episode_ids_in_tail),
+            quote_count=len(all_quotes),
+            fallback_reason=pipeline.fallback_reason or "unknown",
+        )
+        logger.warning(
+            "narration.fallback",
+            reason=stats.fallback_reason,
+            episodes_total=len(pipeline.buckets),
+            quote_count=stats.quote_count,
+        )
+        return NarrationContent(
+            blocks=[],
+            quotes=all_quotes,
+            stats=stats,
+            episode_ids_covered=[],
+            episode_ids_in_tail=episode_ids_in_tail,
+            mode="fallback",
+            markdown=markdown,
+        )
+
+    # --- Helpers --------------------------------------------------------
+
+    def _llm_available(self) -> bool:
+        return self.llm_provider is not None or (
+            self._explicit_clusterer is not None
+            and self._explicit_script_writer is not None
+        )
+
+    def _theme_clusterer(self) -> Optional[ThemeClusterer]:
+        if self._explicit_clusterer is not None:
+            return self._explicit_clusterer
+        if self.llm_provider is None:
+            return None
+        return ThemeClusterer(self.llm_provider)
+
+    def _script_writer(self) -> Optional[ScriptWriter]:
+        if self._explicit_script_writer is not None:
+            return self._explicit_script_writer
+        if self.llm_provider is None:
+            return None
+        prompt = self._anchor_prompt or load_default_anchor_prompt()
+        return ScriptWriter(self.llm_provider, system_prompt=prompt)
 
     def _select_quotes_for_episode(
         self,
@@ -226,19 +477,45 @@ class NarrationGenerator:
         )
         return self.selector.select(turns, selector_cfg, starting_id=starting_id)
 
+    def _build_episode_brief(self, podcast: Podcast, episode: Episode) -> EpisodeBrief:
+        facts = self.loader.load_episode_facts(podcast, episode)
+        gist = self._read_gist(episode)
+        return EpisodeBrief(
+            episode_id=episode.id,
+            podcast_title=podcast.title,
+            episode_title=episode.title,
+            guests=tuple(facts.guests) if facts and facts.guests else (),
+            topics=tuple(facts.topics_keywords) if facts and facts.topics_keywords else (),
+            sponsors=tuple(facts.ad_sponsors) if facts and facts.ad_sponsors else (),
+            gist=gist,
+        )
+
+    def _read_summary(self, episode: Episode) -> Optional[str]:
+        if not episode.summary_path:
+            return None
+        path = self.path_manager.summary_file(episode.summary_path)
+        if not path.exists():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "narration: failed to read summary", episode_id=episode.id, error=str(exc),
+            )
+            return None
+
+    def _read_gist(self, episode: Episode) -> Optional[str]:
+        text = self._read_summary(episode)
+        if not text:
+            return None
+        return extract_gist(text)
+
     @staticmethod
     def _enforce_quote_share_cap(
         quotes: List[QuoteCandidate],
         target_duration_seconds: int,
         max_quote_share: float,
     ) -> set:
-        """Return the set of ``quote_id`` values that fit under the share cap.
-
-        Greedy: rank by score descending, accept while we're under the
-        cap, drop otherwise — the spec #33 §"Word-Budget" rule
-        ("lowest-scoring quotes are dropped first") restated as a
-        forward pack.
-        """
         cap = target_duration_seconds * max_quote_share
         if not quotes or cap <= 0:
             return {q.quote_id for q in quotes}
@@ -250,43 +527,62 @@ class NarrationGenerator:
                 used += q.duration_seconds
         return kept
 
-    def _render_skeleton_blocks(
-        self,
-        per_episode_picks: List[Tuple[Podcast, Episode, List[QuoteCandidate]]],
-        cfg: NarrationConfig,
-    ) -> List[ScriptBlock]:
-        """Phase 1 chrome: opener, per-episode segment, signoff.
+    @staticmethod
+    def _summarise_failures(failures: Sequence[ValidationFailure]) -> str:
+        if not failures:
+            return "unknown"
+        return ",".join(f.reason for f in failures)
 
-        Phase 2 replaces every narration block here with anchor-voiced
-        prose generated by the script-generation LLM call. Quote blocks
-        already carry the durable identifier triple
-        (``episode_id`` + ``start_seconds`` + ``duration_seconds``) so
-        the downstream TTS swap can splice in original audio without
-        further schema work.
-        """
+    @staticmethod
+    def _covered_and_tail(
+        plan: ThemePlan, pipeline: _Pipeline
+    ) -> Tuple[List[str], List[str]]:
+        covered: List[str] = []
+        seen: set = set()
+        for seg in plan.segments:
+            for eid in seg.episode_ids:
+                if eid not in seen:
+                    seen.add(eid)
+                    covered.append(eid)
+        tail = [eid for eid in plan.tail_ids if eid not in seen]
+        # Anything still missing (model dropped an episode) joins the tail.
+        for bucket in pipeline.buckets:
+            if bucket.episode.id not in seen and bucket.episode.id not in tail:
+                tail.append(bucket.episode.id)
+        return covered, tail
+
+    def _narration_word_budget(self, pipeline: _Pipeline) -> int:
+        cfg = pipeline.cfg
+        quote_seconds = sum(
+            q.duration_seconds for b in pipeline.buckets for q in b.picked
+        )
+        narration_seconds = max(0.0, cfg.target_duration_seconds - quote_seconds)
+        return max(1, int(narration_seconds * cfg.wpm / 60.0))
+
+    def _render_skeleton_blocks(self, pipeline: _Pipeline) -> List[ScriptBlock]:
+        cfg = pipeline.cfg
         date_label = datetime.now(timezone.utc).strftime("%B %d, %Y")
         blocks: List[ScriptBlock] = [
             self._narration_block(
                 "opener",
-                f"Briefing skeleton for {date_label}. "
-                "Anchor-voiced prose lands in Phase 2.",
+                f"Briefing skeleton for {date_label}.",
                 cfg.wpm,
             )
         ]
         seg_counter = 0
-        for podcast, episode, picked in per_episode_picks:
-            if not picked:
+        for bucket in pipeline.buckets:
+            if not bucket.picked:
                 continue
             seg_counter += 1
             section = f"segment-{seg_counter}"
             blocks.append(
                 self._narration_block(
                     section,
-                    f"From {podcast.title}: {episode.title}.",
+                    f"From {bucket.podcast.title}: {bucket.episode.title}.",
                     cfg.wpm,
                 )
             )
-            for q in picked:
+            for q in bucket.picked:
                 blocks.append(
                     ScriptBlock(
                         kind="quote",
@@ -297,9 +593,9 @@ class NarrationGenerator:
                 )
 
         tail_entries = [
-            f"{podcast.title}: {episode.title}"
-            for podcast, episode, picked in per_episode_picks
-            if not picked
+            f"{bucket.podcast.title}: {bucket.episode.title}"
+            for bucket in pipeline.buckets
+            if not bucket.picked
         ]
         if tail_entries:
             blocks.append(
@@ -332,8 +628,6 @@ class NarrationGenerator:
                 "text": block.text or "",
                 "duration_seconds": round(block.duration_seconds, 2),
             }
-        # Denormalise the quote: TTS will read this JSON in isolation,
-        # so the block needs to be self-describing.
         quote = next((q for q in quotes if q.quote_id == block.quote_id), None)
         if quote is None:
             return {

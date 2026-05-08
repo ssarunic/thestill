@@ -19,10 +19,11 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 ScriptBlockKind = Literal["narration", "quote"]
 SpeakerRole = Literal["host", "guest", "unknown"]
+NarrationMode = Literal["narrated", "fallback"]
 
 
 def word_count(text: str) -> int:
@@ -97,6 +98,12 @@ class NarrationContent:
     quote; ``episode_ids_in_tail`` lists episodes routed to the rapid-fire
     tail because no quote could be resolved (no JSON sidecar, no
     speaker mapping, every turn filtered, etc).
+
+    ``mode`` distinguishes a successful narration (``"narrated"``) from
+    a link-index fallback (``"fallback"``). The fallback path still
+    emits ``markdown`` (the link-index digest) and ``stats`` so the
+    surface treats both shapes uniformly; ``stats.fallback_reason``
+    explains why narration was abandoned.
     """
 
     blocks: List[ScriptBlock]
@@ -104,6 +111,69 @@ class NarrationContent:
     stats: NarrationStats
     episode_ids_covered: List[str]
     episode_ids_in_tail: List[str]
+    mode: NarrationMode = "narrated"
+    markdown: Optional[str] = None
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     json_script_path: Optional[Path] = None
     markdown_path: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class EpisodeBrief:
+    """Per-episode context fed to the theme clusterer (spec §"Pipeline Stages 1").
+
+    Compact on purpose: only the fields the clusterer needs to spot a
+    cross-show theme. Heavier inputs (full summaries) are reserved for
+    the script-generation call where they are necessary.
+    """
+
+    episode_id: str
+    podcast_title: str
+    episode_title: str
+    guests: Tuple[str, ...] = ()
+    topics: Tuple[str, ...] = ()
+    sponsors: Tuple[str, ...] = ()
+    gist: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One theme-grouped segment in the narration plan.
+
+    Produced by the theme-clustering LLM call. ``rank=1`` is the lead
+    story. ``angle`` is the concrete framing the anchor will speak to
+    ("disagreement on X" / "what changed about Y"), not just the topic.
+    """
+
+    theme: str
+    angle: str
+    episode_ids: Tuple[str, ...]
+    rank: int
+
+
+@dataclass(frozen=True)
+class ThemePlan:
+    """Output of theme clustering (spec §"Pipeline Stages 1").
+
+    ``segments`` are the lead stories in priority order. ``tail_ids``
+    are episodes that did not fold into any segment and will be swept
+    into the rapid-fire tail.
+    """
+
+    segments: Tuple[Segment, ...]
+    tail_ids: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ValidationFailure:
+    """A single validation finding from the script-generation contract.
+
+    ``reason`` is a stable token suitable for metrics
+    (``"unknown_quote_id"``, ``"verbatim_leak"``, ``"word_budget_high"``,
+    ``"word_budget_low"``, ``"empty_blocks"``). ``detail`` is a
+    human-readable message included in the regenerate prompt and the
+    fallback log.
+    """
+
+    reason: str
+    detail: str

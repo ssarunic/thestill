@@ -12,30 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Narrated digest generation (spec #33).
+"""Narrated digest generation (spec #33)."""
 
-Phase 1 ships the deterministic backbone: parse cleaned-transcript JSON
-sidecars into resolved-speaker turns, score and pick verbatim quotes
-under a per-episode cap, and emit a skeleton JSON script ready for
-Phase 2's anchor-prose LLM call to fill in narration blocks around the
-quote cues.
-"""
-
+from .markdown_renderer import NarrationMarkdownRenderer
 from .models import (
+    EpisodeBrief,
     NarrationContent,
+    NarrationMode,
     NarrationStats,
     QuoteCandidate,
     ScriptBlock,
     ScriptBlockKind,
+    Segment,
+    SpeakerRole,
+    ThemePlan,
+    ValidationFailure,
+    word_count,
 )
 from .narration_generator import NarrationConfig, NarrationGenerator
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
+from .script_writer import ScriptResult, ScriptWriter
+from .theme_clusterer import ThemeClusterer
 from .transcript_loader import ResolvedTurn, TranscriptTurnLoader
 
 __all__ = [
+    "EpisodeBrief",
     "NarrationConfig",
     "NarrationContent",
     "NarrationGenerator",
+    "NarrationMarkdownRenderer",
+    "NarrationMode",
     "NarrationStats",
     "QuoteCandidate",
     "QuoteSelector",
@@ -43,5 +49,13 @@ __all__ = [
     "ResolvedTurn",
     "ScriptBlock",
     "ScriptBlockKind",
+    "ScriptResult",
+    "ScriptWriter",
+    "Segment",
+    "SpeakerRole",
+    "ThemeClusterer",
+    "ThemePlan",
     "TranscriptTurnLoader",
+    "ValidationFailure",
+    "word_count",
 ]

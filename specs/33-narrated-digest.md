@@ -1,6 +1,6 @@
 # Narrated Digest Specification
 
-> **Status:** 🚧 In progress (Phase 1 complete)
+> **Status:** 🚧 In progress (Phases 1 + 2 complete)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-08
 > **Author:** Product & Engineering
@@ -544,13 +544,13 @@ Pure-additive. No data backfill required.
 - Emit a "skeleton" JSON script: per-episode chrome blocks + selected quote blocks, no anchor narration yet — proves the data path and the validation contract. _(`thestill/services/narration/narration_generator.py`; output at `data/narrations/YYYY-MM-DD-<slug>.json` with `schema_version: "phase1"`.)_
 - Tests: quote selection is deterministic, sponsor-read filter works, attribution is always resolved. _(`tests/unit/services/narration/`, 28 tests.)_
 
-### Phase 2 — Theme clustering + script generation
+### Phase 2 — Theme clustering + script generation ✅ Complete
 
-- Theme clustering LLM call with structured-output validation.
-- Anchor system prompt + script-generation LLM call.
-- Validation contract: `<<QUOTE>>` placeholder enforcement, no-verbatim-leak check, word-budget tolerance, regenerate-once-then-fallback.
-- Markdown renderer.
-- Fallback to the link-index digest on validation failure.
+- Theme clustering LLM call with structured-output validation. _(`thestill/services/narration/theme_clusterer.py` — Pydantic-validated `_ThemePlanOut`; reconciliation drops invented ids, caps at 4 segments, routes overflow to the tail; LLM error degrades to tail-only.)_
+- Anchor system prompt + script-generation LLM call. _(`thestill/services/narration_prompts/default_anchor.md` loaded at runtime; `thestill/services/narration/script_writer.py`.)_
+- Validation contract: quote-id enforcement, no-verbatim-leak check (8-word n-gram match against any quote, normalised lowercase + collapsed punctuation), word-budget tolerance (±15%), regenerate-once-then-fallback. _(See `_validate` and `_tighten_prompt` in `script_writer.py`.)_
+- Markdown renderer. _(`thestill/services/narration/markdown_renderer.py` — date header + runtime byline, segment headings, block-quote attribution with `▶ Listen at HH:MM` deep links via the new `UrlGenerator.episode_at`, link-index appendix.)_
+- Fallback to the link-index digest on validation failure. _(`NarrationGenerator._build_fallback_narration`: produces `mode="fallback"` content with the existing `DigestGenerator` markdown prefixed by a "narration unavailable" banner; emits a `narration.fallback` structured log with the failure reasons.)_
 
 ### Phase 3 — CLI + API + opt-in morning workflow
 

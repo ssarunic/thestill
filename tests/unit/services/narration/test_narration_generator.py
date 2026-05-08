@@ -23,7 +23,7 @@ import pytest
 from pydantic import HttpUrl
 
 from thestill.models.podcast import Episode, Podcast
-from thestill.services.narration.models import QuoteCandidate
+from thestill.services.narration.models import QuoteCandidate, ScriptBlock
 from thestill.services.narration.narration_generator import (
     NarrationConfig,
     NarrationGenerator,
@@ -203,7 +203,7 @@ def test_json_script_round_trips_through_disk(storage: PathManager) -> None:
     assert out_path.exists()
     assert out_path.parent == storage.storage_path / "narrations"
     payload = json.loads(out_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "phase1"
+    assert payload["schema_version"] == "phase2"
     assert payload["target_duration_seconds"] == 300
     assert payload["wpm"] == 150.0
     assert payload["episodes_covered"] == ["e1"]
@@ -216,6 +216,130 @@ def test_json_script_round_trips_through_disk(storage: PathManager) -> None:
     assert block["start_seconds"] == 60.0
     assert block["text"]
     assert block["duration_seconds"] > 0
+
+
+class _StubClusterer:
+    def __init__(self, plan):
+        self._plan = plan
+        self.calls = 0
+
+    def cluster(self, briefs, target_duration_seconds):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return self._plan
+
+
+class _StubScriptWriter:
+    def __init__(self, result):
+        self._result = result
+        self.calls = 0
+
+    def write(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return self._result
+
+
+def test_full_phase2_path_renders_markdown_and_marks_narrated(
+    storage: PathManager,
+) -> None:
+    from thestill.services.narration.models import (
+        Segment,
+        ThemePlan,
+    )
+    from thestill.services.narration.script_writer import ScriptResult
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one", title="Lead Episode")
+    loader = _StaticLoader(
+        turns_by_episode={
+            "e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex Anchor")],
+        }
+    )
+    plan = ThemePlan(
+        segments=(
+            Segment(theme="AI agents", angle="Lead angle", episode_ids=("e1",), rank=1),
+        ),
+        tail_ids=(),
+    )
+    blocks = [
+        ScriptBlock(kind="narration", section="opener", text="Today's lead." * 1),
+        ScriptBlock(
+            kind="narration",
+            section="segment-1",
+            text=(
+                "On Test Podcast, the host argues the bar shifted. "
+                "Two takes from the same morning. " * 5
+            ),
+        ),
+        ScriptBlock(
+            kind="quote", section="segment-1", quote_id="q1", duration_seconds=12.0
+        ),
+        ScriptBlock(
+            kind="narration",
+            section="segment-1",
+            text="A quick transition before we move on to the next story." * 2,
+        ),
+        ScriptBlock(kind="narration", section="signoff", text="That's the briefing."),
+    ]
+    script_result = ScriptResult(blocks=tuple(blocks), failures=(), raw_word_count=80)
+
+    gen = NarrationGenerator(
+        path_manager=storage,
+        loader=loader,
+        selector=QuoteSelector(),
+        clusterer=_StubClusterer(plan),
+        script_writer=_StubScriptWriter(script_result),
+    )
+    content = gen.generate([(podcast, ep1)])
+
+    assert content.mode == "narrated"
+    assert content.markdown is not None
+    assert "# Morning Briefing —" in content.markdown
+    assert "## Lead — AI agents" in content.markdown
+    # Validate the JSON schema bumped to phase2 and includes mode.
+    out_path = gen.write_json_script(content)
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "phase2"
+    assert payload["mode"] == "narrated"
+    md_path = gen.write_markdown(content)
+    assert md_path is not None and md_path.exists()
+
+
+def test_fallback_path_emits_link_index_when_validation_fails(
+    storage: PathManager,
+) -> None:
+    from thestill.services.narration.models import ThemePlan, ValidationFailure
+    from thestill.services.narration.script_writer import ScriptResult
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one", title="Lead Episode")
+    loader = _StaticLoader(
+        turns_by_episode={
+            "e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex")],
+        }
+    )
+    plan = ThemePlan(segments=(), tail_ids=("e1",))
+    failures = (
+        ValidationFailure(reason="word_budget_high", detail="too long"),
+        ValidationFailure(reason="word_budget_high", detail="still too long"),
+    )
+    script_result = ScriptResult(blocks=(), failures=failures, raw_word_count=900)
+
+    gen = NarrationGenerator(
+        path_manager=storage,
+        loader=loader,
+        selector=QuoteSelector(),
+        clusterer=_StubClusterer(plan),
+        script_writer=_StubScriptWriter(script_result),
+    )
+    content = gen.generate([(podcast, ep1)])
+
+    assert content.mode == "fallback"
+    assert content.stats.fallback_reason and "word_budget_high" in content.stats.fallback_reason
+    assert content.markdown is not None
+    assert "Today's narration is unavailable" in content.markdown
+    assert "Podcast Digest" in content.markdown  # link-index header
+    assert content.episode_ids_covered == []
+    assert content.episode_ids_in_tail == ["e1"]
 
 
 def test_run_is_deterministic(storage: PathManager) -> None:
