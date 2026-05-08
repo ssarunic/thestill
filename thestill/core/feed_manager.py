@@ -16,7 +16,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -327,10 +327,17 @@ class PodcastFeedManager:
             if episodes:
                 new_eps = episodes
                 if podcast.episodes:
-                    most_recent_date = max(
-                        (ep.pub_date for ep in podcast.episodes if ep.pub_date),
-                        default=None,
-                    )
+                    # Mixed-tz guard: ``insert_imported_episode`` writes
+                    # tz-aware pub_dates while the feedparser path here
+                    # produces naive ones. ``max`` over the unioned set
+                    # raises TypeError; normalise to UTC for the compare
+                    # without mutating the stored values.
+                    candidates = [
+                        (ep.pub_date if ep.pub_date.tzinfo else ep.pub_date.replace(tzinfo=timezone.utc))
+                        for ep in podcast.episodes
+                        if ep.pub_date
+                    ]
+                    most_recent_date = max(candidates, default=None)
                     if most_recent_date:
                         podcast.last_processed = most_recent_date
 
@@ -385,6 +392,20 @@ class PodcastFeedManager:
         for field in ("primary_category", "primary_subcategory", "secondary_category", "secondary_subcategory"):
             if getattr(podcast, field) != metadata.get(field):
                 setattr(podcast, field, metadata.get(field))
+                changed = True
+
+        # Fill-on-empty for show-level text fields. These are populated at
+        # add-time by ``add_podcast``, so a regular subscribed podcast will
+        # not see writes here. Auto_added shows (created by import via thin
+        # iTunes/yt-dlp metadata) often arrive with a blank description and
+        # missing author/website/etc — refresh is their first chance to
+        # pick up the canonical RSS values. We only write when the current
+        # value is falsy so a user-edited field on a real subscription is
+        # never silently overwritten.
+        for field in ("description", "author", "show_type", "website_url", "copyright"):
+            new_val = metadata.get(field)
+            if new_val and not getattr(podcast, field, None):
+                setattr(podcast, field, new_val)
                 changed = True
 
         return changed

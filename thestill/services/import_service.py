@@ -492,10 +492,18 @@ class ImportService:
         inbox_repository: InboxRepository,
         queue_manager: QueueManager,
         resolvers: Optional[Sequence[Resolver]] = None,
+        feed_manager: Optional[Any] = None,
     ) -> None:
         self._repository = repository
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
+        # Optional. When set, imports that auto-create a parent podcast also
+        # trigger a one-shot RSS refresh on that parent so its description,
+        # cover, and full episode list show up immediately — instead of the
+        # show appearing as "No description, 1 episode" until someone follows
+        # it. Best-effort: any failure falls through to the single-episode
+        # path so the import still succeeds.
+        self._feed_manager = feed_manager
         # Default order: Apple → YouTube → BareAudio. None of the matchers
         # overlap (Apple needs podcasts.apple.com, YouTube needs youtube.com /
         # youtu.be, BareAudio needs an audio extension), so the order is
@@ -503,7 +511,11 @@ class ImportService:
         self._resolvers: List[Resolver] = (
             list(resolvers) if resolvers else [ApplePodcastsResolver(), YouTubeResolver(), BareAudioResolver()]
         )
-        logger.info("ImportService initialized", resolvers=[type(r).__name__ for r in self._resolvers])
+        logger.info(
+            "ImportService initialized",
+            resolvers=[type(r).__name__ for r in self._resolvers],
+            feed_ingest_on_import=self._feed_manager is not None,
+        )
 
     def import_url(self, *, user_id: str, url: str) -> ImportResult:
         """Import ``url`` into ``user_id``'s inbox. See class docstring for idempotency."""
@@ -594,6 +606,12 @@ class ImportService:
             )
             parent_id = parent_summary[0]
             user_visible_parent: Optional[Tuple[str, str, str]] = parent_summary
+            # Pull the parent's full RSS so the show isn't stuck on iTunes'
+            # thin metadata ("No description, 1 episode"). Best-effort: a
+            # failed fetch must not block the import.
+            matched_id = self._ingest_parent_feed(parent_id, canonical)
+            if matched_id is not None:
+                return matched_id, True, user_visible_parent
         else:
             parent_id = self._repository.ensure_synthetic_audio_imports_parent()
             user_visible_parent = None
@@ -609,3 +627,64 @@ class ImportService:
             image_url=canonical.image_url,
         )
         return episode_id, True, user_visible_parent
+
+    def _ingest_parent_feed(self, parent_id: str, canonical: CanonicalSource) -> Optional[str]:
+        """Refresh the parent's RSS and return the matched episode id, if any.
+
+        On success, the parent podcast row gains its full RSS metadata
+        (description, cover, categories, etc.) and every episode in the
+        feed is inserted as a discovered row. The imported episode is
+        identified inside the freshly-discovered set by ``audio_url``
+        (Apple's iTunes ``episodeUrl`` matches the RSS enclosure URL
+        byte-for-byte; YouTube's webpage URL likewise matches the channel
+        feed link), and its ``canonical_id`` is stamped onto that row so
+        future imports of the same URL dedup correctly.
+
+        Returns the matched episode id, or ``None`` when:
+
+        - ``feed_manager`` was not injected (CLI / unit-test paths);
+        - the RSS fetch failed (logged warning, falls back to the
+          single-episode insert below so the import still succeeds);
+        - the RSS feed does not contain an episode whose ``audio_url``
+          matches ``canonical.audio_url`` (rare — Apple lookup or yt-dlp
+          surfaced an episode the canonical RSS does not carry).
+        """
+        if self._feed_manager is None:
+            return None
+        try:
+            self._feed_manager.get_new_episodes(podcast_id=parent_id)
+        except Exception as exc:  # noqa: BLE001 — refresh is best-effort
+            logger.warning(
+                "import_parent_feed_refresh_failed",
+                parent_id=parent_id,
+                rss_url=canonical.parent.rss_url if canonical.parent else None,
+                error=str(exc),
+                exc_info=True,
+            )
+            return None
+        matched = self._repository.find_episode_id_by_audio_url(parent_id, canonical.audio_url)
+        if matched is None:
+            logger.info(
+                "import_episode_not_in_feed",
+                parent_id=parent_id,
+                audio_url=canonical.audio_url,
+                canonical_id=canonical.canonical_id,
+            )
+            return None
+        try:
+            self._repository.set_episode_canonical_id(matched, canonical.canonical_id)
+        except Exception as exc:  # noqa: BLE001 — race with concurrent import
+            logger.warning(
+                "import_canonical_id_attach_failed",
+                episode_id=matched,
+                canonical_id=canonical.canonical_id,
+                error=str(exc),
+            )
+            return None
+        logger.info(
+            "import_attached_to_feed_episode",
+            episode_id=matched,
+            parent_id=parent_id,
+            canonical_id=canonical.canonical_id,
+        )
+        return matched

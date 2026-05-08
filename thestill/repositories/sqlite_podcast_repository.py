@@ -3712,6 +3712,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             ).fetchone()
             return row["id"] if row else None
 
+    def find_episode_id_by_audio_url(self, podcast_id: str, audio_url: str) -> Optional[str]:
+        """Return the episode UUID for a given audio_url within a podcast, or None.
+
+        Used by the import flow to attach a resolver-issued canonical_id to an
+        episode that was already discovered via the parent's RSS feed (Apple
+        imports auto-ingest the show). Apple's iTunes ``episodeUrl`` matches
+        the RSS enclosure URL byte-for-byte, so this is the cheapest dedup.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM episodes WHERE podcast_id = ? AND audio_url = ? LIMIT 1",
+                (podcast_id, audio_url),
+            ).fetchone()
+            return row["id"] if row else None
+
+    def set_episode_canonical_id(self, episode_id: str, canonical_id: str) -> None:
+        """Stamp ``canonical_id`` on an existing episode row.
+
+        No-op when the row already carries this canonical_id. Raises
+        ``sqlite3.IntegrityError`` if a different episode already owns the
+        canonical_id (the unique partial index would catch this).
+        """
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET canonical_id = ?, updated_at = ? WHERE id = ?",
+                (canonical_id, datetime.now(timezone.utc).isoformat(), episode_id),
+            )
+
     def insert_imported_episode(
         self,
         *,
