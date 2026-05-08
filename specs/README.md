@@ -53,6 +53,7 @@ describing current phase and gates.
 | 32 | [episodes-as-first-class](32-episodes-as-first-class.md) | 📝 Draft | Lift `episodes.podcast_id NOT NULL` and add a many-to-many `collection_memberships` table; same content shared across cross-posts, user playlists, entity-pinned feeds; additive migration with a dual-write window |
 | 33 | [narrated-digest](33-narrated-digest.md) | 📝 Draft | Single-anchor news-style readout replacing the concatenated digest; theme-grouped segments with verbatim quote clips, capped by user-chosen spoken duration; markdown + TTS-ready JSON script |
 | 34 | [briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) | 📝 Draft | Render #33's script to MP3 with TTS anchor + spliced original-audio quote clips; deliver via private token-protected personal podcast RSS feed (Apple / Overcast / Pocket Casts), in-app player, and direct download |
+| 35 | [pluggable-file-storage](35-pluggable-file-storage.md) | 📝 Draft | Cloud-first `FileStorage` abstraction with `LocalFileStorage` / `S3FileStorage` / `GCSFileStorage` backends behind one ABC; preserves `PathManager` + spec #25 traversal guards; phased migration audio-last; presigned URLs unblock direct-from-bucket streaming |
 
 ## Completed
 
