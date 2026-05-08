@@ -97,11 +97,8 @@ def _publish_episode(db_path, podcast_id, title):
     return ep_id
 
 
-def test_backfill_inbox_dry_run_writes_nothing(cli_db):
-    user_id, podcast_id = _seed_user_and_podcast(cli_db)
-    _publish_episode(cli_db, podcast_id, "ep1")
-    SqlitePodcastFollowerRepository(cli_db)._get_connection  # eager wiring sanity
-    conn = sqlite3.connect(cli_db)
+def _add_follower(db_path, user_id, podcast_id):
+    conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO podcast_followers (id, user_id, podcast_id) VALUES (?, ?, ?)",
         (str(uuid.uuid4()), user_id, podcast_id),
@@ -109,10 +106,16 @@ def test_backfill_inbox_dry_run_writes_nothing(cli_db):
     conn.commit()
     conn.close()
 
+
+def test_backfill_inbox_dry_run_writes_nothing(cli_db):
+    user_id, podcast_id = _seed_user_and_podcast(cli_db)
+    _publish_episode(cli_db, podcast_id, "ep1")
+    _add_follower(cli_db, user_id, podcast_id)
+
     result = CliRunner().invoke(main, ["backfill-inbox", "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert "would seed" in result.output
+    assert "Dry run: 1 inbox rows would be delivered" in result.output
 
     inbox = SqliteInboxRepository(cli_db)
     assert inbox.list_items(user_id) == []
@@ -122,19 +125,12 @@ def test_backfill_inbox_delivers_to_existing_followers(cli_db):
     user_id, podcast_id = _seed_user_and_podcast(cli_db)
     ep1 = _publish_episode(cli_db, podcast_id, "ep1")
     ep2 = _publish_episode(cli_db, podcast_id, "ep2")
-
-    conn = sqlite3.connect(cli_db)
-    conn.execute(
-        "INSERT INTO podcast_followers (id, user_id, podcast_id) VALUES (?, ?, ?)",
-        (str(uuid.uuid4()), user_id, podcast_id),
-    )
-    conn.commit()
-    conn.close()
+    _add_follower(cli_db, user_id, podcast_id)
 
     result = CliRunner().invoke(main, ["backfill-inbox"])
 
     assert result.exit_code == 0, result.output
-    assert "Backfill complete" in result.output
+    assert "Backfill complete: 2 inbox rows delivered" in result.output
 
     inbox = SqliteInboxRepository(cli_db)
     delivered = {item.entry.episode_id for item in inbox.list_items(user_id)}
@@ -144,22 +140,15 @@ def test_backfill_inbox_delivers_to_existing_followers(cli_db):
 def test_backfill_inbox_is_idempotent(cli_db):
     user_id, podcast_id = _seed_user_and_podcast(cli_db)
     _publish_episode(cli_db, podcast_id, "ep1")
-
-    conn = sqlite3.connect(cli_db)
-    conn.execute(
-        "INSERT INTO podcast_followers (id, user_id, podcast_id) VALUES (?, ?, ?)",
-        (str(uuid.uuid4()), user_id, podcast_id),
-    )
-    conn.commit()
-    conn.close()
+    _add_follower(cli_db, user_id, podcast_id)
 
     runner = CliRunner()
     runner.invoke(main, ["backfill-inbox"])
     second = runner.invoke(main, ["backfill-inbox"])
 
     assert second.exit_code == 0
-    # ON CONFLICT DO NOTHING means the second run inserts 0 rows.
-    assert "0 inbox rows delivered" in second.output
+    # The LEFT JOIN filter returns zero candidates on the second run.
+    assert "Backfill complete: 0 inbox rows delivered" in second.output
 
     inbox = SqliteInboxRepository(cli_db)
     assert len(inbox.list_items(user_id)) == 1

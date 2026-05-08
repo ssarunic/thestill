@@ -196,11 +196,7 @@ def main(ctx, config, quiet):
         # need both the repository and the service.
         follower_repository = SqlitePodcastFollowerRepository(db_path=config_obj.database_path)
         inbox_repository = SqliteInboxRepository(db_path=config_obj.database_path)
-        inbox_service = InboxService(
-            inbox_repository,
-            follower_repository,
-            seed_on_follow_count=config_obj.inbox_seed_on_follow,
-        )
+        inbox_service = InboxService.from_config(config_obj, inbox_repository, follower_repository)
 
         # Spec #28 — entity-layer repository (always-on; the schema
         # is created by SqlitePodcastRepository's migration block).
@@ -4090,48 +4086,15 @@ def backfill_roles(ctx, podcast_slug):
 def backfill_inbox(ctx, dry_run):
     """Seed existing followers' inboxes with recent published episodes.
 
-    Run once per database after the inbox migration lands. For every
-    ``(user, podcast)`` follow row, ``InboxService.seed_on_follow`` delivers
-    up to ``INBOX_SEED_ON_FOLLOW`` recent published episodes. Idempotent:
-    re-running is safe — already-delivered rows are skipped via the
+    Run once per database after the inbox migration lands. Idempotent —
+    re-running is safe; already-delivered rows are skipped via the
     ``(user_id, episode_id)`` unique constraint.
     """
-    state = ctx.obj
-    follower_repo = state.follower_repository
-    inbox_service = state.inbox_service
-    seed_count = state.config.inbox_seed_on_follow
-
-    # Walk every follow row by visiting every podcast and its followers.
-    # ``podcast_repository`` exposes the corpus; ``follower_repository``
-    # gives us the per-podcast user list.
-    podcasts = state.repository.get_all()
-    total_followers = 0
-    total_inserted = 0
-
-    for podcast in podcasts:
-        user_ids = follower_repo.get_follower_user_ids(podcast.id)
-        if not user_ids:
-            continue
-
-        candidate_ids = state.inbox_repository.recent_published_episode_ids(podcast.id, seed_count)
-        if not candidate_ids:
-            continue
-
-        for user_id in user_ids:
-            total_followers += 1
-            if dry_run:
-                click.echo(
-                    f"  [dry-run] {podcast.slug or podcast.id}: would seed user={user_id} "
-                    f"with up to {len(candidate_ids)} episodes"
-                )
-                continue
-            inserted = inbox_service.seed_on_follow(user_id, podcast.id)
-            total_inserted += inserted
-
+    count = ctx.obj.inbox_service.backfill_existing_followers(dry_run=dry_run)
     if dry_run:
-        click.echo(f"✓ Dry run: {total_followers} (user, podcast) pairs would be seeded.")
+        click.echo(f"✓ Dry run: {count} inbox rows would be delivered.")
     else:
-        click.echo(f"✓ Backfill complete: {total_inserted} inbox rows delivered across {total_followers} pairs.")
+        click.echo(f"✓ Backfill complete: {count} inbox rows delivered.")
 
 
 # ---------------------------------------------------------------------------

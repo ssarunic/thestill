@@ -248,6 +248,64 @@ class SqliteInboxRepository(InboxRepository):
             ).fetchall()
             return [row["id"] for row in rows]
 
+    def backfill_existing_followers(self, limit: int, *, dry_run: bool = False) -> int:
+        if limit <= 0:
+            return 0
+
+        # ROW_NUMBER picks the top-N most-recently-published episodes per
+        # podcast in a single query; the outer JOIN against
+        # ``podcast_followers`` then yields one row per (user, episode)
+        # pair. The LEFT JOIN ... IS NULL filter excludes pairs that are
+        # already in the inbox so dry-run and real-run agree on the
+        # count (without it, dry-run would over-report by counting rows
+        # that ON CONFLICT would silently skip).
+        select_sql = """
+            SELECT f.user_id, ranked.id AS episode_id, ranked.published_at
+              FROM podcast_followers f
+              JOIN (
+                  SELECT id, podcast_id, published_at,
+                         ROW_NUMBER() OVER (
+                             PARTITION BY podcast_id
+                             ORDER BY published_at DESC
+                         ) AS rn
+                    FROM episodes
+                   WHERE published_at IS NOT NULL
+              ) AS ranked
+                ON ranked.podcast_id = f.podcast_id AND ranked.rn <= ?
+              LEFT JOIN user_episode_inbox i
+                ON i.user_id = f.user_id AND i.episode_id = ranked.id
+             WHERE i.id IS NULL
+        """
+
+        with self._get_connection() as conn:
+            candidates = conn.execute(select_sql, (limit,)).fetchall()
+            if dry_run or not candidates:
+                return len(candidates)
+
+            import uuid
+
+            rows = [
+                (
+                    str(uuid.uuid4()),
+                    row["user_id"],
+                    row["episode_id"],
+                    "follow_seed",
+                    "unread",
+                    row["published_at"],
+                )
+                for row in candidates
+            ]
+            cursor = conn.executemany(
+                """
+                INSERT INTO user_episode_inbox
+                    (id, user_id, episode_id, source, state, delivered_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, episode_id) DO NOTHING
+                """,
+                rows,
+            )
+            return cursor.rowcount if cursor.rowcount is not None else 0
+
     # ------------------------------------------------------------------
     # Row mapping
     # ------------------------------------------------------------------

@@ -89,3 +89,14 @@ class InboxRepository(ABC):
         ordered by ``published_at DESC``. Episodes with NULL ``published_at``
         are excluded — they haven't been delivered to anyone yet.
         """
+
+    @abstractmethod
+    def backfill_existing_followers(self, limit: int, *, dry_run: bool = False) -> int:
+        """
+        Seed every existing follower's inbox with the podcast's most recent
+        ``limit`` published episodes. Idempotent on the
+        ``(user_id, episode_id)`` unique constraint.
+
+        Returns the number of rows that were (or would be) inserted.
+        ``dry_run=True`` reports the candidate count without writing.
+        """

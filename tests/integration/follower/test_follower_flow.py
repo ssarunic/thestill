@@ -575,63 +575,64 @@ class TestPodcastFollowerRepository:
         assert user_ids == {user1.id, user2.id}
 
 
-class TestFollowSeedHook:
-    """Spec #29 Phase 2: ``FollowerService.follow`` seeds the new
-    follower's inbox with recent published episodes via ``InboxService``."""
+def _make_follower_service_with_inbox(follower_repo, podcast_repo, inbox_service):
+    from thestill.services.follower_service import FollowerService
 
-    def _make_service(self, follower_repo, podcast_repo, inbox_service=None):
-        from thestill.services.follower_service import FollowerService
+    return FollowerService(follower_repo, podcast_repo, inbox_service=inbox_service)
 
-        return FollowerService(follower_repo, podcast_repo, inbox_service=inbox_service)
 
-    def _make_inbox(self, db_path, follower_repo, *, seed_count=2):
-        from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-        from thestill.services.inbox_service import InboxService
+def _make_inbox_service(db_path, follower_repo, *, seed_count=2):
+    from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
+    from thestill.services.inbox_service import InboxService
 
-        return InboxService(
-            SqliteInboxRepository(db_path),
-            follower_repo,
-            seed_on_follow_count=seed_count,
+    return InboxService(SqliteInboxRepository(db_path), follower_repo, seed_on_follow_count=seed_count)
+
+
+def _insert_published_episode(db_path, podcast_id, title, *, days_ago=0):
+    import sqlite3
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    ep_id = str(uuid.uuid4())
+    published = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO episodes (
+                id, podcast_id, external_id, title, slug, description,
+                description_html, audio_url, published_at
+            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?)
+            """,
+            (
+                ep_id,
+                podcast_id,
+                f"ext-{title}",
+                title,
+                f"https://cdn.example.com/{title}.mp3",
+                published.isoformat(),
+            ),
         )
+        conn.commit()
+    return ep_id
 
-    def _publish_episode(self, db_path, podcast_id, title, *, days_ago=0):
-        import sqlite3
-        import uuid
-        from datetime import datetime, timedelta, timezone
 
-        ep_id = str(uuid.uuid4())
-        published = datetime.now(timezone.utc) - timedelta(days=days_ago)
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO episodes (
-                    id, podcast_id, external_id, title, slug, description,
-                    description_html, audio_url, published_at
-                ) VALUES (?, ?, ?, ?, '', '', '', ?, ?)
-                """,
-                (
-                    ep_id,
-                    podcast_id,
-                    f"ext-{title}",
-                    title,
-                    f"https://cdn.example.com/{title}.mp3",
-                    published.isoformat(),
-                ),
-            )
-            conn.commit()
-        return ep_id
+class TestFollowSeedHook:
+    """``FollowerService.follow`` seeds the new follower's inbox with recent
+    published episodes via ``InboxService``."""
 
     def test_follow_delivers_seed_when_inbox_service_provided(
         self, temp_db, follower_repo, podcast_repo, user_repo, test_user, test_podcast
     ):
         from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 
-        ep1 = self._publish_episode(temp_db, test_podcast.id, "ep1", days_ago=2)
-        ep2 = self._publish_episode(temp_db, test_podcast.id, "ep2", days_ago=1)
+        ep1 = _insert_published_episode(temp_db, test_podcast.id, "ep1", days_ago=2)
+        ep2 = _insert_published_episode(temp_db, test_podcast.id, "ep2", days_ago=1)
 
         inbox_repo = SqliteInboxRepository(temp_db)
-        service = self._make_service(
-            follower_repo, podcast_repo, inbox_service=self._make_inbox(temp_db, follower_repo)
+        service = _make_follower_service_with_inbox(
+            follower_repo,
+            podcast_repo,
+            _make_inbox_service(temp_db, follower_repo),
         )
 
         service.follow(test_user.id, test_podcast.id)
@@ -641,41 +642,44 @@ class TestFollowSeedHook:
 
     def test_follow_succeeds_when_seed_raises(self, follower_repo, podcast_repo, test_user, test_podcast):
         """Best-effort semantics: seed failure must not roll back the follow."""
+        from unittest.mock import Mock
 
-        class BoomInbox:
-            def seed_on_follow(self, *args, **kwargs):
-                raise RuntimeError("inbox is on fire")
+        from thestill.services.inbox_service import InboxService
 
-        service = self._make_service(follower_repo, podcast_repo, inbox_service=BoomInbox())
-        # Must not raise.
+        boom = Mock(spec=InboxService)
+        boom.seed_on_follow.side_effect = RuntimeError("inbox is on fire")
+
+        service = _make_follower_service_with_inbox(follower_repo, podcast_repo, boom)
         result = service.follow(test_user.id, test_podcast.id)
+
         assert result.user_id == test_user.id
         assert follower_repo.exists(test_user.id, test_podcast.id) is True
+        boom.seed_on_follow.assert_called_once_with(test_user.id, test_podcast.id)
 
     def test_follow_without_inbox_service_skips_seeding(self, follower_repo, podcast_repo, test_user, test_podcast):
         """When no inbox service is wired, follow still works (CLI mode)."""
-        service = self._make_service(follower_repo, podcast_repo, inbox_service=None)
+        service = _make_follower_service_with_inbox(follower_repo, podcast_repo, inbox_service=None)
         service.follow(test_user.id, test_podcast.id)
         assert follower_repo.exists(test_user.id, test_podcast.id) is True
 
     def test_re_follow_after_unfollow_is_idempotent_on_seed(
         self, temp_db, follower_repo, podcast_repo, user_repo, test_user, test_podcast
     ):
-        """Re-following a podcast after unfollow re-runs seed; ON CONFLICT
-        prevents duplicate inbox rows for episodes already delivered."""
+        """Unfollow does not retract delivered rows; the second follow's seed
+        is a no-op on already-delivered episodes."""
         from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 
-        ep_id = self._publish_episode(temp_db, test_podcast.id, "only", days_ago=0)
+        ep_id = _insert_published_episode(temp_db, test_podcast.id, "only", days_ago=0)
         inbox_repo = SqliteInboxRepository(temp_db)
-        service = self._make_service(
-            follower_repo, podcast_repo, inbox_service=self._make_inbox(temp_db, follower_repo)
+        service = _make_follower_service_with_inbox(
+            follower_repo,
+            podcast_repo,
+            _make_inbox_service(temp_db, follower_repo),
         )
 
         service.follow(test_user.id, test_podcast.id)
         service.unfollow(test_user.id, test_podcast.id)
         service.follow(test_user.id, test_podcast.id)
 
-        # The unfollow does not retract delivered rows, and the second
-        # follow's seed is a no-op on the already-delivered episode.
         items = inbox_repo.list_items(test_user.id)
         assert [item.entry.episode_id for item in items] == [ep_id]

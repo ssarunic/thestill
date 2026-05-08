@@ -26,13 +26,16 @@ Plus the read/state-mutation APIs used by the inbox view.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from structlog import get_logger
 
 from ..models.inbox import INBOX_STATES, InboxEntry, InboxItem
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
+
+if TYPE_CHECKING:
+    from ..utils.config import Config
 
 logger = get_logger(__name__)
 
@@ -68,6 +71,20 @@ class InboxService:
         self._followers = follower_repository
         self._seed_count = seed_on_follow_count
         logger.info("InboxService initialized", seed_on_follow=seed_on_follow_count)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: "Config",
+        inbox_repository: InboxRepository,
+        follower_repository: PodcastFollowerRepository,
+    ) -> "InboxService":
+        """Builder that pulls ``seed_on_follow_count`` from ``Config``."""
+        return cls(
+            inbox_repository,
+            follower_repository,
+            seed_on_follow_count=config.inbox_seed_on_follow,
+        )
 
     # ------------------------------------------------------------------
     # Write paths
@@ -143,6 +160,24 @@ class InboxService:
             podcast_id=podcast_id,
             candidates=len(episode_ids),
             inserted=inserted,
+        )
+        return inserted
+
+    def backfill_existing_followers(self, *, dry_run: bool = False) -> int:
+        """
+        One-time backfill: seed every current follower's inbox with the
+        podcast's most-recent published episodes.
+
+        Implemented as a single SQL statement (one round trip) so the cost
+        is independent of the (podcasts × followers) cross-product. Use
+        ``dry_run=True`` to count what would be delivered without writing.
+        """
+        inserted = self._repository.backfill_existing_followers(self._seed_count, dry_run=dry_run)
+        logger.info(
+            "inbox_backfill_existing_followers",
+            seed_count=self._seed_count,
+            inserted=inserted,
+            dry_run=dry_run,
         )
         return inserted
 
