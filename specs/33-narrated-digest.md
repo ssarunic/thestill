@@ -1,8 +1,8 @@
 # Narrated Digest Specification
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 In progress (Phase 1 complete)
 > **Created:** 2026-05-06
-> **Updated:** 2026-05-06
+> **Updated:** 2026-05-08
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [digest_generator.py](../thestill/services/digest_generator.py)
 
@@ -537,12 +537,12 @@ Pure-additive. No data backfill required.
 
 ## Implementation Phases
 
-### Phase 1 — Quote selection + JSON script (no LLM-narrated prose)
+### Phase 1 — Quote selection + JSON script (no LLM-narrated prose) ✅ Complete
 
-- Parse cleaned transcripts into turns with speaker resolution from facts files.
-- Implement deterministic quote scoring + selection.
-- Emit a "skeleton" JSON script: per-episode chrome blocks + selected quote blocks, no anchor narration yet — proves the data path and the validation contract.
-- Tests: quote selection is deterministic, sponsor-read filter works, attribution is always resolved.
+- Parse cleaned transcripts into turns with speaker resolution from facts files. _(`thestill/services/narration/transcript_loader.py` reads the `AnnotatedTranscript` JSON sidecar and pairs each `content` segment with the resolved name from the episode-facts `Speaker Mapping` section.)_
+- Implement deterministic quote scoring + selection. _(`thestill/services/narration/quote_selector.py` — keyword-overlap relevance with neutral fallback, length-fit triangle, self-containment penalties, neighbour suppression, per-speaker cap.)_
+- Emit a "skeleton" JSON script: per-episode chrome blocks + selected quote blocks, no anchor narration yet — proves the data path and the validation contract. _(`thestill/services/narration/narration_generator.py`; output at `data/narrations/YYYY-MM-DD-<slug>.json` with `schema_version: "phase1"`.)_
+- Tests: quote selection is deterministic, sponsor-read filter works, attribution is always resolved. _(`tests/unit/services/narration/`, 28 tests.)_
 
 ### Phase 2 — Theme clustering + script generation
 
