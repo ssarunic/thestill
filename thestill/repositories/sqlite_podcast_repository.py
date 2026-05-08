@@ -3740,6 +3740,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """
         episode_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+        # Slug must be populated for the (podcast_slug, episode_slug) URL
+        # lookup to find the episode. RSS-ingested episodes get this via the
+        # ``Episode`` Pydantic model's ``ensure_slug`` validator; the import
+        # path skips that model so we generate the slug here.
+        slug = generate_slug(title)
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -3748,7 +3753,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     external_id, title, slug, description, description_html,
                     pub_date, audio_url, duration, image_url,
                     canonical_id
-                ) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
                 """,
                 (
                     episode_id,
@@ -3757,6 +3762,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     now,
                     external_id,
                     title,
+                    slug,
                     description,
                     pub_date.isoformat() if pub_date else None,
                     audio_url,

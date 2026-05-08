@@ -57,8 +57,17 @@ _BARE_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".opus", ".ogg", ".wav")
 # same canonical id. Conservative list: only well-known tracking keys.
 _TRACKING_PARAMS = frozenset(
     {
-        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-        "fbclid", "gclid", "mc_cid", "mc_eid", "_hsenc", "_hsmi",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+        "_hsenc",
+        "_hsmi",
     }
 )
 
@@ -145,9 +154,7 @@ def _normalise_url(url: str) -> str:
     if parsed.query:
         kept = [
             (k, v)
-            for k, v in (
-                pair.partition("=")[::2] for pair in parsed.query.split("&") if pair
-            )
+            for k, v in (pair.partition("=")[::2] for pair in parsed.query.split("&") if pair)
             if k.lower() not in _TRACKING_PARAMS
         ]
         query = "&".join(f"{k}={v}" if v else k for k, v in kept)
@@ -293,9 +300,10 @@ class YouTubeResolver:
         )
 
 
-AppleEpisodeLookup = Callable[[str], dict]
+AppleEpisodeLookup = Callable[[str, Optional[str]], dict]
 """Function that returns the iTunes Search lookup payload for an Apple
-episode track id. Indirection lets tests inject canned responses without
+episode track id, optionally given the show's ``collectionId`` for a
+fallback lookup. Indirection lets tests inject canned responses without
 hitting Apple's servers.
 
 The expected response shape is the iTunes Search ``results[0]`` object
@@ -306,10 +314,10 @@ fields we ignore).
 """
 
 
-def _default_apple_episode_lookup(track_id: str) -> dict:
+def _itunes_lookup(params: str, *, label: str) -> list:
     import requests
 
-    url = f"https://itunes.apple.com/lookup?id={track_id}&entity=podcastEpisode"
+    url = f"https://itunes.apple.com/lookup?{params}"
     try:
         resp = requests.get(
             url,
@@ -317,22 +325,44 @@ def _default_apple_episode_lookup(track_id: str) -> dict:
             headers={"User-Agent": "thestill/1.0 (+https://github.com/ssarunic/thestill)"},
         )
     except requests.RequestException as exc:
-        raise ResolverError(f"iTunes lookup failed for trackId {track_id}: {exc}") from exc
+        raise ResolverError(f"iTunes lookup failed for {label}: {exc}") from exc
     if resp.status_code != 200:
-        raise ResolverError(
-            f"iTunes lookup returned HTTP {resp.status_code} for trackId {track_id}"
-        )
+        raise ResolverError(f"iTunes lookup returned HTTP {resp.status_code} for {label}")
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise ResolverError(f"iTunes lookup returned non-JSON for trackId {track_id}: {exc}") from exc
-    results = payload.get("results") or []
-    # The search returns the show first when the track id matches an episode;
-    # filter to the episode wrapper to be explicit.
-    for entry in results:
+        raise ResolverError(f"iTunes lookup returned non-JSON for {label}: {exc}") from exc
+    return payload.get("results") or []
+
+
+def _default_apple_episode_lookup(track_id: str, collection_id: Optional[str] = None) -> dict:
+    # Apple's lookup endpoint is unreliable when keyed on episode ``trackId``:
+    # many episodes (especially older ones) are not indexed and the call
+    # returns ``resultCount: 0``. Looking up the show by ``collectionId`` with
+    # ``entity=podcastEpisode&limit=200`` and filtering locally is the reliable
+    # path. We try the direct trackId lookup first as a fast path.
+    direct = _itunes_lookup(
+        f"id={track_id}&entity=podcastEpisode",
+        label=f"trackId {track_id}",
+    )
+    for entry in direct:
         if entry.get("wrapperType") == "podcastEpisode":
             return entry
-    raise ResolverError(f"iTunes lookup found no episode for trackId {track_id}")
+
+    if not collection_id:
+        raise ResolverError(f"iTunes lookup found no episode for trackId {track_id}")
+
+    show_results = _itunes_lookup(
+        f"id={collection_id}&entity=podcastEpisode&limit=200",
+        label=f"collectionId {collection_id}",
+    )
+    for entry in show_results:
+        if entry.get("wrapperType") == "podcastEpisode" and str(entry.get("trackId")) == str(track_id):
+            return entry
+    raise ResolverError(
+        f"iTunes lookup found no episode for trackId {track_id} "
+        f"(searched {len(show_results)} entries under collectionId {collection_id})"
+    )
 
 
 def _apple_pub_date(raw: Any) -> Optional[datetime]:
@@ -378,18 +408,19 @@ class ApplePodcastsResolver:
                 "(missing ?i=<track_id>). Paste the episode link from the "
                 "Share menu, not the show URL."
             )
-        info = self._lookup(episode_id)
+        # Show id from the URL path (always present on a valid share link)
+        # is preferred over the lookup payload's collectionId so a buggy
+        # iTunes response can't reattach the import to the wrong show. It is
+        # also passed to the lookup so it can fall back to a show-level query
+        # when the direct trackId lookup misses (Apple's per-episode index is
+        # not comprehensive — many older episodes return resultCount=0).
+        collection_id = extract_apple_podcast_id(url)
+        info = self._lookup(episode_id, collection_id)
         track_name = info.get("trackName") or "Untitled Apple episode"
         episode_audio = info.get("episodeUrl") or info.get("previewUrl")
         if not isinstance(episode_audio, str) or not episode_audio:
-            raise ResolverError(
-                f"iTunes lookup did not return an audio URL for trackId {episode_id}"
-            )
+            raise ResolverError(f"iTunes lookup did not return an audio URL for trackId {episode_id}")
         feed_url = info.get("feedUrl")
-        # Show id from the URL path (always present on a valid share link)
-        # is preferred over the lookup payload's collectionId so a buggy
-        # iTunes response can't reattach the import to the wrong show.
-        collection_id = extract_apple_podcast_id(url)
         collection_name = info.get("collectionName") or "Apple Podcasts"
         duration_ms = info.get("trackTimeMillis")
         duration = int(duration_ms / 1000) if isinstance(duration_ms, (int, float)) else None
@@ -470,9 +501,7 @@ class ImportService:
         # youtu.be, BareAudio needs an audio extension), so the order is
         # incidental — kept for documentation.
         self._resolvers: List[Resolver] = (
-            list(resolvers)
-            if resolvers
-            else [ApplePodcastsResolver(), YouTubeResolver(), BareAudioResolver()]
+            list(resolvers) if resolvers else [ApplePodcastsResolver(), YouTubeResolver(), BareAudioResolver()]
         )
         logger.info("ImportService initialized", resolvers=[type(r).__name__ for r in self._resolvers])
 
@@ -539,17 +568,12 @@ class ImportService:
                 except ImportError:
                     raise
                 except Exception as exc:
-                    raise ResolverError(
-                        f"{type(resolver).__name__} failed to resolve {url!r}: {exc}"
-                    ) from exc
+                    raise ResolverError(f"{type(resolver).__name__} failed to resolve {url!r}: {exc}") from exc
         raise UnsupportedUrlError(
-            f"No resolver matched URL {url!r}. v1 supports direct audio links "
-            "(.mp3, .m4a, .opus, .ogg, .wav)."
+            f"No resolver matched URL {url!r}. v1 supports direct audio links " "(.mp3, .m4a, .opus, .ogg, .wav)."
         )
 
-    def _find_or_create_episode(
-        self, canonical: CanonicalSource
-    ) -> Tuple[str, bool, Optional[Tuple[str, str, str]]]:
+    def _find_or_create_episode(self, canonical: CanonicalSource) -> Tuple[str, bool, Optional[Tuple[str, str, str]]]:
         """Return ``(episode_id, created, parent_summary)``.
 
         ``parent_summary`` is ``(id, title, slug)`` of the real parent for

@@ -32,7 +32,6 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.import_service import ApplePodcastsResolver, ImportService
 
-
 _APPLE_URL = "https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000"
 
 
@@ -68,7 +67,7 @@ def _service_with(repo, inbox_repo, queue, info):
         repository=repo,
         inbox_repository=inbox_repo,
         queue_manager=queue,
-        resolvers=[ApplePodcastsResolver(episode_lookup=lambda track_id: info)],
+        resolvers=[ApplePodcastsResolver(episode_lookup=lambda track_id, collection_id=None: info)],
     )
 
 
@@ -78,9 +77,7 @@ def _make_user(user_repo, email):
     return user
 
 
-def test_apple_import_upserts_show_as_auto_added(
-    repo, inbox_repo, queue, user_repo, db_path, fake_apple_episode_info
-):
+def test_apple_import_upserts_show_as_auto_added(repo, inbox_repo, queue, user_repo, db_path, fake_apple_episode_info):
     alice = _make_user(user_repo, "alice@example.com")
     svc = _service_with(repo, inbox_repo, queue, fake_apple_episode_info)
 
@@ -113,9 +110,7 @@ def test_apple_import_upserts_show_as_auto_added(
         assert ep["audio_url"] == "https://cdn.example.com/episode.mp3"
 
 
-def test_apple_import_dedup_returns_existing_parent(
-    repo, inbox_repo, queue, user_repo, fake_apple_episode_info
-):
+def test_apple_import_dedup_returns_existing_parent(repo, inbox_repo, queue, user_repo, fake_apple_episode_info):
     alice = _make_user(user_repo, "alice@example.com")
     svc = _service_with(repo, inbox_repo, queue, fake_apple_episode_info)
 
@@ -129,9 +124,7 @@ def test_apple_import_dedup_returns_existing_parent(
     assert r2.parent_slug == "the-daily"
 
 
-def test_apple_import_increments_user_quota_counter(
-    repo, inbox_repo, queue, user_repo, fake_apple_episode_info
-):
+def test_apple_import_increments_user_quota_counter(repo, inbox_repo, queue, user_repo, fake_apple_episode_info):
     """Each successful import is counted by ``count_imports_for_user_since``,
     which is the contract future quota enforcement will read off."""
     alice = _make_user(user_repo, "alice@example.com")
