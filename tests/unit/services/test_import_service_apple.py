@@ -14,13 +14,14 @@
 
 """End-to-end ImportService tests for Apple Podcasts imports.
 
-Mirrors ``test_import_service_youtube.py`` — the Apple resolver also
-emits a ``CanonicalParent``, so the import flow upserts the show as an
-``auto_added`` podcast row that's hidden from refresh until followed.
+The Apple resolver emits a ``CanonicalParent``, so the import flow
+upserts the show as an ``auto_added`` podcast row that stays out of
+refresh and discovery until at least one user follows it.
 """
 
 import sqlite3
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -87,7 +88,7 @@ def test_apple_import_upserts_show_as_auto_added(
 
     assert result.episode_created
     assert result.canonical_id == "apple:1000620312000"
-    assert result.kind == "rss_episode"
+    assert result.kind == "apple_episode"
     # Parent metadata threaded through ImportResult — no second DB lookup.
     assert result.parent_title == "The Daily"
     assert result.parent_slug == "the-daily"
@@ -133,8 +134,6 @@ def test_apple_import_increments_user_quota_counter(
 ):
     """Each successful import is counted by ``count_imports_for_user_since``,
     which is the contract future quota enforcement will read off."""
-    from datetime import datetime, timedelta, timezone
-
     alice = _make_user(user_repo, "alice@example.com")
     svc = _service_with(repo, inbox_repo, queue, fake_apple_episode_info)
     since = datetime.now(timezone.utc) - timedelta(hours=24)

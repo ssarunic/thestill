@@ -66,7 +66,7 @@ def test_matches(url, expected):
 def test_resolve_maps_itunes_fields_to_canonical_source(fake_apple_episode_info):
     src = _resolver_with(fake_apple_episode_info).resolve(_APPLE_EPISODE_URL)
 
-    assert src.kind == "rss_episode"
+    assert src.kind == "apple_episode"
     assert src.canonical_id == "apple:1000620312000"
     assert src.external_id == "1000620312000"
     assert src.audio_url == "https://cdn.example.com/episode.mp3"

@@ -102,7 +102,7 @@ class CanonicalSource:
     fall back to the synthetic audio-imports row.
     """
 
-    kind: Literal["bare_audio", "youtube", "rss_episode"]
+    kind: Literal["bare_audio", "youtube", "apple_episode", "rss_episode"]
     canonical_id: str  # e.g. "audio:<sha256>"
     audio_url: str  # what the download stage fetches
     title: str
@@ -313,7 +313,7 @@ def _default_apple_episode_lookup(track_id: str) -> dict:
     try:
         resp = requests.get(
             url,
-            timeout=15,
+            timeout=10,
             headers={"User-Agent": "thestill/1.0 (+https://github.com/ssarunic/thestill)"},
         )
     except requests.RequestException as exc:
@@ -386,7 +386,10 @@ class ApplePodcastsResolver:
                 f"iTunes lookup did not return an audio URL for trackId {episode_id}"
             )
         feed_url = info.get("feedUrl")
-        collection_id = extract_apple_podcast_id(url) or info.get("collectionId")
+        # Show id from the URL path (always present on a valid share link)
+        # is preferred over the lookup payload's collectionId so a buggy
+        # iTunes response can't reattach the import to the wrong show.
+        collection_id = extract_apple_podcast_id(url)
         collection_name = info.get("collectionName") or "Apple Podcasts"
         duration_ms = info.get("trackTimeMillis")
         duration = int(duration_ms / 1000) if isinstance(duration_ms, (int, float)) else None
@@ -400,7 +403,7 @@ class ApplePodcastsResolver:
                 image_url=info.get("artworkUrl600") or info.get("artworkUrl100"),
             )
         return CanonicalSource(
-            kind="rss_episode",
+            kind="apple_episode",
             canonical_id=f"apple:{episode_id}",
             audio_url=episode_audio,
             title=track_name,
@@ -447,6 +450,11 @@ class ImportService:
       row pointing at the shared episode (no second Whisper run).
     """
 
+    # Rolling window for the per-user import counter logged on each
+    # ``import_completed`` event. Future quota enforcement should read
+    # the same window so dashboard and limits stay in sync.
+    QUOTA_WINDOW = timedelta(hours=24)
+
     def __init__(
         self,
         repository: SqlitePodcastRepository,
@@ -489,12 +497,10 @@ class ImportService:
                 canonical_id=canonical.canonical_id,
                 kind=canonical.kind,
             )
-        # Quota plumbing — counted but not enforced. Rolling 24h window
-        # gives future enforcement a stable bucket; the count includes the
-        # row we just inserted so logs reflect post-import state.
-        quota_window = timedelta(hours=24)
+        # Quota plumbing — counted but not enforced. The count includes
+        # the row we just inserted so logs reflect post-import state.
         imports_in_window = self._inbox_repo.count_imports_for_user_since(
-            user_id, datetime.now(timezone.utc) - quota_window
+            user_id, datetime.now(timezone.utc) - self.QUOTA_WINDOW
         )
         logger.info(
             "import_completed",
