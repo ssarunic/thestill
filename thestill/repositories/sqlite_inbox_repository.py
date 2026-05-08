@@ -253,6 +253,20 @@ class SqliteInboxRepository(InboxRepository):
 
         return [self._row_to_item(row) for row in rows]
 
+    def count_imports_for_user_since(self, user_id: str, since: datetime) -> int:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                  FROM user_episode_inbox
+                 WHERE user_id = ?
+                   AND source = 'import'
+                   AND delivered_at >= ?
+                """,
+                (user_id, since.isoformat()),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
     def unread_count(self, user_id: str) -> int:
         with self._get_connection() as conn:
             row = conn.execute(

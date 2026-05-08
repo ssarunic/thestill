@@ -28,7 +28,7 @@ the same protocol.
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, List, Literal, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlparse, urlunparse
 
@@ -38,7 +38,12 @@ from ..core.queue_manager import QueueManager, TaskStage
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
-from ..utils.url_patterns import is_youtube_url
+from ..utils.url_patterns import (
+    extract_apple_episode_id,
+    extract_apple_podcast_id,
+    is_apple_podcast_url,
+    is_youtube_url,
+)
 
 logger = get_logger(__name__)
 
@@ -288,6 +293,127 @@ class YouTubeResolver:
         )
 
 
+AppleEpisodeLookup = Callable[[str], dict]
+"""Function that returns the iTunes Search lookup payload for an Apple
+episode track id. Indirection lets tests inject canned responses without
+hitting Apple's servers.
+
+The expected response shape is the iTunes Search ``results[0]`` object
+for a ``podcastEpisode`` entity: ``trackId``, ``trackName``, ``feedUrl``,
+``collectionId``, ``collectionName``, ``episodeUrl``, ``releaseDate``,
+``description``, ``trackTimeMillis``, ``artworkUrl600`` (and many more
+fields we ignore).
+"""
+
+
+def _default_apple_episode_lookup(track_id: str) -> dict:
+    import requests
+
+    url = f"https://itunes.apple.com/lookup?id={track_id}&entity=podcastEpisode"
+    try:
+        resp = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "thestill/1.0 (+https://github.com/ssarunic/thestill)"},
+        )
+    except requests.RequestException as exc:
+        raise ResolverError(f"iTunes lookup failed for trackId {track_id}: {exc}") from exc
+    if resp.status_code != 200:
+        raise ResolverError(
+            f"iTunes lookup returned HTTP {resp.status_code} for trackId {track_id}"
+        )
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise ResolverError(f"iTunes lookup returned non-JSON for trackId {track_id}: {exc}") from exc
+    results = payload.get("results") or []
+    # The search returns the show first when the track id matches an episode;
+    # filter to the episode wrapper to be explicit.
+    for entry in results:
+        if entry.get("wrapperType") == "podcastEpisode":
+            return entry
+    raise ResolverError(f"iTunes lookup found no episode for trackId {track_id}")
+
+
+def _apple_pub_date(raw: Any) -> Optional[datetime]:
+    """Parse Apple's ISO-8601 ``releaseDate`` (e.g. ``2024-01-15T10:00:00Z``)."""
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+class ApplePodcastsResolver:
+    """
+    Resolver for ``podcasts.apple.com`` share links.
+
+    Uses Apple's public iTunes Search API ``lookup`` endpoint to translate
+    the share link's ``?i=<track_id>`` into an episode payload that includes
+    the audio URL and the show's RSS feed. The download stage then fetches
+    the audio directly via the regular HTTP path — the iTunes API is only
+    consulted at resolve time.
+
+    Show-only Apple links (``/idNNN`` with no ``?i=``) are not single
+    episodes and therefore not supported by this resolver — paste the RSS
+    feed or a specific episode link instead.
+    """
+
+    def __init__(self, *, episode_lookup: Optional[AppleEpisodeLookup] = None) -> None:
+        self._lookup = episode_lookup or _default_apple_episode_lookup
+
+    def matches(self, url: str) -> bool:
+        return is_apple_podcast_url(url)
+
+    def resolve(self, url: str) -> CanonicalSource:
+        episode_id = extract_apple_episode_id(url)
+        if not episode_id:
+            raise ResolverError(
+                "Apple Podcasts link does not point to a single episode "
+                "(missing ?i=<track_id>). Paste the episode link from the "
+                "Share menu, not the show URL."
+            )
+        info = self._lookup(episode_id)
+        track_name = info.get("trackName") or "Untitled Apple episode"
+        episode_audio = info.get("episodeUrl") or info.get("previewUrl")
+        if not isinstance(episode_audio, str) or not episode_audio:
+            raise ResolverError(
+                f"iTunes lookup did not return an audio URL for trackId {episode_id}"
+            )
+        feed_url = info.get("feedUrl")
+        collection_id = extract_apple_podcast_id(url) or info.get("collectionId")
+        collection_name = info.get("collectionName") or "Apple Podcasts"
+        duration_ms = info.get("trackTimeMillis")
+        duration = int(duration_ms / 1000) if isinstance(duration_ms, (int, float)) else None
+        parent: Optional[CanonicalParent] = None
+        if isinstance(feed_url, str) and feed_url and isinstance(collection_id, (str, int)):
+            parent = CanonicalParent(
+                external_id=str(collection_id),
+                rss_url=feed_url,
+                title=collection_name,
+                description=info.get("collectionDescription") or "",
+                image_url=info.get("artworkUrl600") or info.get("artworkUrl100"),
+            )
+        return CanonicalSource(
+            kind="rss_episode",
+            canonical_id=f"apple:{episode_id}",
+            audio_url=episode_audio,
+            title=track_name,
+            description=info.get("description") or "",
+            duration_seconds=duration,
+            pub_date=_apple_pub_date(info.get("releaseDate")),
+            image_url=info.get("artworkUrl600") or info.get("artworkUrl100"),
+            source_handle=collection_name,
+            external_id=episode_id,
+            parent=parent,
+        )
+
+
 @dataclass(frozen=True)
 class ImportResult:
     """Outcome of ``ImportService.import_url``."""
@@ -331,10 +457,14 @@ class ImportService:
         self._repository = repository
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
-        # YouTube before BareAudio: a youtube.com URL doesn't end in an audio
-        # extension so the order is incidental, but it documents the intent.
+        # Default order: Apple → YouTube → BareAudio. None of the matchers
+        # overlap (Apple needs podcasts.apple.com, YouTube needs youtube.com /
+        # youtu.be, BareAudio needs an audio extension), so the order is
+        # incidental — kept for documentation.
         self._resolvers: List[Resolver] = (
-            list(resolvers) if resolvers else [YouTubeResolver(), BareAudioResolver()]
+            list(resolvers)
+            if resolvers
+            else [ApplePodcastsResolver(), YouTubeResolver(), BareAudioResolver()]
         )
         logger.info("ImportService initialized", resolvers=[type(r).__name__ for r in self._resolvers])
 
@@ -359,6 +489,13 @@ class ImportService:
                 canonical_id=canonical.canonical_id,
                 kind=canonical.kind,
             )
+        # Quota plumbing — counted but not enforced. Rolling 24h window
+        # gives future enforcement a stable bucket; the count includes the
+        # row we just inserted so logs reflect post-import state.
+        quota_window = timedelta(hours=24)
+        imports_in_window = self._inbox_repo.count_imports_for_user_since(
+            user_id, datetime.now(timezone.utc) - quota_window
+        )
         logger.info(
             "import_completed",
             episode_id=episode_id,
@@ -367,6 +504,7 @@ class ImportService:
             episode_created=episode_created,
             inbox_created=inbox_created,
             user_id=user_id,
+            imports_in_24h=imports_in_window,
         )
         parent_id, parent_title, parent_slug = parent_summary if parent_summary else (None, None, None)
         return ImportResult(

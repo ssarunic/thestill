@@ -116,3 +116,14 @@ class InboxRepository(ABC):
         Returns the number of rows that were (or would be) inserted.
         ``dry_run=True`` reports the candidate count without writing.
         """
+
+    @abstractmethod
+    def count_imports_for_user_since(self, user_id: str, since: datetime) -> int:
+        """
+        Number of ``source='import'`` rows for ``user_id`` whose
+        ``delivered_at`` is at or after ``since``.
+
+        Plumbing for a future per-user import quota: the current import
+        flow only emits the count as a structured-log field; nothing is
+        enforced yet.
+        """

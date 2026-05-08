@@ -119,8 +119,8 @@ export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeMod
             />
 
             <p className="mt-2 text-xs text-gray-500">
-              Supported: YouTube videos and direct audio links (.mp3, .m4a, .opus, .ogg, .wav).
-              Apple Podcasts coming soon.
+              Supported: YouTube videos, Apple Podcasts share links, and direct audio links
+              (.mp3, .m4a, .opus, .ogg, .wav).
             </p>
 
             {state.kind === 'error' && (

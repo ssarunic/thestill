@@ -36,3 +36,24 @@ def fake_youtube_video_info():
             {"url": "https://i.ytimg.com/hi.jpg"},
         ],
     }
+
+
+# Minimal iTunes Search API ``podcastEpisode`` lookup response. The actual
+# response includes 30+ more fields; the resolver only consults the ones
+# below.
+@pytest.fixture
+def fake_apple_episode_info():
+    return {
+        "wrapperType": "podcastEpisode",
+        "trackId": 1000620312000,
+        "trackName": "The Friday News Roundup",
+        "description": "A summary of the week.",
+        "collectionId": 1200361736,
+        "collectionName": "The Daily",
+        "feedUrl": "https://feeds.example.com/the-daily",
+        "episodeUrl": "https://cdn.example.com/episode.mp3",
+        "releaseDate": "2024-01-15T10:00:00Z",
+        "trackTimeMillis": 1800000,
+        "artworkUrl600": "https://cdn.example.com/cover-600.jpg",
+        "artworkUrl100": "https://cdn.example.com/cover-100.jpg",
+    }
