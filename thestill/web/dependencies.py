@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
+    from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -100,6 +101,9 @@ class AppState:
     follower_service: "FollowerService"
     inbox_repository: "InboxRepository"
     inbox_service: "InboxService"
+    # Spec #31 — paste-a-URL-to-inbox flow. Lives next to inbox_service
+    # because both target the same per-user inbox table.
+    import_service: "ImportService"
     digest_repository: "DigestRepository"
     # Spec #28 — entity layer. Repository is always available; the
     # ``EntityExtractor`` model is loaded lazily on the first

@@ -46,6 +46,7 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services import FollowerService, PodcastService, RefreshService, StatsService
 from thestill.services.auth_service import AuthService
+from thestill.services.import_service import ImportService
 from thestill.services.inbox_service import InboxService
 from thestill.utils.config import Config
 from thestill.utils.path_manager import PathManager
@@ -91,6 +92,11 @@ def app_state(app_config: Config) -> AppState:
     inbox_repository = SqliteInboxRepository(db_path=app_config.database_path)
     inbox_service = InboxService.from_config(app_config, inbox_repository, follower_repository)
     follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
+    import_service = ImportService(
+        repository=repository,
+        inbox_repository=inbox_repository,
+        queue_manager=queue_manager,
+    )
     digest_repository = SqliteDigestRepository(db_path=app_config.database_path)
 
     from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
@@ -115,6 +121,7 @@ def app_state(app_config: Config) -> AppState:
         follower_service=follower_service,
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
+        import_service=import_service,
         digest_repository=digest_repository,
         entity_repository=entity_repository,
     )

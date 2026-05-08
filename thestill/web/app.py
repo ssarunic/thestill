@@ -49,8 +49,9 @@ from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollo
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
-from ..services.inbox_service import InboxService
 from ..services.auth_service import AuthService
+from ..services.import_service import ImportService
+from ..services.inbox_service import InboxService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
@@ -61,6 +62,7 @@ from .routes import (
     api_digests,
     api_entities,
     api_episodes,
+    api_imports,
     api_inbox,
     api_podcasts,
     api_search,
@@ -142,6 +144,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     inbox_service = InboxService.from_config(config, inbox_repository, follower_repository)
     follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
 
+    # Spec #31 — import-arbitrary-episodes service.
+    import_service = ImportService(
+        repository=repository,
+        inbox_repository=inbox_repository,
+        queue_manager=queue_manager,
+    )
+
     # Initialize digest repository
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
 
@@ -180,6 +189,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_service=follower_service,
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
+        import_service=import_service,
         digest_repository=digest_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
@@ -386,6 +396,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
+    # Spec #31 — paste-a-URL imports.
+    app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 
     # Serve static frontend files

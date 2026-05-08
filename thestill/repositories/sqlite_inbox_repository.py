@@ -21,10 +21,11 @@ round-trip per row.
 """
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
@@ -130,6 +131,41 @@ class SqliteInboxRepository(InboxRepository):
                 rows,
             )
             return cursor.rowcount if cursor.rowcount is not None else 0
+
+    def find_or_create(
+        self, *, user_id: str, episode_id: str, source: str
+    ) -> Tuple[InboxEntry, bool]:
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT id, user_id, episode_id, source, state, delivered_at, state_changed_at
+                  FROM user_episode_inbox
+                 WHERE user_id = ? AND episode_id = ?
+                """,
+                (user_id, episode_id),
+            ).fetchone()
+            if existing is not None:
+                return self._row_to_entry(existing), False
+
+            row_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
+            conn.execute(
+                """
+                INSERT INTO user_episode_inbox
+                    (id, user_id, episode_id, source, state, delivered_at)
+                VALUES (?, ?, ?, ?, 'unread', ?)
+                """,
+                (row_id, user_id, episode_id, source, now.isoformat()),
+            )
+            entry = InboxEntry(
+                id=row_id,
+                user_id=user_id,
+                episode_id=episode_id,
+                source=source,
+                state="unread",
+                delivered_at=now,
+            )
+            return entry, True
 
     def update_state(
         self, user_id: str, episode_id: str, state: str, state_changed_at: datetime
