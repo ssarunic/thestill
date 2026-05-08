@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Inbox service for spec #29 per-user inbox fan-out.
+Per-user inbox service.
 
 Encapsulates the two delivery paths:
 
@@ -32,6 +32,7 @@ from structlog import get_logger
 
 from ..models.inbox import INBOX_STATES, InboxEntry, InboxItem
 from ..repositories.inbox_repository import InboxRepository
+from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 
 logger = get_logger(__name__)
 
@@ -52,27 +53,19 @@ class InboxService:
     """
     Service for delivering episodes to user inboxes and reading/mutating
     inbox state.
-
-    Pure business logic — all SQL lives in ``InboxRepository``.
     """
 
     def __init__(
         self,
         inbox_repository: InboxRepository,
+        follower_repository: PodcastFollowerRepository,
         *,
         seed_on_follow_count: int = 2,
     ) -> None:
-        """
-        Args:
-            inbox_repository: Repository for ``user_episode_inbox`` persistence.
-            seed_on_follow_count: How many recent published episodes to deliver
-                when a user follows a podcast. Mirrors
-                ``Config.inbox_seed_on_follow`` so callers in tests can pass a
-                literal without constructing a full ``Config``.
-        """
         if seed_on_follow_count < 0:
             raise ValueError("seed_on_follow_count must be non-negative")
         self._repository = inbox_repository
+        self._followers = follower_repository
         self._seed_count = seed_on_follow_count
         logger.info("InboxService initialized", seed_on_follow=seed_on_follow_count)
 
@@ -89,13 +82,9 @@ class InboxService:
 
         Returns the number of rows actually inserted.
         """
-        follower_ids = self._repository.followers_of_podcast(podcast_id)
+        follower_ids = self._followers.get_follower_user_ids(podcast_id)
         if not follower_ids:
-            logger.debug(
-                "inbox_fanout_no_followers",
-                episode_id=episode_id,
-                podcast_id=podcast_id,
-            )
+            logger.debug("inbox_fanout_no_followers", episode_id=episode_id, podcast_id=podcast_id)
             return 0
 
         now = datetime.now(timezone.utc)
@@ -133,11 +122,7 @@ class InboxService:
 
         episode_ids = self._repository.recent_published_episode_ids(podcast_id, self._seed_count)
         if not episode_ids:
-            logger.debug(
-                "inbox_seed_no_published_episodes",
-                user_id=user_id,
-                podcast_id=podcast_id,
-            )
+            logger.debug("inbox_seed_no_published_episodes", user_id=user_id, podcast_id=podcast_id)
             return 0
 
         now = datetime.now(timezone.utc)
@@ -175,12 +160,7 @@ class InboxService:
         entry = self._repository.update_state(user_id, episode_id, state, now)
         if entry is None:
             raise InboxEntryNotFoundError(f"No inbox row for user_id={user_id!r}, episode_id={episode_id!r}")
-        logger.info(
-            "inbox_state_changed",
-            user_id=user_id,
-            episode_id=episode_id,
-            state=state,
-        )
+        logger.info("inbox_state_changed", user_id=user_id, episode_id=episode_id, state=state)
         return entry
 
     # ------------------------------------------------------------------
@@ -204,13 +184,7 @@ class InboxService:
         """
         if state is not None and state not in INBOX_STATES:
             raise InvalidInboxStateError(f"Invalid state filter: {state!r} (expected one of {INBOX_STATES})")
-        return self._repository.list_items(
-            user_id,
-            state=state,
-            include_dismissed=False,
-            limit=limit,
-            before=before,
-        )
+        return self._repository.list_items(user_id, state=state, limit=limit, before=before)
 
     def unread_count(self, user_id: str) -> int:
         """Return the number of unread rows for ``user_id``."""

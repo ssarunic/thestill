@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for ``SqliteInboxRepository`` (spec #29)."""
+"""Unit tests for ``SqliteInboxRepository``."""
 
 import sqlite3
 import uuid
@@ -22,11 +22,8 @@ import pytest
 
 from thestill.models.inbox import InboxEntry
 from thestill.models.podcast import Episode, Podcast
-from thestill.models.user import PodcastFollower, User
+from thestill.models.user import User
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-from thestill.repositories.sqlite_podcast_follower_repository import (
-    SqlitePodcastFollowerRepository,
-)
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 
@@ -47,11 +44,6 @@ def podcast_repo(db_path):
 @pytest.fixture
 def user_repo(db_path):
     return SqliteUserRepository(db_path)
-
-
-@pytest.fixture
-def follower_repo(db_path):
-    return SqlitePodcastFollowerRepository(db_path)
 
 
 @pytest.fixture
@@ -121,12 +113,6 @@ def _make_episode(
     return episode
 
 
-def _follow(follower_repo, user_id: str, podcast_id: str) -> PodcastFollower:
-    f = PodcastFollower(user_id=user_id, podcast_id=podcast_id)
-    follower_repo.add(f)
-    return f
-
-
 # ============================================================================
 # insert_many + get
 # ============================================================================
@@ -169,21 +155,23 @@ def test_insert_many_empty_list_returns_zero(inbox_repo):
     assert inbox_repo.insert_many([]) == 0
 
 
-def test_insert_many_rejects_invalid_source(inbox_repo, user_repo, podcast_repo):
+def test_insert_many_rejects_invalid_source_at_db_layer(inbox_repo, user_repo, podcast_repo):
+    """Pydantic guards model construction; if a caller bypasses it via
+    ``model_construct``, the SQLite CHECK constraint catches the bad value."""
     user = _make_user(user_repo, "alice@example.com")
     podcast = _make_podcast(podcast_repo, slug="p1")
     ep = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep1")
 
-    with pytest.raises(ValueError):
-        bogus = InboxEntry.model_construct(
-            id=str(uuid.uuid4()),
-            user_id=user.id,
-            episode_id=ep.id,
-            source="bogus",  # bypass Pydantic literal validation
-            state="unread",
-            delivered_at=datetime.now(timezone.utc),
-            state_changed_at=None,
-        )
+    bogus = InboxEntry.model_construct(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        episode_id=ep.id,
+        source="bogus",
+        state="unread",
+        delivered_at=datetime.now(timezone.utc),
+        state_changed_at=None,
+    )
+    with pytest.raises(sqlite3.IntegrityError):
         inbox_repo.insert_many([bogus])
 
 
@@ -214,13 +202,15 @@ def test_update_state_returns_none_when_no_row(inbox_repo, user_repo):
     assert result is None
 
 
-def test_update_state_rejects_invalid_state(inbox_repo, user_repo, podcast_repo):
+def test_update_state_invalid_state_hits_db_check(inbox_repo, user_repo, podcast_repo):
+    """The repo doesn't pre-validate state; bad values are stopped by the
+    table's CHECK constraint."""
     user = _make_user(user_repo, "alice@example.com")
     podcast = _make_podcast(podcast_repo, slug="p1")
     ep = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep1")
     inbox_repo.insert_many([InboxEntry(user_id=user.id, episode_id=ep.id, source="follow_new")])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(sqlite3.IntegrityError):
         inbox_repo.update_state(user.id, ep.id, "archived", datetime.now(timezone.utc))
 
 
@@ -369,24 +359,8 @@ def test_unread_count_only_counts_unread(inbox_repo, user_repo, podcast_repo):
 
 
 # ============================================================================
-# followers_of_podcast + recent_published_episode_ids
+# recent_published_episode_ids
 # ============================================================================
-
-
-def test_followers_of_podcast(inbox_repo, user_repo, podcast_repo, follower_repo):
-    alice = _make_user(user_repo, "alice@example.com")
-    bob = _make_user(user_repo, "bob@example.com")
-    _make_user(user_repo, "carol@example.com")  # not following
-    podcast = _make_podcast(podcast_repo, slug="p1")
-    other = _make_podcast(podcast_repo, slug="p2")
-
-    _follow(follower_repo, alice.id, podcast.id)
-    _follow(follower_repo, bob.id, podcast.id)
-    # Following a different podcast should not bleed in.
-    _follow(follower_repo, alice.id, other.id)
-
-    followers = set(inbox_repo.followers_of_podcast(podcast.id))
-    assert followers == {alice.id, bob.id}
 
 
 def test_recent_published_episode_ids_orders_by_published_at_desc(inbox_repo, podcast_repo):

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Inbox models for spec #29 per-user inbox fan-out.
+Per-user inbox models.
 
 The inbox decouples *what exists* (episodes in the system) from *what each
 user sees* (rows in their inbox). A row is created by either:
@@ -29,7 +29,7 @@ independent state on the same episode.
 
 import uuid
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -38,8 +38,10 @@ from .podcast import Episode
 InboxSource = Literal["follow_new", "follow_seed"]
 InboxState = Literal["unread", "read", "saved", "dismissed"]
 
-INBOX_SOURCES: tuple[str, ...] = ("follow_new", "follow_seed")
-INBOX_STATES: tuple[str, ...] = ("unread", "read", "saved", "dismissed")
+# Tuples derived from the Literal types so the runtime values can't drift
+# from the type-checker view.
+INBOX_SOURCES: tuple[str, ...] = get_args(InboxSource)
+INBOX_STATES: tuple[str, ...] = get_args(InboxState)
 
 
 class InboxEntry(BaseModel):

@@ -636,11 +636,10 @@ export async function getEntitySummary(
 }
 
 // ============================================================================
-// Inbox API (spec #29 — per-user inbox fan-out)
+// Inbox API
 // ============================================================================
-//
-// The endpoints below correspond to the ``InboxService`` Python API. Backend
-// routes land in Phase 3; the client surface is defined now so the frontend
+// Endpoints correspond to ``InboxService`` on the backend. Routes are added
+// in a follow-up; the client surface is defined now so the frontend
 // integration can move in parallel.
 
 export interface GetInboxOptions {

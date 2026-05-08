@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-SQLite implementation of ``InboxRepository`` (spec #29).
+SQLite implementation of ``InboxRepository``.
 
 Reads compose ``InboxEntry`` + ``Episode`` + ``PodcastInboxSummary`` in a
 single JOIN, so the API layer can serialize a list response without a
@@ -28,21 +28,15 @@ from typing import Any, Iterable, List, Optional
 
 from structlog import get_logger
 
-from ..models.inbox import (
-    INBOX_SOURCES,
-    INBOX_STATES,
-    InboxEntry,
-    InboxItem,
-    PodcastInboxSummary,
-)
-from ..models.podcast import Episode, FailureType
+from ..models.inbox import InboxEntry, InboxItem, PodcastInboxSummary
 from .inbox_repository import InboxRepository
+from .sqlite_podcast_repository import episode_from_row
 
 logger = get_logger(__name__)
 
 
-# Columns selected from ``episodes`` when composing an ``InboxItem``.
-# Kept in sync with ``_row_to_episode`` in sqlite_podcast_repository.py.
+# Episode columns aliased to ``ep_*`` in the inbox-list JOIN. The list is
+# materialized at module load from the Episode model so it cannot drift.
 _EPISODE_COLUMNS = (
     "id",
     "podcast_id",
@@ -80,13 +74,7 @@ _EPISODE_COLUMNS = (
 
 
 class SqliteInboxRepository(InboxRepository):
-    """
-    SQLite-based per-user inbox repository.
-
-    Thread-safety: per-operation connections via ``_get_connection``, matching
-    the project pattern (``SqlitePodcastRepository``,
-    ``SqlitePodcastFollowerRepository``).
-    """
+    """SQLite-based per-user inbox repository."""
 
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
@@ -113,11 +101,6 @@ class SqliteInboxRepository(InboxRepository):
     def insert_many(self, entries: List[InboxEntry]) -> int:
         if not entries:
             return 0
-        for entry in entries:
-            if entry.source not in INBOX_SOURCES:
-                raise ValueError(f"Invalid inbox source: {entry.source}")
-            if entry.state not in INBOX_STATES:
-                raise ValueError(f"Invalid inbox state: {entry.state}")
 
         rows = [
             (
@@ -132,37 +115,38 @@ class SqliteInboxRepository(InboxRepository):
             for entry in entries
         ]
 
+        # ``ON CONFLICT(user_id, episode_id) DO NOTHING`` preserves the
+        # idempotency we want on the unique pair while still surfacing CHECK
+        # / NOT NULL / FK violations — unlike ``INSERT OR IGNORE`` which
+        # silently swallows every constraint failure.
         with self._get_connection() as conn:
             cursor = conn.executemany(
                 """
-                INSERT OR IGNORE INTO user_episode_inbox
+                INSERT INTO user_episode_inbox
                     (id, user_id, episode_id, source, state, delivered_at, state_changed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, episode_id) DO NOTHING
                 """,
                 rows,
             )
-            # ``rowcount`` after ``executemany`` reports total rows affected
-            # (insertions only, since OR IGNORE silently skips conflicts).
-            inserted = cursor.rowcount if cursor.rowcount is not None else 0
-            return inserted
+            return cursor.rowcount if cursor.rowcount is not None else 0
 
     def update_state(
         self, user_id: str, episode_id: str, state: str, state_changed_at: datetime
     ) -> Optional[InboxEntry]:
-        if state not in INBOX_STATES:
-            raise ValueError(f"Invalid inbox state: {state}")
         with self._get_connection() as conn:
-            cursor = conn.execute(
+            row = conn.execute(
                 """
                 UPDATE user_episode_inbox
                    SET state = ?, state_changed_at = ?
                  WHERE user_id = ? AND episode_id = ?
+                RETURNING id, user_id, episode_id, source, state, delivered_at, state_changed_at
                 """,
                 (state, state_changed_at.isoformat(), user_id, episode_id),
-            )
-            if cursor.rowcount == 0:
+            ).fetchone()
+            if row is None:
                 return None
-            return self._fetch_entry(conn, user_id, episode_id)
+            return self._row_to_entry(row)
 
     # ------------------------------------------------------------------
     # Reads
@@ -170,30 +154,37 @@ class SqliteInboxRepository(InboxRepository):
 
     def get(self, user_id: str, episode_id: str) -> Optional[InboxEntry]:
         with self._get_connection() as conn:
-            return self._fetch_entry(conn, user_id, episode_id)
+            row = conn.execute(
+                """
+                SELECT id, user_id, episode_id, source, state, delivered_at, state_changed_at
+                  FROM user_episode_inbox
+                 WHERE user_id = ? AND episode_id = ?
+                """,
+                (user_id, episode_id),
+            ).fetchone()
+            return self._row_to_entry(row) if row else None
 
     def list_items(
         self,
         user_id: str,
         *,
         state: Optional[str] = None,
-        include_dismissed: bool = False,
         limit: int = 50,
         before: Optional[datetime] = None,
     ) -> List[InboxItem]:
-        if state is not None and state not in INBOX_STATES:
-            raise ValueError(f"Invalid inbox state filter: {state}")
         if limit <= 0:
             return []
 
         episode_select = ", ".join(f"e.{col} AS ep_{col}" for col in _EPISODE_COLUMNS)
         clauses = ["i.user_id = ?"]
         params: List[Any] = [user_id]
-        if state is not None:
+        if state is None:
+            # Default view excludes dismissed; pass ``state='dismissed'``
+            # explicitly to surface those rows.
+            clauses.append("i.state != 'dismissed'")
+        else:
             clauses.append("i.state = ?")
             params.append(state)
-        elif not include_dismissed:
-            clauses.append("i.state != 'dismissed'")
         if before is not None:
             clauses.append("i.delivered_at < ?")
             params.append(before.isoformat())
@@ -240,14 +231,6 @@ class SqliteInboxRepository(InboxRepository):
             ).fetchone()
             return int(row["n"]) if row else 0
 
-    def followers_of_podcast(self, podcast_id: str) -> List[str]:
-        with self._get_connection() as conn:
-            rows = conn.execute(
-                "SELECT user_id FROM podcast_followers WHERE podcast_id = ?",
-                (podcast_id,),
-            ).fetchall()
-            return [row["user_id"] for row in rows]
-
     def recent_published_episode_ids(self, podcast_id: str, limit: int) -> List[str]:
         if limit <= 0:
             return []
@@ -268,19 +251,6 @@ class SqliteInboxRepository(InboxRepository):
     # ------------------------------------------------------------------
     # Row mapping
     # ------------------------------------------------------------------
-
-    def _fetch_entry(self, conn: sqlite3.Connection, user_id: str, episode_id: str) -> Optional[InboxEntry]:
-        row = conn.execute(
-            """
-            SELECT id, user_id, episode_id, source, state, delivered_at, state_changed_at
-              FROM user_episode_inbox
-             WHERE user_id = ? AND episode_id = ?
-            """,
-            (user_id, episode_id),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_entry(row)
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> InboxEntry:
@@ -305,60 +275,13 @@ class SqliteInboxRepository(InboxRepository):
             delivered_at=datetime.fromisoformat(row["i_delivered_at"]),
             state_changed_at=(datetime.fromisoformat(row["i_state_changed_at"]) if row["i_state_changed_at"] else None),
         )
-
-        explicit = None
-        if row["ep_explicit"] is not None:
-            explicit = row["ep_explicit"] == 1
-
-        failure_type: Optional[FailureType] = None
-        if row["ep_failure_type"]:
-            try:
-                failure_type = FailureType(row["ep_failure_type"])
-            except ValueError:
-                failure_type = None
-
-        episode = Episode(
-            id=row["ep_id"],
-            podcast_id=row["ep_podcast_id"],
-            created_at=datetime.fromisoformat(row["ep_created_at"]),
-            updated_at=datetime.fromisoformat(row["ep_updated_at"]),
-            external_id=row["ep_external_id"],
-            title=row["ep_title"],
-            slug=row["ep_slug"] or "",
-            description=row["ep_description"],
-            description_html=row["ep_description_html"] or "",
-            pub_date=(datetime.fromisoformat(row["ep_pub_date"]) if row["ep_pub_date"] else None),
-            audio_url=row["ep_audio_url"],
-            duration=row["ep_duration"],
-            image_url=row["ep_image_url"],
-            explicit=explicit,
-            episode_type=row["ep_episode_type"],
-            episode_number=row["ep_episode_number"],
-            season_number=row["ep_season_number"],
-            website_url=row["ep_website_url"],
-            audio_file_size=row["ep_audio_file_size"],
-            audio_mime_type=row["ep_audio_mime_type"],
-            audio_path=row["ep_audio_path"],
-            downsampled_audio_path=row["ep_downsampled_audio_path"],
-            raw_transcript_path=row["ep_raw_transcript_path"],
-            clean_transcript_path=row["ep_clean_transcript_path"],
-            clean_transcript_json_path=row["ep_clean_transcript_json_path"],
-            summary_path=row["ep_summary_path"],
-            playback_time_offset_seconds=row["ep_playback_time_offset_seconds"] or 0.0,
-            published_at=(datetime.fromisoformat(row["ep_published_at"]) if row["ep_published_at"] else None),
-            failed_at_stage=row["ep_failed_at_stage"],
-            failure_reason=row["ep_failure_reason"],
-            failure_type=failure_type,
-            failed_at=(datetime.fromisoformat(row["ep_failed_at"]) if row["ep_failed_at"] else None),
-        )
-
+        episode = episode_from_row(row, prefix="ep_")
         podcast = PodcastInboxSummary(
             id=row["p_id"],
             title=row["p_title"],
             slug=row["p_slug"] or "",
             image_url=row["p_image_url"],
         )
-
         return InboxItem(entry=entry, episode=episode, podcast=podcast)
 
 

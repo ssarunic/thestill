@@ -1011,7 +1011,7 @@ export interface EntitySummaryResponse {
 }
 
 // ============================================================================
-// Inbox API (spec #29 — per-user inbox fan-out)
+// Inbox API
 // ============================================================================
 //
 // Two write paths fill the inbox:
@@ -1033,9 +1033,7 @@ export interface InboxEntry {
   state_changed_at: string | null
 }
 
-// Minimal podcast subset rendered alongside each inbox row. Mirrors the
-// Python ``PodcastInboxSummary`` model — keep in sync if either side adds
-// fields.
+// Minimal podcast subset rendered alongside each inbox row.
 export interface InboxPodcastSummary {
   id: string
   title: string

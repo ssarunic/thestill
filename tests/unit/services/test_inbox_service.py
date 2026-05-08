@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for ``InboxService`` (spec #29)."""
+"""Unit tests for ``InboxService``."""
 
 import sqlite3
 import uuid
@@ -64,8 +64,8 @@ def inbox_repo(db_path):
 
 
 @pytest.fixture
-def service(inbox_repo):
-    return InboxService(inbox_repo, seed_on_follow_count=2)
+def service(inbox_repo, follower_repo):
+    return InboxService(inbox_repo, follower_repo, seed_on_follow_count=2)
 
 
 def _make_user(user_repo, email: str) -> User:
@@ -183,10 +183,10 @@ def test_seed_on_follow_no_published_episodes_returns_zero(service, db_path, use
     assert service.seed_on_follow(alice.id, podcast.id) == 0
 
 
-def test_seed_on_follow_zero_count_short_circuits(inbox_repo, user_repo, podcast_repo):
+def test_seed_on_follow_zero_count_short_circuits(inbox_repo, follower_repo, user_repo, podcast_repo):
     user = _make_user(user_repo, "alice@example.com")
     podcast = _make_podcast(podcast_repo, slug="p1")
-    service = InboxService(inbox_repo, seed_on_follow_count=0)
+    service = InboxService(inbox_repo, follower_repo, seed_on_follow_count=0)
     assert service.seed_on_follow(user.id, podcast.id) == 0
 
 
@@ -277,6 +277,6 @@ def test_unread_count(service, db_path, user_repo, podcast_repo, inbox_repo):
     assert service.unread_count(alice.id) == 1
 
 
-def test_service_rejects_negative_seed_count(inbox_repo):
+def test_service_rejects_negative_seed_count(inbox_repo, follower_repo):
     with pytest.raises(ValueError):
-        InboxService(inbox_repo, seed_on_follow_count=-1)
+        InboxService(inbox_repo, follower_repo, seed_on_follow_count=-1)

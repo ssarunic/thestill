@@ -459,6 +459,28 @@ class TestPodcastFollowerRepository:
 
         assert set(ids) == {p1.id, p2.id}
 
+    def test_get_follower_user_ids(self, follower_repo, user_repo, podcast_repo):
+        """get_follower_user_ids returns the user IDs that follow a podcast."""
+        alice = User(id=str(uuid.uuid4()), email="a@test.com")
+        bob = User(id=str(uuid.uuid4()), email="b@test.com")
+        carol = User(id=str(uuid.uuid4()), email="c@test.com")
+        user_repo.save(alice)
+        user_repo.save(bob)
+        user_repo.save(carol)
+
+        target = Podcast(id=str(uuid.uuid4()), title="T", slug="t", rss_url="https://test.com/t.xml", description="T")
+        other = Podcast(id=str(uuid.uuid4()), title="O", slug="o", rss_url="https://test.com/o.xml", description="O")
+        podcast_repo.save(target)
+        podcast_repo.save(other)
+
+        follower_repo.add(PodcastFollower(user_id=alice.id, podcast_id=target.id))
+        follower_repo.add(PodcastFollower(user_id=bob.id, podcast_id=target.id))
+        # Following an unrelated podcast must not bleed in.
+        follower_repo.add(PodcastFollower(user_id=carol.id, podcast_id=other.id))
+
+        assert set(follower_repo.get_follower_user_ids(target.id)) == {alice.id, bob.id}
+        assert follower_repo.get_follower_user_ids(other.id) == [carol.id]
+
     def test_count_by_podcast(self, follower_repo, user_repo, podcast_repo):
         """count_by_podcast returns correct count."""
         # Create users

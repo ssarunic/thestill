@@ -130,3 +130,20 @@ class PodcastFollowerRepository(ABC):
             List of podcast IDs
         """
         pass
+
+    @abstractmethod
+    def get_follower_user_ids(self, podcast_id: str) -> List[str]:
+        """
+        Get IDs of users that follow a podcast.
+
+        Symmetric to ``get_followed_podcast_ids`` and optimized for the
+        inbox fan-out path which only needs the user IDs, not full
+        ``PodcastFollower`` rows.
+
+        Args:
+            podcast_id: ID of the podcast
+
+        Returns:
+            List of user IDs
+        """
+        pass

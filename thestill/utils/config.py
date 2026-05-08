@@ -149,7 +149,6 @@ class Config(BaseModel):
     digest_default_since_days: int = 7  # Default time window for digest (days)
     digest_default_max_episodes: int = 10  # Default max episodes per digest
 
-    # Spec #29: Inbox Configuration
     # When a user follows a podcast, deliver up to N most-recent published
     # episodes as the on-follow seed so the inbox is non-empty immediately.
     inbox_seed_on_follow: int = 2
@@ -416,7 +415,6 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # Digest
         "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
         "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
-        # Spec #29: Inbox seed
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",

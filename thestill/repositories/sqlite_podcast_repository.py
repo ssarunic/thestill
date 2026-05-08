@@ -45,6 +45,77 @@ logger = get_logger(__name__)
 _MTIME_EPSILON = 1e-6
 
 
+def episode_from_row(row: sqlite3.Row, *, prefix: str = "") -> Episode:
+    """
+    Build an ``Episode`` from a SQLite row.
+
+    ``prefix`` lets composed-JOIN queries (e.g. inbox list, where the SELECT
+    aliases episode columns to ``ep_*`` to disambiguate from joined tables)
+    reuse the same mapping logic without duplicating field-by-field plumbing.
+    """
+
+    def col(name: str):
+        return row[f"{prefix}{name}"]
+
+    def has(name: str) -> bool:
+        return f"{prefix}{name}" in row.keys()
+
+    failure_type = None
+    if col("failure_type"):
+        try:
+            failure_type = FailureType(col("failure_type"))
+        except ValueError:
+            logger.warning(f"Unknown failure_type '{col('failure_type')}' for episode {col('id')}")
+
+    explicit: Optional[bool] = None
+    if col("explicit") is not None:
+        explicit = col("explicit") == 1
+
+    # ``clean_transcript_json_path`` and ``published_at`` are guarded with
+    # ``has()`` because legacy databases predate those migrations; the row
+    # may simply not carry the column.
+    return Episode(
+        id=col("id"),
+        podcast_id=col("podcast_id"),
+        created_at=datetime.fromisoformat(col("created_at")),
+        updated_at=datetime.fromisoformat(col("updated_at")),
+        external_id=col("external_id"),
+        title=col("title"),
+        slug=col("slug") or "",
+        description=col("description"),
+        description_html=col("description_html") or "",
+        pub_date=datetime.fromisoformat(col("pub_date")) if col("pub_date") else None,
+        audio_url=col("audio_url"),
+        duration=col("duration"),
+        image_url=col("image_url"),
+        explicit=explicit,
+        episode_type=col("episode_type"),
+        episode_number=col("episode_number"),
+        season_number=col("season_number"),
+        website_url=col("website_url"),
+        audio_file_size=col("audio_file_size"),
+        audio_mime_type=col("audio_mime_type"),
+        audio_path=col("audio_path"),
+        downsampled_audio_path=col("downsampled_audio_path"),
+        raw_transcript_path=col("raw_transcript_path"),
+        clean_transcript_path=col("clean_transcript_path"),
+        clean_transcript_json_path=(col("clean_transcript_json_path") if has("clean_transcript_json_path") else None),
+        playback_time_offset_seconds=(
+            col("playback_time_offset_seconds")
+            if has("playback_time_offset_seconds") and col("playback_time_offset_seconds") is not None
+            else 0.0
+        ),
+        summary_path=col("summary_path"),
+        published_at=(
+            datetime.fromisoformat(col("published_at")) if has("published_at") and col("published_at") else None
+        ),
+        failed_at_stage=col("failed_at_stage"),
+        failure_reason=col("failure_reason"),
+        failure_type=failure_type,
+        failed_at=datetime.fromisoformat(col("failed_at")) if col("failed_at") else None,
+    )
+
+
 def _normalize_artwork_url(url: Optional[str]) -> Optional[str]:
     """Upgrade ``http://`` artwork URLs to ``https://`` before storage.
 
@@ -931,28 +1002,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: artwork URLs upgraded to https")
 
-        # Spec #29: per-user inbox fan-out.
-        # 1. ``episodes.published_at`` gates inbox visibility — NULL until the
-        #    pipeline finalizes (summarize tail), non-NULL once delivered.
-        # 2. ``user_episode_inbox`` holds one row per (user, episode) with
-        #    explicit per-user state (unread / read / saved / dismissed).
-        # The published_at backfill treats every already-summarized episode as
-        # delivered using its last-touched timestamp; episodes still in-flight
-        # stay NULL and will publish when the pipeline finishes them.
+        # Per-user inbox fan-out. ``episodes.published_at`` gates visibility
+        # (NULL until the pipeline finalizes, non-NULL once delivered) and
+        # ``user_episode_inbox`` holds the per-user rows. The backfill treats
+        # every already-summarized episode as already-published, using its
+        # last-touched timestamp as the publication time.
         cursor = conn.execute("PRAGMA table_info(episodes)")
         episode_columns = {row["name"] for row in cursor.fetchall()}
         if "published_at" not in episode_columns:
-            logger.info("Migrating database: adding episodes.published_at for spec #29 inbox")
+            logger.info("Migrating database: adding episodes.published_at")
             conn.execute("ALTER TABLE episodes ADD COLUMN published_at TIMESTAMP NULL")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_episodes_published_at "
                 "ON episodes(published_at DESC) WHERE published_at IS NOT NULL"
             )
-            # Backfill: any episode that already has a summary is treated as
-            # already-published — use updated_at (or created_at) as the
-            # publication timestamp. Pre-existing followers get seeded by the
-            # one-time data backfill once it ships in Phase 2; this migration
-            # only sets the column.
             conn.execute("""
                 UPDATE episodes
                    SET published_at = COALESCE(updated_at, created_at)
@@ -963,7 +1026,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_episode_inbox'")
         if cursor.fetchone() is None:
-            logger.info("Migrating database: creating user_episode_inbox for spec #29 inbox")
+            logger.info("Migrating database: creating user_episode_inbox")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS user_episode_inbox (
                     id              TEXT PRIMARY KEY NOT NULL,
@@ -3011,72 +3074,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def _row_to_episode(self, row: sqlite3.Row) -> Episode:
         """Convert database row to Episode model."""
-        # Parse failure_type enum if present
-        failure_type = None
-        if row["failure_type"]:
-            try:
-                failure_type = FailureType(row["failure_type"])
-            except ValueError:
-                logger.warning(f"Unknown failure_type '{row['failure_type']}' for episode {row['id']}")
-
-        # Convert explicit from INTEGER to Optional[bool]
-        explicit = None
-        if row["explicit"] is not None:
-            explicit = row["explicit"] == 1
-
-        return Episode(
-            id=row["id"],
-            podcast_id=row["podcast_id"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            external_id=row["external_id"],
-            title=row["title"],
-            slug=row["slug"] or "",
-            description=row["description"],
-            description_html=row["description_html"] if row["description_html"] else "",
-            pub_date=datetime.fromisoformat(row["pub_date"]) if row["pub_date"] else None,
-            audio_url=row["audio_url"],
-            duration=row["duration"],
-            image_url=row["image_url"],
-            # THES-142: New fields
-            explicit=explicit,
-            episode_type=row["episode_type"],
-            episode_number=row["episode_number"],
-            season_number=row["season_number"],
-            website_url=row["website_url"],
-            audio_file_size=row["audio_file_size"],
-            audio_mime_type=row["audio_mime_type"],
-            # File paths
-            audio_path=row["audio_path"],
-            downsampled_audio_path=row["downsampled_audio_path"],
-            raw_transcript_path=row["raw_transcript_path"],
-            clean_transcript_path=row["clean_transcript_path"],
-            # spec #18: structured JSON sidecar + playback offset. Row
-            # accessors default to ``None`` / absent keys when the column
-            # hasn't been migrated yet; the ``or 0.0`` below keeps
-            # ``Episode.playback_time_offset_seconds`` a plain float.
-            clean_transcript_json_path=(
-                row["clean_transcript_json_path"] if "clean_transcript_json_path" in row.keys() else None
-            ),
-            playback_time_offset_seconds=(
-                row["playback_time_offset_seconds"]
-                if "playback_time_offset_seconds" in row.keys() and row["playback_time_offset_seconds"] is not None
-                else 0.0
-            ),
-            summary_path=row["summary_path"],
-            # Spec #29: published_at gates inbox fan-out. Older rows
-            # written before the migration are absent, so guard the lookup.
-            published_at=(
-                datetime.fromisoformat(row["published_at"])
-                if "published_at" in row.keys() and row["published_at"]
-                else None
-            ),
-            # Failure tracking fields
-            failed_at_stage=row["failed_at_stage"],
-            failure_reason=row["failure_reason"],
-            failure_type=failure_type,
-            failed_at=datetime.fromisoformat(row["failed_at"]) if row["failed_at"] else None,
-        )
+        return episode_from_row(row)
 
     def _save_episode(self, conn: sqlite3.Connection, podcast_id: str, episode: Episode, now: datetime):
         """Insert episode into database."""
