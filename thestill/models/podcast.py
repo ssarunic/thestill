@@ -177,6 +177,21 @@ class Episode(BaseModel):
             self.slug = generate_slug(self.title)
         return self
 
+    @model_validator(mode="after")
+    def ensure_pub_date_aware(self) -> "Episode":
+        """Normalize ``pub_date`` to tz-aware UTC.
+
+        Feedparser produces tz-naive datetimes (it drops the RFC 2822 tz
+        and the conventional intent is UTC), while the import path writes
+        tz-aware. Mixing the two crashes ``sorted(...)`` /``max(...)`` /
+        any direct comparison. Forcing tz-aware on construction means
+        every read site — sort, filter, ``last_processed`` rollups —
+        sees a homogeneous set without each call having to normalise.
+        """
+        if self.pub_date is not None and self.pub_date.tzinfo is None:
+            self.pub_date = self.pub_date.replace(tzinfo=timezone.utc)
+        return self
+
     @computed_field  # type: ignore[misc]
     @property
     def state(self) -> EpisodeState:

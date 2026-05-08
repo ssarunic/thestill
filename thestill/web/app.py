@@ -153,6 +153,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         repository=repository,
         inbox_repository=inbox_repository,
         queue_manager=queue_manager,
+        feed_manager=feed_manager,
     )
 
     # Initialize digest repository

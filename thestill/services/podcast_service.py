@@ -16,7 +16,7 @@
 Podcast service - Business logic for podcast and episode management
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Literal, NamedTuple, Optional, Union
 
@@ -387,7 +387,11 @@ class PodcastService:
             return None
 
         # Sort episodes by pub_date descending (latest first)
-        sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or datetime.min, reverse=True)
+        sorted_episodes = sorted(
+            podcast.episodes,
+            key=lambda ep: ep.pub_date or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
 
         # Handle "latest" keyword
         if episode_id == "latest":
@@ -465,11 +469,15 @@ class PodcastService:
         podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
         # Sort episodes by pub_date descending (latest first)
-        sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or datetime.min, reverse=True)
+        sorted_episodes = sorted(
+            podcast.episodes,
+            key=lambda ep: ep.pub_date or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
 
         # Filter by date if since_hours specified
         if since_hours is not None:
-            cutoff_time = datetime.now() - timedelta(hours=since_hours)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=since_hours)
             sorted_episodes = [ep for ep in sorted_episodes if ep.pub_date and ep.pub_date >= cutoff_time]
             logger.debug(f"Filtered to {len(sorted_episodes)} episodes from last {since_hours}h")
 
@@ -536,7 +544,7 @@ class PodcastService:
             return None
 
         if since_hours is not None:
-            cutoff_time = datetime.now() - timedelta(hours=since_hours)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=since_hours)
             return sum(1 for ep in podcast.episodes if ep.pub_date and ep.pub_date >= cutoff_time)
 
         return len(podcast.episodes)
