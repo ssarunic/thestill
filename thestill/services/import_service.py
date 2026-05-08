@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Import-arbitrary-episodes service (spec #31, Phase 1).
+Import-arbitrary-episodes service (spec #31).
 
 Lets a user paste an external URL and have the resulting episode land in
 their inbox immediately. The pipeline (download → downsample → transcribe →
@@ -21,8 +21,9 @@ clean → summarize → entity branch) runs unchanged in the background; this
 module only handles URL resolution, parent-podcast bootstrap, and inbox-row
 creation.
 
-Phase 1 scope: ``BareAudioResolver`` only — direct audio URLs (.mp3, .m4a,
-.opus, .ogg, .wav). YouTube and Apple resolvers ship in later phases.
+Resolver lineup is pluggable. The current resolvers cover direct audio URLs
+(.mp3, .m4a, .opus, .ogg, .wav); YouTube and Apple resolvers will plug into
+the same protocol.
 """
 
 import hashlib
@@ -73,13 +74,12 @@ class CanonicalSource:
     """
     Normalised, resolver-issued description of an importable URL.
 
-    Spec #31 also defines a ``parent`` field (CanonicalParent) for resolvers
-    that can deduce the source podcast — that ships in Phase 2 alongside the
-    YouTube + Apple resolvers. Phase 1 only carries the bare-audio case
-    where there's no parent to deduce.
+    Resolvers that can deduce a source podcast (YouTube channel, RSS feed)
+    will add a ``parent`` field on top of this; bare-audio URLs have no
+    parent and fall back to the synthetic audio-imports row.
     """
 
-    kind: str  # "bare_audio" | "youtube" | "rss_episode" (Phase 1: bare_audio only)
+    kind: str  # one of "bare_audio", "youtube", "rss_episode"
     canonical_id: str  # e.g. "audio:<sha256>"
     audio_url: str  # what the download stage fetches
     title: str
@@ -137,10 +137,10 @@ class BareAudioResolver:
     """
     Resolver for direct audio URLs (no RSS feed, no platform metadata).
 
-    Phase 1 stays offline: ``resolve`` does NOT make a network call. We
-    derive everything we need from the URL itself — extension, filename,
-    host. The actual audio is fetched later by the existing download stage,
-    which is also where transport errors surface.
+    ``resolve`` does NOT make a network call — everything we need is in the
+    URL itself (extension, filename, host). The actual audio is fetched
+    later by the existing download stage, which is also where transport
+    errors surface.
     """
 
     def matches(self, url: str) -> bool:
@@ -206,7 +206,6 @@ class ImportService:
         self._repository = repository
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
-        # Default resolver lineup is intentionally minimal — Phase 1.
         self._resolvers: List[Resolver] = list(resolvers) if resolvers else [BareAudioResolver()]
         logger.info("ImportService initialized", resolvers=[type(r).__name__ for r in self._resolvers])
 
@@ -277,8 +276,8 @@ class ImportService:
         if existing_id is not None:
             return existing_id, False
 
-        # Phase 1: every resolver's parent is the synthetic audio-imports
-        # row. Phase 2 will branch here on canonical.parent.
+        # All current resolvers fall back to the synthetic audio-imports
+        # parent. Once a resolver carries a deduced parent, branch here.
         parent_id = self._repository.ensure_synthetic_audio_imports_parent()
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,

@@ -101,8 +101,6 @@ class AppState:
     follower_service: "FollowerService"
     inbox_repository: "InboxRepository"
     inbox_service: "InboxService"
-    # Spec #31 — paste-a-URL-to-inbox flow. Lives next to inbox_service
-    # because both target the same per-user inbox table.
     import_service: "ImportService"
     digest_repository: "DigestRepository"
     # Spec #28 — entity layer. Repository is always available; the

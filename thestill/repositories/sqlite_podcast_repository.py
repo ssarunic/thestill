@@ -45,8 +45,8 @@ logger = get_logger(__name__)
 # is float64 but SQLite REAL → Python float can drift below microsecond precision.
 _MTIME_EPSILON = 1e-6
 
-# spec #31: synthetic fallback parent for bare-audio imports. Deterministic
-# UUID5 keeps the id stable across runs without storing it as configuration.
+# Deterministic UUID5 so the synthetic-audio-imports parent has a stable id
+# across runs and machines without persisting it as configuration.
 SYNTHETIC_AUDIO_IMPORTS_RSS = "synthetic://audio-imports"
 SYNTHETIC_AUDIO_IMPORTS_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, SYNTHETIC_AUDIO_IMPORTS_RSS))
 
@@ -1065,20 +1065,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """)
             logger.info("Migration complete: user_episode_inbox table created")
 
-        # spec #31 Migration: import-arbitrary-episodes columns + index updates.
-        # Indexes are created unconditionally (with IF NOT EXISTS) so both
-        # fresh databases (columns came from _create_schema) and legacy
-        # databases (columns just added below) end up with the same indexes.
+        # Imports + auto-add columns. Indexes are created unconditionally
+        # (IF NOT EXISTS) so fresh databases (columns came from _create_schema)
+        # and legacy databases (columns just added below) end up identical.
         cursor = conn.execute("PRAGMA table_info(podcasts)")
         podcast_columns = {row["name"] for row in cursor.fetchall()}
         if "synthetic" not in podcast_columns:
-            logger.info("Migrating database: adding spec #31 podcasts.synthetic column")
+            logger.info("Migrating database: adding podcasts.synthetic column")
             conn.execute("ALTER TABLE podcasts ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0")
-            logger.info("Migration complete: spec #31 podcasts.synthetic added")
         if "auto_added" not in podcast_columns:
-            logger.info("Migrating database: adding spec #31 podcasts.auto_added column")
+            logger.info("Migrating database: adding podcasts.auto_added column")
             conn.execute("ALTER TABLE podcasts ADD COLUMN auto_added INTEGER NOT NULL DEFAULT 0")
-            logger.info("Migration complete: spec #31 podcasts.auto_added added")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_podcasts_synthetic "
@@ -1092,26 +1089,23 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("PRAGMA table_info(episodes)")
         episode_columns = {row["name"] for row in cursor.fetchall()}
         if "canonical_id" not in episode_columns:
-            logger.info("Migrating database: adding spec #31 episodes.canonical_id column")
+            logger.info("Migrating database: adding episodes.canonical_id column")
             conn.execute("ALTER TABLE episodes ADD COLUMN canonical_id TEXT NULL")
-            logger.info("Migration complete: spec #31 episodes.canonical_id added")
 
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_canonical_id "
             "ON episodes(canonical_id) WHERE canonical_id IS NOT NULL"
         )
 
-        # spec #31 Migration: extend user_episode_inbox.source CHECK to allow
-        # 'ad_hoc' and 'import'. SQLite has no ALTER COLUMN for CHECK
-        # constraints, so we use the standard table-rebuild dance: detect via
-        # the stored CREATE TABLE SQL whether the new values are already
-        # present, and if not, rebuild via temp-table → copy → drop → rename.
+        # SQLite has no ALTER COLUMN for CHECK constraints, so extending the
+        # user_episode_inbox source enum requires a table rebuild. Detect the
+        # need via the stored CREATE TABLE SQL.
         cursor = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_episode_inbox'"
         )
         row = cursor.fetchone()
         if row is not None and "'import'" not in (row["sql"] or ""):
-            logger.info("Migrating database: extending user_episode_inbox.source CHECK (spec #31)")
+            logger.info("Migrating database: extending user_episode_inbox.source CHECK")
             conn.executescript("""
                 CREATE TABLE user_episode_inbox_new (
                     id              TEXT PRIMARY KEY NOT NULL,
@@ -1502,12 +1496,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- spec #19: HTTP conditional-GET cache
                 etag TEXT NULL,
                 last_modified TEXT NULL,
-                -- spec #31: synthetic fallback parent for bare-audio imports.
-                -- Excluded from refresh, browse, and follow.
+                -- Synthetic fallback parent (e.g. bare-audio imports);
+                -- excluded from refresh, browse, and follow flows.
                 synthetic INTEGER NOT NULL DEFAULT 0,
-                -- spec #31: auto-inserted as a side effect of an import. Real
-                -- podcast row, but hidden until any user follows it. Refresh
-                -- skips auto_added rows with zero followers.
+                -- Auto-inserted as a side effect of an import. Hidden until
+                -- a user follows it; refresh skips rows with zero followers.
                 auto_added INTEGER NOT NULL DEFAULT 0,
                 CHECK (length(id) = 36),
                 CHECK (length(rss_url) > 0)
@@ -1516,9 +1509,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE UNIQUE INDEX IF NOT EXISTS idx_podcasts_rss_url ON podcasts(rss_url);
             CREATE INDEX IF NOT EXISTS idx_podcasts_updated_at ON podcasts(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
-            -- Note: spec #31 indexes (synthetic, auto_added) live in
-            -- _run_migrations because legacy databases need to add the
-            -- columns first; index creation runs after the ALTER TABLE.
+            -- synthetic / auto_added indexes are created in _run_migrations
+            -- so legacy DBs add the columns (via ALTER TABLE) first.
             -- Note: category FK indexes are created in _run_migrations so legacy
             -- databases (which lack the FK columns until migration runs) don't
             -- choke on a CREATE INDEX referencing a not-yet-added column.
@@ -1561,10 +1553,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- spec #18: per-episode playback offset (DB is source of truth;
                 -- the JSON sidecar carries a cached copy of this value)
                 playback_time_offset_seconds REAL NOT NULL DEFAULT 0.0,
-                -- spec #31: typed canonical id for resolver-based dedup,
-                -- e.g. "youtube:<video_id>" or "audio:<sha256_url>". NULL for
-                -- non-imported episodes — those still dedup on
-                -- (podcast_id, external_id).
+                -- Typed canonical id for resolver-based dedup,
+                -- e.g. "youtube:<video_id>" or "audio:<sha256>". NULL for
+                -- non-imported episodes (those dedup on
+                -- (podcast_id, external_id)).
                 canonical_id TEXT NULL,
                 FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                 UNIQUE(podcast_id, external_id),
@@ -1578,8 +1570,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_episodes_pub_date ON episodes(pub_date DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_updated_at ON episodes(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_slug ON episodes(podcast_id, slug) WHERE slug != '';
-            -- spec #31 idx_episodes_canonical_id created in _run_migrations
-            -- (same legacy-DB constraint as the podcasts indexes above).
+            -- canonical_id index lives in _run_migrations for the same
+            -- legacy-DB reason as the synthetic / auto_added indexes above.
 
             -- Partial indexes for state queries (highly selective)
             CREATE INDEX IF NOT EXISTS idx_episodes_state_discovered
@@ -1797,9 +1789,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         refresh loop never needs the full Episode models — it just
         needs to know which externals are already tracked.
 
-        Spec #31: skips synthetic parents and skips auto_added podcasts
-        that no user follows — auto-imports shouldn't drive recurring
-        feed polls until someone explicitly subscribes.
+        Skips synthetic parents and auto_added podcasts that no user
+        follows — auto-imports shouldn't drive recurring feed polls until
+        someone explicitly subscribes.
 
         Returns:
             ``(podcasts, known_external_ids_by_podcast)`` where each
@@ -3539,7 +3531,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             return None
 
     # ------------------------------------------------------------------
-    # spec #31: import-arbitrary-episodes helpers
+    # Import (paste-a-URL) helpers
     # ------------------------------------------------------------------
 
     def ensure_synthetic_audio_imports_parent(self) -> str:
@@ -3551,18 +3543,26 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         ``podcast_id`` on imported episodes when no real parent can be
         deduced from the URL.
         """
+        title = "Audio imports"
         now = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug,
                                       description, language, synthetic, auto_added)
-                VALUES (?, ?, ?, ?, 'Audio imports', 'audio-imports',
-                        'Synthetic parent for bare-audio imports (spec #31).',
+                VALUES (?, ?, ?, ?, ?, ?,
+                        'Synthetic parent for bare-audio imports.',
                         'en', 1, 0)
                 ON CONFLICT(rss_url) DO NOTHING
                 """,
-                (SYNTHETIC_AUDIO_IMPORTS_ID, now, now, SYNTHETIC_AUDIO_IMPORTS_RSS),
+                (
+                    SYNTHETIC_AUDIO_IMPORTS_ID,
+                    now,
+                    now,
+                    SYNTHETIC_AUDIO_IMPORTS_RSS,
+                    title,
+                    generate_slug(title),
+                ),
             )
         return SYNTHETIC_AUDIO_IMPORTS_ID
 
