@@ -1,4 +1,10 @@
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+  type UseQueryOptions,
+} from '@tanstack/react-query'
 import {
   getDashboardStats,
   getRecentActivity,
@@ -638,10 +644,22 @@ export function useEntitySummary(entityType: EntityType | null, idSlug: string |
   })
 }
 
-export function useInbox(options: GetInboxOptions = {}) {
+export interface UseInboxOptions extends GetInboxOptions {
+  /**
+   * Forwarded to react-query so callers can poll while imports are still
+   * working through the pipeline. Pass a function that inspects the query
+   * to decide whether to keep polling.
+   */
+  refetchInterval?: UseQueryOptions<
+    Awaited<ReturnType<typeof getInbox>>
+  >['refetchInterval']
+}
+
+export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) {
   return useQuery({
     queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
     queryFn: () => getInbox(options),
     staleTime: 15_000,
+    refetchInterval,
   })
 }

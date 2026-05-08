@@ -3573,17 +3573,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         title: str,
         description: str = "",
         image_url: Optional[str] = None,
-    ) -> str:
+    ) -> Tuple[str, str, str]:
         """
         Find-or-create a real ``podcasts`` row for an import-deduced parent.
 
-        Returns the podcast id. New rows are inserted with ``auto_added=1``;
-        existing rows (whether previously auto-added or manually subscribed)
-        are returned unchanged so a user who already follows the channel
-        does not silently lose that signal.
+        Returns ``(id, title, slug)``. New rows are inserted with
+        ``auto_added=1``; existing rows (whether previously auto-added or
+        manually subscribed) are returned unchanged so a user who already
+        follows the channel does not silently lose that signal.
         """
         podcast_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+        slug = generate_slug(title)
         with self._get_connection() as conn:
             inserted = conn.execute(
                 """
@@ -3592,30 +3593,46 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                      description, image_url, language, synthetic, auto_added)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en', 0, 1)
                 ON CONFLICT(rss_url) DO NOTHING
-                RETURNING id
+                RETURNING id, title, slug
                 """,
-                (
-                    podcast_id,
-                    now,
-                    now,
-                    rss_url,
-                    title,
-                    generate_slug(title),
-                    description,
-                    image_url,
-                ),
+                (podcast_id, now, now, rss_url, title, slug, description, image_url),
             ).fetchone()
             if inserted is not None:
-                return inserted["id"]
+                return inserted["id"], inserted["title"], inserted["slug"]
             existing = conn.execute(
-                "SELECT id FROM podcasts WHERE rss_url = ?", (rss_url,)
+                "SELECT id, title, slug FROM podcasts WHERE rss_url = ?", (rss_url,)
             ).fetchone()
             if existing is None:
                 raise RuntimeError(
                     f"upsert_auto_added_podcast: row for rss_url={rss_url!r} "
                     "neither inserted nor found"
                 )
-            return existing["id"]
+            return existing["id"], existing["title"], existing["slug"]
+
+    def get_real_parent_podcast_for_episode(
+        self, episode_id: str
+    ) -> Optional[Tuple[str, str, str]]:
+        """
+        Return ``(id, title, slug)`` for the parent podcast of ``episode_id``
+        IFF the parent is a real (non-synthetic) row — otherwise ``None``.
+
+        Used by the import flow's dedup path to surface a follow target for
+        already-imported episodes without re-hydrating the full Podcast
+        model (which would also load every episode of the channel).
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id, p.title, p.slug
+                  FROM episodes e
+                  JOIN podcasts p ON p.id = e.podcast_id
+                 WHERE e.id = ? AND p.synthetic = 0
+                """,
+                (episode_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return row["id"], row["title"], row["slug"]
 
     def find_episode_id_by_canonical_id(self, canonical_id: str) -> Optional[str]:
         """Return the episode UUID for a given canonical id, or None."""

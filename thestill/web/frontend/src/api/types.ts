@@ -1020,7 +1020,7 @@ export interface EntitySummaryResponse {
 // State is per-user; two users following the same podcast keep independent
 // state on the same episode.
 
-export type InboxSource = 'follow_new' | 'follow_seed'
+export type InboxSource = 'follow_new' | 'follow_seed' | 'ad_hoc' | 'import'
 export type InboxState = 'unread' | 'read' | 'saved' | 'dismissed'
 
 export interface InboxEntry {
@@ -1071,4 +1071,40 @@ export interface InboxStateResponse {
   status: string
   timestamp: string
   entry: InboxEntry
+}
+
+// ============================================================================
+// Imports (spec #31) — POST /api/imports
+// ============================================================================
+
+export type ImportKind = 'bare_audio' | 'youtube' | 'rss_episode'
+
+export interface ImportRequest {
+  url: string
+}
+
+// Parent podcast surfaced for the post-import "Follow this channel" CTA.
+// Null when the import fell back to the synthetic audio-imports row.
+export interface ImportParent {
+  id: string
+  title: string
+  slug: string
+}
+
+export interface ImportPayload {
+  episode_id: string
+  canonical_id: string
+  title: string
+  kind: ImportKind
+  source_handle: string
+  deduplicated: boolean
+  inbox_created: boolean
+  inbox_entry: InboxEntry
+  parent: ImportParent | null
+}
+
+export interface ImportResponse {
+  status: string
+  timestamp: string
+  import: ImportPayload
 }

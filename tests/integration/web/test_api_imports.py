@@ -16,8 +16,11 @@
 
 import sqlite3
 
+import pytest
+
 from thestill.core.queue_manager import TaskStage
 from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID
+from thestill.services.import_service import ImportService, YouTubeResolver
 
 
 def test_post_imports_returns_201_shape_and_creates_row(client, app_state):
@@ -33,6 +36,8 @@ def test_post_imports_returns_201_shape_and_creates_row(client, app_state):
     assert payload["deduplicated"] is False
     assert payload["inbox_created"] is True
     assert payload["inbox_entry"]["source"] == "import"
+    # Bare-audio imports park under the synthetic parent — no follow target.
+    assert payload["parent"] is None
 
     # Synthetic parent + episode + inbox row are persisted.
     db_path = app_state.repository.db_path
@@ -90,3 +95,65 @@ def test_post_imports_unsupported_url_returns_400(client):
 def test_post_imports_empty_url_returns_400(client):
     response = client.post("/api/imports", json={"url": "   "})
     assert response.status_code == 400
+
+
+@pytest.fixture
+def fake_youtube_video_info():
+    return {
+        "id": "dQw4w9WgXcQ",
+        "title": "Never Gonna Give You Up",
+        "description": "Music video",
+        "channel": "Rick Astley",
+        "channel_id": "UCuAXFkgsw1L7xaCfnd5JJOw",
+        "uploader": "Rick Astley",
+        "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "duration": 213,
+        "upload_date": "20091025",
+        "thumbnails": [{"url": "https://i.ytimg.com/hi.jpg"}],
+    }
+
+
+def test_post_imports_youtube_returns_parent(client, app_state, fake_youtube_video_info):
+    """A YouTube import surfaces the auto-added channel as the parent so the
+    UI can render a 'Follow this channel' CTA without a second round-trip."""
+    # Swap the resolver lineup so we don't actually invoke yt-dlp.
+    app_state.import_service = ImportService(
+        repository=app_state.repository,
+        inbox_repository=app_state.inbox_repository,
+        queue_manager=app_state.queue_manager,
+        resolvers=[YouTubeResolver(metadata_fetcher=lambda url: fake_youtube_video_info)],
+    )
+
+    response = client.post(
+        "/api/imports", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()["import"]
+    assert payload["kind"] == "youtube"
+    parent = payload["parent"]
+    assert parent is not None
+    assert parent["title"] == "Rick Astley"
+    assert parent["slug"] == "rick-astley"
+    assert parent["id"]
+
+
+def test_post_imports_youtube_dedup_still_returns_parent(
+    client, app_state, fake_youtube_video_info
+):
+    """Dedup hit also returns the parent so re-imports drive the same CTA."""
+    app_state.import_service = ImportService(
+        repository=app_state.repository,
+        inbox_repository=app_state.inbox_repository,
+        queue_manager=app_state.queue_manager,
+        resolvers=[YouTubeResolver(metadata_fetcher=lambda url: fake_youtube_video_info)],
+    )
+
+    r1 = client.post("/api/imports", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+    r2 = client.post("/api/imports", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    p1 = r1.json()["import"]["parent"]
+    p2 = r2.json()["import"]["parent"]
+    assert p1 == p2
+    assert r2.json()["import"]["deduplicated"] is True
