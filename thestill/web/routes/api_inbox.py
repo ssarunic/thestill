@@ -15,24 +15,24 @@
 """
 Per-user inbox API endpoints.
 
-The inbox is a delivery feed, so pagination is cursor-based on
-``delivered_at`` (newest first) rather than offset/limit — clients send the
-``delivered_at`` of the last row they have as ``before`` to fetch older
+Pagination is cursor-based on ``delivered_at`` (newest first) — clients send
+the ``delivered_at`` of the last row they have as ``before`` to fetch older
 rows. Read state, saved state, and dismissals live on the row.
 """
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from structlog import get_logger
 
-from ...models.inbox import INBOX_STATES
 from ...models.user import User
-from ...services.inbox_service import InboxEntryNotFoundError, InvalidInboxStateError
+from ...services.inbox_service import (
+    InboxEntryNotFoundError,
+    InvalidInboxStateError,
+)
 from ..dependencies import AppState, get_app_state, require_auth
-from ..responses import api_response, bad_request, not_found
+from ..responses import api_response, bad_request, not_found, parse_iso_datetime
 
 logger = get_logger(__name__)
 
@@ -59,17 +59,14 @@ async def list_inbox(
     """List the current user's inbox, newest delivery first."""
     if limit <= 0 or limit > _MAX_LIMIT:
         bad_request(f"limit must be between 1 and {_MAX_LIMIT}")
-    if state is not None and state not in INBOX_STATES:
-        bad_request(f"Invalid state filter: {state!r} (expected one of {list(INBOX_STATES)})")
 
-    before_dt: Optional[datetime] = None
-    if before:
-        try:
-            before_dt = datetime.fromisoformat(before)
-        except ValueError:
-            bad_request("before must be an ISO-8601 timestamp")
+    before_dt = parse_iso_datetime(before, field_name="before")
 
-    items = app_state.inbox_service.list(user.id, state=state, limit=limit, before=before_dt)
+    try:
+        items = app_state.inbox_service.list(user.id, state=state, limit=limit, before=before_dt)
+    except InvalidInboxStateError as exc:
+        bad_request(str(exc))
+
     next_before = items[-1].entry.delivered_at.isoformat() if len(items) == limit else None
 
     return api_response(

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useInbox } from '../hooks/useApi'
-import type { InboxItem } from '../api/types'
+import type { InboxItem, InboxState } from '../api/types'
 
 function formatDelivered(iso: string): string {
   const date = new Date(iso)
@@ -12,17 +12,18 @@ function formatDelivered(iso: string): string {
   })
 }
 
-function StateBadge({ state }: { state: InboxItem['entry']['state'] }) {
-  const tone =
-    state === 'unread'
-      ? 'bg-primary-100 text-primary-700'
-      : state === 'saved'
-      ? 'bg-yellow-100 text-yellow-800'
-      : state === 'dismissed'
-      ? 'bg-gray-100 text-gray-500'
-      : 'bg-gray-100 text-gray-600'
+const STATE_TONE: Record<InboxState, string> = {
+  unread: 'bg-primary-100 text-primary-700',
+  saved: 'bg-yellow-100 text-yellow-800',
+  dismissed: 'bg-gray-100 text-gray-500',
+  read: 'bg-gray-100 text-gray-600',
+}
+
+function StateBadge({ state }: { state: InboxState }) {
   return (
-    <span className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded ${tone}`}>
+    <span
+      className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded ${STATE_TONE[state]}`}
+    >
       {state}
     </span>
   )

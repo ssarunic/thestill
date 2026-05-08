@@ -124,10 +124,13 @@ class TestListInbox:
         assert kwargs["state"] == "saved"
 
     def test_rejects_invalid_state(self, client, mock_app_state):
+        from thestill.services.inbox_service import InvalidInboxStateError
+
+        mock_app_state.inbox_service.list.side_effect = InvalidInboxStateError("bad")
+
         response = client.get("/api/inbox?state=archived")
 
         assert response.status_code == 400
-        mock_app_state.inbox_service.list.assert_not_called()
 
     def test_passes_before_cursor_through(self, client, mock_app_state):
         mock_app_state.inbox_service.list.return_value = []
@@ -148,7 +151,6 @@ class TestListInbox:
         assert client.get("/api/inbox?limit=10000").status_code == 400
 
     def test_next_before_set_when_full_page_returned(self, client, mock_app_state):
-        # The handler returns next_before iff ``len(items) == limit``.
         base = datetime(2026, 5, 1, tzinfo=timezone.utc)
         items = [_item(episode_id=f"ep-{i}", delivered_at=base + timedelta(hours=i)) for i in range(3)]
         mock_app_state.inbox_service.list.return_value = items

@@ -640,7 +640,7 @@ export function useEntitySummary(entityType: EntityType | null, idSlug: string |
 
 export function useInbox(options: GetInboxOptions = {}) {
   return useQuery({
-    queryKey: ['inbox', options],
+    queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
     queryFn: () => getInbox(options),
     staleTime: 15_000,
   })

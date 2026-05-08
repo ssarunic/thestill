@@ -18,7 +18,6 @@ Episodes API endpoints for Thestill web UI.
 Provides cross-podcast episode listing, search, and bulk operations.
 """
 
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,7 +29,7 @@ from ...models.podcast import EpisodeState
 from ...services.podcast_service import extract_summary_preview
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
-from ..responses import bad_request, conflict, not_found, paginated_response
+from ..responses import bad_request, conflict, not_found, paginated_response, parse_iso_datetime
 from .api_commands import _get_starting_stage
 
 logger = get_logger(__name__)
@@ -103,18 +102,8 @@ async def get_all_episodes(
         podcast_id = podcast.id
 
     # Parse date parameters
-    parsed_date_from = None
-    parsed_date_to = None
-    if date_from:
-        try:
-            parsed_date_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-        except ValueError as exc:
-            bad_request(f"Invalid date_from format: {date_from}")
-    if date_to:
-        try:
-            parsed_date_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-        except ValueError as exc:
-            bad_request(f"Invalid date_to format: {date_to}")
+    parsed_date_from = parse_iso_datetime(date_from, field_name="date_from")
+    parsed_date_to = parse_iso_datetime(date_to, field_name="date_to")
 
     # Query repository
     episodes_with_podcasts, total = app_state.repository.get_all_episodes(
