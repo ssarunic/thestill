@@ -24,16 +24,10 @@ from thestill.models.inbox import InboxEntry
 from thestill.models.podcast import Podcast
 from thestill.models.user import PodcastFollower, User
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-from thestill.repositories.sqlite_podcast_follower_repository import (
-    SqlitePodcastFollowerRepository,
-)
+from thestill.repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
-from thestill.services.inbox_service import (
-    InboxEntryNotFoundError,
-    InboxService,
-    InvalidInboxStateError,
-)
+from thestill.services.inbox_service import InboxEntryNotFoundError, InboxService, InvalidInboxStateError
 
 
 @pytest.fixture
@@ -86,15 +80,15 @@ def _make_podcast(podcast_repo, *, slug: str) -> Podcast:
     return podcast
 
 
-def _make_published_episode(db_path, podcast_id, title, published_at):
+def _make_published_episode(db_path, podcast_id, title, published_at, *, pub_date=None):
     episode_id = str(uuid.uuid4())
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO episodes (
                 id, podcast_id, external_id, title, slug, description,
-                description_html, audio_url, published_at
-            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?)
+                description_html, audio_url, published_at, pub_date
+            ) VALUES (?, ?, ?, ?, '', '', '', ?, ?, ?)
             """,
             (
                 episode_id,
@@ -103,6 +97,7 @@ def _make_published_episode(db_path, podcast_id, title, published_at):
                 title,
                 f"https://cdn.example.com/{title}.mp3",
                 published_at.isoformat() if published_at else None,
+                pub_date.isoformat() if pub_date else None,
             ),
         )
         conn.commit()
@@ -188,6 +183,60 @@ def test_seed_on_follow_zero_count_short_circuits(inbox_repo, follower_repo, use
     podcast = _make_podcast(podcast_repo, slug="p1")
     service = InboxService(inbox_repo, follower_repo, seed_on_follow_count=0)
     assert service.seed_on_follow(user.id, podcast.id) == 0
+
+
+def test_seed_on_follow_orders_delivered_at_so_newest_lands_on_top(
+    service, db_path, user_repo, podcast_repo, inbox_repo
+):
+    """The most-recently-aired seeded episode must have the largest delivered_at.
+
+    Within one follow event we want the inbox view (sorted by
+    delivered_at DESC) to show the newest episode at the top, then older
+    episodes beneath it — matching the way a listener thinks of "I just
+    subscribed; here's what's new".
+    """
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    air_base = datetime(2026, 4, 1, 8, 15, tzinfo=timezone.utc)
+    pipeline_base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    # Aired Apr 1 / Apr 2 / Apr 3, but pipeline finished them out of
+    # order — older episodes were processed *after* newer ones.
+    old_id = _make_published_episode(
+        db_path,
+        podcast.id,
+        "old",
+        published_at=pipeline_base + timedelta(hours=2),
+        pub_date=air_base,
+    )
+    mid_id = _make_published_episode(
+        db_path,
+        podcast.id,
+        "mid",
+        published_at=pipeline_base + timedelta(hours=0),
+        pub_date=air_base + timedelta(days=1),
+    )
+    new_id = _make_published_episode(
+        db_path,
+        podcast.id,
+        "new",
+        published_at=pipeline_base + timedelta(hours=1),
+        pub_date=air_base + timedelta(days=2),
+    )
+
+    inserted = service.seed_on_follow(alice.id, podcast.id)
+    assert inserted == 2
+
+    items = inbox_repo.list_items(alice.id)
+    # Selection: pub_date drives the pick (newest 2 by air date), so
+    # ``old`` is excluded even though its pipeline timestamp was the
+    # latest.
+    delivered_ids = [item.entry.episode_id for item in items]
+    assert old_id not in delivered_ids
+    # Order: list_items returns delivered_at DESC. The newest-aired
+    # episode (new_id) lands first, then mid_id.
+    assert delivered_ids == [new_id, mid_id]
+    assert items[0].entry.delivered_at > items[1].entry.delivered_at
 
 
 def test_seed_on_follow_skips_already_delivered(service, db_path, user_repo, podcast_repo, follower_repo):
