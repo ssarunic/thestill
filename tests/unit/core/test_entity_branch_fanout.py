@@ -68,9 +68,14 @@ class TestLinearChain:
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.RESOLVE_ENTITIES))
         assert _enqueued_stages(queue) == [TaskStage.REINDEX]
 
-    def test_reindex_terminates(self):
+    def test_reindex_chains_rebuild_cooccurrences(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.REINDEX))
+        assert _enqueued_stages(queue) == [TaskStage.REBUILD_COOCCURRENCES]
+
+    def test_rebuild_cooccurrences_terminates(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(_full_pipeline_task(TaskStage.REBUILD_COOCCURRENCES))
         assert _enqueued_stages(queue) == []
 
 
@@ -161,9 +166,14 @@ class TestEntityBranchAlwaysChains:
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.RESOLVE_ENTITIES))
         assert _enqueued_stages(queue) == [TaskStage.REINDEX]
 
-    def test_reindex_terminates_without_full_pipeline_flag(self):
+    def test_reindex_chains_rebuild_cooccurrences_without_full_pipeline_flag(self):
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.REINDEX))
+        assert _enqueued_stages(queue) == [TaskStage.REBUILD_COOCCURRENCES]
+
+    def test_rebuild_cooccurrences_terminates_without_full_pipeline_flag(self):
+        worker, queue = _make_worker()
+        worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.REBUILD_COOCCURRENCES))
         assert _enqueued_stages(queue) == []
 
     def test_user_chain_still_requires_full_pipeline_flag(self):

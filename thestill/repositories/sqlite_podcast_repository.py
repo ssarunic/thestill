@@ -1697,6 +1697,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         Features:
         - Row factory for dict-like access
         - Foreign keys enabled
+        - WAL journal mode + ``busy_timeout=5000`` so writes from this
+          repo participate in the same concurrency story as the entity
+          repo and the queue manager. Without the per-connection
+          ``busy_timeout`` PRAGMA, contended ``BEGIN IMMEDIATE`` from
+          this repo would fail-fast with ``database is locked`` while
+          peers with a timeout serialize gracefully.
         - Automatic commit/rollback
         - sqlite-vec loaded when available, so cascade DELETEs from
           ``episodes`` to ``chunks`` can fire the ``chunks_ad`` trigger
@@ -1709,6 +1715,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         conn.row_factory = sqlite3.Row  # Dict-like access
         maybe_load_vec_extension(conn)
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
 
         try:
             yield conn
