@@ -56,6 +56,7 @@ from ..services.briefing_service import BriefingService
 from ..services.digest_generator import DigestGenerator
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
+from ..services.narration import NarrationGenerator, NarrationRunner
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState
@@ -69,6 +70,7 @@ from .routes import (
     api_episodes,
     api_imports,
     api_inbox,
+    api_narrations,
     api_podcasts,
     api_search,
     api_status,
@@ -99,6 +101,35 @@ class CachedStaticFiles(StaticFiles):
         elif path.endswith((".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf")):
             response.headers["Cache-Control"] = "public, max-age=86400"
         return response
+
+
+def _build_narration_runner(
+    config: Config,
+    path_manager: PathManager,
+    podcast_repository: SqlitePodcastRepository,
+    digest_repository: SqliteDigestRepository,
+) -> Optional[NarrationRunner]:
+    """Construct a ``NarrationRunner`` when narration is enabled (spec #33).
+
+    Returns ``None`` when ``config.narration_enabled`` is False or the
+    LLM provider cannot be initialised — the API surface returns 503
+    in that mode so callers can handle the rollout gate cleanly.
+    """
+    if not config.narration_enabled:
+        return None
+    from ..core.llm_provider import create_llm_provider_from_config
+
+    try:
+        llm_provider = create_llm_provider_from_config(config)
+    except Exception as exc:  # noqa: BLE001 — surface the gate, don't crash the server
+        logger.warning("narration.runner_disabled", reason=str(exc))
+        return None
+    generator = NarrationGenerator(path_manager=path_manager, llm_provider=llm_provider)
+    return NarrationRunner(
+        generator=generator,
+        digest_repository=digest_repository,
+        podcast_repository=podcast_repository,
+    )
 
 
 def create_app(config: Optional[Config] = None) -> FastAPI:
@@ -216,6 +247,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         entity_repository=entity_repository,
         search_backend=search_backend,
         embedding_model=embedding_model,
+        narration_runner=_build_narration_runner(config, path_manager, repository, digest_repository),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -419,6 +451,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
     app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
+    app.include_router(api_narrations.router, prefix="/api/narrations", tags=["narrations"])
     app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
 

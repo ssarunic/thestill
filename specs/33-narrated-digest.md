@@ -1,6 +1,6 @@
 # Narrated Digest Specification
 
-> **Status:** 🚧 In progress (Phases 1 + 2 complete)
+> **Status:** 🚧 In progress (Phases 1–3 complete)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-08
 > **Author:** Product & Engineering
@@ -552,12 +552,15 @@ Pure-additive. No data backfill required.
 - Markdown renderer. _(`thestill/services/narration/markdown_renderer.py` — date header + runtime byline, segment headings, block-quote attribution with `▶ Listen at HH:MM` deep links via the new `UrlGenerator.episode_at`, link-index appendix.)_
 - Fallback to the link-index digest on validation failure. _(`NarrationGenerator._build_fallback_narration`: produces `mode="fallback"` content with the existing `DigestGenerator` markdown prefixed by a "narration unavailable" banner; emits a `narration.fallback` structured log with the failure reasons.)_
 
-### Phase 3 — CLI + API + opt-in morning workflow
+### Phase 3 — CLI + API + opt-in morning workflow ✅ Complete
 
-- `thestill narrate` standalone command.
-- `thestill digest --narrate` chained command.
-- `POST /api/narrations` and `GET /api/narrations/{id}`.
-- Structured logging + a `narration.fallback` metric.
+- `thestill narrate` standalone command. _(`thestill/cli.py::narrate` — `--digest <id>` (defaults to latest), `--target-duration` (preset / `5m` / `0:05:00` / bare seconds), `--slug`, `--dry-run`. Writes `data/narrations/YYYY-MM-DD-<slug>.{json,md}`.)_
+- `thestill digest --narrate` chained command. _(New `--narrate` and `--narration-duration` flags on `thestill digest`; on success the digest record's id is fed to `_chain_narrate`. Narration failures degrade to warnings — the digest already wrote to disk.)_
+- `POST /api/narrations` and `GET /api/narrations/{id}` + `GET /api/narrations/{id}/script.json`. _(`thestill/web/routes/api_narrations.py`. The POST resolves a `digest_id` (defaulting to latest), parses `target_duration_seconds` or the `target_duration` string (`short` / `5m` / etc.), and returns `201 {id, digest_id, mode, target_duration_seconds, actual_duration_seconds, quote_count, episodes_covered, episodes_in_tail, fallback_reason, markdown_path, script_path}`. GET reads from disk; 503 when the runner is disabled, 404 on missing artefacts.)_
+- Structured logging + a `narration.fallback` metric. _(`narration.fallback` log lands in Phase 2; `NarrationRunner.run` adds `narration.run` per-invocation log with mode + actual seconds + fallback reason.)_
+- New shared service: `NarrationRunner` resolves a digest reference into `(Podcast, Episode)` tuples and chains the generator → JSON + Markdown writes. CLI and API call into the same runner so both surfaces produce identical artefacts.
+- New helper: `parse_target_duration` in `thestill/utils/duration.py` — accepts presets, unit suffixes, `MM:SS`/`HH:MM:SS`, and bare seconds.
+- Config gate: `NARRATION_ENABLED=true` (default off) plus `NARRATION_DEFAULT_DURATION_SECONDS=300` so deployments can opt in once fallback rates are measured (spec §"Migration Strategy").
 
 ### Phase 4 — Frontend reader + length switcher
 

@@ -30,6 +30,7 @@ from .models import (
     word_count,
 )
 from .narration_generator import NarrationConfig, NarrationGenerator
+from .narration_runner import NarrationRun, NarrationRunner, NarrationRunnerError
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
 from .script_writer import ScriptResult, ScriptWriter
 from .theme_clusterer import ThemeClusterer
@@ -42,6 +43,9 @@ __all__ = [
     "NarrationGenerator",
     "NarrationMarkdownRenderer",
     "NarrationMode",
+    "NarrationRun",
+    "NarrationRunner",
+    "NarrationRunnerError",
     "NarrationStats",
     "QuoteCandidate",
     "QuoteSelector",
