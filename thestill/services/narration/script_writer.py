@@ -84,9 +84,10 @@ class ScriptWriter:
     fallback signal.
     """
 
-    def __init__(self, provider: LLMProvider, system_prompt: str):
+    def __init__(self, provider: LLMProvider, system_prompt: str, wpm: float = 150.0):
         self.provider = provider
         self.system_prompt = system_prompt
+        self.wpm = wpm
 
     def write(
         self,
@@ -140,7 +141,7 @@ class ScriptWriter:
                 )
                 break
 
-            blocks = self._normalise_blocks(result.blocks, quotes_by_id)
+            blocks = self._normalise_blocks(result.blocks, quotes_by_id, self.wpm)
             failures = self._validate(blocks, quotes_by_id, narration_word_budget)
             raw_words = sum(
                 word_count(b.text) for b in blocks if b.kind == "narration" and b.text
@@ -239,26 +240,31 @@ class ScriptWriter:
     def _normalise_blocks(
         out_blocks: Sequence[_ScriptBlockOut],
         quotes_by_id: Mapping[str, QuoteCandidate],
+        wpm: float,
     ) -> List[ScriptBlock]:
         blocks: List[ScriptBlock] = []
         for raw in out_blocks:
             if raw.kind == "narration":
+                text = (raw.text or "").strip() or None
+                duration = (
+                    word_count(text) / wpm * 60.0 if text and wpm else 0.0
+                )
                 blocks.append(
                     ScriptBlock(
                         kind="narration",
                         section=raw.section,
-                        text=(raw.text or "").strip() or None,
+                        text=text,
+                        duration_seconds=duration,
                     )
                 )
             else:
                 quote = quotes_by_id.get(raw.quote_id or "")
-                duration = quote.duration_seconds if quote else 0.0
                 blocks.append(
                     ScriptBlock(
                         kind="quote",
                         section=raw.section,
                         quote_id=raw.quote_id,
-                        duration_seconds=duration,
+                        duration_seconds=quote.duration_seconds if quote else 0.0,
                     )
                 )
         return blocks
@@ -279,7 +285,6 @@ class ScriptWriter:
             )
             return tuple(failures)
 
-        # Quote-id contract.
         for idx, b in enumerate(blocks):
             if b.kind != "quote":
                 continue
@@ -294,9 +299,9 @@ class ScriptWriter:
                     )
                 )
 
-        # No-verbatim-leak contract: an 8-word slice that appears verbatim
-        # in any quote text is treated as a paraphrase-of-the-quote
-        # showing up inside narration.
+        # An 8-word slice that appears verbatim in any quote is the
+        # paraphrase-leak signal — the model copied a quote into the
+        # narration instead of cueing it. Spec #33 §"Script Generation".
         narration_text = " ".join(
             b.text for b in blocks if b.kind == "narration" and b.text
         )
@@ -312,7 +317,6 @@ class ScriptWriter:
                 )
             )
 
-        # Word-budget contract.
         narration_words = word_count(narration_text)
         low = int(narration_word_budget * (1 - WORD_BUDGET_TOLERANCE))
         high = int(narration_word_budget * (1 + WORD_BUDGET_TOLERANCE))

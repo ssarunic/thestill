@@ -96,7 +96,6 @@ class _PerEpisodeBucket:
     episode: Episode
     picked: List[QuoteCandidate]
     brief: EpisodeBrief
-    summary_text: Optional[str] = None
 
 
 @dataclass
@@ -146,8 +145,8 @@ class NarrationGenerator:
         )
         self.llm_provider = llm_provider
         self._anchor_prompt = anchor_prompt
-        self._explicit_clusterer = clusterer
-        self._explicit_script_writer = script_writer
+        self.clusterer = clusterer
+        self.script_writer = script_writer
 
     def generate(
         self,
@@ -249,18 +248,14 @@ class NarrationGenerator:
                 podcast, episode, pipeline.cfg, starting_id=next_quote_id
             )
             next_quote_id += len(picked)
-            brief = self._build_episode_brief(podcast, episode)
-            summary_text = self._read_summary(episode)
             pipeline.buckets.append(
                 _PerEpisodeBucket(
                     podcast=podcast,
                     episode=episode,
                     picked=picked,
-                    brief=brief,
-                    summary_text=summary_text,
+                    brief=self._build_episode_brief(podcast, episode),
                 )
             )
-
         kept_ids = self._enforce_quote_share_cap(
             [q for b in pipeline.buckets for q in b.picked],
             pipeline.cfg.target_duration_seconds,
@@ -305,29 +300,10 @@ class NarrationGenerator:
     def _build_narrated(
         self, pipeline: _Pipeline, blocks: Sequence[ScriptBlock]
     ) -> NarrationContent:
-        cfg = pipeline.cfg
         all_quotes = [q for b in pipeline.buckets for q in b.picked]
         episode_ids_covered, episode_ids_in_tail = self._covered_and_tail(pipeline.plan, pipeline)
-        for block in blocks:
-            if block.kind == "narration" and block.text:
-                block.duration_seconds = (
-                    word_count(block.text) / cfg.wpm * 60.0 if cfg.wpm else 0.0
-                )
-
-        narration_words = sum(
-            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
-        )
-        quote_seconds = sum(q.duration_seconds for q in all_quotes)
-        narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
-
-        stats = NarrationStats(
-            target_duration_seconds=cfg.target_duration_seconds,
-            actual_duration_seconds=narration_seconds + quote_seconds,
-            narration_words=narration_words,
-            quote_seconds=quote_seconds,
-            episodes_covered=len(episode_ids_covered),
-            episodes_in_tail=len(episode_ids_in_tail),
-            quote_count=len(all_quotes),
+        stats = self._build_stats(
+            pipeline.cfg, blocks, all_quotes, episode_ids_covered, episode_ids_in_tail,
         )
 
         content = NarrationContent(
@@ -360,25 +336,12 @@ class NarrationGenerator:
         return content
 
     def _build_skeleton_narration(self, pipeline: _Pipeline) -> NarrationContent:
-        cfg = pipeline.cfg
         all_quotes = [q for b in pipeline.buckets for q in b.picked]
         episode_ids_covered = [b.episode.id for b in pipeline.buckets if b.picked]
         episode_ids_in_tail = [b.episode.id for b in pipeline.buckets if not b.picked]
         blocks = self._render_skeleton_blocks(pipeline)
-        narration_words = sum(
-            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
-        )
-        quote_seconds = sum(q.duration_seconds for q in all_quotes)
-        narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
-
-        stats = NarrationStats(
-            target_duration_seconds=cfg.target_duration_seconds,
-            actual_duration_seconds=narration_seconds + quote_seconds,
-            narration_words=narration_words,
-            quote_seconds=quote_seconds,
-            episodes_covered=len(episode_ids_covered),
-            episodes_in_tail=len(episode_ids_in_tail),
-            quote_count=len(all_quotes),
+        stats = self._build_stats(
+            pipeline.cfg, blocks, all_quotes, episode_ids_covered, episode_ids_in_tail,
         )
         return NarrationContent(
             blocks=blocks,
@@ -400,14 +363,9 @@ class NarrationGenerator:
             " instead._\n\n"
             + digest_content.markdown
         )
-        stats = NarrationStats(
-            target_duration_seconds=pipeline.cfg.target_duration_seconds,
-            actual_duration_seconds=0.0,
-            narration_words=0,
-            quote_seconds=sum(q.duration_seconds for q in all_quotes),
-            episodes_covered=0,
-            episodes_in_tail=len(episode_ids_in_tail),
-            quote_count=len(all_quotes),
+        stats = self._build_stats(
+            pipeline.cfg, blocks=(), all_quotes=all_quotes,
+            episode_ids_covered=[], episode_ids_in_tail=episode_ids_in_tail,
             fallback_reason=pipeline.fallback_reason or "unknown",
         )
         logger.warning(
@@ -430,24 +388,23 @@ class NarrationGenerator:
 
     def _llm_available(self) -> bool:
         return self.llm_provider is not None or (
-            self._explicit_clusterer is not None
-            and self._explicit_script_writer is not None
+            self.clusterer is not None and self.script_writer is not None
         )
 
     def _theme_clusterer(self) -> Optional[ThemeClusterer]:
-        if self._explicit_clusterer is not None:
-            return self._explicit_clusterer
+        if self.clusterer is not None:
+            return self.clusterer
         if self.llm_provider is None:
             return None
         return ThemeClusterer(self.llm_provider)
 
     def _script_writer(self) -> Optional[ScriptWriter]:
-        if self._explicit_script_writer is not None:
-            return self._explicit_script_writer
+        if self.script_writer is not None:
+            return self.script_writer
         if self.llm_provider is None:
             return None
         prompt = self._anchor_prompt or load_default_anchor_prompt()
-        return ScriptWriter(self.llm_provider, system_prompt=prompt)
+        return ScriptWriter(self.llm_provider, system_prompt=prompt, wpm=DEFAULT_WPM)
 
     def _select_quotes_for_episode(
         self,
@@ -509,6 +466,31 @@ class NarrationGenerator:
         if not text:
             return None
         return extract_gist(text)
+
+    @staticmethod
+    def _build_stats(
+        cfg: NarrationConfig,
+        blocks: Sequence[ScriptBlock],
+        all_quotes: Sequence[QuoteCandidate],
+        episode_ids_covered: Sequence[str],
+        episode_ids_in_tail: Sequence[str],
+        fallback_reason: Optional[str] = None,
+    ) -> NarrationStats:
+        narration_words = sum(
+            word_count(b.text) for b in blocks if b.kind == "narration" and b.text
+        )
+        quote_seconds = sum(q.duration_seconds for q in all_quotes)
+        narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
+        return NarrationStats(
+            target_duration_seconds=cfg.target_duration_seconds,
+            actual_duration_seconds=narration_seconds + quote_seconds,
+            narration_words=narration_words,
+            quote_seconds=quote_seconds,
+            episodes_covered=len(episode_ids_covered),
+            episodes_in_tail=len(episode_ids_in_tail),
+            quote_count=len(all_quotes),
+            fallback_reason=fallback_reason,
+        )
 
     @staticmethod
     def _enforce_quote_share_cap(
