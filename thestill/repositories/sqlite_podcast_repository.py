@@ -185,8 +185,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='categories'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating categories table")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -200,8 +199,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     ON categories(name) WHERE parent_id IS NULL;
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_sub_unique
                     ON categories(parent_id, name) WHERE parent_id IS NOT NULL;
-                """
-            )
+                """)
 
         # Seed categories table if it's empty.
         cursor = conn.execute("SELECT COUNT(*) AS n FROM categories")
@@ -266,8 +264,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='podcast_followers'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating podcast_followers table")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS podcast_followers (
                     id TEXT PRIMARY KEY NOT NULL,
                     user_id TEXT NOT NULL,
@@ -284,8 +281,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
                 CREATE INDEX IF NOT EXISTS idx_podcast_followers_podcast
                     ON podcast_followers(podcast_id);
-                """
-            )
+                """)
             logger.info("Migration complete: podcast_followers table created")
 
         # Refresh column info after previous migrations
@@ -347,8 +343,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='revoked_tokens'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating revoked_tokens table")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS revoked_tokens (
                     jti TEXT PRIMARY KEY NOT NULL,
                     expires_at TIMESTAMP NOT NULL,
@@ -356,8 +351,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 );
                 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at
                     ON revoked_tokens(expires_at);
-                """
-            )
+                """)
             logger.info("Migration complete: revoked_tokens table created")
 
         # Migration: Add region columns to users table (idempotent).
@@ -378,8 +372,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating digests tables for THES-153")
-            conn.executescript(
-                """
+            conn.executescript("""
                 -- Digest metadata table
                 -- user_id references users table (required, uses default user in CLI mode)
                 CREATE TABLE IF NOT EXISTS digests (
@@ -414,16 +407,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
                 CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
                 CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
-                """
-            )
+                """)
             logger.info("Migration complete: digests tables created for THES-153")
 
         # Spec #21 Migration: top_podcasts + rankings + meta tables (idempotent).
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='top_podcasts'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating top_podcasts tables")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS top_podcasts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -460,8 +451,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     row_count INTEGER NOT NULL,
                     seeded_at TIMESTAMP NOT NULL
                 );
-                """
-            )
+                """)
             logger.info("Migration complete: top_podcasts tables created")
 
         # spec #28 Migration: entity-layer schema (idempotent).
@@ -483,8 +473,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entities'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating spec #28 entity tables")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS entities (
                     id              TEXT PRIMARY KEY NOT NULL,
                     type            TEXT NOT NULL,
@@ -539,8 +528,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     PRIMARY KEY (entity_a_id, entity_b_id),
                     CHECK (entity_a_id < entity_b_id)
                 );
-                """
-            )
+                """)
             logger.info("Migration complete: spec #28 entity tables created")
 
         # spec #28 §1.5 — record the GLiNER-emitted label
@@ -579,8 +567,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Migrating database: rebuilding entity_mentions with relaxed CHECKs (spec #28 §1.13)")
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
-                conn.executescript(
-                    """
+                conn.executescript("""
                     CREATE TABLE entity_mentions_new (
                         id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                         entity_id             TEXT NULL REFERENCES entities(id) ON DELETE CASCADE,
@@ -628,8 +615,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         ON entity_mentions(entity_id, role) WHERE entity_id IS NOT NULL;
                     CREATE INDEX IF NOT EXISTS idx_mentions_pending
                         ON entity_mentions(resolution_status) WHERE resolution_status = 'pending';
-                    """
-                )
+                    """)
                 logger.info("Migration complete: entity_mentions CHECKs relaxed")
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
@@ -673,8 +659,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mention_overrides'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating mention_overrides table")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE mention_overrides (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     surface_form  TEXT NOT NULL,
@@ -689,15 +674,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 );
                 CREATE INDEX idx_overrides_surface_episode
                     ON mention_overrides(LOWER(surface_form), episode_id);
-                """
-            )
+                """)
             logger.info("Migration complete: mention_overrides created")
 
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resolution_blacklist'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating resolution_blacklist table")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE resolution_blacklist (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     surface_form  TEXT NOT NULL,
@@ -709,8 +692,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 );
                 CREATE INDEX idx_blacklist_lookup
                     ON resolution_blacklist(LOWER(surface_form), wrong_qid);
-                """
-            )
+                """)
             logger.info("Migration complete: resolution_blacklist created")
 
         # spec #28 §2.10 — chunks + chunks_vec + chunks_fts enable
@@ -739,8 +721,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     embedding_model=DEFAULT_EMBEDDING_MODEL,
                     vec_dim=vec_dim,
                 )
-                conn.executescript(
-                    f"""
+                conn.executescript(f"""
                     CREATE TABLE IF NOT EXISTS chunks (
                         id              INTEGER PRIMARY KEY AUTOINCREMENT,
                         episode_id      TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
@@ -824,8 +805,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                             END
                         );
                     END;
-                    """
-                )
+                    """)
                 logger.info("Migration complete: spec #28 §2.10 chunks tables created")
 
         # Migration: rebuild chunks_fts as contentless and strip the
@@ -847,8 +827,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 pass
             else:
                 logger.info("Migrating database: rebuilding chunks_fts as contentless (strip speaker prefix)")
-                conn.executescript(
-                    """
+                conn.executescript("""
                     DROP TRIGGER IF EXISTS chunks_ai;
                     DROP TRIGGER IF EXISTS chunks_ad;
                     DROP TRIGGER IF EXISTS chunks_au;
@@ -917,8 +896,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                                ELSE text
                            END
                     FROM chunks;
-                    """
-                )
+                    """)
                 logger.info("Migration complete: chunks_fts rebuilt without speaker prefix")
 
         # Migration: drop idx_chunks_model. Every chunk shares a single
@@ -952,6 +930,71 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 "UPDATE episodes SET image_url = 'https://' || substr(image_url, 8) " "WHERE image_url LIKE 'http://%'"
             )
             logger.info("Migration complete: artwork URLs upgraded to https")
+
+        # Spec #29: per-user inbox fan-out.
+        # 1. ``episodes.published_at`` gates inbox visibility — NULL until the
+        #    pipeline finalizes (summarize tail), non-NULL once delivered.
+        # 2. ``user_episode_inbox`` holds one row per (user, episode) with
+        #    explicit per-user state (unread / read / saved / dismissed).
+        # The published_at backfill treats every already-summarized episode as
+        # delivered using its last-touched timestamp; episodes still in-flight
+        # stay NULL and will publish when the pipeline finishes them.
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns = {row["name"] for row in cursor.fetchall()}
+        if "published_at" not in episode_columns:
+            logger.info("Migrating database: adding episodes.published_at for spec #29 inbox")
+            conn.execute("ALTER TABLE episodes ADD COLUMN published_at TIMESTAMP NULL")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_episodes_published_at "
+                "ON episodes(published_at DESC) WHERE published_at IS NOT NULL"
+            )
+            # Backfill: any episode that already has a summary is treated as
+            # already-published — use updated_at (or created_at) as the
+            # publication timestamp. Pre-existing followers get seeded by the
+            # one-time data backfill once it ships in Phase 2; this migration
+            # only sets the column.
+            conn.execute("""
+                UPDATE episodes
+                   SET published_at = COALESCE(updated_at, created_at)
+                 WHERE summary_path IS NOT NULL
+                   AND published_at IS NULL
+                """)
+            logger.info("Migration complete: episodes.published_at added and backfilled")
+
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_episode_inbox'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating user_episode_inbox for spec #29 inbox")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS user_episode_inbox (
+                    id              TEXT PRIMARY KEY NOT NULL,
+                    user_id         TEXT NOT NULL,
+                    episode_id      TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    state           TEXT NOT NULL DEFAULT 'unread',
+                    delivered_at    TIMESTAMP NOT NULL
+                                    DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    state_changed_at TIMESTAMP NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, episode_id),
+                    CHECK (length(id) = 36),
+                    CHECK (source IN ('follow_new','follow_seed')),
+                    CHECK (state IN ('unread','read','saved','dismissed'))
+                );
+
+                -- Hot path: render an unread inbox. Partial index keeps it
+                -- cheap even when read/dismissed rows accumulate.
+                CREATE INDEX IF NOT EXISTS idx_inbox_user_unread
+                    ON user_episode_inbox(user_id, delivered_at DESC)
+                    WHERE state = 'unread';
+
+                CREATE INDEX IF NOT EXISTS idx_inbox_user_all
+                    ON user_episode_inbox(user_id, delivered_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_inbox_episode
+                    ON user_episode_inbox(episode_id);
+                """)
+            logger.info("Migration complete: user_episode_inbox table created")
 
     # ------------------------------------------------------------------
     # Category helpers
@@ -1207,8 +1250,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
-        conn.executescript(
-            """
+        conn.executescript("""
             -- ========================================================================
             -- CATEGORIES TABLE (Apple Podcasts taxonomy)
             -- ========================================================================
@@ -1520,8 +1562,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             );
 
             CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
-        """
-        )
+        """)
 
     @contextmanager
     def _get_connection(self) -> sqlite3.Connection:
@@ -1594,16 +1635,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             A podcast with no tracked episodes has no key in the dict.
         """
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
+            cursor = conn.execute("""
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
-                """
-            )
+                """)
             podcast_rows = cursor.fetchall()
 
             dedup: Dict[str, Set[str]] = {}
@@ -1697,16 +1736,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:
             # Fetch all podcasts
-            cursor = conn.execute(
-                """
+            cursor = conn.execute("""
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
                        last_processed, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
-            """
-            )
+            """)
 
             podcasts = []
             for row in cursor.fetchall():
@@ -2724,8 +2761,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         with self._get_connection() as conn:
             # Note: SQLite query planner will use partial index for this WHERE clause
-            cursor = conn.execute(
-                f"""
+            cursor = conn.execute(f"""
                 SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
                        p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
                        p.language as p_language,
@@ -2738,8 +2774,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
                 ORDER BY e.pub_date DESC
-            """
-            )
+            """)
 
             results = []
             for row in cursor.fetchall():
@@ -3029,6 +3064,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 else 0.0
             ),
             summary_path=row["summary_path"],
+            # Spec #29: published_at gates inbox fan-out. Older rows
+            # written before the migration are absent, so guard the lookup.
+            published_at=(
+                datetime.fromisoformat(row["published_at"])
+                if "published_at" in row.keys() and row["published_at"]
+                else None
+            ),
             # Failure tracking fields
             failed_at_stage=row["failed_at_stage"],
             failure_reason=row["failure_reason"],
@@ -3301,8 +3343,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     (podcast_id,),
                 )
             else:
-                cursor = conn.execute(
-                    """
+                cursor = conn.execute("""
                     SELECT DISTINCT e.id, e.podcast_id, e.created_at, e.updated_at, e.external_id,
                            e.title, e.slug, e.description, e.pub_date, e.audio_url, e.duration,
                            e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
@@ -3311,8 +3352,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     INNER JOIN episode_transcript_links etl ON e.id = etl.episode_id
                     WHERE etl.downloaded_path IS NULL
                     ORDER BY e.pub_date DESC
-                """
-                )
+                """)
 
             results = []
             for row in cursor.fetchall():

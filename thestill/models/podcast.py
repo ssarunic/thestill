@@ -149,6 +149,12 @@ class Episode(BaseModel):
     clean_transcript_json_path: Optional[str] = None
     summary_path: Optional[str] = None  # Filename of the summary (future use)
 
+    # Spec #29: timestamp the episode crossed from "pipeline-incomplete" to
+    # "delivered to inboxes". NULL until the publish transition fires at the
+    # tail of the summarize stage; non-NULL means the episode has been fanned
+    # out to followers' inboxes (or was backfilled as already-published).
+    published_at: Optional[datetime] = None
+
     # Per-episode playback offset in seconds, applied by the player when
     # the downsampled-WAV-derived segment timestamps drift from the
     # publisher's MP3 (leading silence trimmed during downsampling,
