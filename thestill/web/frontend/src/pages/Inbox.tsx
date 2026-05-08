@@ -33,30 +33,32 @@ function InboxRow({ item }: { item: InboxItem }) {
   const { entry, episode, podcast } = item
   const episodeHref = `/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`
   return (
-    <li className="flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg">
-      {podcast.image_url ? (
-        <img
-          src={podcast.image_url}
-          alt=""
-          className="w-12 h-12 rounded object-cover flex-shrink-0"
-        />
-      ) : (
-        <div className="w-12 h-12 rounded bg-gray-100 flex-shrink-0" />
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
-          <span className="text-gray-300">·</span>
-          <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
+    <li>
+      <Link
+        to={episodeHref}
+        className="group flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
+      >
+        {podcast.image_url ? (
+          <img
+            src={podcast.image_url}
+            alt=""
+            className="w-12 h-12 rounded object-cover flex-shrink-0"
+          />
+        ) : (
+          <div className="w-12 h-12 rounded bg-gray-100 flex-shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
+            <span className="text-gray-300">·</span>
+            <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
+          </div>
+          <p className="block text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
+            {episode.title}
+          </p>
         </div>
-        <Link
-          to={episodeHref}
-          className="block text-base font-medium text-gray-900 hover:text-primary-600 truncate"
-        >
-          {episode.title}
-        </Link>
-      </div>
-      <StateBadge state={entry.state} />
+        <StateBadge state={entry.state} />
+      </Link>
     </li>
   )
 }
