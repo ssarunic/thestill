@@ -3585,13 +3585,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         podcast_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
-            conn.execute(
+            inserted = conn.execute(
                 """
                 INSERT INTO podcasts
                     (id, created_at, updated_at, rss_url, title, slug,
                      description, image_url, language, synthetic, auto_added)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en', 0, 1)
                 ON CONFLICT(rss_url) DO NOTHING
+                RETURNING id
                 """,
                 (
                     podcast_id,
@@ -3603,12 +3604,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     description,
                     image_url,
                 ),
-            )
-            row = conn.execute(
+            ).fetchone()
+            if inserted is not None:
+                return inserted["id"]
+            existing = conn.execute(
                 "SELECT id FROM podcasts WHERE rss_url = ?", (rss_url,)
             ).fetchone()
-            assert row is not None  # we either inserted or someone else has
-            return row["id"]
+            if existing is None:
+                raise RuntimeError(
+                    f"upsert_auto_added_podcast: row for rss_url={rss_url!r} "
+                    "neither inserted nor found"
+                )
+            return existing["id"]
 
     def find_episode_id_by_canonical_id(self, canonical_id: str) -> Optional[str]:
         """Return the episode UUID for a given canonical id, or None."""

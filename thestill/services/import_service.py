@@ -29,7 +29,7 @@ the same protocol.
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, List, Literal, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlparse, urlunparse
 
 from structlog import get_logger
@@ -97,7 +97,7 @@ class CanonicalSource:
     fall back to the synthetic audio-imports row.
     """
 
-    kind: str  # one of "bare_audio", "youtube", "rss_episode"
+    kind: Literal["bare_audio", "youtube", "rss_episode"]
     canonical_id: str  # e.g. "audio:<sha256>"
     audio_url: str  # what the download stage fetches
     title: str

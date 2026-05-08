@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for ``YouTubeResolver`` (spec #31, Phase 2).
+"""Unit tests for ``YouTubeResolver``.
 
 The resolver is tested against canned yt-dlp metadata so the suite stays
 offline. The download stage's existing yt-dlp integration is what fetches
@@ -28,25 +28,6 @@ from thestill.services.import_service import (
     ResolverError,
     YouTubeResolver,
 )
-
-
-# Minimal yt-dlp output shape for a single video. Real responses include
-# many more keys; the resolver only consults the ones below.
-_FAKE_INFO = {
-    "id": "dQw4w9WgXcQ",
-    "title": "Never Gonna Give You Up",
-    "description": "Music video",
-    "channel": "Rick Astley",
-    "channel_id": "UCuAXFkgsw1L7xaCfnd5JJOw",
-    "uploader": "Rick Astley",
-    "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "duration": 213,
-    "upload_date": "20091025",
-    "thumbnails": [
-        {"url": "https://i.ytimg.com/lo.jpg"},
-        {"url": "https://i.ytimg.com/hi.jpg"},
-    ],
-}
 
 
 def _resolver_with(info):
@@ -79,8 +60,10 @@ def test_matches(url, expected):
 # ============================================================================
 
 
-def test_resolve_maps_yt_dlp_fields_to_canonical_source():
-    src = _resolver_with(_FAKE_INFO).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+def test_resolve_maps_yt_dlp_fields_to_canonical_source(fake_youtube_video_info):
+    src = _resolver_with(fake_youtube_video_info).resolve(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
 
     assert src.kind == "youtube"
     assert src.canonical_id == "youtube:dQw4w9WgXcQ"
@@ -95,8 +78,10 @@ def test_resolve_maps_yt_dlp_fields_to_canonical_source():
     assert src.source_handle == "Rick Astley"
 
 
-def test_resolve_emits_canonical_parent_for_channel():
-    src = _resolver_with(_FAKE_INFO).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+def test_resolve_emits_canonical_parent_for_channel(fake_youtube_video_info):
+    src = _resolver_with(fake_youtube_video_info).resolve(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
 
     assert isinstance(src.parent, CanonicalParent)
     assert src.parent.external_id == "UCuAXFkgsw1L7xaCfnd5JJOw"
@@ -106,30 +91,30 @@ def test_resolve_emits_canonical_parent_for_channel():
     )
 
 
-def test_resolve_falls_back_to_thumbnail_when_thumbnails_missing():
-    info = {**_FAKE_INFO, "thumbnails": [], "thumbnail": "https://i.ytimg.com/single.jpg"}
+def test_resolve_falls_back_to_thumbnail_when_thumbnails_missing(fake_youtube_video_info):
+    info = {**fake_youtube_video_info, "thumbnails": [], "thumbnail": "https://i.ytimg.com/single.jpg"}
     src = _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     assert src.image_url == "https://i.ytimg.com/single.jpg"
 
 
-def test_resolve_handles_missing_pub_date():
-    info = {**_FAKE_INFO}
+def test_resolve_handles_missing_pub_date(fake_youtube_video_info):
+    info = {**fake_youtube_video_info}
     info.pop("upload_date")
     info.pop("timestamp", None)
     src = _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     assert src.pub_date is None
 
 
-def test_resolve_omits_parent_when_channel_id_is_missing():
-    info = {**_FAKE_INFO}
+def test_resolve_omits_parent_when_channel_id_is_missing(fake_youtube_video_info):
+    info = {**fake_youtube_video_info}
     info.pop("channel_id")
     info["uploader_id"] = "@someuser"  # not a UC... id, must NOT become a parent
     src = _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     assert src.parent is None
 
 
-def test_resolve_falls_back_to_uploader_id_when_it_is_a_channel_id():
-    info = {**_FAKE_INFO}
+def test_resolve_falls_back_to_uploader_id_when_it_is_a_channel_id(fake_youtube_video_info):
+    info = {**fake_youtube_video_info}
     info.pop("channel_id")
     info["uploader_id"] = "UCabc123def456ghi789jkl"
     src = _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
@@ -137,8 +122,8 @@ def test_resolve_falls_back_to_uploader_id_when_it_is_a_channel_id():
     assert src.parent.external_id == "UCabc123def456ghi789jkl"
 
 
-def test_resolve_raises_when_id_missing():
-    info = {**_FAKE_INFO}
+def test_resolve_raises_when_id_missing(fake_youtube_video_info):
+    info = {**fake_youtube_video_info}
     info.pop("id")
     with pytest.raises(ResolverError):
         _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")

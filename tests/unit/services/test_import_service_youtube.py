@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""End-to-end ImportService tests for YouTube imports (spec #31, Phase 2).
+"""End-to-end ImportService tests for YouTube imports.
 
 These exercise the auto-added-parent path: a YouTube import upserts the
 channel as a real ``podcasts`` row (auto_added=1), the episode points at
@@ -34,20 +34,6 @@ from thestill.repositories.sqlite_podcast_repository import (
 )
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.import_service import ImportService, YouTubeResolver
-
-
-_FAKE_VIDEO = {
-    "id": "dQw4w9WgXcQ",
-    "title": "Never Gonna Give You Up",
-    "description": "Music video",
-    "channel": "Rick Astley",
-    "channel_id": "UCuAXFkgsw1L7xaCfnd5JJOw",
-    "uploader": "Rick Astley",
-    "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "duration": 213,
-    "upload_date": "20091025",
-    "thumbnails": [{"url": "https://i.ytimg.com/hi.jpg"}],
-}
 
 
 @pytest.fixture
@@ -77,7 +63,7 @@ def queue(db_path):
     return QueueManager(db_path)
 
 
-def _service_with(repo, inbox_repo, queue, info=_FAKE_VIDEO):
+def _service_with(repo, inbox_repo, queue, info):
     return ImportService(
         repository=repo,
         inbox_repository=inbox_repo,
@@ -98,10 +84,10 @@ def _make_user(user_repo, email):
 
 
 def test_youtube_import_upserts_channel_as_auto_added(
-    repo, inbox_repo, queue, user_repo, db_path
+    repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info
 ):
     alice = _make_user(user_repo, "alice@example.com")
-    svc = _service_with(repo, inbox_repo, queue)
+    svc = _service_with(repo, inbox_repo, queue, fake_youtube_video_info)
 
     result = svc.import_url(user_id=alice.id, url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
@@ -152,10 +138,10 @@ def _follow(db_path, user_id, podcast_id):
 
 
 def test_auto_added_channel_excluded_from_refresh_until_followed(
-    repo, inbox_repo, queue, user_repo, db_path
+    repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info
 ):
     alice = _make_user(user_repo, "alice@example.com")
-    svc = _service_with(repo, inbox_repo, queue)
+    svc = _service_with(repo, inbox_repo, queue, fake_youtube_video_info)
     svc.import_url(user_id=alice.id, url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     rss = "https://www.youtube.com/feeds/videos.xml?channel_id=UCuAXFkgsw1L7xaCfnd5JJOw"
@@ -181,10 +167,12 @@ def test_auto_added_channel_excluded_from_refresh_until_followed(
 # ============================================================================
 
 
-def test_two_users_share_episode_and_channel(repo, inbox_repo, queue, user_repo, db_path):
+def test_two_users_share_episode_and_channel(
+    repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info
+):
     alice = _make_user(user_repo, "alice@example.com")
     bob = _make_user(user_repo, "bob@example.com")
-    svc = _service_with(repo, inbox_repo, queue)
+    svc = _service_with(repo, inbox_repo, queue, fake_youtube_video_info)
 
     r1 = svc.import_url(user_id=alice.id, url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     r2 = svc.import_url(user_id=bob.id, url="https://youtu.be/dQw4w9WgXcQ?si=tracking")
@@ -212,7 +200,7 @@ def test_two_users_share_episode_and_channel(repo, inbox_repo, queue, user_repo,
 
 
 def test_existing_followed_channel_is_not_overwritten_by_import(
-    repo, inbox_repo, queue, user_repo, db_path
+    repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info
 ):
     """If a user already manually subscribed to the channel (auto_added=0,
     a follower exists), an import must not flip it back to auto_added=1
@@ -235,7 +223,7 @@ def test_existing_followed_channel_is_not_overwritten_by_import(
         conn.commit()
     _follow(db_path, alice.id, podcast_id)
 
-    svc = _service_with(repo, inbox_repo, queue)
+    svc = _service_with(repo, inbox_repo, queue, fake_youtube_video_info)
     svc.import_url(user_id=alice.id, url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     with sqlite3.connect(db_path) as conn:
