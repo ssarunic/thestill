@@ -26,16 +26,32 @@ function formatDuration(seconds: number): string {
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
 }
 
-function formatTimeAgo(dateStr: string | null): string {
-  if (!dateStr) return 'Unknown'
-  const date = new Date(dateStr)
-  const now = new Date()
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
+// Backend emits naive ISO strings (datetime.utcnow().isoformat() — no `Z`).
+// Per ECMAScript, JS parses those as LOCAL time, which silently shifts UTC
+// timestamps by the user's offset. Append `Z` when no timezone is present
+// so we always interpret the wire value as UTC.
+function parseServerTimestamp(dateStr: string): Date {
+  const hasTimezone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(dateStr)
+  return new Date(hasTimezone ? dateStr : `${dateStr}Z`)
+}
 
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
+function formatRelativeTime(dateStr: string | null): { text: string; isOverdue: boolean } {
+  if (!dateStr) return { text: 'unknown', isOverdue: false }
+  const date = parseServerTimestamp(dateStr)
+  const deltaSeconds = Math.floor((date.getTime() - Date.now()) / 1000)
+  const future = deltaSeconds >= 0
+  const abs = Math.abs(deltaSeconds)
+
+  let magnitude: string
+  if (abs < 60) magnitude = `${abs}s`
+  else if (abs < 3600) magnitude = `${Math.floor(abs / 60)}m`
+  else if (abs < 86400) magnitude = `${Math.floor(abs / 3600)}h`
+  else magnitude = `${Math.floor(abs / 86400)}d`
+
+  return {
+    text: future ? `in ${magnitude}` : `${magnitude} ago`,
+    isOverdue: !future,
+  }
 }
 
 interface TaskCardProps {
@@ -47,6 +63,7 @@ interface TaskCardProps {
   isBumping?: boolean
   isCancelling?: boolean
   compact?: boolean
+  showStageBadge?: boolean
 }
 
 function TaskCard({
@@ -58,7 +75,9 @@ function TaskCard({
   isBumping = false,
   isCancelling = false,
   compact = false,
+  showStageBadge = false,
 }: TaskCardProps) {
+  const renderStageBadge = !compact || showStageBadge
   return (
     <div
       className={`bg-white rounded-md border border-gray-200 shadow-sm ${compact ? 'p-2.5' : 'p-4'}`}
@@ -75,15 +94,17 @@ function TaskCard({
             {task.podcast_title}
           </p>
 
-          {/* Per-lane cards omit the stage badge (stage is implicit in the lane) */}
-          {!compact && (
-            <div className="flex flex-wrap items-center gap-2 mt-2">
+          {/* Per-lane cards omit the stage badge (stage is implicit in the lane).
+              Status-grouped sections (Retry Scheduled, Recently Completed) opt
+              in via showStageBadge so the stage stays visible. */}
+          {renderStageBadge && (
+            <div className={`flex flex-wrap items-center gap-2 ${compact ? 'mt-1' : 'mt-2'}`}>
               <span
                 className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[task.stage] || 'bg-gray-100 text-gray-700'}`}
               >
                 {task.stage}
               </span>
-              {task.duration_formatted && (
+              {!compact && task.duration_formatted && (
                 <span className="text-xs text-gray-500">{task.duration_formatted}</span>
               )}
               {task.retry_count > 0 && (
@@ -91,7 +112,7 @@ function TaskCard({
               )}
             </div>
           )}
-          {compact && task.retry_count > 0 && (
+          {compact && !renderStageBadge && task.retry_count > 0 && (
             <span className="text-xs text-yellow-600 mt-1 inline-block">
               Retry #{task.retry_count}
             </span>
@@ -104,9 +125,14 @@ function TaskCard({
             {task.status === 'pending' && task.time_in_queue_seconds !== null && (
               <span>In queue for {formatDuration(task.time_in_queue_seconds)}</span>
             )}
-            {task.status === 'retry_scheduled' && task.next_retry_at && (
-              <span>Retry scheduled for {formatTimeAgo(task.next_retry_at)}</span>
-            )}
+            {task.status === 'retry_scheduled' && task.next_retry_at && (() => {
+              const { text, isOverdue } = formatRelativeTime(task.next_retry_at)
+              return isOverdue ? (
+                <span className="text-orange-600">Retry overdue by {text.replace(' ago', '')}</span>
+              ) : (
+                <span>Retry {text}</span>
+              )
+            })()}
             {task.status === 'completed' && (
               <span className="flex flex-wrap gap-2">
                 {task.wait_time_seconds !== null && (
@@ -234,6 +260,13 @@ function StageLane({
       {/* Lane body */}
       {isIdle ? (
         <div className="px-4 py-3 text-xs text-gray-400">Idle</div>
+      ) : processing.length === 0 && pending.length === 0 ? (
+        // Only retry-scheduled tasks remain. They're rendered in the
+        // dedicated Retry Scheduled section below — point the user there.
+        <div className="px-4 py-3 text-xs text-yellow-600">
+          {stage.retry_scheduled} task{stage.retry_scheduled === 1 ? '' : 's'} scheduled for retry —
+          see below
+        </div>
       ) : (
         <div className="p-3 space-y-2">
           {processing.map((task) => (
@@ -487,9 +520,9 @@ export default function QueueViewer() {
           <h2 className="text-lg font-semibold text-gray-900 mb-3">
             Retry Scheduled ({retry_scheduled_count})
           </h2>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {retry_scheduled_tasks.map((task) => (
-              <TaskCard key={task.task_id} task={task} />
+              <TaskCard key={task.task_id} task={task} compact showStageBadge />
             ))}
           </div>
         </div>
@@ -501,9 +534,9 @@ export default function QueueViewer() {
           <h2 className="text-lg font-semibold text-gray-900 mb-3">
             Recently Completed ({collapsedCompletedTasks.length})
           </h2>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {collapsedCompletedTasks.map((task) => (
-              <TaskCard key={task.episode_id} task={task} />
+              <TaskCard key={task.episode_id} task={task} compact showStageBadge />
             ))}
           </div>
         </div>

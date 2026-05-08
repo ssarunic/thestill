@@ -312,7 +312,7 @@ class EntityResolver:
                 type=entity_type,
                 canonical_name=canonical_name,
                 wikidata_qid=wikidata_qid,
-                aliases=[mention.surface_form] if mention.surface_form != canonical_name else [],
+                aliases=[mention.surface_form] if _is_plausible_alias(mention.surface_form, canonical_name) else [],
                 description=getattr(match.predicted_entity, "description", None),
                 wikidata_instance_of=p31_qids,
             ),
@@ -388,22 +388,58 @@ def _extract_confidence(span) -> Optional[float]:
 
 def _pick_best_span(spans, surface_form: str):
     """Pick the ReFinED span whose ``.text`` best matches the
-    mention's ``surface_form``. Exact match wins; falls back to the
-    span with the highest character overlap. Returns None when no
-    span overlaps at all.
+    mention's ``surface_form``. Exact match wins; otherwise the span
+    with the highest character overlap *covering at least half of
+    the surface form* wins. Returns ``None`` when no span passes the
+    coverage floor — better an unresolvable mention than a wildly
+    wrong one (e.g. ``"consumer preferences"`` resolving to
+    ``Henry Ford`` because the two phrases happen to share the
+    2-character substring ``"en"``).
     """
     if not spans:
         return None
     target = surface_form.lower().strip()
+    if not target:
+        return None
     exact = [s for s in spans if (s.text or "").lower().strip() == target]
     if exact:
         return exact[0]
     overlaps = [(s, _char_overlap(s.text or "", target)) for s in spans]
-    overlaps = [(s, o) for s, o in overlaps if o > 0]
+    # Require the longest common substring to cover at least half of
+    # the target. ``o * 2 >= len(target)`` is integer-safe and rejects
+    # incidental coincidences like ``"en"`` shared between two
+    # otherwise-unrelated phrases.
+    overlaps = [(s, o) for s, o in overlaps if o > 0 and o * 2 >= len(target)]
     if not overlaps:
-        return spans[0]
+        return None
     overlaps.sort(key=lambda pair: pair[1], reverse=True)
     return overlaps[0][0]
+
+
+def _is_plausible_alias(surface_form: str, canonical_name: str) -> bool:
+    """Defense-in-depth: only persist ``surface_form`` as an alias of
+    ``canonical_name`` when the two share lexical content. Stops the
+    resolver from quietly recording wildly unrelated phrases as
+    aliases when ReFinED returns a low-confidence match — historical
+    contamination case: ``"consumer preferences"`` was stored as an
+    alias of ``Henry Ford`` because both phrases co-occurred in one
+    excerpt. After the ``_pick_best_span`` fix this should not happen
+    in the first place; this guard is the second line of defense.
+
+    Returns ``True`` when the alias is worth keeping:
+    - one is a substring of the other (case-insensitive), OR
+    - they share at least one whitespace token
+
+    Returns ``False`` for identical strings (no alias needed) and
+    for empty strings.
+    """
+    s = surface_form.lower().strip()
+    c = canonical_name.lower().strip()
+    if not s or not c or s == c:
+        return False
+    if s in c or c in s:
+        return True
+    return bool(set(s.split()) & set(c.split()))
 
 
 def _char_overlap(a: str, b: str) -> int:

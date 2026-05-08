@@ -18,7 +18,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import List
 
-from thestill.core.entity_resolver import EntityResolver, _build_entity_id, _char_overlap, _pick_best_span
+from thestill.core.entity_resolver import (
+    EntityResolver,
+    _build_entity_id,
+    _char_overlap,
+    _is_plausible_alias,
+    _pick_best_span,
+)
 from thestill.models.entities import EntityMention, EntityType, ResolutionStatus
 
 
@@ -189,6 +195,73 @@ class TestSpanPicker:
             SimpleNamespace(text="OpenAI", predicted_entity=None),
         ]
         assert _pick_best_span(spans, "Anthropic").text == "Anthropic AI"
+
+    def test_zero_overlap_returns_none(self):
+        # Regression: ReFinED finds a span ("Henry Ford") that has no
+        # character overlap with the surface form ("consumer
+        # preferences"). The picker must not silently return that
+        # unrelated span — it must return None so the resolver falls
+        # through to unresolvable.
+        spans = [SimpleNamespace(text="Henry Ford", predicted_entity=None)]
+        assert _pick_best_span(spans, "consumer preferences") is None
+
+    def test_stebbings_reproducer_unrelated_span_does_not_resolve(self):
+        # Excerpt mentions both "consumer preferences" (no Wikidata hit)
+        # and "Henry Ford" (Wikidata hit). Mention surface_form is
+        # "consumer preferences". Resolver must mark unresolvable, not
+        # quietly resolve to person:henry-ford.
+        excerpt = (
+            "It made me think of consumer preferences, and it made me "
+            "think of the Henry Ford, 'If I listen to my customers, I'll "
+            "build a faster horse.'"
+        )
+        predictions = {"Henry Ford": ("Q8001", "Henry Ford", "PER")}
+        resolver = EntityResolver(preloaded_model=StubReFinED(predictions))
+        results = resolver.resolve([_mention(1, "consumer preferences", label="topic", excerpt=excerpt)])
+        assert results[0].status == "unresolvable"
+        assert results[0].entity.wikidata_qid is None
+        assert results[0].entity.id == "topic:consumer-preferences"
+
+
+class TestIsPlausibleAlias:
+    def test_substring_relationship_is_plausible(self):
+        assert _is_plausible_alias("Tesla", "Tesla, Inc.") is True
+        assert _is_plausible_alias("Tesla, Inc.", "Tesla") is True
+
+    def test_shared_token_is_plausible(self):
+        assert _is_plausible_alias("New York Times", "The New York Times Company") is True
+
+    def test_identical_strings_are_not_aliases(self):
+        # No alias needed — surface == canonical
+        assert _is_plausible_alias("OpenAI", "OpenAI") is False
+        assert _is_plausible_alias("  OpenAI ", "openai") is False
+
+    def test_unrelated_strings_are_rejected(self):
+        # The contamination case: zero shared tokens, no substring
+        # relationship. This is what would have prevented the
+        # "consumer preferences" → Henry Ford alias.
+        assert _is_plausible_alias("consumer preferences", "Henry Ford") is False
+
+    def test_empty_inputs_are_rejected(self):
+        assert _is_plausible_alias("", "Henry Ford") is False
+        assert _is_plausible_alias("Henry Ford", "") is False
+        assert _is_plausible_alias("   ", "Henry Ford") is False
+
+
+class TestAliasGuardInResolver:
+    def test_unrelated_canonical_does_not_record_alias(self):
+        # Defense-in-depth: even if a span_picker bug ever lets through
+        # a low-overlap match, the resolver must not store the surface
+        # form as an alias of an unrelated canonical name.
+        predictions = {"frontier": ("Q8001", "Henry Ford", "PER")}
+        resolver = EntityResolver(preloaded_model=StubReFinED(predictions))
+        results = resolver.resolve([_mention(1, "frontier", label="topic", excerpt="frontier labs are interesting")])
+        # The picker did match (exact "frontier" is in the span),
+        # canonical comes back as "Henry Ford" — but the alias guard
+        # rejects "frontier" since it shares no tokens with "Henry Ford".
+        assert results[0].status == "resolved"
+        assert results[0].entity.canonical_name == "Henry Ford"
+        assert results[0].entity.aliases == []
 
 
 class TestCharOverlap:
