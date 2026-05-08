@@ -638,10 +638,24 @@ export function useEntitySummary(entityType: EntityType | null, idSlug: string |
   })
 }
 
-export function useInbox(options: GetInboxOptions = {}) {
+type InboxRefetchInterval = NonNullable<
+  Parameters<typeof useQuery<Awaited<ReturnType<typeof getInbox>>>>[0]['refetchInterval']
+>
+
+export interface UseInboxOptions extends GetInboxOptions {
+  /**
+   * Forwarded to react-query so callers can poll while imports are still
+   * working through the pipeline. Pass a function that inspects the query
+   * to decide whether to keep polling.
+   */
+  refetchInterval?: InboxRefetchInterval
+}
+
+export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) {
   return useQuery({
     queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
     queryFn: () => getInbox(options),
     staleTime: 15_000,
+    refetchInterval,
   })
 }

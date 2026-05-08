@@ -65,6 +65,16 @@ async def create_import(
     except ImportServiceError as exc:
         bad_request(str(exc))
 
+    parent: dict | None = None
+    if result.parent_podcast_id is not None:
+        parent_row = app_state.repository.get(result.parent_podcast_id)
+        if parent_row is not None:
+            parent = {
+                "id": parent_row.id,
+                "title": parent_row.title,
+                "slug": parent_row.slug or "",
+            }
+
     return api_response(
         {
             "import": {
@@ -76,6 +86,7 @@ async def create_import(
                 "deduplicated": not result.episode_created,
                 "inbox_created": result.inbox_created,
                 "inbox_entry": result.inbox_entry.model_dump(mode="json"),
+                "parent": parent,
             }
         }
     )

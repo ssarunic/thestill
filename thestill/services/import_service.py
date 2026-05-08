@@ -300,6 +300,12 @@ class ImportResult:
     inbox_entry: InboxEntry
     episode_created: bool
     inbox_created: bool
+    # The materialised parent podcast id (auto_added or pre-existing). NULL
+    # when the import fell back to the synthetic ``audio-imports`` parent.
+    # Carries the channel/feed-following affordance to the caller without a
+    # second round-trip.
+    parent_podcast_id: Optional[str] = None
+    parent_title: Optional[str] = None
 
 
 class ImportService:
@@ -334,7 +340,7 @@ class ImportService:
     def import_url(self, *, user_id: str, url: str) -> ImportResult:
         """Import ``url`` into ``user_id``'s inbox. See class docstring for idempotency."""
         canonical = self._resolve(url)
-        episode_id, episode_created = self._find_or_create_episode(canonical)
+        episode_id, episode_created, parent_podcast_id = self._find_or_create_episode(canonical)
         inbox_entry, inbox_created = self._inbox_repo.find_or_create(
             user_id=user_id,
             episode_id=episode_id,
@@ -370,6 +376,8 @@ class ImportService:
             inbox_entry=inbox_entry,
             episode_created=episode_created,
             inbox_created=inbox_created,
+            parent_podcast_id=parent_podcast_id,
+            parent_title=canonical.parent.title if canonical.parent is not None else None,
         )
 
     # ------------------------------------------------------------------
@@ -392,11 +400,19 @@ class ImportService:
             "(.mp3, .m4a, .opus, .ogg, .wav)."
         )
 
-    def _find_or_create_episode(self, canonical: CanonicalSource) -> Tuple[str, bool]:
-        """Return ``(episode_id, created)`` for ``canonical``."""
+    def _find_or_create_episode(
+        self, canonical: CanonicalSource
+    ) -> Tuple[str, bool, Optional[str]]:
+        """Return ``(episode_id, created, parent_podcast_id)``.
+
+        ``parent_podcast_id`` is the real (non-synthetic) parent for both
+        fresh and dedup imports, or ``None`` when the import lives under
+        the synthetic ``audio-imports`` row (no follow target).
+        """
         existing_id = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id)
         if existing_id is not None:
-            return existing_id, False
+            parent_id = self._repository.get_real_parent_podcast_id_for_episode(existing_id)
+            return existing_id, False, parent_id
 
         if canonical.parent is not None:
             parent_id = self._repository.upsert_auto_added_podcast(
@@ -405,8 +421,10 @@ class ImportService:
                 description=canonical.parent.description,
                 image_url=canonical.parent.image_url,
             )
+            user_visible_parent_id: Optional[str] = parent_id
         else:
             parent_id = self._repository.ensure_synthetic_audio_imports_parent()
+            user_visible_parent_id = None
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,
             canonical_id=canonical.canonical_id,
@@ -418,4 +436,4 @@ class ImportService:
             duration=canonical.duration_seconds,
             image_url=canonical.image_url,
         )
-        return episode_id, True
+        return episode_id, True, user_visible_parent_id

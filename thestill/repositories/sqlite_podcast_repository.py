@@ -3617,6 +3617,27 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 )
             return existing["id"]
 
+    def get_real_parent_podcast_id_for_episode(self, episode_id: str) -> Optional[str]:
+        """
+        Return the parent podcast id for ``episode_id`` IFF the parent is a
+        real (non-synthetic) row — otherwise ``None``.
+
+        Used by the import flow's dedup path to surface a follow target
+        for already-imported episodes; episodes parked under the synthetic
+        ``audio-imports`` row have no follow target and return ``None``.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id
+                  FROM episodes e
+                  JOIN podcasts p ON p.id = e.podcast_id
+                 WHERE e.id = ? AND p.synthetic = 0
+                """,
+                (episode_id,),
+            ).fetchone()
+            return row["id"] if row else None
+
     def find_episode_id_by_canonical_id(self, canonical_id: str) -> Optional[str]:
         """Return the episode UUID for a given canonical id, or None."""
         with self._get_connection() as conn:
