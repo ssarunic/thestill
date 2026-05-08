@@ -46,6 +46,10 @@ import {
   getEntitySummary,
   getInbox,
   type GetInboxOptions,
+  getLatestBriefing,
+  getBriefing,
+  getBriefingScript,
+  markBriefingListened,
 } from '../api/client'
 import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType } from '../api/types'
 
@@ -643,5 +647,46 @@ export function useInbox(options: GetInboxOptions = {}) {
     queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
     queryFn: () => getInbox(options),
     staleTime: 15_000,
+  })
+}
+
+// Per-user briefings (spec #36). The "latest" endpoint lazy-generates,
+// so a 404 means "nothing eligible to brief about right now" — callers
+// should treat it as a hide-the-card signal rather than an error.
+export function useLatestBriefing() {
+  return useQuery({
+    queryKey: ['briefings', 'latest'],
+    queryFn: getLatestBriefing,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+export function useBriefing(briefingId: string | null) {
+  return useQuery({
+    queryKey: ['briefings', briefingId],
+    queryFn: () => getBriefing(briefingId!),
+    enabled: !!briefingId,
+    staleTime: 60_000,
+  })
+}
+
+export function useBriefingScript(briefingId: string | null) {
+  return useQuery({
+    queryKey: ['briefings', briefingId, 'script'],
+    queryFn: () => getBriefingScript(briefingId!),
+    enabled: !!briefingId,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useMarkBriefingListened() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (briefingId: string) => markBriefingListened(briefingId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['briefings', 'latest'] })
+      queryClient.invalidateQueries({ queryKey: ['briefings', data.id] })
+    },
   })
 }

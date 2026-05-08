@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useInbox } from '../hooks/useApi'
 import type { InboxItem, InboxState } from '../api/types'
+import BriefingCard from '../components/BriefingCard'
 
 function formatDelivered(iso: string): string {
   const date = new Date(iso)
@@ -87,6 +88,8 @@ export default function Inbox() {
           {isLoading ? 'Loading…' : `${items.length} delivered`}
         </p>
       </div>
+
+      <BriefingCard />
 
       {isLoading ? (
         <ul className="space-y-3">
