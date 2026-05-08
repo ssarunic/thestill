@@ -55,6 +55,7 @@ describing current phase and gates.
 | 34 | [briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) | 📝 Draft | Render #33's script to MP3 with TTS anchor + spliced original-audio quote clips; deliver via private token-protected personal podcast RSS feed (Apple / Overcast / Pocket Casts), in-app player, and direct download |
 | 35 | [pluggable-file-storage](35-pluggable-file-storage.md) | 📝 Draft | Cloud-first `FileStorage` abstraction with `LocalFileStorage` / `S3FileStorage` / `GCSFileStorage` backends behind one ABC; preserves `PathManager` + spec #25 traversal guards; phased migration audio-last; presigned URLs unblock direct-from-bucket streaming |
 | 36 | [per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) | 📝 Draft | Wire the morning briefing to select from each user's inbox since their last briefing; replaces the global recent-episode window post-#29; unblocks per-user audio in #34 |
+| 37 | [substack-import-resolver](37-substack-import-resolver.md) | 📝 Draft | Add `SubstackResolver` so pasted Substack post URLs (open.substack.com, `*.substack.com`, custom domains) resolve to embedded podcast audio; reuses #31's canonical-id + auto-add-parent path |
 
 ## Completed
 
