@@ -239,8 +239,9 @@ def test_two_users_share_episode_each_gets_inbox_row(service, inbox_repo, queue,
 
 def test_unsupported_url_raises(service, user_repo):
     alice = _make_user(user_repo, "alice@example.com")
+    # Vimeo isn't covered by any v1 resolver.
     with pytest.raises(UnsupportedUrlError):
-        service.import_url(user_id=alice.id, url="https://www.youtube.com/watch?v=abc")
+        service.import_url(user_id=alice.id, url="https://vimeo.com/123456789")
 
 
 def test_resolver_failure_wraps_in_resolver_error(repo, inbox_repo, queue, user_repo):

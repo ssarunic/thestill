@@ -29,7 +29,7 @@ the same protocol.
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlparse, urlunparse
 
 from structlog import get_logger
@@ -38,6 +38,7 @@ from ..core.queue_manager import QueueManager, TaskStage
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..utils.url_patterns import is_youtube_url
 
 logger = get_logger(__name__)
 
@@ -70,13 +71,30 @@ class ResolverError(ImportError):
 
 
 @dataclass(frozen=True)
+class CanonicalParent:
+    """
+    A real parent podcast deduced from the URL.
+
+    ``rss_url`` is the feed the existing refresh loop will use IF a user
+    follows the auto-added podcast — it is captured at import time so
+    follow-the-channel works without re-resolving the URL.
+    """
+
+    external_id: str
+    rss_url: str
+    title: str
+    description: str = ""
+    image_url: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class CanonicalSource:
     """
     Normalised, resolver-issued description of an importable URL.
 
-    Resolvers that can deduce a source podcast (YouTube channel, RSS feed)
-    will add a ``parent`` field on top of this; bare-audio URLs have no
-    parent and fall back to the synthetic audio-imports row.
+    ``parent`` is set by resolvers that can deduce the source podcast
+    (YouTube channel, RSS feed). Bare-audio URLs leave it ``None`` and
+    fall back to the synthetic audio-imports row.
     """
 
     kind: str  # one of "bare_audio", "youtube", "rss_episode"
@@ -87,8 +105,9 @@ class CanonicalSource:
     duration_seconds: Optional[int] = None
     pub_date: Optional[datetime] = None
     image_url: Optional[str] = None
-    source_handle: str = ""  # display label (host for bare audio)
-    external_id: str = ""  # episode-level external id (sha256 for bare audio)
+    source_handle: str = ""  # display label (host for bare audio, channel for YouTube)
+    external_id: str = ""  # episode-level external id (video_id for YouTube)
+    parent: Optional[CanonicalParent] = None
 
 
 class Resolver(Protocol):
@@ -170,6 +189,105 @@ class BareAudioResolver:
         )
 
 
+YouTubeMetadataFetcher = Callable[[str], dict]
+"""Function that returns the yt-dlp metadata dict for a YouTube URL.
+
+Indirection lets tests inject canned metadata without invoking yt-dlp or
+hitting the network.
+"""
+
+
+def _default_youtube_metadata_fetch(url: str) -> dict:
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": False}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not isinstance(info, dict):
+        raise ResolverError(f"yt-dlp returned no metadata for {url!r}")
+    return info
+
+
+def _yt_pub_date(raw: Any) -> Optional[datetime]:
+    """yt-dlp emits ``upload_date`` as a YYYYMMDD string. Normalise to UTC."""
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    text = str(raw)
+    if len(text) == 8 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d")
+        except ValueError:
+            return None
+    return None
+
+
+def _yt_thumbnail(info: dict) -> Optional[str]:
+    """Pick the largest thumbnail; fall back to the top-level ``thumbnail`` field."""
+    thumbs = info.get("thumbnails") or []
+    if isinstance(thumbs, list) and thumbs:
+        last = thumbs[-1]
+        if isinstance(last, dict) and last.get("url"):
+            return last["url"]
+    fallback = info.get("thumbnail")
+    return fallback if isinstance(fallback, str) else None
+
+
+class YouTubeResolver:
+    """
+    Resolver for YouTube watch / shorts / youtu.be URLs.
+
+    Uses yt-dlp's ``extract_info`` for metadata. The download stage already
+    routes YouTube URLs to yt-dlp automatically (via ``MediaSourceFactory``),
+    so the resolved ``audio_url`` here is just the public watch URL.
+
+    Each video carries its channel as a ``CanonicalParent`` so the import
+    flow can upsert the channel into ``podcasts`` (auto_added=1) and the
+    UI can offer "Follow this channel" without re-resolving the URL.
+    """
+
+    def __init__(self, *, metadata_fetcher: Optional[YouTubeMetadataFetcher] = None) -> None:
+        self._fetch = metadata_fetcher or _default_youtube_metadata_fetch
+
+    def matches(self, url: str) -> bool:
+        return is_youtube_url(url)
+
+    def resolve(self, url: str) -> CanonicalSource:
+        info = self._fetch(url)
+        video_id = info.get("id")
+        if not isinstance(video_id, str) or not video_id:
+            raise ResolverError(f"yt-dlp metadata missing 'id' for {url!r}")
+        title = info.get("title") or "Untitled YouTube video"
+        webpage = info.get("webpage_url") or url
+        channel_id = info.get("channel_id") or info.get("uploader_id")
+        channel_name = info.get("channel") or info.get("uploader") or "YouTube"
+        duration_raw = info.get("duration")
+        duration = int(duration_raw) if isinstance(duration_raw, (int, float)) else None
+        parent: Optional[CanonicalParent] = None
+        if isinstance(channel_id, str) and channel_id.startswith("UC"):
+            parent = CanonicalParent(
+                external_id=channel_id,
+                rss_url=f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+                title=channel_name,
+                description=info.get("channel_description") or "",
+                image_url=info.get("channel_thumbnail"),
+            )
+        return CanonicalSource(
+            kind="youtube",
+            canonical_id=f"youtube:{video_id}",
+            audio_url=webpage,
+            title=title,
+            description=info.get("description") or "",
+            duration_seconds=duration,
+            pub_date=_yt_pub_date(info.get("upload_date") or info.get("timestamp")),
+            image_url=_yt_thumbnail(info),
+            source_handle=channel_name,
+            external_id=video_id,
+            parent=parent,
+        )
+
+
 @dataclass(frozen=True)
 class ImportResult:
     """Outcome of ``ImportService.import_url``."""
@@ -206,7 +324,11 @@ class ImportService:
         self._repository = repository
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
-        self._resolvers: List[Resolver] = list(resolvers) if resolvers else [BareAudioResolver()]
+        # YouTube before BareAudio: a youtube.com URL doesn't end in an audio
+        # extension so the order is incidental, but it documents the intent.
+        self._resolvers: List[Resolver] = (
+            list(resolvers) if resolvers else [YouTubeResolver(), BareAudioResolver()]
+        )
         logger.info("ImportService initialized", resolvers=[type(r).__name__ for r in self._resolvers])
 
     def import_url(self, *, user_id: str, url: str) -> ImportResult:
@@ -276,9 +398,15 @@ class ImportService:
         if existing_id is not None:
             return existing_id, False
 
-        # All current resolvers fall back to the synthetic audio-imports
-        # parent. Once a resolver carries a deduced parent, branch here.
-        parent_id = self._repository.ensure_synthetic_audio_imports_parent()
+        if canonical.parent is not None:
+            parent_id = self._repository.upsert_auto_added_podcast(
+                rss_url=canonical.parent.rss_url,
+                title=canonical.parent.title,
+                description=canonical.parent.description,
+                image_url=canonical.parent.image_url,
+            )
+        else:
+            parent_id = self._repository.ensure_synthetic_audio_imports_parent()
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,
             canonical_id=canonical.canonical_id,

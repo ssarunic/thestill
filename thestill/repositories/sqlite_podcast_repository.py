@@ -3566,6 +3566,50 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
         return SYNTHETIC_AUDIO_IMPORTS_ID
 
+    def upsert_auto_added_podcast(
+        self,
+        *,
+        rss_url: str,
+        title: str,
+        description: str = "",
+        image_url: Optional[str] = None,
+    ) -> str:
+        """
+        Find-or-create a real ``podcasts`` row for an import-deduced parent.
+
+        Returns the podcast id. New rows are inserted with ``auto_added=1``;
+        existing rows (whether previously auto-added or manually subscribed)
+        are returned unchanged so a user who already follows the channel
+        does not silently lose that signal.
+        """
+        podcast_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO podcasts
+                    (id, created_at, updated_at, rss_url, title, slug,
+                     description, image_url, language, synthetic, auto_added)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en', 0, 1)
+                ON CONFLICT(rss_url) DO NOTHING
+                """,
+                (
+                    podcast_id,
+                    now,
+                    now,
+                    rss_url,
+                    title,
+                    generate_slug(title),
+                    description,
+                    image_url,
+                ),
+            )
+            row = conn.execute(
+                "SELECT id FROM podcasts WHERE rss_url = ?", (rss_url,)
+            ).fetchone()
+            assert row is not None  # we either inserted or someone else has
+            return row["id"]
+
     def find_episode_id_by_canonical_id(self, canonical_id: str) -> Optional[str]:
         """Return the episode UUID for a given canonical id, or None."""
         with self._get_connection() as conn:

@@ -81,9 +81,8 @@ def test_post_imports_idempotent_for_same_url(client, app_state):
 
 
 def test_post_imports_unsupported_url_returns_400(client):
-    response = client.post(
-        "/api/imports", json={"url": "https://www.youtube.com/watch?v=abc"}
-    )
+    # Vimeo isn't covered by any v1 resolver.
+    response = client.post("/api/imports", json={"url": "https://vimeo.com/123456789"})
     assert response.status_code == 400
     assert "No resolver" in response.json()["detail"]
 
