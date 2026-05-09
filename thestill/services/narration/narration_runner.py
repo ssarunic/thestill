@@ -22,6 +22,7 @@ writes the JSON + Markdown artefacts to disk, and returns the
 both surfaces produce identical artefacts.
 """
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -109,7 +110,9 @@ class NarrationRunner:
             # error so the CLI prints a friendly message instead of a
             # stack trace, and the API can convert to 400.
             raise NarrationRunnerError(str(exc)) from exc
+        started = time.perf_counter()
         content = self.generator.generate(episodes, cfg)
+        content.latency_ms = int((time.perf_counter() - started) * 1000)
         self.generator.write_json_script(content, cfg)
         self.generator.write_markdown(content, cfg)
         run = NarrationRun(digest_id=digest.id, slug=slug, content=content)
@@ -121,6 +124,7 @@ class NarrationRunner:
             target_seconds=cfg.target_duration_seconds,
             actual_seconds=round(content.stats.actual_duration_seconds, 1),
             quote_count=content.stats.quote_count,
+            latency_ms=content.latency_ms,
             fallback_reason=content.stats.fallback_reason,
         )
         return run

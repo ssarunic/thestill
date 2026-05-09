@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-query'
 import {
   getDashboardStats,
+  getNarrationDashboardStats,
   getRecentActivity,
   getPodcasts,
   getPodcast,
@@ -66,6 +67,14 @@ export function useDashboardStats() {
   return useQuery({
     queryKey: ['dashboard', 'stats'],
     queryFn: getDashboardStats,
+  })
+}
+
+export function useNarrationDashboardStats() {
+  return useQuery({
+    queryKey: ['dashboard', 'narration'],
+    queryFn: getNarrationDashboardStats,
+    staleTime: 60_000,
   })
 }
 

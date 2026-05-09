@@ -1,5 +1,6 @@
 import type {
   DashboardStats,
+  NarrationDashboardStats,
   ActivityResponse,
   PodcastsResponse,
   PodcastDetailResponse,
@@ -78,6 +79,10 @@ async function fetchApi<T>(endpoint: string): Promise<T> {
 // Dashboard API
 export async function getDashboardStats(): Promise<DashboardStats> {
   return fetchApi<DashboardStats>('/dashboard/stats')
+}
+
+export async function getNarrationDashboardStats(): Promise<NarrationDashboardStats> {
+  return fetchApi<NarrationDashboardStats>('/dashboard/narration')
 }
 
 export async function getRecentActivity(limit = 10, offset = 0): Promise<ActivityResponse> {

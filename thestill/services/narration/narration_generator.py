@@ -211,6 +211,7 @@ class NarrationGenerator:
             "schema_version": "phase2",
             "mode": content.mode,
             "fallback_reason": content.stats.fallback_reason,
+            "latency_ms": content.latency_ms,
             "blocks": [self._block_to_dict(b, content.quotes) for b in content.blocks],
             "episodes_covered": list(content.episode_ids_covered),
             "episodes_in_tail": list(content.episode_ids_in_tail),

@@ -23,6 +23,28 @@ export interface DashboardStats {
   }
 }
 
+export interface NarrationLatestSummary {
+  narration_id: string
+  generated_at: string | null
+  mode: 'narrated' | 'fallback' | null
+  fallback_reason: string | null
+  target_duration_seconds: number | null
+  actual_duration_seconds: number | null
+  latency_ms: number | null
+}
+
+export interface NarrationDashboardStats {
+  status: string
+  timestamp: string
+  total_runs: number
+  fallback_count: number
+  fallback_rate: number
+  avg_actual_duration_seconds: number | null
+  avg_target_duration_seconds: number | null
+  avg_latency_ms: number | null
+  latest: NarrationLatestSummary | null
+}
+
 export interface ActivityItem {
   episode_id: string
   episode_title: string

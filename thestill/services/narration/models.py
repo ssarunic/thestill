@@ -116,6 +116,10 @@ class NarrationContent:
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     json_script_path: Optional[Path] = None
     markdown_path: Optional[Path] = None
+    # Wall-clock latency captured by ``NarrationRunner`` around the
+    # generate() call. ``None`` for the standalone-generator path
+    # where no runner observed the timing.
+    latency_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)

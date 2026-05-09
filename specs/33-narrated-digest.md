@@ -1,6 +1,6 @@
 # Narrated Digest Specification
 
-> **Status:** ✅ Phases 1–4 complete (Phase 5 polish + docs pending)
+> **Status:** ✅ Complete (Phases 1–5)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-09
 > **Author:** Product & Engineering
@@ -582,11 +582,11 @@ one viewer, two renderings.
 - "Today's briefing" inbox card — spec #36 already ships a per-user briefing card; promoting narrated content into the inbox card is a separate decision once per-user briefings adopt narration.
 - Per-user briefing narration (spec #36 + #33 join) — kept on link-index for now to avoid the per-user × LLM-cost multiplier.
 
-### Phase 5 — Polish + docs
+### Phase 5 — Polish + docs ✅ Complete
 
-- `docs/narration.md` covering the prompt, the time-budget model, and how to tune `wpm` / `max_quote_share`.
-- Cost + latency dashboard tile.
-- Sample narration committed to the repo for easy demoing.
+- ✅ [`docs/narration.md`](../docs/narration.md) covers the rollout switch, time-budget math, anchor-prompt hot-reload, validation contract, JSON-script schema, observability, and cost expectations.
+- ✅ Latency-and-fallback dashboard tile. Runner captures wall-clock `latency_ms` around `generator.generate()` and persists it in the JSON header. New `GET /api/dashboard/narration` aggregates `data/narrations/*.json` headers (total runs, fallback rate with red/amber/green coding, avg actual/target runtime, avg latency, latest run with deep link). Frontend `NarrationStatsTile` renders the tile on the dashboard; hides itself when zero runs exist. Cost-from-token-counts is deferred to a follow-up since instrumentation differs per LLM provider.
+- ✅ Sample narration committed at [`examples/narrations/example-digest-medium.{json,md}`](../examples/narrations/) plus a [`README.md`](../examples/narrations/README.md) explaining how the artefacts double as a TTS-pipeline target and a `NarrationView` playground fixture.
 
 ---
 
