@@ -85,7 +85,7 @@ def disabled_client(disabled_app_state, mock_user):
 
 def _narration_run(
     *,
-    narration_id: str = "2026-05-08-morning",
+    slug: str = "morning",
     digest_id: str = "digest-001",
     mode: str = "narrated",
     json_path: Path | None = None,
@@ -111,14 +111,10 @@ def _narration_run(
         mode=mode,
         markdown="# briefing\n",
         generated_at=datetime(2026, 5, 8, 7, 0, tzinfo=timezone.utc),
-    )
-    return NarrationRun(
-        digest_id=digest_id,
-        narration_id=narration_id,
-        content=content,
-        json_path=json_path,
+        json_script_path=json_path,
         markdown_path=markdown_path,
     )
+    return NarrationRun(digest_id=digest_id, slug=slug, content=content)
 
 
 class TestCreateNarration:
@@ -130,7 +126,7 @@ class TestCreateNarration:
         mock_app_state.narration_runner.run.return_value = _narration_run(
             json_path=json_path, markdown_path=md_path,
         )
-        response = client.post("/api/narrations", json={"target_duration_seconds": 300})
+        response = client.post("/api/narrations", json={"target_duration": 300})
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "ok"
@@ -160,20 +156,23 @@ class TestCreateNarration:
         kwargs = mock_app_state.narration_runner.run.call_args.kwargs
         assert kwargs["target_duration_seconds"] == 180
 
-    def test_rejects_both_duration_fields(self, client):
-        response = client.post(
-            "/api/narrations",
-            json={"target_duration": "5m", "target_duration_seconds": 300},
-        )
-        assert response.status_code == 400
-
     def test_rejects_unparseable_duration_string(self, client):
         response = client.post(
             "/api/narrations", json={"target_duration": "abc"}
         )
         assert response.status_code == 400
 
-    def test_falls_back_uses_default_when_neither_supplied(
+    def test_rejects_non_positive_int_duration(self, client):
+        response = client.post("/api/narrations", json={"target_duration": 0})
+        assert response.status_code == 400
+
+    def test_rejects_traversal_slug(self, client):
+        response = client.post(
+            "/api/narrations", json={"slug": "../etc/passwd"}
+        )
+        assert response.status_code == 422
+
+    def test_falls_back_uses_default_when_duration_omitted(
         self, client, mock_app_state
     ):
         mock_app_state.narration_runner.run.return_value = _narration_run()

@@ -2465,6 +2465,53 @@ def digest(
         ctx.exit(2)  # Complete failure
 
 
+def _resolve_target_seconds_or_warn(
+    config, target_duration: Optional[str], *, prefix: str
+) -> Optional[int]:
+    """Parse ``target_duration`` against the config default. ``None`` on parse error."""
+    if target_duration is None:
+        return config.narration_default_duration_seconds
+    try:
+        return parse_target_duration(target_duration)
+    except ValueError as exc:
+        click.echo(f"{prefix} {exc}", err=True)
+        return None
+
+
+def _build_narration_runner(ctx, *, llm_provider):
+    """Construct a ``NarrationRunner`` from the CLI context."""
+    from .services.narration import NarrationGenerator, NarrationRunner
+
+    generator = NarrationGenerator(
+        path_manager=ctx.obj.path_manager,
+        llm_provider=llm_provider,
+    )
+    return NarrationRunner(
+        generator=generator,
+        digest_repository=ctx.obj.digest_repository,
+        podcast_repository=ctx.obj.repository,
+    )
+
+
+def _print_run_summary(run, *, include_target: bool) -> None:
+    """Render the per-run stats block shared by ``narrate`` and ``--narrate``."""
+    stats = run.content.stats
+    click.echo(f"   Mode: {run.content.mode}")
+    if include_target:
+        click.echo(f"   Digest: {run.digest_id}")
+        click.echo(f"   Target: {format_duration(stats.target_duration_seconds)}")
+    click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
+    if include_target:
+        click.echo(f"   Episodes: {stats.episodes_covered} covered, {stats.episodes_in_tail} in tail")
+        click.echo(f"   Quotes: {stats.quote_count}")
+    if stats.fallback_reason:
+        click.echo(f"   Fallback reason: {stats.fallback_reason}")
+    if run.json_path:
+        click.echo(f"   JSON: {run.json_path}")
+    if run.markdown_path:
+        click.echo(f"   Markdown: {run.markdown_path}")
+
+
 def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> None:
     """Run ``thestill narrate`` against ``digest_id`` from inside ``digest``.
 
@@ -2472,48 +2519,28 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
     link-index digest already succeeded and the narrated rendering is
     additive (spec #33 §"Migration Strategy").
     """
-    from .services.narration import NarrationGenerator, NarrationRunner, NarrationRunnerError
+    from .services.narration import NarrationRunnerError
 
-    config = ctx.obj.config
-    target_seconds = config.narration_default_duration_seconds
-    if target_duration is not None:
-        try:
-            target_seconds = parse_target_duration(target_duration)
-        except ValueError as exc:
-            click.echo(f"⚠️  Skipping narration: {exc}", err=True)
-            return
+    target_seconds = _resolve_target_seconds_or_warn(
+        ctx.obj.config, target_duration, prefix="⚠️  Skipping narration:"
+    )
+    if target_seconds is None:
+        return
 
     try:
-        llm_provider = create_llm_provider_from_config(config)
+        llm_provider = create_llm_provider_from_config(ctx.obj.config)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"⚠️  Skipping narration — could not init LLM provider: {exc}", err=True)
         return
 
     click.echo("\n🎙  Generating narrated digest…")
-    generator = NarrationGenerator(
-        path_manager=ctx.obj.path_manager,
-        llm_provider=llm_provider,
-    )
-    runner = NarrationRunner(
-        generator=generator,
-        digest_repository=ctx.obj.digest_repository,
-        podcast_repository=ctx.obj.repository,
-    )
+    runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
         run = runner.run(digest_id=digest_id, target_duration_seconds=target_seconds)
     except NarrationRunnerError as exc:
         click.echo(f"⚠️  Narration skipped: {exc}", err=True)
         return
-
-    stats = run.content.stats
-    click.echo(f"   Mode: {run.content.mode}")
-    click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
-    if stats.fallback_reason:
-        click.echo(f"   Fallback reason: {stats.fallback_reason}")
-    if run.markdown_path:
-        click.echo(f"   Markdown: {run.markdown_path}")
-    if run.json_path:
-        click.echo(f"   JSON: {run.json_path}")
+    _print_run_summary(run, include_target=False)
 
 
 @main.command()
@@ -2555,20 +2582,14 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     digest with a "narration unavailable" banner; the JSON script still
     serialises with ``mode: "fallback"`` for diagnostics.
     """
-    from .services.narration import NarrationGenerator, NarrationRunner, NarrationRunnerError
+    from .services.narration import NarrationRunnerError
 
     config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    repository = ctx.obj.repository
-    digest_repository = ctx.obj.digest_repository
-
-    target_seconds = config.narration_default_duration_seconds
-    if target_duration is not None:
-        try:
-            target_seconds = parse_target_duration(target_duration)
-        except ValueError as exc:
-            click.echo(f"❌ {exc}", err=True)
-            ctx.exit(2)
+    target_seconds = _resolve_target_seconds_or_warn(
+        config, target_duration, prefix="❌"
+    )
+    if target_seconds is None:
+        ctx.exit(2)
 
     llm_provider = None
     if not dry_run:
@@ -2584,15 +2605,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     else:
         click.echo("🔍 Dry run — quote selection + theme clustering only.")
 
-    generator = NarrationGenerator(
-        path_manager=path_manager,
-        llm_provider=llm_provider,
-    )
-    runner = NarrationRunner(
-        generator=generator,
-        digest_repository=digest_repository,
-        podcast_repository=repository,
-    )
+    runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
         run = runner.run(
             digest_id=digest_id,
@@ -2603,21 +2616,13 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
         click.echo(f"❌ {exc}", err=True)
         ctx.exit(2)
 
-    stats = run.content.stats
     click.echo("")
     click.echo(f"🎙  Narration ready ({run.content.mode})")
-    click.echo(f"   Digest: {run.digest_id}")
-    click.echo(f"   Target: {format_duration(stats.target_duration_seconds)}")
-    click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
-    click.echo(f"   Episodes: {stats.episodes_covered} covered, {stats.episodes_in_tail} in tail")
-    click.echo(f"   Quotes: {stats.quote_count}")
-    if stats.fallback_reason:
-        click.echo(f"   Fallback reason: {stats.fallback_reason}")
-    if run.json_path:
-        click.echo(f"   JSON: {run.json_path}")
-    if run.markdown_path:
-        click.echo(f"   Markdown: {run.markdown_path}")
-
+    _print_run_summary(run, include_target=True)
+    # Fallback exits non-zero so the caller knows the LLM stage didn't
+    # produce its intended output, even though the link-index artefact
+    # was still written. ``thestill digest --narrate`` ignores this in
+    # ``_chain_narrate`` since the digest itself already shipped.
     ctx.exit(0 if run.content.mode == "narrated" else 1)
 
 

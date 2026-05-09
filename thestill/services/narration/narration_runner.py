@@ -45,13 +45,30 @@ class NarrationRunnerError(Exception):
 
 @dataclass(frozen=True)
 class NarrationRun:
-    """Result envelope returned by ``NarrationRunner.run``."""
+    """Result envelope returned by ``NarrationRunner.run``.
+
+    ``narration_id``, ``json_path``, and ``markdown_path`` are derived
+    from ``content`` so the runner has a single source of truth for the
+    on-disk artefacts; the properties are convenience accessors for
+    callers that want them directly.
+    """
 
     digest_id: str
-    narration_id: str
+    slug: str
     content: NarrationContent
-    json_path: Optional[Path]
-    markdown_path: Optional[Path]
+
+    @property
+    def narration_id(self) -> str:
+        date_str = self.content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        return f"{date_str}-{self.slug}"
+
+    @property
+    def json_path(self) -> Optional[Path]:
+        return self.content.json_script_path
+
+    @property
+    def markdown_path(self) -> Optional[Path]:
+        return self.content.markdown_path
 
 
 class NarrationRunner:
@@ -89,26 +106,20 @@ class NarrationRunner:
             slug=slug,
         )
         content = self.generator.generate(episodes, cfg)
-        json_path = self.generator.write_json_script(content, cfg)
-        markdown_path = self.generator.write_markdown(content, cfg)
-        narration_id = self._narration_id(content, cfg)
+        self.generator.write_json_script(content, cfg)
+        self.generator.write_markdown(content, cfg)
+        run = NarrationRun(digest_id=digest.id, slug=slug, content=content)
         logger.info(
             "narration.run",
             digest_id=digest.id,
-            narration_id=narration_id,
+            narration_id=run.narration_id,
             mode=content.mode,
             target_seconds=cfg.target_duration_seconds,
             actual_seconds=round(content.stats.actual_duration_seconds, 1),
             quote_count=content.stats.quote_count,
             fallback_reason=content.stats.fallback_reason,
         )
-        return NarrationRun(
-            digest_id=digest.id,
-            narration_id=narration_id,
-            content=content,
-            json_path=json_path,
-            markdown_path=markdown_path,
-        )
+        return run
 
     def _resolve_digest(self, digest_id: Optional[str]) -> Digest:
         if digest_id is None or digest_id == "latest":
@@ -136,8 +147,3 @@ class NarrationRunner:
                 continue
             resolved.append(pair)
         return resolved
-
-    @staticmethod
-    def _narration_id(content: NarrationContent, cfg: NarrationConfig) -> str:
-        date_str = content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        return f"{date_str}-{cfg.slug}"

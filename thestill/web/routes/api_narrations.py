@@ -20,16 +20,16 @@ the rollout gate cleanly.
 """
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
 from ...services.narration import NarrationRunnerError
 from ...utils.duration import parse_target_duration
+from ...utils.path_manager import _validate_slug
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found
 
@@ -39,27 +39,38 @@ router = APIRouter()
 
 
 class CreateNarrationRequest(BaseModel):
-    """Body for ``POST /api/narrations`` (spec §"CLI & API")."""
+    """Body for ``POST /api/narrations`` (spec §"CLI & API").
+
+    ``target_duration`` accepts either an integer (seconds) or a string
+    (preset / unit-suffixed / clock form) — both shapes are resolved
+    server-side by ``parse_target_duration`` so the API surface stays
+    a single field instead of a mutual-exclusion pair.
+    """
 
     digest_id: Optional[str] = Field(
         default=None,
         description="Digest id to narrate. Omit to use the latest digest.",
     )
-    target_duration_seconds: Optional[int] = Field(
-        default=None, gt=0, le=86400,
-        description=(
-            "Target spoken duration in seconds. Mutually exclusive with"
-            " target_duration. Defaults to config.narration_default_duration_seconds."
-        ),
-    )
-    target_duration: Optional[str] = Field(
+    target_duration: Optional[Union[int, str]] = Field(
         default=None,
         description=(
-            "Target duration as a preset (short/medium/long) or unit-suffixed"
-            " string (5m, 120s, 0:05:00). Resolved server-side via parse_target_duration."
+            "Target spoken duration. Int = seconds; string = preset"
+            " (short/medium/long) or unit-suffixed (5m, 120s, 0:05:00)."
+            " Defaults to config.narration_default_duration_seconds."
         ),
     )
     slug: str = Field(default="morning", min_length=1, max_length=64)
+
+    @field_validator("slug")
+    @classmethod
+    def _check_slug(cls, value: str) -> str:
+        # Defence in depth — PathManager's slug validator is also applied
+        # downstream, but we reject malformed input at the request
+        # boundary so a traversal attempt never reaches the filesystem.
+        try:
+            return _validate_slug(value, name="slug")
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 def _require_runner(app_state: AppState):
@@ -74,17 +85,18 @@ def _require_runner(app_state: AppState):
     return app_state.narration_runner
 
 
-def _resolve_target_seconds(req: CreateNarrationRequest, default_seconds: int) -> int:
-    if req.target_duration_seconds is not None and req.target_duration is not None:
-        bad_request("provide target_duration_seconds OR target_duration, not both")
-    if req.target_duration_seconds is not None:
-        return req.target_duration_seconds
-    if req.target_duration is not None:
-        try:
-            return parse_target_duration(req.target_duration)
-        except ValueError as exc:
-            bad_request(str(exc))
-    return default_seconds
+def _resolve_target_seconds(req: CreateNarrationRequest, app_state: AppState) -> int:
+    raw = req.target_duration
+    if raw is None:
+        return app_state.config.narration_default_duration_seconds
+    if isinstance(raw, int):
+        if raw <= 0:
+            bad_request("target_duration must be positive")
+        return raw
+    try:
+        return parse_target_duration(raw)
+    except ValueError as exc:
+        bad_request(str(exc))
 
 
 def _narration_paths(state: AppState, narration_id: str) -> tuple[Path, Path]:
@@ -103,9 +115,7 @@ async def create_narration(
 ):
     """Generate a narration synchronously and return its artefact paths."""
     runner = _require_runner(app_state)
-    target_seconds = _resolve_target_seconds(
-        body, app_state.config.narration_default_duration_seconds
-    )
+    target_seconds = _resolve_target_seconds(body, app_state)
     try:
         run = runner.run(
             digest_id=body.digest_id,
@@ -114,7 +124,6 @@ async def create_narration(
         )
     except NarrationRunnerError as exc:
         not_found("Digest", body.digest_id or "latest")
-        return  # not reached — not_found raises
     stats = run.content.stats
     return api_response(
         {
