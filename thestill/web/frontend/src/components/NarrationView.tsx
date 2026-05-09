@@ -4,9 +4,9 @@ import { useNarrateDigest, useNarration } from '../hooks/useApi'
 import type { NarrationMode, NarrationSummary } from '../api/types'
 
 const PRESETS = [
-  { slug: 'short', label: 'Short', minutes: 3, seconds: 180 },
-  { slug: 'medium', label: 'Medium', minutes: 5, seconds: 300 },
-  { slug: 'long', label: 'Long', minutes: 10, seconds: 600 },
+  { slug: 'short', label: 'Short', minutes: 3 },
+  { slug: 'medium', label: 'Medium', minutes: 5 },
+  { slug: 'long', label: 'Long', minutes: 10 },
 ] as const
 
 function formatRuntime(seconds: number | null | undefined): string {

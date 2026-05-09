@@ -615,12 +615,14 @@ export function useNarrateDigest() {
   return useMutation({
     mutationFn: ({ digestId, request }: { digestId: string; request: NarrateDigestRequest }) =>
       narrateDigest(digestId, request),
-    onSuccess: (_data, { digestId }) => {
+    onSuccess: (data, { digestId }) => {
       // Refresh the digest detail so the new variant appears in the
       // ``narrations`` list, and the targeted narration query so the
       // reader picks up the new markdown if it was already cached.
       queryClient.invalidateQueries({ queryKey: ['digests', digestId] })
-      queryClient.invalidateQueries({ queryKey: ['narrations'] })
+      queryClient.invalidateQueries({
+        queryKey: ['narrations', data.narration_id],
+      })
     },
   })
 }
