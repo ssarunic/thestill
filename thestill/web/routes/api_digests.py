@@ -287,7 +287,14 @@ async def get_latest_digest(
     if not digests:
         not_found("Digest", "latest")
 
-    return api_response({"digest": _digest_to_response(digests[0]).model_dump()})
+    digest = digests[0]
+    narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest.id)
+    return api_response(
+        {
+            "digest": _digest_to_response(digest).model_dump(),
+            "narrations": narrations,
+        }
+    )
 
 
 @router.get("/morning-briefing")

@@ -1,6 +1,6 @@
 # Narrated Digest Specification
 
-> **Status:** 🚧 In progress (Phases 1–3 complete; Phase 4 backend complete, frontend pending)
+> **Status:** ✅ Phases 1–4 complete (Phase 5 polish + docs pending)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-09
 > **Author:** Product & Engineering
@@ -576,7 +576,7 @@ one viewer, two renderings.
 - ✅ ``GET /api/digests/{id}`` surfaces a ``narrations: [{narration_id, slug, target_duration_seconds, mode, fallback_reason, …}]`` array — populated from the filesystem (no schema migration needed).
 - ✅ ``POST /api/digests/{id}/narrate`` triggers narration with a duration. Each call writes ``<digest_id>-<slug>.{json,md}``; previous variants are preserved so the length switcher can flip back without paying for a regen. Default slug derives from the duration preset (``short`` / ``medium`` / ``long``); custom durations get ``custom-<seconds>s``.
 - ✅ ``POST /api/narrations`` retired in favour of the digest-scoped route. ``GET /api/narrations/{id}`` and ``GET /api/narrations/{id}/script.json`` stay as direct artefact endpoints (TTS consumer).
-- 🚧 Frontend: digest viewer renders narration when present, link-index when not. Length switcher chips (Short · Medium · Long) call `POST /api/digests/{id}/narrate`. Fallback banner when ``mode=fallback``. (Follow-up commit.)
+- ✅ Frontend: digest viewer renders narration when present, link-index when not. Length switcher chips (Short · Medium · Long) call `POST /api/digests/{id}/narrate`. Fallback banner when ``mode=fallback``. New ``NarrationView`` component composes the markdown reader, length switcher, "Show link-index" toggle, and the fallback banner; wired into ``DigestDetail.tsx`` so the existing digest viewer is the unified surface (no separate ``/narrations/:id`` route in v1).
 
 **Out of v1 (deferred):**
 - "Today's briefing" inbox card — spec #36 already ships a per-user briefing card; promoting narrated content into the inbox card is a separate decision once per-user briefings adopt narration.

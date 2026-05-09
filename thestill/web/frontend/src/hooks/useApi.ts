@@ -46,6 +46,8 @@ import {
   deleteDigest,
   getMorningBriefing,
   createMorningBriefing,
+  narrateDigest,
+  getNarration,
   quickSearch,
   corpusSearch,
   getEpisodeEntities,
@@ -57,7 +59,7 @@ import {
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -590,6 +592,35 @@ export function useDeleteDigest() {
     onSuccess: () => {
       // Invalidate digests list
       queryClient.invalidateQueries({ queryKey: ['digests'] })
+    },
+  })
+}
+
+// ============================================================================
+// Narration hooks (spec #33)
+// ============================================================================
+
+export function useNarration(narrationId: string | null) {
+  return useQuery({
+    queryKey: ['narrations', narrationId],
+    queryFn: () => getNarration(narrationId!),
+    enabled: !!narrationId,
+    staleTime: 60_000,
+  })
+}
+
+export function useNarrateDigest() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ digestId, request }: { digestId: string; request: NarrateDigestRequest }) =>
+      narrateDigest(digestId, request),
+    onSuccess: (_data, { digestId }) => {
+      // Refresh the digest detail so the new variant appears in the
+      // ``narrations`` list, and the targeted narration query so the
+      // reader picks up the new markdown if it was already cached.
+      queryClient.invalidateQueries({ queryKey: ['digests', digestId] })
+      queryClient.invalidateQueries({ queryKey: ['narrations'] })
     },
   })
 }

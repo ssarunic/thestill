@@ -42,6 +42,9 @@ import type {
   CreateDigestResponse,
   DigestPreviewResponse,
   DigestStatus,
+  NarrateDigestRequest,
+  NarrateDigestResponse,
+  NarrationDetail,
   TopPodcastsResponse,
   CorpusSearchOptions,
   QuickSearchOptions,
@@ -539,6 +542,35 @@ export async function deleteDigest(digestId: string): Promise<void> {
 
 export async function getMorningBriefing(): Promise<DigestPreviewResponse> {
   return fetchApi<DigestPreviewResponse>('/digests/morning-briefing')
+}
+
+// ============================================================================
+// Narration API (spec #33)
+// ============================================================================
+
+export async function narrateDigest(
+  digestId: string,
+  request: NarrateDigestRequest = {},
+): Promise<NarrateDigestResponse> {
+  const response = await fetch(`${API_BASE}/digests/${digestId}/narrate`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message =
+      typeof error.detail === 'string'
+        ? error.detail
+        : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+  return response.json()
+}
+
+export async function getNarration(narrationId: string): Promise<NarrationDetail> {
+  return fetchApi<NarrationDetail>(`/narrations/${encodeURIComponent(narrationId)}`)
 }
 
 // ============================================================================

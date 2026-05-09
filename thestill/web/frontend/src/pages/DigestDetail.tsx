@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useDigest, useDigestContent, useDigestEpisodes, useDeleteDigest } from '../hooks/useApi'
 import type { DigestStatus, DigestEpisodeInfo } from '../api/types'
 import ReactMarkdown from 'react-markdown'
+import NarrationView from '../components/NarrationView'
 
 // Status colors for badges
 const statusColors: Record<DigestStatus, string> = {
@@ -276,37 +277,48 @@ export default function DigestDetail() {
       {/* Tab content */}
       {activeTab === 'content' && (
         <div className="bg-white rounded-lg border border-gray-200 p-6">
-          {contentLoading ? (
-            <div className="animate-pulse space-y-4">
-              <div className="h-6 bg-gray-200 rounded w-1/3" />
-              <div className="h-4 bg-gray-200 rounded w-full" />
-              <div className="h-4 bg-gray-200 rounded w-5/6" />
-              <div className="h-4 bg-gray-200 rounded w-4/5" />
-            </div>
-          ) : contentData?.available && contentData.content ? (
-            <article className="prose prose-gray max-w-none prose-headings:scroll-mt-4 prose-a:text-primary-600 prose-a:no-underline hover:prose-a:underline">
-              <ReactMarkdown>{contentData.content}</ReactMarkdown>
-            </article>
-          ) : (
-            <div className="text-center py-12">
-              <div className="text-gray-400 mb-2">
-                <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
+          {(() => {
+            const linkIndex = contentLoading ? (
+              <div className="animate-pulse space-y-4">
+                <div className="h-6 bg-gray-200 rounded w-1/3" />
+                <div className="h-4 bg-gray-200 rounded w-full" />
+                <div className="h-4 bg-gray-200 rounded w-5/6" />
+                <div className="h-4 bg-gray-200 rounded w-4/5" />
               </div>
-              <p className="text-gray-500">Digest content not available</p>
-              {digest?.status === 'pending' && (
-                <p className="text-sm text-gray-400 mt-1">
-                  This digest is still being processed
-                </p>
-              )}
-              {digest?.status === 'failed' && (
-                <p className="text-sm text-gray-400 mt-1">
-                  Digest generation failed
-                </p>
-              )}
-            </div>
-          )}
+            ) : contentData?.available && contentData.content ? (
+              <article className="prose prose-gray max-w-none prose-headings:scroll-mt-4 prose-a:text-primary-600 prose-a:no-underline hover:prose-a:underline">
+                <ReactMarkdown>{contentData.content}</ReactMarkdown>
+              </article>
+            ) : (
+              <div className="text-center py-12">
+                <div className="text-gray-400 mb-2">
+                  <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <p className="text-gray-500">Digest content not available</p>
+                {digest?.status === 'pending' && (
+                  <p className="text-sm text-gray-400 mt-1">
+                    This digest is still being processed
+                  </p>
+                )}
+                {digest?.status === 'failed' && (
+                  <p className="text-sm text-gray-400 mt-1">
+                    Digest generation failed
+                  </p>
+                )}
+              </div>
+            )
+            return digestId ? (
+              <NarrationView
+                digestId={digestId}
+                narrations={digestData?.narrations ?? []}
+                linkIndexFallback={linkIndex}
+              />
+            ) : (
+              linkIndex
+            )
+          })()}
         </div>
       )}
 
