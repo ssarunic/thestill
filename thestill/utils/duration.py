@@ -97,6 +97,46 @@ NARRATION_DURATION_PRESETS: dict[str, int] = {
     "long": 600,
 }
 
+# Inverse map for ``slug_for_duration_seconds``. Built once at import
+# so the slug returned for a preset duration is always the same string
+# the parser accepts.
+_DURATION_SLUG_BY_SECONDS: dict[int, str] = {
+    seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()
+}
+
+
+def slug_for_duration_seconds(seconds: int) -> str:
+    """Return the narration slug for a target duration.
+
+    Preset durations (180/300/600) round-trip to ``short``/``medium``/
+    ``long``; non-preset durations get a stable ``custom-<seconds>s``
+    slug so length-switcher requests with arbitrary durations don't
+    collide on disk.
+    """
+    return _DURATION_SLUG_BY_SECONDS.get(seconds, f"custom-{seconds}s")
+
+
+def resolve_target_or_default(
+    value: Optional[Union[int, str]], default: int
+) -> int:
+    """Resolve a target-duration request value to seconds.
+
+    ``value`` may be ``None`` (use ``default``), a positive int
+    (interpreted as seconds), or a string that ``parse_target_duration``
+    can handle (preset / unit-suffixed / clock form). Raises
+    ``ValueError`` on a non-positive int or an unparseable string.
+
+    Used by both the CLI and the API so the duration parsing rules
+    are defined in exactly one place.
+    """
+    if value is None:
+        return default
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError("target_duration must be positive")
+        return value
+    return parse_target_duration(value)
+
 
 def parse_target_duration(value: str) -> int:
     """Parse a narrated-digest target duration to seconds.

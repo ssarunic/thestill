@@ -30,7 +30,7 @@ from structlog import get_logger
 from ...models.digest import Digest, DigestStatus
 from ...models.user import User
 from ...services.narration import NarrationRunnerError
-from ...utils.duration import parse_target_duration
+from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
 from ...services.digest_generator import DigestGenerator
 from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
@@ -187,16 +187,6 @@ def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[di
         )
     out.sort(key=lambda r: r.get("generated_at") or "")
     return out
-
-
-# Spec #33 §"Frontend UX" — three duration presets ship as the default
-# slug set so the length-switcher UI can call ``POST /digests/{id}/narrate``
-# without inventing names.
-_DURATION_SLUG_BY_SECONDS = {180: "short", 300: "medium", 600: "long"}
-
-
-def _slug_for_duration(seconds: int) -> str:
-    return _DURATION_SLUG_BY_SECONDS.get(seconds, f"custom-{seconds}s")
 
 
 class NarrateDigestRequest(BaseModel):
@@ -496,19 +486,14 @@ async def narrate_digest(
             ),
         )
 
-    target_seconds = state.config.narration_default_duration_seconds
-    if body.target_duration is not None:
-        if isinstance(body.target_duration, int):
-            if body.target_duration <= 0:
-                bad_request("target_duration must be positive")
-            target_seconds = body.target_duration
-        else:
-            try:
-                target_seconds = parse_target_duration(body.target_duration)
-            except ValueError as exc:
-                bad_request(str(exc))
+    try:
+        target_seconds = resolve_target_or_default(
+            body.target_duration, state.config.narration_default_duration_seconds
+        )
+    except ValueError as exc:
+        bad_request(str(exc))
 
-    slug = body.slug or _slug_for_duration(target_seconds)
+    slug = body.slug or slug_for_duration_seconds(target_seconds)
 
     try:
         run = state.narration_runner.run(

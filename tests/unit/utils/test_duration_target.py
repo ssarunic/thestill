@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for ``parse_target_duration`` (spec #33 Phase 3)."""
+"""Tests for ``parse_target_duration`` + helpers (spec #33 Phase 3+4)."""
 
 import pytest
 
 from thestill.utils.duration import (
     NARRATION_DURATION_PRESETS,
     parse_target_duration,
+    resolve_target_or_default,
+    slug_for_duration_seconds,
 )
 
 
@@ -65,3 +67,50 @@ def test_invalid_inputs_raise_value_error(raw: str) -> None:
             return
     with pytest.raises(ValueError):
         parse_target_duration(raw)
+
+
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [
+        (180, "short"),
+        (300, "medium"),
+        (600, "long"),
+        (450, "custom-450s"),
+        (12, "custom-12s"),
+    ],
+)
+def test_slug_for_duration_seconds(seconds: int, expected: str) -> None:
+    assert slug_for_duration_seconds(seconds) == expected
+
+
+def test_slug_round_trips_with_preset_parser() -> None:
+    """The slug returned for a preset duration must parse back to that duration."""
+    for seconds in (180, 300, 600):
+        slug = slug_for_duration_seconds(seconds)
+        assert parse_target_duration(slug) == seconds
+
+
+class TestResolveTargetOrDefault:
+    def test_none_falls_back_to_default(self) -> None:
+        assert resolve_target_or_default(None, default=300) == 300
+
+    def test_positive_int_pass_through(self) -> None:
+        assert resolve_target_or_default(450, default=300) == 450
+
+    def test_zero_int_raises(self) -> None:
+        with pytest.raises(ValueError):
+            resolve_target_or_default(0, default=300)
+
+    def test_negative_int_raises(self) -> None:
+        with pytest.raises(ValueError):
+            resolve_target_or_default(-1, default=300)
+
+    def test_preset_string_resolves(self) -> None:
+        assert resolve_target_or_default("short", default=300) == 180
+
+    def test_clock_string_resolves(self) -> None:
+        assert resolve_target_or_default("0:05:00", default=120) == 300
+
+    def test_unparseable_string_raises(self) -> None:
+        with pytest.raises(ValueError):
+            resolve_target_or_default("nope", default=300)
