@@ -74,6 +74,51 @@ class DigestContent:
     output_path: Optional[Path] = None
 
 
+def extract_gist(summary_text: str) -> Optional[str]:
+    """Extract 2–3 sentences from the ``The Gist`` section of a summary.
+
+    Public so the narrated-digest theme clusterer (spec #33) can feed
+    the same compact episode synopsis into its LLM input that the
+    link-index digest renders into per-episode rows.
+
+    The Gist section has this structure:
+
+        ## 1. 🎙️ The Gist
+        [Optional host/guest intro]
+        [2 sentence summary]
+        **The Big 3-5 Takeaways:**
+        …
+
+    We want the 2 sentences before "The Big 3-5 Takeaways".
+    """
+    gist_pattern = r"##\s*1\.?\s*(?:🎙️\s*)?The Gist\s*\n(.*?)(?=\*\*The Big|##\s*2\.|$)"
+    match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        gist_pattern = r"(?:The Gist|Executive Summary|Overview)\s*\n+(.*?)(?=\*\*|##|$)"
+        match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)
+    if not match:
+        return None
+
+    gist_text = match.group(1).strip()
+    gist_text = re.sub(r"\[[\d:]+\]", "", gist_text)
+    gist_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", gist_text)
+    gist_text = re.sub(r"\*([^*]+)\*", r"\1", gist_text)
+    gist_text = re.sub(r"\s+", " ", gist_text).strip()
+
+    sentences = _split_sentences(gist_text)
+    if not sentences:
+        return None
+    description = " ".join(sentences[:2])
+    if len(description) < 100 and len(sentences) > 2:
+        description = " ".join(sentences[:3])
+    return description or None
+
+
+def _split_sentences(text: str) -> List[str]:
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
+
+
 class DigestGenerator:
     """
     Generates markdown digest documents from processed episodes.
@@ -205,51 +250,8 @@ class DigestGenerator:
         return info
 
     def _extract_executive_summary(self, summary_text: str) -> Optional[str]:
-        """
-        Extract 2-3 sentences from 'The Gist' section.
-
-        The Gist section has this structure:
-        ## 1. 🎙️ The Gist
-        [Optional host/guest intro]
-        [2 sentence summary]
-        **The Big 3-5 Takeaways:**
-        ...
-
-        We want the 2 sentences before "The Big 3-5 Takeaways".
-        """
-        # Find "The Gist" section
-        gist_pattern = r"##\s*1\.?\s*(?:🎙️\s*)?The Gist\s*\n(.*?)(?=\*\*The Big|##\s*2\.|$)"
-        match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)
-
-        if not match:
-            # Fallback: try to find any "Gist" section
-            gist_pattern = r"(?:The Gist|Executive Summary|Overview)\s*\n+(.*?)(?=\*\*|##|$)"
-            match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)
-
-        if not match:
-            return None
-
-        gist_text = match.group(1).strip()
-
-        # Remove markdown formatting artifacts
-        gist_text = re.sub(r"\[[\d:]+\]", "", gist_text)  # Remove timestamps
-        gist_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", gist_text)  # Remove bold
-        gist_text = re.sub(r"\*([^*]+)\*", r"\1", gist_text)  # Remove italic
-        gist_text = re.sub(r"\s+", " ", gist_text).strip()  # Normalize whitespace
-
-        # Extract sentences (up to 3)
-        sentences = self._split_sentences(gist_text)
-        if not sentences:
-            return None
-
-        # Take first 2-3 sentences, preferring 2
-        description = " ".join(sentences[:2])
-
-        # If the description is very short, add a third sentence if available
-        if len(description) < 100 and len(sentences) > 2:
-            description = " ".join(sentences[:3])
-
-        return description if description else None
+        """Backwards-compat shim. Prefer ``extract_gist`` directly."""
+        return extract_gist(summary_text)
 
     def _split_sentences(self, text: str) -> List[str]:
         """Split text into sentences."""

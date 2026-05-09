@@ -23,10 +23,14 @@ from typing import List
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from structlog import get_logger
 
+from ...services.narration import read_narration_header
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 from ..responses import api_response, paginated_response
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -146,4 +150,84 @@ async def get_recent_activity(
         offset=offset,
         limit=limit,
         items_key="items",
+    )
+
+
+@router.get("/narration")
+async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
+    """Aggregate narration runs for the dashboard tile (spec #33 Phase 5).
+
+    Filesystem-driven so no schema migration: the runner writes one
+    JSON header per variant under ``data/narrations/``. We read every
+    one and roll up the metrics that matter for the operator: total
+    runs, fallback rate, average actual/target runtime, average
+    latency (when captured), and a pointer to the latest run so the
+    tile can deep-link into the digest viewer.
+    """
+    narrations_dir = state.path_manager.narrations_dir()
+    runs: List[dict] = []
+    if narrations_dir.exists():
+        for json_path in sorted(narrations_dir.glob("*.json")):
+            header = read_narration_header(json_path)
+            if header is None:
+                continue
+            runs.append({"path": json_path, "header": header})
+
+    total = len(runs)
+    fallback_count = sum(1 for r in runs if r["header"].get("mode") == "fallback")
+    fallback_rate = (fallback_count / total) if total > 0 else 0.0
+
+    actual_seconds_values = [
+        float(r["header"]["actual_duration_seconds"])
+        for r in runs
+        if isinstance(r["header"].get("actual_duration_seconds"), (int, float))
+    ]
+    target_seconds_values = [
+        int(r["header"]["target_duration_seconds"])
+        for r in runs
+        if isinstance(r["header"].get("target_duration_seconds"), int)
+    ]
+    latency_values = [
+        int(r["header"]["latency_ms"])
+        for r in runs
+        if isinstance(r["header"].get("latency_ms"), int)
+    ]
+
+    avg_actual = (sum(actual_seconds_values) / len(actual_seconds_values)) if actual_seconds_values else None
+    avg_target = (sum(target_seconds_values) / len(target_seconds_values)) if target_seconds_values else None
+    avg_latency_ms = (sum(latency_values) / len(latency_values)) if latency_values else None
+
+    latest = None
+    if runs:
+        latest_run = max(
+            runs,
+            key=lambda r: r["header"].get("generated_at") or "",
+        )
+        header = latest_run["header"]
+        # ``digest_id`` is persisted in the JSON header by the runner
+        # so consumers don't have to parse the filename. Slugs may
+        # contain ``-`` (e.g. ``custom-450s``) so the filename alone
+        # is ambiguous; older artefacts written before this field
+        # was added surface ``None`` and the tile hides its deep-link.
+        latest = {
+            "narration_id": latest_run["path"].stem,
+            "digest_id": header.get("digest_id"),
+            "generated_at": header.get("generated_at"),
+            "mode": header.get("mode"),
+            "fallback_reason": header.get("fallback_reason"),
+            "target_duration_seconds": header.get("target_duration_seconds"),
+            "actual_duration_seconds": header.get("actual_duration_seconds"),
+            "latency_ms": header.get("latency_ms"),
+        }
+
+    return api_response(
+        {
+            "total_runs": total,
+            "fallback_count": fallback_count,
+            "fallback_rate": round(fallback_rate, 4),
+            "avg_actual_duration_seconds": round(avg_actual, 2) if avg_actual is not None else None,
+            "avg_target_duration_seconds": round(avg_target, 2) if avg_target is not None else None,
+            "avg_latency_ms": int(avg_latency_ms) if avg_latency_ms is not None else None,
+            "latest": latest,
+        }
     )

@@ -23,6 +23,29 @@ export interface DashboardStats {
   }
 }
 
+export interface NarrationLatestSummary {
+  narration_id: string
+  digest_id: string | null
+  generated_at: string | null
+  mode: 'narrated' | 'fallback' | null
+  fallback_reason: string | null
+  target_duration_seconds: number | null
+  actual_duration_seconds: number | null
+  latency_ms: number | null
+}
+
+export interface NarrationDashboardStats {
+  status: string
+  timestamp: string
+  total_runs: number
+  fallback_count: number
+  fallback_rate: number
+  avg_actual_duration_seconds: number | null
+  avg_target_duration_seconds: number | null
+  avg_latency_ms: number | null
+  latest: NarrationLatestSummary | null
+}
+
 export interface ActivityItem {
   episode_id: string
   episode_title: string
@@ -725,10 +748,54 @@ export interface DigestsResponse {
   next_offset: number | null
 }
 
+export type NarrationMode = 'narrated' | 'fallback'
+
+export interface NarrationSummary {
+  narration_id: string
+  slug: string
+  target_duration_seconds: number | null
+  actual_duration_seconds: number | null
+  mode: NarrationMode | null
+  fallback_reason: string | null
+  generated_at: string | null
+  schema_version: string | null
+  script_path: string
+  markdown_path: string | null
+}
+
+export interface NarrateDigestRequest {
+  target_duration?: number | string
+  slug?: string
+}
+
+export interface NarrateDigestResponse {
+  status: string
+  timestamp: string
+  narration_id: string
+  digest_id: string
+  slug: string
+  mode: NarrationMode
+  target_duration_seconds: number
+  actual_duration_seconds: number
+  quote_count: number
+  fallback_reason: string | null
+  script_path: string | null
+  markdown_path: string | null
+}
+
+export interface NarrationDetail {
+  status: string
+  timestamp: string
+  id: string
+  script: Record<string, unknown>
+  markdown: string | null
+}
+
 export interface DigestDetailResponse {
   status: string
   timestamp: string
   digest: Digest
+  narrations: NarrationSummary[]
 }
 
 export interface DigestContentResponse {

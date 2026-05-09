@@ -91,6 +91,95 @@ def parse_time_window(duration_str: str) -> int:
     return result
 
 
+NARRATION_DURATION_PRESETS: dict[str, int] = {
+    "short": 180,
+    "medium": 300,
+    "long": 600,
+}
+
+# Inverse map for ``slug_for_duration_seconds``. Built once at import
+# so the slug returned for a preset duration is always the same string
+# the parser accepts.
+_DURATION_SLUG_BY_SECONDS: dict[int, str] = {
+    seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()
+}
+
+
+def slug_for_duration_seconds(seconds: int) -> str:
+    """Return the narration slug for a target duration.
+
+    Preset durations (180/300/600) round-trip to ``short``/``medium``/
+    ``long``; non-preset durations get a stable ``custom-<seconds>s``
+    slug so length-switcher requests with arbitrary durations don't
+    collide on disk.
+    """
+    return _DURATION_SLUG_BY_SECONDS.get(seconds, f"custom-{seconds}s")
+
+
+def resolve_target_or_default(
+    value: Optional[Union[int, str]], default: int
+) -> int:
+    """Resolve a target-duration request value to seconds.
+
+    ``value`` may be ``None`` (use ``default``), a positive int
+    (interpreted as seconds), or a string that ``parse_target_duration``
+    can handle (preset / unit-suffixed / clock form). Raises
+    ``ValueError`` on a non-positive int or an unparseable string.
+
+    Used by both the CLI and the API so the duration parsing rules
+    are defined in exactly one place.
+    """
+    if value is None:
+        return default
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError("target_duration must be positive")
+        return value
+    return parse_target_duration(value)
+
+
+def parse_target_duration(value: str) -> int:
+    """Parse a narrated-digest target duration to seconds.
+
+    Accepts the following forms (spec #33 §"Time Budget Model"):
+
+    - Named preset: ``"short"`` → 180, ``"medium"`` → 300, ``"long"`` → 600
+    - ``"5m"`` minutes / ``"2h"`` hours / ``"120s"`` seconds
+    - ``"MM:SS"`` or ``"HH:MM:SS"``
+    - Bare integer seconds: ``"300"``
+
+    Raises ``ValueError`` for unparseable input. Negative or zero results
+    are rejected so the caller can rely on a positive integer.
+    """
+    import re
+
+    raw = value.strip().lower()
+    if not raw:
+        raise ValueError("target duration cannot be empty")
+
+    if raw in NARRATION_DURATION_PRESETS:
+        return NARRATION_DURATION_PRESETS[raw]
+
+    suffix_match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([smh])", raw)
+    if suffix_match:
+        number = float(suffix_match.group(1))
+        unit = suffix_match.group(2)
+        seconds = number * {"s": 1, "m": 60, "h": 3600}[unit]
+        result = int(seconds)
+        if result <= 0:
+            raise ValueError(f"target duration must be positive: {value!r}")
+        return result
+
+    parsed = parse_duration(raw)
+    if parsed is None or parsed <= 0:
+        raise ValueError(
+            f"unrecognised target duration: {value!r}. "
+            "Use a preset (short/medium/long), a unit suffix (5m, 2h, 120s), "
+            "or MM:SS / HH:MM:SS."
+        )
+    return parsed
+
+
 def parse_duration(duration: Optional[str]) -> Optional[int]:
     """
     Parse duration string to seconds.

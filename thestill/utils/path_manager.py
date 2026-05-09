@@ -132,6 +132,7 @@ class PathManager:
         self._external_transcripts = "external_transcripts"
         self._digests = "digests"
         self._briefings = "briefings"
+        self._narrations = "narrations"
         # Spec #28 — corpus holds the Obsidian-friendly per-entity
         # Markdown pages regenerated from the ``entities`` SQLite
         # tables. Episode pages were dropped in Phase 2.10 (chunks
@@ -230,6 +231,14 @@ class PathManager:
         guard) so a malformed id can't escape the briefings tree.
         """
         return self._assert_inside_root(self.briefings_dir() / user_id / briefing_id)
+
+    def narrations_dir(self) -> Path:
+        """Narrated-digest artefacts root (spec #33).
+
+        Stores ``YYYY-MM-DD-<slug>.json`` (TTS-ready script) and the
+        Phase 2 ``.md`` read-through alongside it.
+        """
+        return self.storage_path / self._narrations
 
     # --- Spec #28 corpus paths -------------------------------------------------
     # The four entity-type subdirs are split because a rendered Markdown
@@ -579,6 +588,7 @@ class PathManager:
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
             self.digests_dir(),
+            self.narrations_dir(),
             # Spec #28 corpus tree — entity pages only (Phase 2.10
             # removed the per-episode rendered Markdown projection).
             self.corpus_dir(),

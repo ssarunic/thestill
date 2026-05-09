@@ -20,14 +20,17 @@ Provides endpoints for listing, viewing, creating, and reading digest documents.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
 from ...models.digest import Digest, DigestStatus
 from ...models.user import User
+from ...services.narration import NarrationRunnerError, read_narration_header
+from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
+from ...utils.path_manager import _validate_slug
 from ...services.digest_generator import DigestGenerator
 from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
 from ..dependencies import AppState, get_app_state, require_auth
@@ -142,6 +145,79 @@ def _digest_to_response(digest: Digest) -> DigestResponse:
     )
 
 
+def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[dict]:
+    """Filesystem-driven list of narration variants for ``digest_id``.
+
+    Each variant is keyed by ``<digest_id>-<slug>.json`` (the runner's
+    canonical filename), so a directory glob is sufficient — no schema
+    column needed for v1. ``slug`` is recovered by stripping the
+    ``<digest_id>-`` prefix off the filename stem.
+    """
+    if not narrations_dir.exists():
+        return []
+    out: List[dict] = []
+    prefix = f"{digest_id}-"
+    for json_path in sorted(narrations_dir.glob(f"{digest_id}-*.json")):
+        stem = json_path.stem
+        if not stem.startswith(prefix):
+            continue
+        slug = stem[len(prefix):]
+        if not slug:
+            continue
+        payload = read_narration_header(json_path)
+        if payload is None:
+            continue
+        md_path = json_path.with_suffix(".md")
+        out.append(
+            {
+                "narration_id": stem,
+                "slug": slug,
+                "target_duration_seconds": payload.get("target_duration_seconds"),
+                "actual_duration_seconds": payload.get("actual_duration_seconds"),
+                "mode": payload.get("mode"),
+                "fallback_reason": payload.get("fallback_reason"),
+                "generated_at": payload.get("generated_at"),
+                "schema_version": payload.get("schema_version"),
+                "script_path": str(json_path),
+                "markdown_path": str(md_path) if md_path.exists() else None,
+            }
+        )
+    out.sort(key=lambda r: r.get("generated_at") or "")
+    return out
+
+
+class NarrateDigestRequest(BaseModel):
+    """Body for ``POST /api/digests/{digest_id}/narrate``."""
+
+    target_duration: Optional[Union[int, str]] = Field(
+        default=None,
+        description=(
+            "Target spoken duration. Int = seconds; string = preset"
+            " (short/medium/long) or unit-suffixed (5m, 120s, 0:05:00)."
+        ),
+    )
+    slug: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Output slug (filenames are keyed on ``<digest_id>-<slug>``)."
+            " Defaults to ``short``/``medium``/``long`` for the matching"
+            " preset duration, otherwise ``custom-<seconds>s``."
+        ),
+    )
+
+    @field_validator("slug")
+    @classmethod
+    def _check_slug(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        try:
+            return _validate_slug(value, name="slug")
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -208,7 +284,14 @@ async def get_latest_digest(
     if not digests:
         not_found("Digest", "latest")
 
-    return api_response({"digest": _digest_to_response(digests[0]).model_dump()})
+    digest = digests[0]
+    narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest.id)
+    return api_response(
+        {
+            "digest": _digest_to_response(digest).model_dump(),
+            "narrations": narrations,
+        }
+    )
 
 
 @router.get("/morning-briefing")
@@ -362,17 +445,89 @@ async def get_digest(
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Get a single digest by ID."""
+    """Get a single digest by ID, plus any narration variants on disk."""
     digest = state.digest_repository.get_by_id(digest_id)
 
     if not digest:
         not_found("Digest", digest_id)
 
-    # Verify ownership
     if digest.user_id != user.id:
         not_found("Digest", digest_id)
 
-    return api_response({"digest": _digest_to_response(digest).model_dump()})
+    narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest_id)
+    return api_response(
+        {
+            "digest": _digest_to_response(digest).model_dump(),
+            "narrations": narrations,
+        }
+    )
+
+
+@router.post("/{digest_id}/narrate", status_code=201)
+async def narrate_digest(
+    digest_id: str,
+    body: NarrateDigestRequest,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """Generate (or regenerate) a narrated digest for ``digest_id``.
+
+    Used by the length-switcher UI: each click writes
+    ``<digest_id>-<slug>.{json,md}`` so previous variants are preserved.
+    """
+    digest = state.digest_repository.get_by_id(digest_id)
+    if not digest:
+        not_found("Digest", digest_id)
+    if digest.user_id != user.id:
+        not_found("Digest", digest_id)
+
+    if state.narration_runner is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Narration is disabled — set NARRATION_ENABLED=true and"
+                " configure an LLM provider to enable digest narration."
+            ),
+        )
+
+    try:
+        target_seconds = resolve_target_or_default(
+            body.target_duration, state.config.narration_default_duration_seconds
+        )
+    except ValueError as exc:
+        bad_request(str(exc))
+
+    slug = body.slug or slug_for_duration_seconds(target_seconds)
+
+    try:
+        run = state.narration_runner.run(
+            digest_id=digest_id,
+            target_duration_seconds=target_seconds,
+            slug=slug,
+        )
+    except NarrationRunnerError as exc:
+        logger.warning(
+            "digest.narrate_failed",
+            digest_id=digest_id,
+            error=str(exc),
+        )
+        not_found("Digest", digest_id)
+
+    stats = run.content.stats
+    return api_response(
+        {
+            "narration_id": run.narration_id,
+            "digest_id": run.digest_id,
+            "slug": slug,
+            "mode": run.content.mode,
+            "target_duration_seconds": stats.target_duration_seconds,
+            "actual_duration_seconds": round(stats.actual_duration_seconds, 2),
+            "quote_count": stats.quote_count,
+            "fallback_reason": stats.fallback_reason,
+            "script_path": str(run.json_path) if run.json_path else None,
+            "markdown_path": str(run.markdown_path) if run.markdown_path else None,
+        }
+    )
 
 
 @router.get("/{digest_id}/content")

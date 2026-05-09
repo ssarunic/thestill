@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from ..services.briefing_service import BriefingService
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
+    from ..services.narration import NarrationRunner
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
     from .task_manager import TaskManager
@@ -124,6 +125,10 @@ class AppState:
     # semantic/hybrid query or first REINDEX task).
     search_backend: "Optional[SearchBackend]" = None
     embedding_model: "Optional[EmbeddingModel]" = None
+    # Spec #33 Phase 3 — narrated-digest runner. ``None`` when
+    # ``narration_enabled`` is False; the API surface returns 503 in
+    # that mode so callers can handle the rollout gate cleanly.
+    narration_runner: "Optional[NarrationRunner]" = None
 
 
 def get_app_state(request: Request) -> AppState:

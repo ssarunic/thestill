@@ -149,6 +149,12 @@ class Config(BaseModel):
     digest_default_since_days: int = 7  # Default time window for digest (days)
     digest_default_max_episodes: int = 10  # Default max episodes per digest
 
+    # Narrated Digest Configuration (spec #33). Default duration is the
+    # ``medium`` preset; flip ``narration_enabled`` on once fallback rates
+    # are measured in production (spec #33 §"Migration Strategy").
+    narration_enabled: bool = False
+    narration_default_duration_seconds: int = 300
+
     # When a user follows a podcast, deliver up to N most-recent published
     # episodes as the on-follow seed so the inbox is non-empty immediately.
     inbox_seed_on_follow: int = 2
@@ -422,6 +428,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # Digest
         "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
         "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
+        "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
+        "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
         "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
         # Authentication

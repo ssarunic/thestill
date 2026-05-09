@@ -5,6 +5,7 @@ import PipelineStatus from '../components/PipelineStatus'
 import RefreshButton from '../components/RefreshButton'
 import MobileSummaryBar from '../components/MobileSummaryBar'
 import MorningBriefingWidget from '../components/MorningBriefingWidget'
+import NarrationStatsTile from '../components/NarrationStatsTile'
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats()
@@ -99,6 +100,11 @@ export default function Dashboard() {
 
       {/* Morning Briefing Widget */}
       <MorningBriefingWidget />
+
+      {/* Narration health (spec #33). Renders nothing when no
+          narrations have run yet, so the tile only appears once the
+          feature is generating artefacts. */}
+      <NarrationStatsTile />
 
       {/* Pipeline Status - hidden on mobile */}
       <div className="hidden sm:block bg-white rounded-lg border border-gray-200 p-6">

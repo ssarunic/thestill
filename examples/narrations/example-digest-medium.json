@@ -1,0 +1,97 @@
+{
+  "generated_at": "2026-05-08T07:00:00+00:00",
+  "target_duration_seconds": 300,
+  "actual_duration_seconds": 287.6,
+  "wpm": 150.0,
+  "schema_version": "phase2",
+  "mode": "narrated",
+  "fallback_reason": null,
+  "latency_ms": 4280,
+  "blocks": [
+    {
+      "kind": "narration",
+      "section": "opener",
+      "text": "Today's briefing: AI coding agents are starting to ship at non-technical companies, Anthropic's coding lead admits the scaling laws still hold, and a quiet disagreement is opening up about whether junior PMs should be writing production code at all.",
+      "duration_seconds": 16.4
+    },
+    {
+      "kind": "narration",
+      "section": "segment-1",
+      "text": "Two of today's interviews land on the same fault line. On Lenny's Podcast, Zevi Arnovitz — a non-technical PM at Meta — argued the bar has fundamentally shifted for new graduates entering tech.",
+      "duration_seconds": 14.0
+    },
+    {
+      "kind": "quote",
+      "section": "segment-1",
+      "quote_id": "q1",
+      "episode_id": "lenny-zevi-arnovitz",
+      "podcast_title": "Lenny's Podcast",
+      "speaker": "Zevi Arnovitz",
+      "speaker_role": "guest",
+      "text": "It's the best time to be a junior, contrary to what a lot of people are saying — when else in history could you get out of school and just build a startup on your own?",
+      "start_seconds": 59.0,
+      "duration_seconds": 13.5,
+      "score": 0.7421
+    },
+    {
+      "kind": "narration",
+      "section": "segment-1",
+      "text": "Cross-cutting against that, Boris Cherny — head of Claude Code at Anthropic — told the AI Daily Brief his team is increasingly worried about the asymmetry: senior engineers are getting compounding leverage, juniors are getting outpaced by the people they used to learn from.",
+      "duration_seconds": 18.4
+    },
+    {
+      "kind": "quote",
+      "section": "segment-1",
+      "quote_id": "q3",
+      "episode_id": "ai-daily-anthropic-q1",
+      "podcast_title": "The AI Daily Brief",
+      "speaker": "Boris Cherny",
+      "speaker_role": "guest",
+      "text": "The scaling laws didn't bend, they just moved — and the people who already knew how to ship are pulling away from the ones who are still learning.",
+      "start_seconds": 412.0,
+      "duration_seconds": 11.5,
+      "score": 0.6890
+    },
+    {
+      "kind": "narration",
+      "section": "segment-2",
+      "text": "Onto our second story — Q1 capital flows. BG2Pod's Brad Gerstner walked through the Altman call, the Apollo private-credit footprint, and what he calls the “big three” trades for the rest of the year.",
+      "duration_seconds": 14.0
+    },
+    {
+      "kind": "quote",
+      "section": "segment-2",
+      "quote_id": "q5",
+      "episode_id": "bg2pod-q1-2026",
+      "podcast_title": "BG2Pod",
+      "speaker": "Brad Gerstner",
+      "speaker_role": "host",
+      "text": "Private credit is doing the heavy lifting public markets used to do, and the spread is wider than anything we've seen since the GFC.",
+      "start_seconds": 1820.0,
+      "duration_seconds": 10.4,
+      "score": 0.6612
+    },
+    {
+      "kind": "narration",
+      "section": "tail",
+      "text": "Also today: Founders Forum on the new EU AI Act enforcement timetable, Acquired's two-part on the Rivian comeback, and Latent Space on the Anthropic–Cursor latency war. Links in the index below.",
+      "duration_seconds": 12.4
+    },
+    {
+      "kind": "narration",
+      "section": "signoff",
+      "text": "That's the briefing for May 8th. Back tomorrow.",
+      "duration_seconds": 4.0
+    }
+  ],
+  "episodes_covered": [
+    "lenny-zevi-arnovitz",
+    "ai-daily-anthropic-q1",
+    "bg2pod-q1-2026"
+  ],
+  "episodes_in_tail": [
+    "founders-forum-eu-ai-act",
+    "acquired-rivian-pt1",
+    "latent-space-anthropic-cursor"
+  ]
+}
