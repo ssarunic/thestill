@@ -103,6 +103,7 @@ class NarrationRunner:
                 max_quote_share=max_quote_share,
                 slug=slug,
                 basename=f"{digest.id}-{slug}",
+                digest_id=digest.id,
             )
         except ValueError as exc:
             # ``NarrationConfig.__post_init__`` rejects slugs with path

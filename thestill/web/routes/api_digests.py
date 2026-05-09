@@ -18,7 +18,6 @@ Digest API endpoints for Thestill web UI.
 Provides endpoints for listing, viewing, creating, and reading digest documents.
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
@@ -29,7 +28,7 @@ from structlog import get_logger
 
 from ...models.digest import Digest, DigestStatus
 from ...models.user import User
-from ...services.narration import NarrationRunnerError
+from ...services.narration import NarrationRunnerError, read_narration_header
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
 from ...services.digest_generator import DigestGenerator
@@ -165,10 +164,8 @@ def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[di
         slug = stem[len(prefix):]
         if not slug:
             continue
-        try:
-            payload = json.loads(json_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            logger.warning("narration.read_failed", id=stem, error=str(exc))
+        payload = read_narration_header(json_path)
+        if payload is None:
             continue
         md_path = json_path.with_suffix(".md")
         out.append(

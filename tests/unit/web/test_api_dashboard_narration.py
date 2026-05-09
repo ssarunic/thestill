@@ -60,6 +60,7 @@ def _write_narration(
     latency_ms: int | None = 4000,
     generated_at: str = "2026-05-08T07:00:00+00:00",
     fallback_reason: str | None = None,
+    digest_id: str | None = None,
 ) -> None:
     payload: dict = {
         "schema_version": "phase2",
@@ -69,6 +70,7 @@ def _write_narration(
         "latency_ms": latency_ms,
         "generated_at": generated_at,
         "fallback_reason": fallback_reason,
+        "digest_id": digest_id,
         "blocks": [],
     }
     (storage.narrations_dir() / f"{narration_id}.json").write_text(
@@ -150,3 +152,35 @@ def test_handles_missing_latency_field(client, storage):
     assert data["total_runs"] == 1
     # Average is None when no run has latency captured.
     assert data["avg_latency_ms"] is None
+
+
+def test_latest_surfaces_digest_id_from_header(client, storage):
+    """Phase 5 hardening: the API surfaces ``digest_id`` straight from
+    the JSON header so the frontend doesn't parse the filename. Slugs
+    can contain hyphens (``custom-450s``) so filename parsing is
+    ambiguous; reading the persisted field is correct.
+    """
+    _write_narration(
+        storage,
+        narration_id="abc-custom-450s",
+        digest_id="abc",
+    )
+    response = client.get("/api/dashboard/narration")
+    data = response.json()
+    assert data["latest"]["digest_id"] == "abc"
+    assert data["latest"]["narration_id"] == "abc-custom-450s"
+
+
+def test_latest_digest_id_is_null_for_legacy_artefacts(client, storage):
+    """Older artefacts written before the runner persisted ``digest_id``
+    surface ``None`` so the tile can hide its deep-link without
+    inventing a fragile filename split.
+    """
+    _write_narration(
+        storage,
+        narration_id="legacy-medium",
+        digest_id=None,
+    )
+    response = client.get("/api/dashboard/narration")
+    data = response.json()
+    assert data["latest"]["digest_id"] is None

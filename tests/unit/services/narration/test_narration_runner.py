@@ -150,6 +150,38 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
     assert payload["episodes_covered"] == ["e1"]
 
 
+def test_runner_captures_latency_ms_and_digest_id(storage: PathManager) -> None:
+    """Phase 5 instrumentation: ``content.latency_ms`` is populated by
+    the runner around ``generate()``, and ``digest_id`` is persisted in
+    the JSON header so the dashboard tile doesn't have to parse the
+    filename to recover the join key.
+    """
+    from thestill.services.narration.models import Segment, ThemePlan
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    plan = ThemePlan(
+        segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
+        tail_ids=(),
+    )
+    digest = _digest(id_="digest-uuid-001", episode_ids=["e1"])
+    runner = NarrationRunner(
+        generator=_generator(storage, plan, _good_blocks()),
+        digest_repository=_DigestRepo([digest]),
+        podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
+    )
+    run = runner.run(target_duration_seconds=300, slug="medium")
+
+    assert run.content.latency_ms is not None
+    assert isinstance(run.content.latency_ms, int)
+    assert run.content.latency_ms >= 0
+
+    payload = json.loads(run.json_path.read_text(encoding="utf-8"))
+    assert payload["latency_ms"] == run.content.latency_ms
+    assert payload["digest_id"] == "digest-uuid-001"
+    assert payload["slug"] == "medium"
+
+
 def test_runner_resolves_specific_digest_id(storage: PathManager) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 

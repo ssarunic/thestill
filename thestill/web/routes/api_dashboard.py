@@ -18,15 +18,14 @@ Dashboard API endpoints for Thestill web UI.
 Provides statistics and recent activity for the dashboard.
 """
 
-import json
 from datetime import datetime
-from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from structlog import get_logger
 
+from ...services.narration import read_narration_header
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
 from ..responses import api_response, paginated_response
@@ -154,23 +153,6 @@ async def get_recent_activity(
     )
 
 
-def _read_narration_header(path: Path) -> Optional[dict]:
-    """Read just the metadata fields off a narration JSON sidecar.
-
-    Returns ``None`` on any error (corrupt JSON, OS failure) so the
-    aggregator silently skips bad files instead of poisoning the
-    dashboard.
-    """
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        logger.warning("narration.aggregate.skipped", path=str(path), error=str(exc))
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
 @router.get("/narration")
 async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
     """Aggregate narration runs for the dashboard tile (spec #33 Phase 5).
@@ -186,7 +168,7 @@ async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> d
     runs: List[dict] = []
     if narrations_dir.exists():
         for json_path in sorted(narrations_dir.glob("*.json")):
-            header = _read_narration_header(json_path)
+            header = read_narration_header(json_path)
             if header is None:
                 continue
             runs.append({"path": json_path, "header": header})
@@ -222,12 +204,14 @@ async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> d
             key=lambda r: r["header"].get("generated_at") or "",
         )
         header = latest_run["header"]
-        narration_id = latest_run["path"].stem
-        # Filenames are ``<digest_id>-<slug>``; the digest id may itself
-        # contain hyphens (UUIDs do not, but legacy ids could). We
-        # surface ``narration_id`` and let the caller split if needed.
+        # ``digest_id`` is persisted in the JSON header by the runner
+        # so consumers don't have to parse the filename. Slugs may
+        # contain ``-`` (e.g. ``custom-450s``) so the filename alone
+        # is ambiguous; older artefacts written before this field
+        # was added surface ``None`` and the tile hides its deep-link.
         latest = {
-            "narration_id": narration_id,
+            "narration_id": latest_run["path"].stem,
+            "digest_id": header.get("digest_id"),
             "generated_at": header.get("generated_at"),
             "mode": header.get("mode"),
             "fallback_reason": header.get("fallback_reason"),

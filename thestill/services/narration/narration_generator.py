@@ -92,6 +92,11 @@ class NarrationConfig:
     # JSON/Markdown artefacts. The runner sets this to ``<digest_id>-<slug>``
     # so the digest record is the durable join key for narrations.
     basename: Optional[str] = None
+    # Persisted in the JSON header so consumers (dashboard tile, future
+    # TTS) read the join key explicitly instead of parsing the filename
+    # — slugs may contain ``-`` (e.g. ``custom-450s``) so the filename
+    # alone is ambiguous.
+    digest_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Defence-in-depth: the slug ends up in a filename so a value
@@ -212,6 +217,8 @@ class NarrationGenerator:
             "mode": content.mode,
             "fallback_reason": content.stats.fallback_reason,
             "latency_ms": content.latency_ms,
+            "digest_id": cfg.digest_id,
+            "slug": cfg.slug,
             "blocks": [self._block_to_dict(b, content.quotes) for b in content.blocks],
             "episodes_covered": list(content.episode_ids_covered),
             "episodes_in_tail": list(content.episode_ids_in_tail),

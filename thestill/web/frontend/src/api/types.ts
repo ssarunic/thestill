@@ -25,6 +25,7 @@ export interface DashboardStats {
 
 export interface NarrationLatestSummary {
   narration_id: string
+  digest_id: string | null
   generated_at: string | null
   mode: 'narrated' | 'fallback' | null
   fallback_reason: string | null

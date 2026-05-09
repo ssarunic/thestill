@@ -119,7 +119,9 @@ is the canonical TTS contract. Schema version `phase2`:
   "schema_version": "phase2",
   "mode": "narrated",            // "narrated" or "fallback"
   "fallback_reason": null,       // e.g. "word_budget_high,verbatim_leak" when mode=fallback
-  "latency_ms": 4280,            // wall-clock around generate(); null for non-runner callers
+  "latency_ms": 4280,            // wall-clock around generate(), captured by NarrationRunner; null when generate() is called outside the runner (e.g. tests / programmatic callers / older artefacts)
+  "digest_id": "digest-uuid-…", // null when the artefact wasn't produced via the runner
+  "slug": "medium",              // matches the second half of the filename basename
   "blocks": [
     {
       "kind": "narration",

@@ -22,15 +22,6 @@ function fallbackRateClass(rate: number): string {
   return 'text-red-700 bg-red-50'
 }
 
-function digestIdFromNarrationId(narrationId: string): string | null {
-  // ``<digest_id>-<slug>`` — the slug is one of the duration presets,
-  // so we strip from the rightmost ``-`` and let the dashboard tile
-  // link to the digest viewer. Safe enough for v1; the API also
-  // surfaces a ``digest_id`` field if we ever need stricter parsing.
-  const lastDash = narrationId.lastIndexOf('-')
-  return lastDash > 0 ? narrationId.slice(0, lastDash) : null
-}
-
 export default function NarrationStatsTile() {
   const { data, isLoading, error } = useNarrationDashboardStats()
 
@@ -58,9 +49,7 @@ export default function NarrationStatsTile() {
     return null
   }
 
-  const latestDigestId = data.latest
-    ? digestIdFromNarrationId(data.latest.narration_id)
-    : null
+  const latestDigestId = data.latest?.digest_id ?? null
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-6">

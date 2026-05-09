@@ -14,6 +14,7 @@
 
 """Narrated digest generation (spec #33)."""
 
+from .artefacts import read_narration_header
 from .markdown_renderer import NarrationMarkdownRenderer
 from .models import (
     EpisodeBrief,
@@ -42,6 +43,7 @@ __all__ = [
     "NarrationContent",
     "NarrationGenerator",
     "NarrationMarkdownRenderer",
+    "read_narration_header",
     "NarrationMode",
     "NarrationRun",
     "NarrationRunner",

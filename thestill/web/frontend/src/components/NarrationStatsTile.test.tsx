@@ -34,6 +34,7 @@ function makeStats(overrides: Partial<NarrationDashboardStats> = {}): NarrationD
     avg_latency_ms: 4280,
     latest: {
       narration_id: 'digest-001-medium',
+      digest_id: 'digest-001',
       generated_at: '2026-05-08T07:00:00+00:00',
       mode: 'narrated',
       fallback_reason: null,
@@ -100,6 +101,7 @@ describe('NarrationStatsTile', () => {
       data: makeStats({
         latest: {
           narration_id: 'digest-002-short',
+          digest_id: 'digest-002',
           generated_at: '2026-05-08T07:00:00+00:00',
           mode: 'fallback',
           fallback_reason: 'word_budget_high',
@@ -114,6 +116,29 @@ describe('NarrationStatsTile', () => {
     render(withProviders(<NarrationStatsTile />))
     expect(screen.getByText(/fell back to link-index/)).toBeInTheDocument()
     expect(screen.getByText(/word_budget_high/)).toBeInTheDocument()
+  })
+
+  it('hides the deep-link when digest_id is missing (legacy artefact)', () => {
+    mockHook.mockReturnValue({
+      data: makeStats({
+        latest: {
+          narration_id: 'legacy-medium',
+          digest_id: null,
+          generated_at: '2026-05-08T07:00:00+00:00',
+          mode: 'narrated',
+          fallback_reason: null,
+          target_duration_seconds: 300,
+          actual_duration_seconds: 290,
+          latency_ms: 4280,
+        },
+      }),
+      isLoading: false,
+      error: null,
+    })
+    render(withProviders(<NarrationStatsTile />))
+    // Headline metrics still render; the "View latest" link is gone.
+    expect(screen.getByText('Narration health')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /View latest/ })).toBeNull()
   })
 
   it('color-codes the fallback rate (low → emerald, high → red)', () => {
