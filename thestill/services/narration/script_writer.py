@@ -45,8 +45,14 @@ from .models import (
 logger = get_logger(__name__)
 
 
-# Validation tolerances
-WORD_BUDGET_TOLERANCE = 0.15  # ±15%
+# Validation tolerances. The bounds are asymmetric: overruns blow the
+# spoken-duration budget that downstream TTS plans against, while
+# undershoots just produce a shorter briefing — preferable to a
+# fallback link-index for the user. LLMs reliably undershoot long
+# prompts (Gemini in particular on 1k+ word targets), so the low side
+# is generous.
+WORD_BUDGET_TOLERANCE_HIGH = 0.15  # +15% cap (strict — overruns hurt TTS)
+WORD_BUDGET_TOLERANCE_LOW = 0.50  # -50% floor (lenient — short briefing > fallback)
 VERBATIM_LEAK_NGRAM = 8  # an 8-word verbatim slice from a quote in narration → leak
 MAX_REGENERATIONS = 1  # one retry, then fall back
 
@@ -143,9 +149,7 @@ class ScriptWriter:
 
             blocks = self._normalise_blocks(result.blocks, quotes_by_id, self.wpm)
             failures = self._validate(blocks, quotes_by_id, narration_word_budget)
-            raw_words = sum(
-                word_count(b.text) for b in blocks if b.kind == "narration" and b.text
-            )
+            raw_words = sum(word_count(b.text) for b in blocks if b.kind == "narration" and b.text)
             if not failures:
                 return ScriptResult(blocks=tuple(blocks), failures=(), raw_word_count=raw_words)
 
@@ -172,9 +176,10 @@ class ScriptWriter:
         narration_word_budget: int,
     ) -> str:
         parts: List[str] = [
-            f"Narration word budget: {narration_word_budget} words"
-            f" (±{int(WORD_BUDGET_TOLERANCE * 100)}% tolerance, counts only narration"
-            " block text — quote blocks are excluded).",
+            f"Narration word budget: aim for {narration_word_budget} words"
+            f" (hard cap: +{int(WORD_BUDGET_TOLERANCE_HIGH * 100)}% — going over"
+            " blows the spoken-duration budget; counts only narration block text,"
+            " quote blocks are excluded).",
             "",
             "Quote pool (verbatim — do not retype these in your narration):",
         ]
@@ -194,9 +199,7 @@ class ScriptWriter:
             for seg in plan.segments:
                 parts.append(self._format_segment(seg, briefs_by_id))
         else:
-            parts.append(
-                "Segment plan: (empty — emit opener, tail-only narration, signoff)"
-            )
+            parts.append("Segment plan: (empty — emit opener, tail-only narration, signoff)")
 
         if plan.tail_ids:
             parts.append("")
@@ -205,17 +208,12 @@ class ScriptWriter:
                 brief = briefs_by_id.get(eid)
                 if brief is None:
                     continue
-                parts.append(
-                    f"- episode_id={eid} | podcast={brief.podcast_title}"
-                    f" | title={brief.episode_title}"
-                )
+                parts.append(f"- episode_id={eid} | podcast={brief.podcast_title}" f" | title={brief.episode_title}")
 
         return "\n".join(parts)
 
     @staticmethod
-    def _format_segment(
-        seg: Segment, briefs_by_id: Mapping[str, EpisodeBrief]
-    ) -> str:
+    def _format_segment(seg: Segment, briefs_by_id: Mapping[str, EpisodeBrief]) -> str:
         lines = [
             "",
             f"Segment {seg.rank}: {seg.theme}",
@@ -226,10 +224,7 @@ class ScriptWriter:
             brief = briefs_by_id.get(eid)
             if brief is None:
                 continue
-            lines.append(
-                f"  - episode_id={eid} | podcast={brief.podcast_title}"
-                f" | title={brief.episode_title}"
-            )
+            lines.append(f"  - episode_id={eid} | podcast={brief.podcast_title}" f" | title={brief.episode_title}")
             if brief.guests:
                 lines.append(f"    guests: {', '.join(brief.guests)}")
             if brief.gist:
@@ -246,9 +241,7 @@ class ScriptWriter:
         for raw in out_blocks:
             if raw.kind == "narration":
                 text = (raw.text or "").strip() or None
-                duration = (
-                    word_count(text) / wpm * 60.0 if text and wpm else 0.0
-                )
+                duration = word_count(text) / wpm * 60.0 if text and wpm else 0.0
                 blocks.append(
                     ScriptBlock(
                         kind="narration",
@@ -292,19 +285,14 @@ class ScriptWriter:
                 failures.append(
                     ValidationFailure(
                         reason="unknown_quote_id",
-                        detail=(
-                            f"block {idx} (kind=quote) references unknown quote_id="
-                            f"{b.quote_id!r}"
-                        ),
+                        detail=(f"block {idx} (kind=quote) references unknown quote_id=" f"{b.quote_id!r}"),
                     )
                 )
 
         # An 8-word slice that appears verbatim in any quote is the
         # paraphrase-leak signal — the model copied a quote into the
         # narration instead of cueing it. Spec #33 §"Script Generation".
-        narration_text = " ".join(
-            b.text for b in blocks if b.kind == "narration" and b.text
-        )
+        narration_text = " ".join(b.text for b in blocks if b.kind == "narration" and b.text)
         leaked_quote_id = self._first_verbatim_leak(narration_text, quotes_by_id)
         if leaked_quote_id is not None:
             failures.append(
@@ -318,16 +306,16 @@ class ScriptWriter:
             )
 
         narration_words = word_count(narration_text)
-        low = int(narration_word_budget * (1 - WORD_BUDGET_TOLERANCE))
-        high = int(narration_word_budget * (1 + WORD_BUDGET_TOLERANCE))
+        low = int(narration_word_budget * (1 - WORD_BUDGET_TOLERANCE_LOW))
+        high = int(narration_word_budget * (1 + WORD_BUDGET_TOLERANCE_HIGH))
         if narration_words < low:
             failures.append(
                 ValidationFailure(
                     reason="word_budget_low",
                     detail=(
                         f"narration={narration_words} words; budget"
-                        f" {narration_word_budget}±{int(WORD_BUDGET_TOLERANCE * 100)}%"
-                        f" → {low}..{high}"
+                        f" {narration_word_budget} (-{int(WORD_BUDGET_TOLERANCE_LOW * 100)}%"
+                        f"/+{int(WORD_BUDGET_TOLERANCE_HIGH * 100)}%) → {low}..{high}"
                     ),
                 )
             )
@@ -337,8 +325,8 @@ class ScriptWriter:
                     reason="word_budget_high",
                     detail=(
                         f"narration={narration_words} words; budget"
-                        f" {narration_word_budget}±{int(WORD_BUDGET_TOLERANCE * 100)}%"
-                        f" → {low}..{high}"
+                        f" {narration_word_budget} (-{int(WORD_BUDGET_TOLERANCE_LOW * 100)}%"
+                        f"/+{int(WORD_BUDGET_TOLERANCE_HIGH * 100)}%) → {low}..{high}"
                     ),
                 )
             )
@@ -346,9 +334,7 @@ class ScriptWriter:
         return tuple(failures)
 
     @staticmethod
-    def _first_verbatim_leak(
-        narration: str, quotes_by_id: Mapping[str, QuoteCandidate]
-    ) -> Optional[str]:
+    def _first_verbatim_leak(narration: str, quotes_by_id: Mapping[str, QuoteCandidate]) -> Optional[str]:
         if not narration:
             return None
         narration_norm = _normalise_for_match(narration)
@@ -376,8 +362,8 @@ class ScriptWriter:
             " and emit the corrected JSON only.\n"
             f"{bullet}\n\n"
             "Reminders for the retry:\n"
-            f"- Stay within {narration_word_budget} narration words"
-            f" (±{int(WORD_BUDGET_TOLERANCE * 100)}%, counted across narration"
+            f"- Aim for {narration_word_budget} narration words; do not exceed"
+            f" +{int(WORD_BUDGET_TOLERANCE_HIGH * 100)}% (counted across narration"
             " block text only).\n"
             "- Every kind=quote block's quote_id must come from the supplied"
             " pool — do not invent ids.\n"
