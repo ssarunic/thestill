@@ -2448,12 +2448,17 @@ def digest(
     click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
     click.echo(f"   Processing time: {format_duration(int(processing_time))}")
 
-    # Narration is the default enhancement when an LLM is configured. The
-    # link-index digest above already shipped, so any narration failure
-    # downgrades to a warning and the user keeps the link-index.
-    if not skip_narrate:
+    # Narration is opt-in per ``narration_enabled`` (spec #33 §"Migration
+    # Strategy"). Explicit ``--narration-duration`` counts as a per-run
+    # opt-in even when the flag is off. ``--no-narrate`` is a hard
+    # opt-out. The link-index digest above already shipped, so any
+    # narration failure downgrades to a warning.
+    narration_explicit = narration_duration is not None
+    if not skip_narrate and (ctx.obj.config.narration_enabled or narration_explicit):
         _chain_narrate(
-            ctx, digest_id=digest_model.id, target_duration=narration_duration,
+            ctx,
+            digest_id=digest_model.id,
+            target_duration=narration_duration,
         )
 
     # Determine exit code
@@ -2468,9 +2473,7 @@ def digest(
         ctx.exit(2)  # Complete failure
 
 
-def _resolve_target_seconds_or_warn(
-    config, target_duration: Optional[str], *, prefix: str
-) -> Optional[int]:
+def _resolve_target_seconds_or_warn(config, target_duration: Optional[str], *, prefix: str) -> Optional[int]:
     """Parse ``target_duration`` against the config default. ``None`` on parse error."""
     if target_duration is None:
         return config.narration_default_duration_seconds
@@ -2524,9 +2527,7 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
     """
     from .services.narration import NarrationRunnerError
 
-    target_seconds = _resolve_target_seconds_or_warn(
-        ctx.obj.config, target_duration, prefix="⚠️  Skipping narration:"
-    )
+    target_seconds = _resolve_target_seconds_or_warn(ctx.obj.config, target_duration, prefix="⚠️  Skipping narration:")
     if target_seconds is None:
         return
 
@@ -2588,9 +2589,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     from .services.narration import NarrationRunnerError
 
     config = ctx.obj.config
-    target_seconds = _resolve_target_seconds_or_warn(
-        config, target_duration, prefix="❌"
-    )
+    target_seconds = _resolve_target_seconds_or_warn(config, target_duration, prefix="❌")
     if target_seconds is None:
         ctx.exit(2)
 
@@ -2601,10 +2600,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
         except Exception as exc:  # noqa: BLE001 — surface to user, not a stack trace
             click.echo(f"❌ Could not initialise LLM provider: {exc}", err=True)
             ctx.exit(2)
-        click.echo(
-            f"✓ Using {config.llm_provider.upper()} provider with model: "
-            f"{llm_provider.get_model_name()}"
-        )
+        click.echo(f"✓ Using {config.llm_provider.upper()} provider with model: " f"{llm_provider.get_model_name()}")
     else:
         click.echo("🔍 Dry run — quote selection + theme clustering only.")
 

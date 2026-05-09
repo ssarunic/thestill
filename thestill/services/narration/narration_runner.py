@@ -94,16 +94,21 @@ class NarrationRunner:
         digest = self._resolve_digest(digest_id)
         episodes = self._resolve_episodes(digest)
         if not episodes:
-            raise NarrationRunnerError(
-                f"digest {digest.id} contains no resolvable episodes"
+            raise NarrationRunnerError(f"digest {digest.id} contains no resolvable episodes")
+        try:
+            cfg = NarrationConfig(
+                target_duration_seconds=target_duration_seconds,
+                wpm=wpm,
+                max_quote_share=max_quote_share,
+                slug=slug,
+                basename=f"{digest.id}-{slug}",
             )
-        cfg = NarrationConfig(
-            target_duration_seconds=target_duration_seconds,
-            wpm=wpm,
-            max_quote_share=max_quote_share,
-            slug=slug,
-            basename=f"{digest.id}-{slug}",
-        )
+        except ValueError as exc:
+            # ``NarrationConfig.__post_init__`` rejects slugs with path
+            # separators or non-canonical chars. Surface as a runner
+            # error so the CLI prints a friendly message instead of a
+            # stack trace, and the API can convert to 400.
+            raise NarrationRunnerError(str(exc)) from exc
         content = self.generator.generate(episodes, cfg)
         self.generator.write_json_script(content, cfg)
         self.generator.write_markdown(content, cfg)
@@ -124,9 +129,7 @@ class NarrationRunner:
         if digest_id is None or digest_id == "latest":
             digest = self.digest_repository.get_latest()
             if digest is None:
-                raise NarrationRunnerError(
-                    "no digests found — run `thestill digest` before `thestill narrate`"
-                )
+                raise NarrationRunnerError("no digests found — run `thestill digest` before `thestill narrate`")
             return digest
         digest = self.digest_repository.get_by_id(digest_id)
         if digest is None:

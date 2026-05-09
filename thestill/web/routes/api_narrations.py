@@ -23,10 +23,12 @@ the durable join key for narrations.
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from structlog import get_logger
 
+from ...models.digest import Digest
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, not_found
 
@@ -43,6 +45,30 @@ def _narration_paths(state: AppState, narration_id: str) -> tuple[Path, Path]:
     )
 
 
+def _resolve_owned_digest(state: AppState, narration_id: str, user_id: str) -> Optional[Digest]:
+    """Resolve the digest that owns ``narration_id`` and check ownership.
+
+    Filenames are ``<digest_id>-<slug>.{json,md}``. Both the digest_id
+    (UUID4) and the slug may contain hyphens, so we iterate possible
+    split points from longest digest_id prefix down to shortest, hitting
+    the repo until a row matches. Returns ``None`` when no row matches
+    or the matching digest belongs to another user — callers translate
+    both into a 404 so the endpoint isn't an enumeration oracle.
+    """
+    parts = narration_id.split("-")
+    if len(parts) < 2:
+        return None
+    for n in range(len(parts) - 1, 0, -1):
+        candidate = "-".join(parts[:n])
+        digest = state.digest_repository.get_by_id(candidate)
+        if digest is None:
+            continue
+        if digest.user_id != user_id:
+            return None
+        return digest
+    return None
+
+
 @router.get("/{narration_id}")
 async def get_narration(
     narration_id: str,
@@ -50,6 +76,8 @@ async def get_narration(
     user=Depends(require_auth),
 ):
     """Fetch the JSON script + Markdown body for a stored narration."""
+    if _resolve_owned_digest(app_state, narration_id, user.id) is None:
+        not_found("Narration", narration_id)
     json_path, md_path = _narration_paths(app_state, narration_id)
     if not json_path.exists():
         not_found("Narration", narration_id)
@@ -75,6 +103,8 @@ async def get_narration_script(
     user=Depends(require_auth),
 ):
     """Return the JSON script body verbatim — intended for downstream TTS consumers."""
+    if _resolve_owned_digest(app_state, narration_id, user.id) is None:
+        not_found("Narration", narration_id)
     json_path, _ = _narration_paths(app_state, narration_id)
     if not json_path.exists():
         not_found("Narration", narration_id)
