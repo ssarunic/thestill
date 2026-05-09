@@ -23,7 +23,6 @@ both surfaces produce identical artefacts.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -59,8 +58,7 @@ class NarrationRun:
 
     @property
     def narration_id(self) -> str:
-        date_str = self.content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        return f"{date_str}-{self.slug}"
+        return f"{self.digest_id}-{self.slug}"
 
     @property
     def json_path(self) -> Optional[Path]:
@@ -104,6 +102,7 @@ class NarrationRunner:
             wpm=wpm,
             max_quote_share=max_quote_share,
             slug=slug,
+            basename=f"{digest.id}-{slug}",
         )
         content = self.generator.generate(episodes, cfg)
         self.generator.write_json_script(content, cfg)

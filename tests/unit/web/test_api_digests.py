@@ -119,9 +119,18 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
         1,
     )
 
-    # Mock path manager
+    # Mock path manager — real tempdirs so the narration variant
+    # filesystem listing in GET /digests/{id} can read files we write.
     state.path_manager = MagicMock()
     state.path_manager.digests_dir.return_value = Path(tempfile.mkdtemp())
+    narrations_root = Path(tempfile.mkdtemp())
+    state.path_manager.narrations_dir.return_value = narrations_root
+
+    # Default: narration runner disabled. Tests that exercise the
+    # POST /narrate path opt in by setting state.narration_runner.
+    state.narration_runner = None
+    state.config = MagicMock()
+    state.config.narration_default_duration_seconds = 300
 
     return state
 
@@ -218,6 +227,172 @@ class TestGetDigest:
 
         response = client.get("/api/digests/test-digest-id")
 
+        assert response.status_code == 404
+
+    def test_get_digest_includes_narration_variants(
+        self, client, mock_app_state, sample_digest
+    ):
+        """GET surfaces narration variants present on disk."""
+        narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
+        for slug, target in [("short", 180), ("medium", 300), ("long", 600)]:
+            json_path = narrations_dir / f"{sample_digest.id}-{slug}.json"
+            json_path.write_text(
+                f'{{"target_duration_seconds": {target}, '
+                f'"actual_duration_seconds": {target - 10}, '
+                f'"mode": "narrated", '
+                f'"generated_at": "2026-05-08T07:00:00+00:00"}}',
+                encoding="utf-8",
+            )
+            (narrations_dir / f"{sample_digest.id}-{slug}.md").write_text(
+                "# briefing\n", encoding="utf-8",
+            )
+
+        response = client.get(f"/api/digests/{sample_digest.id}")
+        assert response.status_code == 200
+        data = response.json()
+        narrations = data["narrations"]
+        slugs = sorted(n["slug"] for n in narrations)
+        assert slugs == ["long", "medium", "short"]
+        # All variants share the digest id as the prefix.
+        assert all(n["narration_id"].startswith(f"{sample_digest.id}-") for n in narrations)
+        assert all(n["markdown_path"] for n in narrations)
+
+    def test_get_digest_with_no_narrations_returns_empty_list(
+        self, client, sample_digest
+    ):
+        response = client.get(f"/api/digests/{sample_digest.id}")
+        assert response.status_code == 200
+        assert response.json()["narrations"] == []
+
+    def test_get_digest_skips_corrupt_narration_json(
+        self, client, mock_app_state, sample_digest
+    ):
+        narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
+        (narrations_dir / f"{sample_digest.id}-medium.json").write_text(
+            "{not valid json", encoding="utf-8",
+        )
+        response = client.get(f"/api/digests/{sample_digest.id}")
+        assert response.status_code == 200
+        assert response.json()["narrations"] == []
+
+
+class TestNarrateDigest:
+    """Tests for POST /api/digests/{digest_id}/narrate endpoint."""
+
+    def _stub_run(self, digest_id="test-digest-id", slug="short", mode="narrated"):
+        from thestill.services.narration.models import NarrationContent, NarrationStats
+        from thestill.services.narration.narration_runner import NarrationRun
+
+        stats = NarrationStats(
+            target_duration_seconds=180,
+            actual_duration_seconds=170.0,
+            narration_words=350,
+            quote_seconds=24.0,
+            episodes_covered=2,
+            episodes_in_tail=1,
+            quote_count=2,
+            fallback_reason=None,
+        )
+        content = NarrationContent(
+            blocks=[],
+            quotes=[],
+            stats=stats,
+            episode_ids_covered=["e1", "e2"],
+            episode_ids_in_tail=["e3"],
+            mode=mode,
+            markdown="# briefing\n",
+            generated_at=datetime(2026, 5, 8, 7, 0, tzinfo=timezone.utc),
+            json_script_path=Path(f"/tmp/{digest_id}-{slug}.json"),
+            markdown_path=Path(f"/tmp/{digest_id}-{slug}.md"),
+        )
+        return NarrationRun(digest_id=digest_id, slug=slug, content=content)
+
+    def test_returns_503_when_runner_disabled(self, client, sample_digest):
+        # Default mock_app_state.narration_runner is None.
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate", json={}
+        )
+        assert response.status_code == 503
+
+    def test_resolves_preset_string_into_slug(
+        self, client, mock_app_state, sample_digest
+    ):
+        mock_app_state.narration_runner = MagicMock()
+        mock_app_state.narration_runner.run.return_value = self._stub_run(slug="short")
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate",
+            json={"target_duration": "short"},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["slug"] == "short"
+        assert data["narration_id"].endswith("-short")
+        kwargs = mock_app_state.narration_runner.run.call_args.kwargs
+        assert kwargs["target_duration_seconds"] == 180
+        assert kwargs["slug"] == "short"
+
+    def test_int_seconds_default_to_custom_slug(
+        self, client, mock_app_state, sample_digest
+    ):
+        mock_app_state.narration_runner = MagicMock()
+        mock_app_state.narration_runner.run.return_value = self._stub_run(
+            slug="custom-450s"
+        )
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate",
+            json={"target_duration": 450},
+        )
+        assert response.status_code == 201
+        kwargs = mock_app_state.narration_runner.run.call_args.kwargs
+        assert kwargs["slug"] == "custom-450s"
+
+    def test_explicit_slug_is_honoured(self, client, mock_app_state, sample_digest):
+        mock_app_state.narration_runner = MagicMock()
+        mock_app_state.narration_runner.run.return_value = self._stub_run(slug="weekend")
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate",
+            json={"target_duration": 300, "slug": "weekend"},
+        )
+        assert response.status_code == 201
+        kwargs = mock_app_state.narration_runner.run.call_args.kwargs
+        assert kwargs["slug"] == "weekend"
+
+    def test_rejects_traversal_slug(self, client, mock_app_state, sample_digest):
+        mock_app_state.narration_runner = MagicMock()
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate",
+            json={"slug": "../etc/passwd"},
+        )
+        assert response.status_code == 422
+
+    def test_404_when_digest_unknown(self, client, mock_app_state):
+        mock_app_state.narration_runner = MagicMock()
+        mock_app_state.digest_repository.get_by_id.return_value = None
+        response = client.post(
+            "/api/digests/missing/narrate", json={}
+        )
+        assert response.status_code == 404
+
+    def test_404_when_runner_raises(self, client, mock_app_state, sample_digest):
+        from thestill.services.narration import NarrationRunnerError
+        mock_app_state.narration_runner = MagicMock()
+        mock_app_state.narration_runner.run.side_effect = NarrationRunnerError(
+            "no resolvable episodes"
+        )
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate", json={}
+        )
+        assert response.status_code == 404
+
+    def test_owner_check_returns_404_for_other_user(
+        self, client, mock_app_state, sample_digest
+    ):
+        mock_app_state.narration_runner = MagicMock()
+        sample_digest.user_id = "different-user"
+        mock_app_state.digest_repository.get_by_id.return_value = sample_digest
+        response = client.post(
+            f"/api/digests/{sample_digest.id}/narrate", json={}
+        )
         assert response.status_code == 404
 
 

@@ -12,91 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Narrated digest API endpoints (spec #33 Phase 3).
+"""Narrated-digest artefact endpoints (spec #33).
 
-Returns 503 when the runner is unavailable (``narration_enabled`` is
-False or the LLM provider failed to initialise) so callers can handle
-the rollout gate cleanly.
+These are direct-fetch endpoints for the on-disk artefacts, intended
+for the future TTS consumer and for clients that want to deep-link to
+a specific narration variant. The user-facing trigger now lives at
+``POST /api/digests/{digest_id}/narrate`` so the digest record stays
+the durable join key for narrations.
 """
 
 import json
 from pathlib import Path
-from typing import Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, Depends
 from structlog import get_logger
 
-from ...services.narration import NarrationRunnerError
-from ...utils.duration import parse_target_duration
-from ...utils.path_manager import _validate_slug
 from ..dependencies import AppState, get_app_state, require_auth
-from ..responses import api_response, bad_request, not_found
+from ..responses import api_response, not_found
 
 logger = get_logger(__name__)
 
 router = APIRouter()
-
-
-class CreateNarrationRequest(BaseModel):
-    """Body for ``POST /api/narrations`` (spec §"CLI & API").
-
-    ``target_duration`` accepts either an integer (seconds) or a string
-    (preset / unit-suffixed / clock form) — both shapes are resolved
-    server-side by ``parse_target_duration`` so the API surface stays
-    a single field instead of a mutual-exclusion pair.
-    """
-
-    digest_id: Optional[str] = Field(
-        default=None,
-        description="Digest id to narrate. Omit to use the latest digest.",
-    )
-    target_duration: Optional[Union[int, str]] = Field(
-        default=None,
-        description=(
-            "Target spoken duration. Int = seconds; string = preset"
-            " (short/medium/long) or unit-suffixed (5m, 120s, 0:05:00)."
-            " Defaults to config.narration_default_duration_seconds."
-        ),
-    )
-    slug: str = Field(default="morning", min_length=1, max_length=64)
-
-    @field_validator("slug")
-    @classmethod
-    def _check_slug(cls, value: str) -> str:
-        # Defence in depth — PathManager's slug validator is also applied
-        # downstream, but we reject malformed input at the request
-        # boundary so a traversal attempt never reaches the filesystem.
-        try:
-            return _validate_slug(value, name="slug")
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-
-
-def _require_runner(app_state: AppState):
-    if app_state.narration_runner is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Narration is disabled — set NARRATION_ENABLED=true and"
-                " configure an LLM provider to enable the /api/narrations surface."
-            ),
-        )
-    return app_state.narration_runner
-
-
-def _resolve_target_seconds(req: CreateNarrationRequest, app_state: AppState) -> int:
-    raw = req.target_duration
-    if raw is None:
-        return app_state.config.narration_default_duration_seconds
-    if isinstance(raw, int):
-        if raw <= 0:
-            bad_request("target_duration must be positive")
-        return raw
-    try:
-        return parse_target_duration(raw)
-    except ValueError as exc:
-        bad_request(str(exc))
 
 
 def _narration_paths(state: AppState, narration_id: str) -> tuple[Path, Path]:
@@ -107,48 +43,13 @@ def _narration_paths(state: AppState, narration_id: str) -> tuple[Path, Path]:
     )
 
 
-@router.post("", status_code=201)
-async def create_narration(
-    body: CreateNarrationRequest,
-    app_state: AppState = Depends(get_app_state),
-    user=Depends(require_auth),
-):
-    """Generate a narration synchronously and return its artefact paths."""
-    runner = _require_runner(app_state)
-    target_seconds = _resolve_target_seconds(body, app_state)
-    try:
-        run = runner.run(
-            digest_id=body.digest_id,
-            target_duration_seconds=target_seconds,
-            slug=body.slug,
-        )
-    except NarrationRunnerError as exc:
-        not_found("Digest", body.digest_id or "latest")
-    stats = run.content.stats
-    return api_response(
-        {
-            "id": run.narration_id,
-            "digest_id": run.digest_id,
-            "mode": run.content.mode,
-            "target_duration_seconds": stats.target_duration_seconds,
-            "actual_duration_seconds": round(stats.actual_duration_seconds, 2),
-            "quote_count": stats.quote_count,
-            "episodes_covered": run.content.episode_ids_covered,
-            "episodes_in_tail": run.content.episode_ids_in_tail,
-            "fallback_reason": stats.fallback_reason,
-            "markdown_path": str(run.markdown_path) if run.markdown_path else None,
-            "script_path": str(run.json_path) if run.json_path else None,
-        }
-    )
-
-
 @router.get("/{narration_id}")
 async def get_narration(
     narration_id: str,
     app_state: AppState = Depends(get_app_state),
     user=Depends(require_auth),
 ):
-    """Fetch the JSON script + Markdown body for a previously-generated narration."""
+    """Fetch the JSON script + Markdown body for a stored narration."""
     json_path, md_path = _narration_paths(app_state, narration_id)
     if not json_path.exists():
         not_found("Narration", narration_id)

@@ -139,9 +139,11 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
     )
     run = runner.run(target_duration_seconds=300, slug="morning")
     assert run.digest_id == "digest-001"
-    assert run.narration_id.endswith("-morning")
+    assert run.narration_id == "digest-001-morning"
     assert run.json_path is not None and run.json_path.exists()
+    assert run.json_path.name == "digest-001-morning.json"
     assert run.markdown_path is not None and run.markdown_path.exists()
+    assert run.markdown_path.name == "digest-001-morning.md"
 
     payload = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert payload["mode"] == "narrated"

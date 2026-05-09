@@ -2097,15 +2097,15 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     "--async", "async_mode", is_flag=True, help="Queue processing and return immediately (requires worker process)"
 )
 @click.option(
-    "--narrate",
-    "narrate_after",
+    "--no-narrate",
+    "skip_narrate",
     is_flag=True,
-    help="Generate a narrated digest (spec #33) after the link-index digest is written.",
+    help="Skip the narrated-digest enhancement (link-index only). Useful in offline / no-LLM runs.",
 )
 @click.option(
     "--narration-duration",
     default=None,
-    help="Target spoken duration when --narrate is set (preset short/medium/long, or 5m / 0:05:00).",
+    help="Target spoken duration for the narrated digest (preset short/medium/long, or 5m / 0:05:00).",
 )
 @click.pass_context
 @require_config
@@ -2122,7 +2122,7 @@ def digest(
     output,
     ready_only,
     exclude_digested,
-    narrate_after,
+    skip_narrate,
     narration_duration,
     async_mode,
 ):
@@ -2448,7 +2448,10 @@ def digest(
     click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
     click.echo(f"   Processing time: {format_duration(int(processing_time))}")
 
-    if narrate_after:
+    # Narration is the default enhancement when an LLM is configured. The
+    # link-index digest above already shipped, so any narration failure
+    # downgrades to a warning and the user keeps the link-index.
+    if not skip_narrate:
         _chain_narrate(
             ctx, digest_id=digest_model.id, target_duration=narration_duration,
         )
@@ -2494,7 +2497,7 @@ def _build_narration_runner(ctx, *, llm_provider):
 
 
 def _print_run_summary(run, *, include_target: bool) -> None:
-    """Render the per-run stats block shared by ``narrate`` and ``--narrate``."""
+    """Render the per-run stats block shared by ``narrate`` and the chained ``digest`` flow."""
     stats = run.content.stats
     click.echo(f"   Mode: {run.content.mode}")
     if include_target:
@@ -2621,7 +2624,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     _print_run_summary(run, include_target=True)
     # Fallback exits non-zero so the caller knows the LLM stage didn't
     # produce its intended output, even though the link-index artefact
-    # was still written. ``thestill digest --narrate`` ignores this in
+    # was still written. ``thestill digest`` ignores this in
     # ``_chain_narrate`` since the digest itself already shipped.
     ctx.exit(0 if run.content.mode == "narrated" else 1)
 

@@ -1,8 +1,8 @@
 # Narrated Digest Specification
 
-> **Status:** 🚧 In progress (Phases 1–3 complete)
+> **Status:** 🚧 In progress (Phases 1–3 complete; Phase 4 backend complete, frontend pending)
 > **Created:** 2026-05-06
-> **Updated:** 2026-05-08
+> **Updated:** 2026-05-09
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [digest_generator.py](../thestill/services/digest_generator.py)
 
@@ -562,12 +562,25 @@ Pure-additive. No data backfill required.
 - New helper: `parse_target_duration` in `thestill/utils/duration.py` — accepts presets, unit suffixes, `MM:SS`/`HH:MM:SS`, and bare seconds.
 - Config gate: `NARRATION_ENABLED=true` (default off) plus `NARRATION_DEFAULT_DURATION_SECONDS=300` so deployments can opt in once fallback rates are measured (spec §"Migration Strategy").
 
-### Phase 4 — Frontend reader + length switcher
+### Phase 4 — Digest-as-narration consolidation 🚧 In progress
 
-- "Today's briefing" card on the inbox.
-- Reader view with deep-linked quote timestamps.
-- Length switcher chips (Short / Medium / Long).
-- Fallback banner when narration is missing.
+**Design shift from the original Phase 4.** Per a design call, the
+narrated digest is no longer a separate "narration" surface alongside
+the link-index; it becomes the canonical rendering of an existing
+digest, with the link-index remaining as the synchronous-fast view and
+the narrated form arriving as a progressive enhancement. One artefact,
+one viewer, two renderings.
+
+- ✅ Narration filenames are keyed on the digest record (``data/narrations/<digest_id>-<slug>.{json,md}``) so the digest is the durable join key. Standalone callers fall back to ``YYYY-MM-DD-<slug>``.
+- ✅ ``thestill digest`` runs narration by default after the link-index ships when an LLM provider is configured. ``--no-narrate`` opts out (the old ``--narrate`` flag is replaced).
+- ✅ ``GET /api/digests/{id}`` surfaces a ``narrations: [{narration_id, slug, target_duration_seconds, mode, fallback_reason, …}]`` array — populated from the filesystem (no schema migration needed).
+- ✅ ``POST /api/digests/{id}/narrate`` triggers narration with a duration. Each call writes ``<digest_id>-<slug>.{json,md}``; previous variants are preserved so the length switcher can flip back without paying for a regen. Default slug derives from the duration preset (``short`` / ``medium`` / ``long``); custom durations get ``custom-<seconds>s``.
+- ✅ ``POST /api/narrations`` retired in favour of the digest-scoped route. ``GET /api/narrations/{id}`` and ``GET /api/narrations/{id}/script.json`` stay as direct artefact endpoints (TTS consumer).
+- 🚧 Frontend: digest viewer renders narration when present, link-index when not. Length switcher chips (Short · Medium · Long) call `POST /api/digests/{id}/narrate`. Fallback banner when ``mode=fallback``. (Follow-up commit.)
+
+**Out of v1 (deferred):**
+- "Today's briefing" inbox card — spec #36 already ships a per-user briefing card; promoting narrated content into the inbox card is a separate decision once per-user briefings adopt narration.
+- Per-user briefing narration (spec #36 + #33 join) — kept on link-index for now to avoid the per-user × LLM-cost multiplier.
 
 ### Phase 5 — Polish + docs
 

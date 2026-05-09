@@ -88,6 +88,16 @@ class NarrationConfig:
     opener_share: float = DEFAULT_OPENER_SHARE
     signoff_share: float = DEFAULT_SIGNOFF_SHARE
     slug: str = "morning"
+    # Overrides the default ``YYYY-MM-DD-<slug>`` basename used for the
+    # JSON/Markdown artefacts. The runner sets this to ``<digest_id>-<slug>``
+    # so the digest record is the durable join key for narrations.
+    basename: Optional[str] = None
+
+    def file_basename(self, generated_at) -> str:
+        if self.basename:
+            return self.basename
+        date_str = generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        return f"{date_str}-{self.slug}"
 
 
 @dataclass
@@ -182,15 +192,14 @@ class NarrationGenerator:
     ) -> Path:
         """Write the JSON-script artefact under ``data/narrations/``.
 
-        Filename pattern: ``YYYY-MM-DD-<slug>.json`` (UTC date). Slug
-        defaults to ``morning`` and is overridable via
-        ``NarrationConfig.slug``.
+        Filename: ``<basename>.json``. The runner sets ``basename`` to
+        ``<digest_id>-<slug>`` so the digest record is the join key.
+        Standalone callers fall back to ``YYYY-MM-DD-<slug>``.
         """
         cfg = config or NarrationConfig()
         narrations_dir = self.path_manager.narrations_dir()
         narrations_dir.mkdir(parents=True, exist_ok=True)
-        date_str = content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        path = narrations_dir / f"{date_str}-{cfg.slug}.json"
+        path = narrations_dir / f"{cfg.file_basename(content.generated_at)}.json"
         payload = {
             "generated_at": content.generated_at.astimezone(timezone.utc).isoformat(),
             "target_duration_seconds": content.stats.target_duration_seconds,
@@ -228,8 +237,7 @@ class NarrationGenerator:
         cfg = config or NarrationConfig()
         narrations_dir = self.path_manager.narrations_dir()
         narrations_dir.mkdir(parents=True, exist_ok=True)
-        date_str = content.generated_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        path = narrations_dir / f"{date_str}-{cfg.slug}.md"
+        path = narrations_dir / f"{cfg.file_basename(content.generated_at)}.md"
         path.write_text(content.markdown, encoding="utf-8")
         content.markdown_path = path
         logger.info(
