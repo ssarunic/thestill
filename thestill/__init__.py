@@ -19,3 +19,9 @@ Thestill - Automated Podcast Transcription and Summarization Pipeline
 __version__ = "1.0.0"
 __author__ = "Your Name"
 __description__ = "Automated podcast transcription and summarization pipeline"
+
+# Ensure ffmpeg/ffprobe are on PATH before any subprocess or pydub call runs.
+# Some launch contexts (e.g. stale shell snapshots) omit /opt/homebrew/bin.
+from .utils.ffmpeg_path import ensure_ffmpeg_on_path as _ensure_ffmpeg_on_path
+
+_ensure_ffmpeg_on_path()

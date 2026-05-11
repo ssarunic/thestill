@@ -329,4 +329,4 @@ class AudioPreprocessor:
 
         except Exception as e:
             self._log(f"Error downsampling audio: {e}")
-            return None
+            raise
