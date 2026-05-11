@@ -26,6 +26,7 @@ import type {
 } from '../api/types'
 import { parseQuery } from '../utils/searchOperators'
 import { entityHref, entityStyle } from '../utils/entityColors'
+import { usePlayer } from '../contexts/PlayerContext'
 
 type Tab = 'all' | 'quotes' | 'entities'
 
@@ -186,15 +187,43 @@ function Section({ title, children }: { title?: string; children: React.ReactNod
 
 function QuoteResultRow({ result }: { result: SearchResult }) {
   const navigate = useNavigate()
+  const player = usePlayer()
   const seconds = Math.floor(result.start_ms / 1000)
   const hasSlugs = !!result.podcast_slug && !!result.episode_slug
+  const canPlayInline = hasSlugs && !!result.audio_url
 
+  // Spec #28 §4.2 — clicking a quote row plays it inline through the
+  // FloatingPlayer when we have the audio URL on hand; only fall back
+  // to a full navigation when the API response is missing audio_url
+  // (older episodes or pre-audio_url backend versions). The fallback
+  // keeps legacy behaviour intact so we never strand a user on a
+  // search result they can't open.
   const handleOpen = () => {
-    if (hasSlugs) {
-      navigate(
-        `/podcasts/${result.podcast_slug}/episodes/${result.episode_slug}?t=${seconds}`,
+    if (!hasSlugs) return
+    if (canPlayInline && result.audio_url) {
+      if (player.isCurrent(result.episode_id)) {
+        player.seek(seconds)
+        if (!player.isPlaying) player.resume()
+        return
+      }
+      player.play(
+        {
+          episodeId: result.episode_id,
+          podcastSlug: result.podcast_slug!,
+          episodeSlug: result.episode_slug!,
+          title: result.episode_title,
+          podcastTitle: result.podcast_title,
+          audioUrl: result.audio_url,
+          artworkUrl: result.image_url ?? null,
+          durationHint: result.duration ?? null,
+        },
+        { startAt: seconds },
       )
+      return
     }
+    navigate(
+      `/podcasts/${result.podcast_slug}/episodes/${result.episode_slug}?t=${seconds}`,
+    )
   }
 
   return (

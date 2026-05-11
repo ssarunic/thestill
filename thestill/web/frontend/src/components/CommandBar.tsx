@@ -27,6 +27,7 @@ import type {
 } from '../api/types'
 import { parseQuery } from '../utils/searchOperators'
 import type { ParsedFilters } from '../utils/searchOperators'
+import { usePlayer, type PlayerContextValue } from '../contexts/PlayerContext'
 
 interface CommandBarProps {
   isOpen: boolean
@@ -46,6 +47,7 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const navigate = useNavigate()
+  const player = usePlayer()
 
   const parsed = useMemo(() => parseQuery(query), [query])
   const searchOptions = useMemo(
@@ -88,9 +90,9 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
   const activate = useCallback(
     (entry: FlatItem) => {
       onClose()
-      handleActivate(entry.item, navigate)
+      handleActivate(entry.item, navigate, player)
     },
-    [navigate, onClose],
+    [navigate, onClose, player],
   )
 
   const handleKey = useCallback(
@@ -478,13 +480,44 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-function handleActivate(item: QuickSearchItem, navigate: ReturnType<typeof useNavigate>) {
+function handleActivate(
+  item: QuickSearchItem,
+  navigate: ReturnType<typeof useNavigate>,
+  player: PlayerContextValue,
+) {
   if (item.kind === 'episode') {
     navigate(`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`)
     return
   }
   if (item.kind === 'quote') {
     const seconds = Math.floor(item.start_ms / 1000)
+    // Spec #28 §4.1 — quote hits play inline via the FloatingPlayer
+    // when we have the audio URL on hand; we only fall back to a
+    // navigation when the API didn't ship audio_url (legacy episodes
+    // or pre-audio_url backend versions). Playing inline keeps the
+    // user on whichever page launched the bar, which is the point of
+    // having a global ⌘K.
+    if (item.audio_url) {
+      if (player.isCurrent(item.episode_id)) {
+        player.seek(seconds)
+        if (!player.isPlaying) player.resume()
+        return
+      }
+      player.play(
+        {
+          episodeId: item.episode_id,
+          podcastSlug: item.podcast_slug,
+          episodeSlug: item.episode_slug,
+          title: item.episode_title,
+          podcastTitle: item.podcast_title,
+          audioUrl: item.audio_url,
+          artworkUrl: item.image_url ?? null,
+          durationHint: item.duration ?? null,
+        },
+        { startAt: seconds },
+      )
+      return
+    }
     navigate(`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}?t=${seconds}`)
     return
   }

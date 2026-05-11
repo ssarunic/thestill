@@ -362,6 +362,31 @@ class TestEntitySummaryEndpoint:
         assert first["episode_title"] == "First Episode"
         assert first["surface_form"] in {"Elon Musk", "Musk"}
 
+    def test_recent_mentions_include_episode_audio_url(self, client, app_state):
+        """Spec #28 §5.1 — the entity page wires recent-mention timestamps
+        into the FloatingPlayer inline. Each citation row must carry the
+        episode's ``audio_url`` (and ideally artwork/duration) so the
+        frontend can play it without a second round-trip.
+        """
+        _seed_corpus(Path(app_state.repository.db_path))
+
+        resp = client.get("/api/entities/person/elon-musk")
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["recent_mentions"], "expected at least one mention"
+        for row in body["recent_mentions"]:
+            # Every seeded episode has audio_url set, so every row must
+            # carry it. Missing audio_url is what made the entity page's
+            # play affordance fall back to a deep-link Link.
+            assert row["audio_url"], f"row missing audio_url: {row}"
+            assert row["audio_url"].startswith("https://example.com/ep")
+            # Optional fields are still present in the response shape
+            # (even when null), so the frontend can hand them straight
+            # to ``player.play()``.
+            assert "image_url" in row
+            assert "duration" in row
+
     def test_accepts_full_id_form_in_url_path(self, client, app_state):
         _seed_corpus(Path(app_state.repository.db_path))
 

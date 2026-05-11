@@ -175,6 +175,13 @@ class CitationRow(BaseModel):
     speaker: Optional[str] = None
     quote: str
     surface_form: str
+    # Spec #28 §5.1 — entity page must seek the FloatingPlayer inline
+    # when a quote timestamp is clicked. Without the audio URL the page
+    # has to fall back to a full navigation to /podcasts/.../episodes/...
+    # which loses the user's place on the entity page.
+    audio_url: Optional[str] = None
+    image_url: Optional[str] = None
+    duration: Optional[float] = None
 
 
 class HostedPodcastRef(BaseModel):
@@ -410,7 +417,18 @@ def get_entity_summary(
         # The web doesn't have an `/episodes/<id>` route; resolve slugs
         # so the row is deeplinkable from the entity page.
         episode_lookup = state.repository.get_episode(ctx.episode_id)
-        episode_slug = episode_lookup[1].slug if episode_lookup else None
+        episode_slug = None
+        episode_audio_url = None
+        episode_image_url = None
+        episode_duration = None
+        if episode_lookup is not None:
+            _ep_podcast, ep_record = episode_lookup
+            episode_slug = ep_record.slug
+            # ``audio_url`` is a HttpUrl on the model; coerce to str so
+            # the response stays JSON-serializable.
+            episode_audio_url = str(ep_record.audio_url) if ep_record.audio_url else None
+            episode_image_url = ep_record.image_url
+            episode_duration = ep_record.duration
         recent_mentions.append(
             CitationRow(
                 episode_id=ctx.episode_id,
@@ -425,6 +443,9 @@ def get_entity_summary(
                 speaker=m.speaker,
                 quote=m.quote_excerpt,
                 surface_form=m.surface_form,
+                audio_url=episode_audio_url,
+                image_url=episode_image_url,
+                duration=episode_duration,
             )
         )
 

@@ -1,7 +1,8 @@
 import { useParams, Link } from 'react-router-dom'
 import { useEntitySummary } from '../hooks/useApi'
-import type { EntityType } from '../api/types'
+import type { EntityCitationRow, EntityType } from '../api/types'
 import { entityHref, entityStyle } from '../utils/entityColors'
+import { usePlayer } from '../contexts/PlayerContext'
 
 // Spec #28 §5.1 — minimal entity page. The full design (timeline
 // sparkline, NotableQuotes pull-out, MentionFeed pagination) lands in
@@ -35,6 +36,37 @@ export default function Entities() {
     ? (entityType as EntityType)
     : null
   const { data, isLoading, error } = useEntitySummary(validType, idSlug ?? null)
+  const player = usePlayer()
+
+  // Spec #28 §5.1 — clicking a quote timestamp on the entity page must
+  // open the FloatingPlayer at the right moment, not navigate away to
+  // the episode detail page (which loses the user's place). We hand
+  // the audio URL + start offset directly to ``player.play`` so the
+  // MiniPlayer takes over inline. Falls back to a deep-link Link when
+  // ``audio_url`` is missing (older API responses, episode without
+  // resolved feed audio).
+  const playMention = (row: EntityCitationRow) => {
+    if (!row.audio_url || !row.podcast_slug || !row.episode_slug) return
+    const startAt = row.start_ms / 1000
+    if (player.isCurrent(row.episode_id)) {
+      player.seek(startAt)
+      if (!player.isPlaying) player.resume()
+      return
+    }
+    player.play(
+      {
+        episodeId: row.episode_id,
+        podcastSlug: row.podcast_slug,
+        episodeSlug: row.episode_slug,
+        title: row.episode_title,
+        podcastTitle: row.podcast_title,
+        audioUrl: row.audio_url,
+        artworkUrl: row.image_url ?? null,
+        durationHint: row.duration ?? null,
+      },
+      { startAt },
+    )
+  }
 
   if (!validType || !idSlug) {
     return (
@@ -250,15 +282,28 @@ export default function Entities() {
               const seekHref = row.podcast_slug && row.episode_slug
                 ? `/podcasts/${row.podcast_slug}/episodes/${row.episode_slug}?t=${Math.floor(row.start_ms / 1000)}`
                 : null
+              const canPlayInline =
+                Boolean(row.audio_url) && Boolean(row.podcast_slug) && Boolean(row.episode_slug)
+              const timestamp = formatTimestamp(row.start_ms)
               return (
                 <li key={`${row.episode_id}-${row.start_ms}-${idx}`} className="py-3">
                   <div className="flex items-baseline gap-2 text-xs text-gray-500">
-                    {seekHref ? (
+                    {canPlayInline ? (
+                      <button
+                        type="button"
+                        onClick={() => playMention(row)}
+                        aria-label={`Play "${row.quote}" at ${timestamp}`}
+                        className="font-mono tabular-nums text-primary-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded-sm"
+                        data-testid="entity-mention-play"
+                      >
+                        {timestamp}
+                      </button>
+                    ) : seekHref ? (
                       <Link to={seekHref} className="font-mono tabular-nums text-primary-700 hover:underline">
-                        {formatTimestamp(row.start_ms)}
+                        {timestamp}
                       </Link>
                     ) : (
-                      <span className="font-mono tabular-nums">{formatTimestamp(row.start_ms)}</span>
+                      <span className="font-mono tabular-nums">{timestamp}</span>
                     )}
                     <span>·</span>
                     {row.speaker && <span>{row.speaker}</span>}
@@ -266,7 +311,14 @@ export default function Entities() {
                   </div>
                   <p className="mt-1 text-sm text-gray-800">"{row.quote}"</p>
                   <div className="mt-1 text-xs text-gray-500">
-                    <span className="font-medium text-gray-700">{row.episode_title}</span> · {row.podcast_title}
+                    {seekHref ? (
+                      <Link to={seekHref} className="font-medium text-gray-700 hover:underline">
+                        {row.episode_title}
+                      </Link>
+                    ) : (
+                      <span className="font-medium text-gray-700">{row.episode_title}</span>
+                    )}
+                    {' · '}{row.podcast_title}
                   </div>
                 </li>
               )
