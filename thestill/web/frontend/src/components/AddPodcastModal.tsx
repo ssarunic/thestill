@@ -100,7 +100,7 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
       setIsFetching(true)
       setFetchError(null)
       try {
-        const response = await getTopPodcasts(undefined, SEARCH_LIMIT, q, ctrl.signal)
+        const response = await getTopPodcasts(undefined, SEARCH_LIMIT, q, undefined, ctrl.signal)
         if (ctrl.signal.aborted) return
         setResults(response.top_podcasts)
         setRegion(response.region)

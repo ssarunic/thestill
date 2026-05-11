@@ -14,6 +14,7 @@ import {
   getPodcastEpisodes,
   getEpisode,
   getEpisodeTranscript,
+  getEpisodeTranscriptWords,
   getEpisodeSummary,
   startRefresh,
   getRefreshStatus,
@@ -61,7 +62,7 @@ import {
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -178,6 +179,40 @@ export function useEpisodeTranscript(podcastSlug: string, episodeSlug: string) {
     // Don't poll transcript content
     refetchInterval: false,
     staleTime: 60000, // 1 minute
+  })
+}
+
+// Spec #38 — karaoke wipe word-level timestamps. ``enabled`` is driven by
+// the toolbar chip; the request never fires when karaoke is off, so the
+// default page weight is unchanged. ``data === null`` means the endpoint
+// returned 404 (no word data for this episode) — the chip renders
+// disabled with a tooltip in that case. The response is pre-indexed into
+// a Map so the viewer doesn't repeat the work per render.
+export function useEpisodeTranscriptWords(
+  podcastSlug: string,
+  episodeSlug: string,
+  enabled: boolean,
+) {
+  return useQuery<KaraokeWordsByEpisode | null>({
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'transcript', 'words'],
+    queryFn: async () => {
+      const response = await getEpisodeTranscriptWords(podcastSlug, episodeSlug)
+      if (response === null) return null
+      const wordsBySegmentId = new Map<number, WordTimestamp[]>()
+      for (const seg of response.segments) {
+        wordsBySegmentId.set(seg.segment_id, seg.words)
+      }
+      return {
+        episodeId: response.episode_id,
+        offset: response.playback_time_offset_seconds,
+        wordsBySegmentId,
+      }
+    },
+    enabled: enabled && !!podcastSlug && !!episodeSlug,
+    refetchInterval: false,
+    // Word timestamps don't change once produced; keep them around for
+    // the whole session.
+    staleTime: 5 * 60_000,
   })
 }
 

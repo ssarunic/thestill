@@ -41,6 +41,11 @@ interface PlayerContextValue {
   setRate: (rate: number) => void
   stop: () => void
   isCurrent: (episodeId: string) => boolean
+  // Spec #38 — stable getter so a rAF loop can read the audio element's
+  // ``currentTime`` at 60 fps without subscribing to ``usePlayerTime``
+  // (which only ticks at the browser's ~4 Hz ``timeupdate`` cadence).
+  // Returns 0 before the audio element mounts.
+  getCurrentTime: () => number
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null)
@@ -142,6 +147,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [track]
   )
 
+  // Stable across re-renders so the rAF loop's effect doesn't tear down
+  // and respawn whenever PlayerContextValue changes identity. Reads the
+  // ref each call rather than capturing the audio element.
+  const getCurrentTime = useCallback(() => {
+    return audioRef.current?.currentTime ?? 0
+  }, [])
+
   // Memoize so the state-context value identity only changes when
   // low-frequency state changes. currentTime is delivered via a separate
   // context so high-frequency ticks don't re-render PlayerContext consumers.
@@ -161,6 +173,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setRate,
       stop,
       isCurrent,
+      getCurrentTime,
     }),
     [
       track,
@@ -177,6 +190,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setRate,
       stop,
       isCurrent,
+      getCurrentTime,
     ]
   )
 

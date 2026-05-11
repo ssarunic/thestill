@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useCallback,
   useDeferredValue,
@@ -12,8 +13,10 @@ import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
   EpisodeEntity,
+  KaraokeWordsByEpisode,
   MentionLite,
   SegmentKind,
+  WordTimestamp,
 } from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import {
@@ -23,6 +26,8 @@ import {
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
 import { getSpeakerBorderColor, getSpeakerColor } from '../utils/speakerColors'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
+import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
+import KaraokeWord from './KaraokeWord'
 import { useToast } from './Toast'
 import {
   applyEntityHighlights,
@@ -39,6 +44,12 @@ const HIDDEN_KINDS_STORAGE_KEY = 'thestill:transcriptViewer:hiddenKinds'
 type TogglableKind = Exclude<SegmentKind, 'filler' | 'content'>
 
 const TOGGLE_ORDER: TogglableKind[] = ['ad_break', 'music', 'intro', 'outro']
+
+// Sentinel for ContentSegment's karaoke rAF hook when karaoke is off
+// for this segment. The hook short-circuits on null words, so this is
+// never read — it's just a stable identity so the effect's deps array
+// doesn't churn between renders.
+const KARAOKE_NOOP_TIME = (): number => 0
 
 const KIND_LABELS: Record<TogglableKind, string> = {
   ad_break: 'Ads',
@@ -147,6 +158,23 @@ interface SegmentedTranscriptViewerProps {
   // `[`/`]` keyboard nav (spec §5.2 affordance #1).
   focusedEntityId?: string | null
   onFocusEntity?: (entityId: string) => void
+  // Spec #38 — karaoke wipe.
+  //
+  // ``karaokeEnabled`` is the *effective* state (chip is on AND words are
+  // loaded for this episode); it drives whether the active segment swaps
+  // to KaraokeWord spans. ``karaokeWords`` is the pre-indexed map
+  // returned by ``useEpisodeTranscriptWords``.
+  //
+  // The remaining three props control the toolbar chip itself. The chip
+  // is rendered only when ``onKaraokeToggle`` is provided, mirroring the
+  // pattern other optional features use. ``karaokeChipChecked`` is the
+  // chip's visual state (persisted in the parent); ``karaokeChipDisabled``
+  // shows the chip dimmed with a tooltip when the endpoint returned 404.
+  karaokeEnabled?: boolean
+  karaokeWords?: KaraokeWordsByEpisode | null
+  karaokeChipChecked?: boolean
+  karaokeChipDisabled?: boolean
+  onKaraokeToggle?: () => void
 }
 
 function formatTimestamp(seconds: number): string {
@@ -333,6 +361,18 @@ interface ContentSegmentProps {
   segmentMentions: SegmentMentionSet | null
   entityHighlightsEnabled: boolean
   onFocusEntity?: (entityId: string) => void
+  // Spec #38 karaoke wipe. Present only on the active segment when
+  // karaoke is on AND the episode has word data for this segment.
+  // When set, the cleaned-text body is replaced by a flow of
+  // ``KaraokeWord`` spans (raw words, raw spacing). The viewer is
+  // "honest about what we know" — the cleaned wording is set aside for
+  // the active segment so the highlight tracks the actual audio.
+  // The active-word index is computed *inside* this component via a
+  // per-frame rAF loop, not derived from the 4 Hz ``usePlayerTime`` —
+  // the difference is the gap between "the gradient inside one word is
+  // smooth" and "the highlight handoff between words is also smooth".
+  karaokeWords?: WordTimestamp[]
+  karaokeGetCurrentTime?: () => number
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -348,7 +388,21 @@ const ContentSegment = memo(function ContentSegment({
   segmentMentions,
   entityHighlightsEnabled,
   onFocusEntity,
+  karaokeWords,
+  karaokeGetCurrentTime,
 }: ContentSegmentProps) {
+  // Per-frame karaoke cursor: which word is currently spoken (-1 during
+  // pauses) and how far through the segment the audio has progressed.
+  // The "read-up-to" cutoff is what makes the highlight stable through
+  // pauses — without it, every gap between words flips the segment back
+  // to grey. The hook returns { -1, -1 } for inactive segments, so the
+  // call is safe on every render.
+  const { activeIdx: karaokeActiveWordIdx, readUpTo: karaokeReadUpTo } =
+    useKaraokeActiveWordIdx(
+      karaokeWords ?? null,
+      offset,
+      karaokeGetCurrentTime ?? KARAOKE_NOOP_TIME,
+    )
   const speaker = segment.speaker ?? 'Unknown'
   const absoluteSeconds = segment.start + offset
   const speakerText = getSpeakerColor(speaker)
@@ -393,14 +447,25 @@ const ContentSegment = memo(function ContentSegment({
           )}
           :
         </span>{' '}
-        {applyEntityHighlights({
-          text: segment.text,
-          segmentMentions,
-          enabled: entityHighlightsEnabled,
-          searchQuery,
-          onSeek,
-          onFocusEntity,
-        })}
+        {karaokeWords && karaokeGetCurrentTime
+          ? karaokeWords.map((w, i) => (
+              <Fragment key={i}>
+                <KaraokeWord
+                  word={w}
+                  read={i <= karaokeReadUpTo}
+                  isActive={i === karaokeActiveWordIdx}
+                />
+                {i < karaokeWords.length - 1 ? ' ' : ''}
+              </Fragment>
+            ))
+          : applyEntityHighlights({
+              text: segment.text,
+              segmentMentions,
+              enabled: entityHighlightsEnabled,
+              searchQuery,
+              onSeek,
+              onFocusEntity,
+            })}
       </p>
     </div>
   )
@@ -463,6 +528,11 @@ export default function SegmentedTranscriptViewer({
   visibleSegmentIds,
   focusedEntityId: focusedEntityIdProp,
   onFocusEntity: onFocusEntityProp,
+  karaokeEnabled,
+  karaokeWords,
+  karaokeChipChecked,
+  karaokeChipDisabled,
+  onKaraokeToggle,
 }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
@@ -543,7 +613,7 @@ export default function SegmentedTranscriptViewer({
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
   const currentTime = usePlayerTime()
-  const { track } = usePlayer()
+  const { track, getCurrentTime } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
   const activeSegmentId = useMemo(() => {
@@ -561,6 +631,24 @@ export default function SegmentedTranscriptViewer({
     }
     return null
   }, [isCurrentEpisode, transcript.segments, currentTime, offset, renderedSegments])
+
+  // Spec #38 — karaoke wipe. Resolve the words for the active segment.
+  // Inactive segments stay on cleaned text so DOM cost stays
+  // O(words-in-active-segment), not O(all-words). The active-word index
+  // itself is computed inside ContentSegment via a per-frame rAF loop
+  // (``useKaraokeActiveWordIdx``) so word transitions land within ~16 ms
+  // of the audio cursor — `usePlayerTime` only ticks at 4 Hz and can
+  // miss short words entirely.
+  const activeKaraoke = useMemo(() => {
+    if (!karaokeEnabled) return null
+    if (!karaokeWords || activeSegmentId === null) return null
+    const wordsForSegment = karaokeWords.wordsBySegmentId.get(activeSegmentId)
+    if (!wordsForSegment || wordsForSegment.length === 0) return null
+    return {
+      segmentId: activeSegmentId,
+      words: wordsForSegment,
+    }
+  }, [karaokeEnabled, karaokeWords, activeSegmentId])
 
   const follow = useAutoScrollFollow({
     activeKey: activeSegmentId,
@@ -846,6 +934,30 @@ export default function SegmentedTranscriptViewer({
           />
           <span>Follow playback</span>
         </label>
+        {onKaraokeToggle && (
+          <label
+            className={
+              'inline-flex items-center gap-2 text-xs select-none ' +
+              (karaokeChipDisabled
+                ? 'text-gray-400 cursor-not-allowed'
+                : 'text-gray-600 cursor-pointer')
+            }
+            title={
+              karaokeChipDisabled
+                ? 'No word timestamps for this episode'
+                : undefined
+            }
+          >
+            <input
+              type="checkbox"
+              checked={karaokeChipChecked ?? false}
+              disabled={karaokeChipDisabled ?? false}
+              onChange={onKaraokeToggle}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50"
+            />
+            <span>Karaoke</span>
+          </label>
+        )}
       </div>
 
       {renderedSegments.length === 0 ? (
@@ -881,6 +993,8 @@ export default function SegmentedTranscriptViewer({
             const isActive = segment.id === activeSegmentId
             const segmentMentions = segmentMentionSets.get(segment.id) ?? null
             if (segment.kind === 'content' || segment.kind === 'filler') {
+              const isKaraokeSegment =
+                activeKaraoke !== null && activeKaraoke.segmentId === segment.id
               return (
                 <ContentSegment
                   key={segment.id}
@@ -896,6 +1010,10 @@ export default function SegmentedTranscriptViewer({
                   segmentMentions={segmentMentions}
                   entityHighlightsEnabled={entityHighlightsEnabled}
                   onFocusEntity={onFocusEntity}
+                  karaokeWords={isKaraokeSegment ? activeKaraoke.words : undefined}
+                  karaokeGetCurrentTime={
+                    isKaraokeSegment ? getCurrentTime : undefined
+                  }
                 />
               )
             }

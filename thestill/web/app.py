@@ -75,6 +75,7 @@ from .routes import (
     api_search,
     api_status,
     api_top_podcasts,
+    api_transcript_words,
     auth,
     health,
     webhooks,
@@ -440,6 +441,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_status.router, prefix="/api/status", tags=["status"])
     app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+    # spec #38 karaoke wipe: separate file, but URL pattern slots in next to
+    # api_podcasts so it mounts under the same /api/podcasts prefix.
+    app.include_router(api_transcript_words.router, prefix="/api/podcasts", tags=["transcript-words"])
     app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
     # Spec #28 §5.2 — episode-page entity UX (mention list per episode +
