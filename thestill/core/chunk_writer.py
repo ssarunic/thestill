@@ -89,6 +89,11 @@ class ChunkWriter:
         Idempotent: skips when chunks already exist at the current
         model unless ``force=True``, in which case existing rows are
         deleted first. Returns the inserted row count.
+
+        The encode_batch call runs *outside* any DB transaction so
+        parallel reindex workers don't serialize on the SQLite writer
+        lock during the embedding compute (which dominates wall time).
+        Only the DELETE+INSERT phase opens a write connection.
         """
         content_segs = [s for s in transcript.segments if s.kind == "content" and s.text.strip()]
         if not content_segs:
@@ -102,35 +107,37 @@ class ChunkWriter:
                 "SELECT COUNT(*) FROM chunks WHERE episode_id = ? AND embedding_model = ?",
                 (episode_id, model_name),
             ).fetchone()[0]
-            if existing and not force:
-                logger.info(
-                    "chunk_write_skipped_exists",
-                    episode_id=episode_id,
-                    model=model_name,
-                    existing_rows=existing,
-                )
-                return 0
+        if existing and not force:
+            logger.info(
+                "chunk_write_skipped_exists",
+                episode_id=episode_id,
+                model=model_name,
+                existing_rows=existing,
+            )
+            return 0
+
+        texts = [_segment_text(seg.speaker, seg.text) for seg in content_segs]
+        embeddings = self.embedding_model.encode_batch(texts)
+        rows = [
+            (
+                episode_id,
+                seg.id,
+                int(round(seg.start * 1000)),
+                int(round(seg.end * 1000)),
+                seg.speaker,
+                text,
+                model_name,
+                embedding,
+            )
+            for seg, text, embedding in zip(content_segs, texts, embeddings)
+        ]
+
+        with self._get_connection() as conn:
             if force and existing:
                 conn.execute(
                     "DELETE FROM chunks WHERE episode_id = ? AND embedding_model = ?",
                     (episode_id, model_name),
                 )
-
-            texts = [_segment_text(seg.speaker, seg.text) for seg in content_segs]
-            embeddings = self.embedding_model.encode_batch(texts)
-            rows = [
-                (
-                    episode_id,
-                    seg.id,
-                    int(round(seg.start * 1000)),
-                    int(round(seg.end * 1000)),
-                    seg.speaker,
-                    text,
-                    model_name,
-                    embedding,
-                )
-                for seg, text, embedding in zip(content_segs, texts, embeddings)
-            ]
             cur = conn.executemany(
                 """
                 INSERT OR IGNORE INTO chunks
