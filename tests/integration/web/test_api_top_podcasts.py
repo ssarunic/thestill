@@ -148,3 +148,42 @@ def test_unknown_region_falls_back_to_first_available(client, two_pods):
     # Only ``us`` is seeded → that's the only available region → resolved == us.
     assert body["region"] == "us"
     assert body["count"] == 2
+
+
+def test_podcast_slug_field_present(client, two_pods):
+    """Every row must carry a ``podcast_slug`` field (None for unimported)."""
+    response = client.get("/api/top-podcasts")
+
+    body = response.json()
+    rows = body["top_podcasts"]
+    assert all("podcast_slug" in row for row in rows)
+    # Neither chart entry has a matching ``podcasts`` row in this fixture.
+    assert all(row["podcast_slug"] is None for row in rows)
+
+
+def test_podcast_slug_populated_when_imported(client, two_pods, app_state):
+    """When a chart entry maps to an existing ``podcasts`` row, its slug
+    flows through so the UI can link directly to the detail page."""
+    from datetime import datetime, timezone
+
+    from thestill.models.podcast import Podcast
+
+    now = datetime.now(timezone.utc)
+    podcast = Podcast(
+        id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        rss_url="https://r/1",
+        title="The Rest Is History",
+        description="",
+        slug="the-rest-is-history",
+        created_at=now,
+        episodes=[],
+    )
+    app_state.repository.save(podcast)
+
+    response = client.get("/api/top-podcasts")
+
+    body = response.json()
+    by_rank = {row["rank"]: row for row in body["top_podcasts"]}
+    assert by_rank[1]["podcast_slug"] == "the-rest-is-history"
+    # The other (unimported) chart entry remains null.
+    assert by_rank[2]["podcast_slug"] is None

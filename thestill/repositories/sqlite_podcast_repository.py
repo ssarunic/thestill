@@ -3369,6 +3369,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         AND the given user follows it. Pass ``None`` (anonymous) to make every
         row report ``is_following=False`` without special-casing — the
         ``LEFT JOIN`` simply misses for ``user_id IS NULL``.
+
+        ``podcast_slug`` is surfaced from the same ``podcasts`` join so the
+        UI can link directly to the detail page for entries that already
+        exist in the local DB (regardless of follow state). ``None`` means
+        the podcast has not been imported yet.
         """
         if not region:
             return []
@@ -3394,6 +3399,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 f"""
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
                        c.name AS category, r.source_genre,
+                       up.slug AS podcast_slug,
                        CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id

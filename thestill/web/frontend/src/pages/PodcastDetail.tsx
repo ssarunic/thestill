@@ -198,11 +198,26 @@ export default function PodcastDetail() {
                     <span className="text-gray-300">·</span>
                   </>
                 )}
-                {/* Episode count */}
-                <span>{podcast.episodes_count} episodes</span>
-                <span className="text-gray-300">·</span>
-                {/* Processed count */}
-                <span className="text-green-600">{podcast.episodes_processed} processed</span>
+                {/* Episode count — replaced with a loading indicator while the
+                    initial feed refresh runs (server signals this with a null
+                    ``last_processed``). The 5s refetchInterval will replace
+                    this with the real counts as soon as discovery completes. */}
+                {podcast.last_processed === null ? (
+                  <span className="inline-flex items-center gap-2 text-gray-500">
+                    <span
+                      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+                      aria-hidden="true"
+                    />
+                    Loading episodes…
+                  </span>
+                ) : (
+                  <>
+                    <span>{podcast.episodes_count} episodes</span>
+                    <span className="text-gray-300">·</span>
+                    {/* Processed count */}
+                    <span className="text-green-600">{podcast.episodes_processed} processed</span>
+                  </>
+                )}
                 {/* Website link */}
                 {podcast.website_url && (
                   <>
@@ -239,7 +254,19 @@ export default function PodcastDetail() {
           {totalEpisodes > 0 && ` (${totalEpisodes})`}
         </h2>
 
-        {episodesLoading ? (
+        {!episodesData ||
+        episodesLoading ||
+        (allEpisodes.length === 0 &&
+          (podcast?.last_processed === null || (podcast?.episodes_count ?? 0) > 0)) ? (
+          // Skeleton during the first fetch (``!episodesData`` covers the
+          // brief render gap before TanStack Query starts fetching). Also
+          // keep the skeleton up in two race-window cases:
+          //   1. ``last_processed`` null  — the background refresh is still
+          //      discovering episodes (lazy-import flow).
+          //   2. ``episodes_count > 0`` but the list came back empty — the
+          //      /episodes handler was waiting on a SQLite write lock and
+          //      saw a stale snapshot. The next 5s refetch will land the
+          //      real list.
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
               <div key={i} className="animate-pulse bg-white rounded-lg border border-gray-200 p-4">

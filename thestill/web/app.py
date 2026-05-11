@@ -467,14 +467,24 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # Catch-all route for SPA - must be after API routes
         @app.get("/{full_path:path}")
         async def serve_spa(request: Request, full_path: str):
-            """Serve the SPA index.html for all non-API routes."""
+            """Serve the SPA index.html for all non-API routes.
+
+            ``index.html`` references the hashed JS/CSS chunks by filename, so
+            it itself is the only file that must never be cached — otherwise
+            the browser keeps the old shell after a redeploy and never loads
+            the freshly-built chunks. The hashed assets under /assets are
+            cached aggressively by ``CachedStaticFiles``; here we explicitly
+            opt out for the shell.
+            """
             # Skip if it's an API or known route
             if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health")):
                 return None
             index_file = static_dir / "index.html"
-            if index_file.exists():
-                return FileResponse(str(index_file))
-            return FileResponse(str(static_dir / "index.html"))
+            target = index_file if index_file.exists() else (static_dir / "index.html")
+            return FileResponse(
+                str(target),
+                headers={"Cache-Control": "no-cache, must-revalidate"},
+            )
 
         logger.info("serving_static_frontend", directory=str(static_dir))
     else:

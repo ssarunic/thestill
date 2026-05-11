@@ -18,9 +18,12 @@ Podcast API endpoints for Thestill web UI.
 Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
+import threading
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
+from structlog import get_logger
 
 from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
@@ -28,7 +31,93 @@ from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
 from ..responses import api_response, conflict, not_found, paginated_response
 
+logger = get_logger(__name__)
+
 router = APIRouter()
+
+
+class ResolvePodcastRequest(BaseModel):
+    """Request body for the resolve-podcast endpoint."""
+
+    url: str
+
+
+@router.post("/resolve")
+async def resolve_podcast(
+    request: ResolvePodcastRequest,
+    state: AppState = Depends(get_app_state),
+    _: User = Depends(require_auth),
+) -> dict:
+    """
+    Resolve a podcast URL to a local slug, creating the row if needed.
+
+    This is the "lazy import" path used by the Top Podcasts list when a user
+    clicks a chart entry that hasn't been imported yet. The synchronous part
+    only fetches RSS metadata and persists the ``podcasts`` row (~1–2s); the
+    full episode discovery runs in a background daemon thread so the caller
+    can navigate to the detail page immediately and watch episodes fill in.
+
+    Unlike ``POST /api/commands/add``, this endpoint:
+      - does NOT auto-follow the podcast for the caller
+      - does NOT use the single-instance task manager, so multiple resolves
+        can run in parallel (FastAPI runs sync defs in a threadpool)
+      - returns the slug synchronously, never a job ID
+
+    The operation is idempotent: calling it with a URL that already maps to
+    an existing podcast simply returns the existing slug (``is_new=False``)
+    without re-fetching the feed.
+    """
+    url = request.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    # ``podcast_service.add_podcast`` is idempotent and resolves Apple/YouTube
+    # URLs to a canonical RSS URL before checking existence, so we can't tell
+    # "new vs existing" from the URL alone. Use ``last_processed`` instead:
+    # it's ``None`` until the first refresh completes, so it's True for both
+    # genuinely-new rows and stale rows that never finished discovery — both
+    # cases want a background refresh.
+    try:
+        podcast = state.podcast_service.add_podcast(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if podcast is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to resolve podcast — the URL may be invalid or unreachable.",
+        )
+
+    is_new = podcast.last_processed is None
+
+    if is_new:
+        max_episodes_per_podcast = state.config.max_episodes_per_podcast
+
+        def _background_refresh(podcast_id: str) -> None:
+            try:
+                state.refresh_service.refresh(
+                    podcast_id=podcast_id,
+                    max_episodes_per_podcast=max_episodes_per_podcast,
+                )
+            except Exception:
+                logger.exception("resolve_podcast_background_refresh_failed", podcast_id=podcast_id)
+
+        threading.Thread(target=_background_refresh, args=(str(podcast.id),), daemon=True).start()
+
+    logger.info(
+        "podcast_resolved",
+        podcast_id=podcast.id,
+        podcast_slug=podcast.slug,
+        is_new=is_new,
+    )
+
+    return api_response(
+        {
+            "podcast_slug": podcast.slug,
+            "podcast_id": podcast.id,
+            "is_new": is_new,
+        }
+    )
 
 
 @router.get("")

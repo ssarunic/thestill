@@ -1316,6 +1316,39 @@ def test_get_top_podcasts_is_following_no_podcast_row(temp_db):
     assert rows[0]["is_following"] is False
 
 
+def test_get_top_podcasts_podcast_slug_none_when_not_imported(temp_db):
+    """``podcast_slug`` is ``None`` for chart entries that have no ``podcasts`` row."""
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "Untracked", "artist": None, "rss_url": "https://r/1"}],
+    )
+
+    rows = temp_db.get_top_podcasts("us")
+
+    assert rows[0]["podcast_slug"] is None
+
+
+def test_get_top_podcasts_podcast_slug_populated_when_imported(temp_db):
+    """``podcast_slug`` is surfaced from the ``podcasts`` join when the row exists.
+
+    The slug is independent of follow state — an imported-but-not-followed
+    podcast still has its slug returned, so the UI can link to its detail page.
+    """
+    _seed_top_chart(
+        temp_db,
+        "us",
+        [{"rank": 1, "name": "The Daily", "artist": "NYT", "rss_url": "https://r/1"}],
+        user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        follow_rss_urls=("https://r/1",),
+    )
+
+    rows = temp_db.get_top_podcasts("us", user_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    assert rows[0]["podcast_slug"] is not None
+    assert rows[0]["podcast_slug"].startswith("slug-")
+
+
 def test_get_top_podcasts_unknown_region_returns_empty(temp_db):
     _seed_top_chart(
         temp_db,

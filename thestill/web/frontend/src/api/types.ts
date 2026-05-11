@@ -362,6 +362,23 @@ export interface TopPodcast {
   category: string | null
   source_genre: string | null
   is_following: boolean
+  // Slug of the local ``podcasts`` row when this chart entry has already
+  // been imported. ``null`` means the podcast must be lazy-imported via
+  // POST /api/podcasts/resolve before the detail page can render.
+  podcast_slug: string | null
+}
+
+// Resolve API Types (lazy-import path used by Top Podcasts)
+export interface ResolvePodcastRequest {
+  url: string
+}
+
+export interface ResolvePodcastResponse {
+  status: string
+  timestamp: string
+  podcast_slug: string
+  podcast_id: string
+  is_new: boolean
 }
 
 export interface TopPodcastsResponse {

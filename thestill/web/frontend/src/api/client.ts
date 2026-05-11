@@ -47,6 +47,8 @@ import type {
   NarrateDigestResponse,
   NarrationDetail,
   TopPodcastsResponse,
+  ResolvePodcastRequest,
+  ResolvePodcastResponse,
   CorpusSearchOptions,
   QuickSearchOptions,
   QuickSearchResponse,
@@ -117,6 +119,34 @@ export async function getTopPodcasts(
 
 export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResponse> {
   return fetchApi<PodcastDetailResponse>(`/podcasts/${podcastSlug}`)
+}
+
+// Lazy import: resolve a podcast URL (e.g. a top-chart entry) to a local
+// slug, creating the row + kicking off a background refresh if needed.
+// Returns synchronously in ~1–2s; episodes populate via the detail page's
+// existing 5s refetch interval.
+export async function resolvePodcast(
+  request: ResolvePodcastRequest,
+): Promise<ResolvePodcastResponse> {
+  const response = await fetch(`${API_BASE}/podcasts/resolve`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message =
+      typeof error.detail === 'string'
+        ? error.detail
+        : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
 }
 
 // Follow a podcast

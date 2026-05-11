@@ -1,18 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { addPodcast, getTopPodcasts } from '../api/client'
+import { addPodcast, getTopPodcasts, resolvePodcast } from '../api/client'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
+import { useToast } from '../components/Toast'
 
 export default function TopPodcasts() {
   const { user } = useAuth()
+  const navigate = useNavigate()
+  const { showToast } = useToast()
   const [region, setRegion] = useState<string | null>(null)
   const [available, setAvailable] = useState<string[]>([])
   const [items, setItems] = useState<TopPodcast[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState<Record<string, 'idle' | 'pending' | 'done' | 'error'>>({})
+  // Per-row resolve state for the lazy-import → navigate flow. Keyed by
+  // rss_url, same as ``adding`` above.
+  const [resolving, setResolving] = useState<Record<string, boolean>>({})
 
   const requestedRegion = region ?? undefined
 
@@ -56,6 +62,30 @@ export default function TopPodcasts() {
       setAdding((prev) => ({ ...prev, [key]: 'done' }))
     } catch {
       setAdding((prev) => ({ ...prev, [key]: 'error' }))
+    }
+  }
+
+  async function handleOpen(podcast: TopPodcast) {
+    // Fast path: chart entry already linked to a local ``podcasts`` row.
+    if (podcast.podcast_slug) {
+      navigate(`/podcasts/${podcast.podcast_slug}`)
+      return
+    }
+
+    const key = podcast.rss_url
+    if (resolving[key]) return
+    setResolving((prev) => ({ ...prev, [key]: true }))
+    try {
+      const res = await resolvePodcast({ url: podcast.rss_url })
+      navigate(`/podcasts/${res.podcast_slug}`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to open podcast'
+      showToast(message, 'error')
+      setResolving((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
     }
   }
 
@@ -108,13 +138,36 @@ export default function TopPodcasts() {
       <ol className="space-y-2">
         {items.map((podcast) => {
           const status = adding[podcast.rss_url] ?? 'idle'
+          const isResolving = !!resolving[podcast.rss_url]
           return (
             <li
               key={podcast.rss_url}
-              className="flex items-center gap-4 bg-white border border-gray-200 rounded-lg px-4 py-3"
+              onClick={() => handleOpen(podcast)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleOpen(podcast)
+                }
+              }}
+              role="link"
+              tabIndex={0}
+              aria-busy={isResolving}
+              aria-label={`Open ${podcast.name}`}
+              className={`flex items-center gap-4 bg-white border border-gray-200 rounded-lg px-4 py-3 transition-colors hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 cursor-pointer ${
+                isResolving ? 'opacity-70' : ''
+              }`}
             >
-              <span className="w-10 text-right text-xl font-semibold tabular-nums text-gray-400 flex-shrink-0">
-                {podcast.rank}
+              <span className="w-10 text-right flex-shrink-0 flex items-center justify-end">
+                {isResolving ? (
+                  <span
+                    className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+                    aria-label="Loading"
+                  />
+                ) : (
+                  <span className="text-xl font-semibold tabular-nums text-gray-400">
+                    {podcast.rank}
+                  </span>
+                )}
               </span>
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-gray-900 truncate">{podcast.name}</div>
@@ -125,7 +178,11 @@ export default function TopPodcasts() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div
+                className="flex items-center gap-2 flex-shrink-0"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
                 {podcast.apple_url && (
                   <a
                     href={podcast.apple_url}
