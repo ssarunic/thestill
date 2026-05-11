@@ -44,7 +44,7 @@ describing current phase and gates.
 | 20 | [parallel-task-queues](20-parallel-task-queues.md) | 🚧 Active development | Per-stage worker pools so a slow transcribe task no longer blocks a fast clean task; stage-swimlane UI |
 | 21 | [episode-processing-indicator](21-episode-processing-indicator.md) | 🚧 Active development | Show "currently processing" badge on episode cards in lists; frontend-only via queue-tasks hook |
 | 22 | [floating-media-player](22-floating-media-player.md) | 🚧 Active development | Persistent audio playback across route changes via `PlayerContext` + mini player in `Layout`; seam for future custom player |
-| 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 📝 Draft | Soft highlight riding word-by-word across the active segment, powered by raw word timestamps behind an opt-in toggle |
+| 24 | [word-level-transcript-highlighting](24-word-level-transcript-highlighting.md) | 🗄 Archived | Superseded by #38 |
 | 26 | [pre-deploy-security-checklist](26-pre-deploy-security-checklist.md) | 📋 Planned (2026-04-23) | LLM-runnable + runtime smoke-test checklist that must return GO before any deploy; regression harness for spec #25 |
 | 28 | [corpus-search-and-entities](28-corpus-search-and-entities.md) | 🚧 Phases 0–4 complete; Phase 5 (entity pages + augmented reader) in progress | Native person/company/topic entity index over real podcast corpus; sqlite-vec hybrid search (Phase 2.10), DLQ-separated entity branch with CI latency budgets (Phase 3), and `⌘K` command bar + `/search` slug routes (Phase 4) all shipped. Phase 5: 7 of 20 reader affordances landed, entity-page polish + remaining affordances + Playwright suite still owed |
 | 29 | [per-user-inbox-fanout](29-per-user-inbox-fanout.md) | 📝 Draft | Per-user Inbox replacing shared "recent episodes" list: write-fan-out on publish, seed-on-follow, per-user read/save/dismiss state; sets the steady-state delivery model for full automation |
@@ -56,6 +56,7 @@ describing current phase and gates.
 | 35 | [pluggable-file-storage](35-pluggable-file-storage.md) | 📝 Draft | Cloud-first `FileStorage` abstraction with `LocalFileStorage` / `S3FileStorage` / `GCSFileStorage` backends behind one ABC; preserves `PathManager` + spec #25 traversal guards; phased migration audio-last; presigned URLs unblock direct-from-bucket streaming |
 | 36 | [per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) | 📝 Draft | Wire the morning briefing to select from each user's inbox since their last briefing; replaces the global recent-episode window post-#29; unblocks per-user audio in #34 |
 | 37 | [substack-import-resolver](37-substack-import-resolver.md) | 📝 Draft | Add `SubstackResolver` so pasted Substack post URLs (open.substack.com, `*.substack.com`, custom domains) resolve to embedded podcast audio; reuses #31's canonical-id + auto-add-parent path |
+| 38 | [karaoke-word-highlighting](38-karaoke-word-highlighting.md) | 📝 Draft | Karaoke-style smooth-wipe word highlighting during playback; CSS gradient + rAF driver, opt-in toggle, graceful fallback when words missing; supersedes #24 |
 
 ## Completed
 

@@ -1,9 +1,13 @@
 # Word-Level Transcript Highlighting
 
-**Status**: 📝 Draft
+**Status**: 🗄 Archived — superseded by [38-karaoke-word-highlighting.md](38-karaoke-word-highlighting.md)
 **Created**: 2026-04-19
-**Updated**: 2026-04-19
+**Updated**: 2026-05-11
 **Priority**: Low (polish on top of spec #23; ships only if reading-along demand warrants the payload cost)
+
+> **Superseded.** Spec #38 carries the karaoke-style evolution forward and
+> reuses most of the backend / data-plumbing design described below. Kept here
+> for historical context; do not implement from this file.
 
 ## Overview
 
