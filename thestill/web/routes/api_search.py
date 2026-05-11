@@ -46,6 +46,13 @@ class SearchResult(BaseModel):
     match_type: str
     deeplink: str
     web_url: str
+    # Spec #28 §4.2 — search results page plays each quote inline via
+    # the FloatingPlayer. Without the audio URL the click has to fall
+    # back to a full navigation, which loses the user's place in the
+    # results list.
+    audio_url: Optional[str] = None
+    image_url: Optional[str] = None
+    duration: Optional[float] = None
 
 
 class SearchResponse(BaseModel):
@@ -101,6 +108,12 @@ class QuickQuoteItem(BaseModel):
     start_ms: int
     end_ms: int
     score: float
+    # Spec #28 §4.1 — typeahead quote rows seek the FloatingPlayer
+    # inline when selected from ⌘K, so we ship the audio URL alongside
+    # the slug so the CommandBar can play without a second fetch.
+    audio_url: Optional[str] = None
+    image_url: Optional[str] = None
+    duration: Optional[float] = None
 
 
 class QuickGroup(BaseModel):
@@ -158,16 +171,20 @@ def search_corpus(
     # Resolve slugs so the React client can build /podcasts/<p>/episodes/<e>
     # routes directly. The citation's web_url is /episodes/<id> — kept on
     # the wire for MCP/desktop callers but the web doesn't have that route.
-    slug_map = _resolve_episode_slugs(
+    payload_map = _resolve_episode_payloads(
         db_path=str(state.repository.db_path),
         episode_ids=[h.episode_id for h in hits],
     )
     results: list[SearchResult] = []
     for h in hits:
         row = SearchResult(**h.as_citation())
-        slugs = slug_map.get(h.episode_id)
-        if slugs is not None:
-            row.podcast_slug, row.episode_slug = slugs
+        payload = payload_map.get(h.episode_id)
+        if payload is not None:
+            row.podcast_slug = payload.podcast_slug
+            row.episode_slug = payload.episode_slug
+            row.audio_url = payload.audio_url
+            row.image_url = payload.image_url
+            row.duration = payload.duration
         results.append(row)
     return SearchResponse(
         query=q,
@@ -287,21 +304,20 @@ def search_quick(
     # /episodes/<id>?t=… which doesn't match the live frontend route.
     quote_items: list[QuickQuoteItem] = []
     if quote_hits:
-        slug_map = _resolve_episode_slugs(
+        payload_map = _resolve_episode_payloads(
             db_path=str(state.repository.db_path),
             episode_ids=[h.episode_id for h in quote_hits],
         )
         for h in quote_hits:
-            slugs = slug_map.get(h.episode_id)
-            if slugs is None:
+            payload = payload_map.get(h.episode_id)
+            if payload is None:
                 continue  # episode metadata missing — skip rather than render a broken row
-            pslug, eslug = slugs
             quote_items.append(
                 QuickQuoteItem(
                     episode_id=h.episode_id,
                     podcast_id=h.podcast_id,
-                    podcast_slug=pslug,
-                    episode_slug=eslug,
+                    podcast_slug=payload.podcast_slug,
+                    episode_slug=payload.episode_slug,
                     podcast_title=h.podcast_title,
                     episode_title=h.episode_title,
                     speaker=h.speaker,
@@ -309,6 +325,9 @@ def search_quick(
                     start_ms=h.start_ms,
                     end_ms=h.end_ms,
                     score=h.score,
+                    audio_url=payload.audio_url,
+                    image_url=payload.image_url,
+                    duration=payload.duration,
                 )
             )
 
@@ -416,22 +435,45 @@ def _episode_typeahead(
     return items
 
 
-def _resolve_episode_slugs(
+class _EpisodePayload(BaseModel):
+    """Per-episode playback metadata used by both search endpoints.
+
+    The slug pair was the original payload shape (``_resolve_episode_slugs``);
+    we expanded it to carry the data the FloatingPlayer needs (audio
+    URL, artwork, duration) so neither the search-results page nor the
+    ⌘K command bar has to do a follow-up ``/episodes/<id>`` fetch on
+    click. Rows with no audio URL still come back so the caller can
+    fall back to a deep-link navigation.
+    """
+
+    podcast_slug: str
+    episode_slug: str
+    audio_url: Optional[str] = None
+    image_url: Optional[str] = None
+    duration: Optional[float] = None
+
+
+def _resolve_episode_payloads(
     *,
     db_path: str,
     episode_ids: List[str],
-) -> dict[str, tuple[str, str]]:
-    """Return ``{episode_id: (podcast_slug, episode_slug)}`` for the
-    given ids. One round-trip with an IN clause; rows missing a slug
-    are dropped (caller skips them).
+) -> dict[str, _EpisodePayload]:
+    """Return playback metadata for each episode id (podcast/episode
+    slugs, audio URL, artwork, duration). One round-trip with an IN
+    clause; rows missing slugs are dropped because they aren't
+    deep-linkable.
     """
     if not episode_ids:
         return {}
     placeholders = ",".join("?" for _ in episode_ids)
     sql = f"""
-        SELECT e.id        AS episode_id,
-               e.slug      AS episode_slug,
-               p.slug      AS podcast_slug
+        SELECT e.id              AS episode_id,
+               e.slug            AS episode_slug,
+               e.audio_url       AS audio_url,
+               e.image_url       AS image_url,
+               e.duration        AS duration,
+               p.slug            AS podcast_slug,
+               p.image_url       AS podcast_image_url
         FROM episodes e
         JOIN podcasts p ON p.id = e.podcast_id
         WHERE e.id IN ({placeholders})
@@ -442,8 +484,30 @@ def _resolve_episode_slugs(
         rows = conn.execute(sql, episode_ids).fetchall()
     finally:
         conn.close()
-    return {
-        row["episode_id"]: (row["podcast_slug"] or "", row["episode_slug"] or "")
-        for row in rows
-        if row["podcast_slug"] and row["episode_slug"]
-    }
+    out: dict[str, _EpisodePayload] = {}
+    for row in rows:
+        if not row["podcast_slug"] or not row["episode_slug"]:
+            continue
+        out[row["episode_id"]] = _EpisodePayload(
+            podcast_slug=row["podcast_slug"],
+            episode_slug=row["episode_slug"],
+            audio_url=row["audio_url"] or None,
+            image_url=row["image_url"] or row["podcast_image_url"] or None,
+            duration=row["duration"],
+        )
+    return out
+
+
+def _resolve_episode_slugs(
+    *,
+    db_path: str,
+    episode_ids: List[str],
+) -> dict[str, tuple[str, str]]:
+    """Backwards-compatible slug-only shape.
+
+    Kept so existing callers (and tests that import the symbol directly)
+    don't break while the FloatingPlayer wiring rolls out. New code
+    should prefer ``_resolve_episode_payloads``.
+    """
+    payloads = _resolve_episode_payloads(db_path=db_path, episode_ids=episode_ids)
+    return {ep_id: (p.podcast_slug, p.episode_slug) for ep_id, p in payloads.items()}

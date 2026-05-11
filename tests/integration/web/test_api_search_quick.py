@@ -236,6 +236,25 @@ class TestQuickEndpoint:
         assert item["start_ms"] == 1000
         assert item["kind"] == "quote"
 
+    def test_quote_group_carries_audio_url_for_floating_player(self, client, app_state):
+        """Spec #28 §4.1 — selecting a quote from ⌘K plays it inline
+        through the FloatingPlayer. The row must carry ``audio_url`` so
+        the CommandBar can hand it straight to ``player.play()`` without
+        a second round-trip; missing audio_url silently falls back to a
+        full navigation, which loses the user's current page.
+        """
+        _seed(app_state)
+        r = client.get("/api/search/quick", params={"q": "elon"})
+        body = r.json()
+        quote_group = next(g for g in body["groups"] if g["type"] == "quote")
+        assert quote_group["items"], "expected at least one quote hit"
+        item = quote_group["items"][0]
+        assert item["audio_url"], f"quote row missing audio_url: {item}"
+        # Optional companions are still present in the wire shape so the
+        # frontend can hand the full track to player.play() in one go.
+        assert "image_url" in item
+        assert "duration" in item
+
     def test_lexical_path_never_loads_embedding(self, client, app_state):
         seed = _seed(app_state)
         r = client.get("/api/search/quick", params={"q": "elon"})

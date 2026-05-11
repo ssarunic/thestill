@@ -943,6 +943,12 @@ export interface SearchResult {
   match_type: string
   deeplink: string
   web_url: string
+  // Spec #28 §4.2 — populated so the search results page can play the
+  // matching quote inline through the FloatingPlayer instead of
+  // navigating to the episode page.
+  audio_url?: string | null
+  image_url?: string | null
+  duration?: number | null
 }
 
 export interface SearchResponse {
@@ -1001,6 +1007,12 @@ export interface QuickQuoteItem {
   start_ms: number
   end_ms: number
   score: number
+  // Spec #28 §4.1 — populated so the ⌘K command bar can seek the
+  // FloatingPlayer inline when a quote row is selected, instead of
+  // closing the bar and navigating to the episode page.
+  audio_url?: string | null
+  image_url?: string | null
+  duration?: number | null
 }
 
 export type QuickSearchItem = QuickEpisodeItem | QuickEntityItem | QuickQuoteItem
@@ -1108,6 +1120,13 @@ export interface EntityCitationRow {
   speaker: string | null
   quote: string
   surface_form: string
+  // Spec #28 §5.1 — present so the entity page can hand them straight
+  // to the FloatingPlayer without a second round-trip. Optional because
+  // older API responses (or episodes whose audio_url was never set)
+  // shouldn't blank the row.
+  audio_url?: string | null
+  image_url?: string | null
+  duration?: number | null
 }
 
 export interface HostedPodcastRef {

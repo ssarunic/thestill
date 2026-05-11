@@ -26,7 +26,7 @@ export interface PlayOptions {
   startAt?: number
 }
 
-interface PlayerContextValue {
+export interface PlayerContextValue {
   track: PlayerTrack | null
   isPlaying: boolean
   isLoading: boolean
