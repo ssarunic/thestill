@@ -1,19 +1,20 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { usePodcast, usePodcastEpisodesInfinite, useUnfollowPodcast, useProcessingStageByEpisodeId } from '../hooks/useApi'
+import { usePodcast, usePodcastEpisodesInfinite, useFollowPodcast, useUnfollowPodcast, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
 import { ExplicitBadge } from '../components/ExplicitBadge'
 import { ExternalLink } from '../components/ExternalLink'
-import Button, { MinusIcon } from '../components/Button'
+import Button, { MinusIcon, PlusIcon } from '../components/Button'
 
 export default function PodcastDetail() {
   const { podcastSlug } = useParams<{ podcastSlug: string }>()
   const navigate = useNavigate()
   const { showToast } = useToast()
-  const [isUnfollowing, setIsUnfollowing] = useState(false)
+  const [isMutating, setIsMutating] = useState(false)
   const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastSlug!)
+  const { mutate: follow } = useFollowPodcast()
   const { mutate: unfollow } = useUnfollowPodcast()
   const {
     data: episodesData,
@@ -120,21 +121,20 @@ export default function PodcastDetail() {
             )}
 
             <div className="flex-1 text-center sm:text-left">
-              {/* Title row with Unfollow button aligned right */}
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-2">
                   <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
                   <ExplicitBadge explicit={podcast.explicit} />
                 </div>
-                {podcast.is_following && (
+                {podcast.is_following ? (
                   <Button
                     variant="secondary"
                     icon={<MinusIcon />}
                     iconOnlyMobile
-                    isLoading={isUnfollowing}
+                    isLoading={isMutating}
                     onClick={() => {
-                      if (isUnfollowing) return
-                      setIsUnfollowing(true)
+                      if (isMutating) return
+                      setIsMutating(true)
                       unfollow(podcastSlug!, {
                         onSuccess: () => {
                           showToast(`Unfollowed ${podcast.title}`, 'success')
@@ -142,12 +142,35 @@ export default function PodcastDetail() {
                         },
                         onError: (error) => {
                           showToast(`Failed to unfollow: ${error.message}`, 'error')
-                          setIsUnfollowing(false)
+                          setIsMutating(false)
                         },
                       })
                     }}
                   >
                     Unfollow
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    icon={<PlusIcon />}
+                    iconOnlyMobile
+                    isLoading={isMutating}
+                    onClick={() => {
+                      if (isMutating) return
+                      setIsMutating(true)
+                      follow(podcastSlug!, {
+                        onSuccess: () => {
+                          showToast(`Followed ${podcast.title}`, 'success')
+                          setIsMutating(false)
+                        },
+                        onError: (error) => {
+                          showToast(`Failed to follow: ${error.message}`, 'error')
+                          setIsMutating(false)
+                        },
+                      })
+                    }}
+                  >
+                    Follow
                   </Button>
                 )}
               </div>

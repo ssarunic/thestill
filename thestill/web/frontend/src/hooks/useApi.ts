@@ -36,6 +36,7 @@ import {
   retryFailedEpisode,
   runPipeline,
   cancelPipeline,
+  followPodcast,
   unfollowPodcast,
   getDigests,
   getDigest,
@@ -134,6 +135,17 @@ export function usePodcastEpisodesInfinite(podcastSlug: string, limit = 20) {
     enabled: !!podcastSlug,
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
+  })
+}
+
+export function useFollowPodcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (podcastSlug: string) => followPodcast(podcastSlug),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 }
 

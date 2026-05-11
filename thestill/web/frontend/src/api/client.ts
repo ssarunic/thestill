@@ -119,6 +119,19 @@ export async function getPodcast(podcastSlug: string): Promise<PodcastDetailResp
   return fetchApi<PodcastDetailResponse>(`/podcasts/${podcastSlug}`)
 }
 
+// Follow a podcast
+export async function followPodcast(podcastSlug: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `API error: ${response.status}`)
+  }
+}
+
 // Unfollow a podcast
 export async function unfollowPodcast(podcastSlug: string): Promise<void> {
   const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow`, {
