@@ -75,6 +75,54 @@ def _setup_legacy_db(db_path: Path) -> None:
         conn.close()
 
 
+def _setup_intermediate_db(db_path: Path, *, missing_stage: str) -> None:
+    """Stand up a database whose ``tasks`` CHECK is missing a single stage.
+
+    Models the real-world bug: the spec #28 migration ran once (so the
+    table has ``extract-entities`` etc.), but then a new stage was added
+    to the ``TaskStage`` enum in a later release and the existing DB
+    never got widened. The old one-shot guard only checked for
+    ``extract-entities`` and silently skipped re-migrating.
+
+    The CHECK clause is derived from the current ``TaskStage`` enum
+    minus ``missing_stage`` so the test stays valid as the enum grows.
+    """
+    SqlitePodcastRepository(db_path=str(db_path))
+    intermediate_check = "CHECK (stage IN ({values}))".format(
+        values=", ".join(f"'{s.value}'" for s in TaskStage if s.value != missing_stage),
+    )
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY NOT NULL,
+                episode_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER DEFAULT 0,
+                error_message TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP NULL,
+                completed_at TIMESTAMP NULL,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                next_retry_at TIMESTAMP NULL,
+                error_type TEXT NULL,
+                last_error TEXT NULL,
+                metadata TEXT NULL,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                CHECK (length(id) = 36),
+                {intermediate_check}
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _stage_check_clause(db_path: Path) -> str:
     conn = sqlite3.connect(str(db_path))
     try:
@@ -229,6 +277,41 @@ class TestTasksTableRebuild:
             assert set(legacy_ids) == ids_after
         finally:
             conn.close()
+
+
+class TestIntermediateVintageRebuild:
+    """Regression: the original guard only checked for ``extract-entities``.
+
+    Once that one-shot migration ran, the guard returned early forever —
+    even after a later release added a new ``TaskStage`` value. The
+    downstream enqueue from ``reindex`` to ``rebuild-cooccurrences``
+    then failed the CHECK constraint and the entity branch stalled
+    with "Indexing incomplete". The fix widens the check to look for
+    *every* current stage value (quoted) in the existing DDL.
+    """
+
+    def test_intermediate_db_gets_remigrated(self, tmp_db):
+        missing = TaskStage.REBUILD_COOCCURRENCES.value
+        _setup_intermediate_db(tmp_db, missing_stage=missing)
+
+        # Sanity: pre-migration table rejects the missing stage.
+        conn = sqlite3.connect(str(tmp_db))
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO tasks (id, episode_id, stage) VALUES (?, ?, ?)",
+                    (str(uuid.uuid4()), "ep-1", missing),
+                )
+            conn.rollback()
+        finally:
+            conn.close()
+
+        QueueManager(db_path=str(tmp_db))
+
+        # Post-migration: every current TaskStage value is accepted.
+        sql = _stage_check_clause(tmp_db)
+        for stage in TaskStage:
+            assert f"'{stage.value}'" in sql, f"missing stage {stage.value} after rebuild"
 
 
 class TestStageEnumIntegrity:

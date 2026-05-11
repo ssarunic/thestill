@@ -356,25 +356,39 @@ class QueueManager:
             self._migrate_add_column(conn, "tasks", "last_error", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "metadata", "TEXT NULL")
 
-            # Spec #28 §0.5 — rebuild the tasks table when it still has the
-            # legacy 5-stage CHECK constraint. SQLite has no
-            # ``ALTER TABLE ... DROP CONSTRAINT`` so the only way to widen
-            # a CHECK is the standard rebuild dance: create _new with the
-            # new constraint, copy rows, drop old, rename. ``CREATE TABLE
-            # IF NOT EXISTS`` above is a no-op for legacy databases and
-            # would not update the constraint by itself.
+            # Spec #28 §0.5 — rebuild the tasks table whenever the existing
+            # CHECK constraint is missing any current ``TaskStage`` value.
+            # SQLite has no ``ALTER TABLE ... DROP CONSTRAINT`` so the only
+            # way to widen a CHECK is the standard rebuild dance: create
+            # _new with the new constraint, copy rows, drop old, rename.
+            # ``CREATE TABLE IF NOT EXISTS`` above is a no-op for legacy
+            # databases and would not update the constraint by itself.
             #
-            # Guard: read ``sqlite_master.sql`` for the existing table and
-            # check whether one of the new stage names is already present.
-            # If it is, we've already migrated; skip. The check is a string
-            # match on the DDL because SQLite gives us no introspection
-            # API for CHECK clauses.
+            # Guard: read ``sqlite_master.sql`` and look for each enum
+            # value as a quoted token (``'extract-entities'``) rather than
+            # a bare word — a bare-word match would false-positive on
+            # column names and false-negative if a later stage shares a
+            # substring with an earlier one. Quoted matching is exact and
+            # mirrors the form SQLite stores the CHECK clause in. If the
+            # enum gains a new stage between releases (as happened when
+            # ``rebuild-cooccurrences`` was added after the initial
+            # extract-entities migration), the next startup widens the
+            # constraint automatically.
             cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'")
             row = cursor.fetchone()
-            if row and row["sql"] and "extract-entities" not in row["sql"]:
-                logger.info("Migrating tasks table: rebuilding with extended stage CHECK constraint")
-                self._rebuild_tasks_with_extended_check(conn)
-                logger.info("Migration complete: tasks table rebuilt with spec #28 stages")
+            existing_ddl = row["sql"] if row else None
+            if existing_ddl:
+                missing_stages = [s.value for s in TaskStage if f"'{s.value}'" not in existing_ddl]
+                if missing_stages:
+                    logger.info(
+                        "Migrating tasks table: widening stage CHECK constraint",
+                        missing_stages=missing_stages,
+                    )
+                    self._rebuild_tasks_with_extended_check(conn)
+                    logger.info(
+                        "Migration complete: tasks table rebuilt with current TaskStage values",
+                        added_stages=missing_stages,
+                    )
 
             # Indexes for efficient querying
             conn.execute(
