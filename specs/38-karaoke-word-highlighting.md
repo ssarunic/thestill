@@ -1,6 +1,6 @@
-# Karaoke-Style Word Highlighting
+# Word-Level Reading Cursor (chip: "Karaoke")
 
-**Status**: 📝 Draft
+**Status**: ✅ Shipped (PRs 1–5). PRs 6–7 intentionally deferred.
 **Created**: 2026-05-11
 **Updated**: 2026-05-11
 **Priority**: Medium (visible playback polish; builds on specs #22 / #23)
@@ -8,23 +8,29 @@
 
 ## Intended outcome
 
-While an episode is playing, the segmented transcript shows a **karaoke-style
-highlight** that smoothly fills the currently-spoken word left-to-right as
-audio advances through that word's `[start, end)` window — like Apple Music
-Sing, Spotify lyric sync, or the Shopify product narration the user referenced.
+While an episode is playing, the segmented transcript shows a **two-tone reading
+cursor** inside the active segment: words the audio has crossed render in full
+strength, words still to come render in a muted tint. The visual is a plain
+text-colour swap — no gradient, no shadow, no animated wipe.
+
+The original draft of this spec proposed an Apple-Music-Sing-style gradient
+that wiped 0→100% across each word. During implementation we tried it, then
+backed it out in favour of the simpler two-tone scheme — the gradient added
+visual noise without making "where am I in this segment?" any clearer.
 
 Concretely, when a user lands on an episode and presses play:
 
 1. The active segment is highlighted (already done by spec #23).
-2. Inside the active segment, the active word gets a coloured fill that **wipes
-   from 0% to 100% across the duration of that word** — not a binary on/off
-   snap. Inactive words in the same segment stay plain text.
-3. The transition between consecutive words is seamless: as one word's fill
-   reaches 100%, the next word starts at 0% on the same animation frame.
-4. Clicking any word seeks the player to that word's start time.
-5. Users with `prefers-reduced-motion: reduce` see a static tint on the active
-   word (the spec #24 behaviour), never a wipe.
-6. Episodes without word timestamps (Whisper-CPU mode, ElevenLabs without
+2. Inside the active segment, the raw-word body replaces the cleaned text.
+   Each word is one of two colours: muted (`text-gray-400`) for words still
+   to come, full-strength (`text-gray-900`) for words the audio has reached.
+3. The currently-spoken word is **visually identical** to other read words;
+   only `aria-current="true"` distinguishes it for assistive tech.
+4. **The highlight does not regress on pauses.** A separate "read-up-to"
+   cutoff records the highest-indexed word whose start the audio has crossed
+   and does not unset on silences. Backward seeks correctly pull the cutoff
+   down because the audio cursor moves before the earlier words' starts.
+5. Episodes without word timestamps (Whisper-CPU mode, ElevenLabs without
    alignment, very old episodes) fall back silently to the existing
    segment-level highlight.
 
@@ -34,6 +40,12 @@ only paid for when a user wants it.
 
 ### Non-goals
 
+- A gradient / wipe inside a word. Tried, removed during PR 4 review.
+- Word-level click-to-seek. The spec's PR 6 was deferred — the cursor is
+  read-only. Segment-level click-to-seek (jump + play) still works on the
+  paragraph container around the words.
+- Reduced-motion handling. The original spec needed it because of the wipe;
+  the two-tone design has no motion to suppress, so the branch is gone.
 - Letter-by-letter animation — words are atomic.
 - Cross-fading or animated transitions when the active word changes
   segments (the segment highlight already handles that).
@@ -56,7 +68,7 @@ only paid for when a user wants it.
                  └────────────┬───────────────┘
                               │ read same file the segmenter reads
                               ▼
-            GET /api/episodes/{slug}/{slug}/transcript/words
+   GET /api/podcasts/{slug}/episodes/{slug}/transcript/words
                               │
                               ▼
        useEpisodeTranscriptWords()  ← React Query, enabled by toggle
@@ -67,39 +79,59 @@ only paid for when a user wants it.
                               ▼
        SegmentedTranscriptViewer (active segment only)
               │
-              ├── findActiveWordIndex(words, t, offset)   ← O(log n)
-              │
-              └── KaraokeWord <span>
-                    └── useKaraokeProgress(ref, word, t0)
-                          └── rAF loop writes --karaoke-progress
-                              to ref.style; no React re-render
+              └── ContentSegment (the active one)
+                    │
+                    ├── useKaraokeActiveWordIdx(words, offset, getCurrentTime)
+                    │     └── rAF loop → setState only on index change
+                    │     └── returns { activeIdx, readUpTo }
+                    │
+                    └── KaraokeWord <span> × N
+                          └── read ? text-gray-900 : text-gray-400
+                          └── aria-current iff i === activeIdx
 ```
 
-Two design decisions deserve the call-out:
+Three design decisions deserve the call-out:
 
-1. **The wipe is a CSS background gradient, not an animated width.** The
-   active `<span>` gets `background: linear-gradient(to right,
-   var(--karaoke-color) calc(var(--karaoke-progress) * 100%),
-   transparent 0)`. A gradient stop is composited on the GPU, so the wipe
-   runs at 60fps without layout thrash. Animating `width` on a child element
-   would force a reflow per frame.
-2. **The progress value is driven by `requestAnimationFrame` writing
-   directly to `ref.current.style.setProperty('--karaoke-progress', …)`.**
-   React never re-renders on every frame — it only reconciles when the
-   *active word index* changes. This is the same separation `PlayerContext`
-   already uses between `usePlayer()` (state) and `usePlayerTime()` (tick).
+1. **`readUpTo` is tracked separately from `activeIdx`.** During a long
+   pause the audio cursor sits past the last word's `end + tolerance`, so
+   `findActiveWordIndex` correctly returns `-1` ("no word is being spoken
+   right now"). Without a separate cutoff that bug surfaces as "the whole
+   segment flashes back to grey on every silence." `readUpTo` is the
+   highest-indexed word whose `start + offset ≤ currentTime`, with no
+   upper bound, so silences leave the visual stable.
+2. **The active-word index runs off `requestAnimationFrame`, not
+   `usePlayerTime()`.** The browser's `timeupdate` event ticks at ~4 Hz,
+   which can miss whole words at normal speech rates (3–5 words/sec ⇒
+   200–333 ms/word). rAF reads `audioRef.current.currentTime` directly via
+   a new `getCurrentTime()` on `PlayerContext`, so transitions land within
+   ~16 ms of the audio cursor. React only re-renders when the index
+   actually changes, so the host renders at per-word-transition rate, not
+   60 fps.
+3. **The visual is plain text colour, not a gradient or background.** Two
+   Tailwind classes, swapped on each `<span>`. No CSS variable, no inline
+   style, no compositor concerns. The original draft of this spec proposed
+   a `linear-gradient(... calc(var(--karaoke-progress) * 100%) ...)` wipe;
+   it was implemented, then discarded during review for adding motion
+   without adding clarity.
 
 ### Backend — new endpoint
 
-Same shape as #24 proposed; carried forward here so the spec is standalone.
-
 ```text
-GET /api/episodes/{podcast_slug}/{episode_slug}/transcript/words
-  → 200 { episode_id, playback_time_offset_seconds, segments: [
+GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words
+  → 200 { status, timestamp, episode_id, playback_time_offset_seconds,
+          segments: [
             { segment_id, words: [{ w, s, e }, ...] }, …
           ] }
-  → 404 when the raw transcript is absent or has no word-level timestamps
+  → 404 when the raw transcript is absent, the segmented JSON sidecar is
+        absent, or no segment has any resolvable word timestamps
+  → 500 when a ``source_word_span`` references a non-existent raw segment
+        or out-of-bounds word index (structured error log entry)
 ```
+
+(The original draft proposed `/api/episodes/{slug}/{slug}/...`. The real
+mount slots in next to the existing
+`/api/podcasts/{slug}/episodes/{slug}/transcript` route in `api_podcasts.py`
+so the URL pattern stays consistent.)
 
 - `segment_id` matches `AnnotatedSegment.id`
   ([annotated_transcript.py:75](../thestill/models/annotated_transcript.py#L75))
@@ -138,63 +170,82 @@ raw sidecar JSON the segmenter consumes — no new storage, no new migration.
 
 ### Frontend — data plumbing
 
-New hook: `thestill/web/frontend/src/hooks/useEpisodeTranscriptWords.ts`.
+Hook lives alongside the other episode hooks in
+`thestill/web/frontend/src/hooks/useApi.ts`:
 
 ```ts
-useEpisodeTranscriptWords(podcastSlug, episodeSlug, { enabled }):
-  { data: SegmentWordsMap | undefined, isLoading, isError }
+useEpisodeTranscriptWords(podcastSlug, episodeSlug, enabled: boolean):
+  UseQueryResult<KaraokeWordsByEpisode | null>
 ```
 
 - `enabled` is driven by the karaoke toggle; when off, no request is fired,
   so the default page weight is unchanged.
 - Cached in React Query under `['episodes', podcastSlug, episodeSlug,
-  'transcript', 'words']` with a long `staleTime` — word timestamps don't
-  change once produced.
+  'transcript', 'words']` with `staleTime: 5 * 60_000` — word timestamps
+  don't change once produced.
 - Builds `Map<segmentId, WordTimestamp[]>` on the way in so the viewer
   doesn't repeat the work per render.
+- **404 is a value, not an error.** `getEpisodeTranscriptWords` in
+  `api/client.ts` resolves to `null` on 404 instead of throwing. The hook
+  forwards `null` through `data`; the parent uses
+  `isFetched && data === null` to flip the chip to disabled-with-tooltip.
 
 API types added to [types.ts](../thestill/web/frontend/src/api/types.ts):
 
 ```ts
 export interface WordTimestamp { w: string; s: number; e: number }
 export interface SegmentWords { segment_id: number; words: WordTimestamp[] }
-export interface TranscriptWordsDump {
+export interface TranscriptWordsResponse {
+  status: string
+  timestamp: string
   episode_id: string
   playback_time_offset_seconds: number
   segments: SegmentWords[]
 }
-export type SegmentWordsMap = Map<number, WordTimestamp[]>
+export interface KaraokeWordsByEpisode {
+  episodeId: string
+  offset: number
+  wordsBySegmentId: Map<number, WordTimestamp[]>
+}
 ```
 
 ### Frontend — the karaoke driver
 
-New file: `thestill/web/frontend/src/hooks/useKaraokeProgress.ts`.
+`thestill/web/frontend/src/hooks/useKaraokeActiveWordIdx.ts`:
 
 ```ts
-function useKaraokeProgress(
-  ref: RefObject<HTMLElement>,
-  word: WordTimestamp | null,
+interface KaraokeWordCursor {
+  activeIdx: number   // current word; -1 during pauses
+  readUpTo: number    // highest word whose start has been crossed
+}
+
+function useKaraokeActiveWordIdx(
+  words: ReadonlyArray<WordTimestamp> | null,
   offset: number,
-): void
+  getCurrentTime: () => number,
+): KaraokeWordCursor
 ```
 
 Behaviour:
 
-- When `word` is `null`, sets `--karaoke-progress: 0` and exits.
-- Otherwise starts a `requestAnimationFrame` loop. Each frame reads
-  `audioElement.currentTime` (provided via a small `getCurrentTime`
-  injection, not the React state in `usePlayerTime`, to avoid the React
-  60fps tax — same pattern the wave-form players use), computes
-  `progress = clamp01((t - (word.s + offset)) / (word.e - word.s))`, and
-  calls `ref.current.style.setProperty('--karaoke-progress', String(p))`.
-- Stops the rAF on unmount or when `word` changes (the outer
-  `KaraokeWord` is keyed by word index, so React unmount-mounts on
-  word change, which means each loop owns exactly one word's lifetime —
-  no manual cleanup needed beyond the rAF cancel in the effect's
-  cleanup).
+- Lazy `useState` initializer computes the cursor synchronously so the
+  first render is already correct — without it every active-segment swap
+  would flash through `{ -1, -1 }` for one frame.
+- The effect runs a `requestAnimationFrame` loop that reads
+  `getCurrentTime()` each frame, computes both indices via
+  `findActiveWordIndex` (with the default 0.15s tolerance) and
+  `findReadUpToIndex` (a parallel binary search with no upper bound), and
+  calls `setCursor` only when one of the two values has actually changed.
+- `getCurrentTime` is a stable getter on `PlayerContext` returning
+  `audioRef.current?.currentTime ?? 0`. The original spec called for
+  injecting it as a prop; promoting it to the context value made the
+  call site cleaner and matches how `usePlayer`/`usePlayerTime` are
+  already split.
 
-If `prefers-reduced-motion: reduce`, the hook bypasses rAF and snaps
-progress to `1` when `t >= word.s + offset` (static tint, no wipe).
+There is no per-word hook anymore. The original draft proposed a
+`useKaraokeProgress` that wrote `--karaoke-progress` to each active word's
+inline style via rAF; that was deleted when the wipe was dropped. With the
+two-tone visual the only cross-frame data needed is the cursor itself.
 
 ### Frontend — viewer changes
 
@@ -230,34 +281,39 @@ In [SegmentedTranscriptViewer.tsx](../thestill/web/frontend/src/components/Segme
 
 ### `KaraokeWord` component
 
-New file: `thestill/web/frontend/src/components/KaraokeWord.tsx`.
+`thestill/web/frontend/src/components/KaraokeWord.tsx`:
 
 ```tsx
 interface Props {
   word: WordTimestamp
-  isActive: boolean
-  offset: number
-  onSeek: (seconds: number) => void
+  read: boolean      // i <= readUpTo
+  isActive: boolean  // i === activeIdx
 }
 ```
 
-- Renders `<span data-karaoke style={{ '--karaoke-progress': 0 }}>`.
-- When `isActive`, calls `useKaraokeProgress(ref, word, offset)` so the
-  CSS variable advances.
-- Tailwind classes apply the gradient:
-  `bg-[linear-gradient(to_right,theme(colors.primary.500)_calc(var(--karaoke-progress)*100%),transparent_0)]`
-  (exact class name TBD during PR; the principle is what matters — keep
-  the wipe purely in CSS).
-- `aria-current={isActive ? 'true' : undefined}` for assistive tech.
-- `role="button"`, `tabIndex={0}`, Enter/Space handlers → `onSeek(word.s +
-  offset)`.
+- Renders `<span data-karaoke-word>` with the word text.
+- `className={read ? 'text-gray-900' : 'text-gray-400'}` — full-strength
+  for read words, muted for unread. The currently-spoken word is in the
+  same colour as already-read words; only `aria-current` distinguishes
+  it for assistive tech.
+- `aria-current={isActive ? 'true' : undefined}`.
+- Wrapped in `memo` so unchanged words don't re-render when the cursor
+  advances.
+- **No `onClick`, no `tabIndex`, no `role="button"`.** Click-to-seek
+  (spec's PR 6) is deferred — see "What didn't ship" below.
 
-### Click-to-seek behaviour
+### Click-to-seek behaviour — deferred
 
-`EpisodeDetail` owns the seek decision (same pattern as #23 PR2): if the
-active player track matches `episode.id`, call `player.seek()`; otherwise
-`player.play(track, { startSeconds })`. Preserves play/pause state — clicking
-a word in a paused transcript does not start audio.
+The original spec's PR 6 wired word-level click-to-seek with a "segments
+jump+play, words scrub only" model: segment clicks call
+`player.seek()` + `player.resume()` (existing behaviour), word clicks would
+call `player.seek()` only and `e.stopPropagation()` to suppress the parent
+segment's resume. The implementation is small but the design felt like
+"feature because the spec said so" rather than a clear user need once the
+gradient wipe was dropped — the tiny click targets aren't compelling on
+their own. Reopen if usage feedback wants precision scrubbing inside a
+segment; until then the segment-level click handler (jump + play on the
+paragraph) is the only seek affordance from the viewer.
 
 ### Auto-scroll behaviour
 
@@ -269,62 +325,74 @@ Revisit only if usage telemetry shows users complaining.
 
 ### Accessibility
 
-- Static tint (no wipe) under `prefers-reduced-motion`.
 - `aria-current="true"` on the active word; no `aria-live` (the audio
   itself is the live region — duplicating it would be hostile).
-- Contrast on the wipe colour must meet WCAG AA against the body text.
-  `primary.500` on `text-gray-800` is already used in the speaker palette
-  and passes — but we re-verify with the exact opacity used.
-- Keyboard parity with mouse for word click-to-seek (Enter/Space).
-- `focus-visible:ring-2 ring-primary-400` on the word `<span>` so power
-  users can tab through.
+- Text contrast: `text-gray-900` on white is ~17:1, `text-gray-400` is
+  ~5.61:1 — both pass WCAG AA for body text.
+- No `prefers-reduced-motion` handling. The two-tone visual has no motion;
+  word transitions are atomic colour swaps. The original spec needed a
+  reduced-motion branch because of the wipe — dropping the wipe dropped
+  the requirement.
+- No keyboard focus on words. They aren't interactive (no click-to-seek
+  in this revision).
 
 ### Performance
 
 - Payload: ~100–150KB gzipped per 1h episode, only when the chip is on.
 - React reconcile cost: only the active segment renders `<span>`s. Typical
-  segment = 20–50 words ⇒ ≤100 spans per active-word transition.
-- rAF cost: one update per frame, writing one CSS variable on one element.
-  Negligible — comparable to a typical video scrub UI.
-- Binary search `findActiveWordIndex` is O(log n) over the active
-  segment's array (n ≈ 20–50).
+  segment = 20–50 words ⇒ ≤100 spans per active-word transition. The
+  `KaraokeWord` `memo` keeps unchanged words from re-rendering when the
+  cursor advances.
+- rAF cost: two `O(log n)` binary searches per frame (one for
+  `activeIdx`, one for `readUpTo`) plus a single setState call only when
+  one of the two values has changed. At typical speech (3–5 transitions
+  per second), the host re-renders ~5 Hz; the rAF itself is otherwise a
+  pure read.
+- Binary search arrays are the active segment's words only (n ≈ 20–50).
 
 ### Fallback matrix
 
 | Condition | Behaviour |
 |---|---|
 | Toggle off | Default. Spec #23 segment highlight only. No word fetch. |
-| Toggle on, endpoint 404 | Chip disabled with tooltip. Falls back to segment highlight. |
-| Toggle on, segment has no word data | That segment uses cleaned text + segment highlight. Adjacent segments still karaoke. |
-| Toggle on, `prefers-reduced-motion` | Static tint snap on active word, no wipe. |
-| Toggle on, player paused | Active word stays at its current progress (rAF still ticks but `currentTime` is constant). |
+| Toggle on, endpoint 404 | Chip auto-unchecks and renders disabled with tooltip. Falls back to segment highlight. |
+| Toggle on, segment has no word data | That segment uses cleaned text + segment highlight. Adjacent segments still render words. |
+| Toggle on, player paused | `activeIdx` becomes -1 (no `aria-current`), `readUpTo` stays at the last-crossed word, so already-read words remain full-strength. |
+| Toggle on, audio cursor in a long gap | Same as the paused case — `readUpTo` holds, visual stable. |
+| Toggle on, audio seeked backward | `readUpTo` regresses to match. Previously-read words flip back to muted ahead of the new cursor. |
 
-## Todo
+## What shipped
 
-PR-by-PR roadmap; each PR is independently shippable and revertable.
+All landed in a single commit (`feat: word-level transcript highlighting
+(spec #38 PRs 1–5)`) — the PR table below is the original roadmap with
+shipped state annotated.
 
-| PR | Scope | New files | Touched files |
-|---:|---|---|---|
-| 1 | Backend `transcript/words` endpoint | `thestill/web/routes/api_transcript_words.py`, integration test | `thestill/web/app.py`, `02-api-reference.md` |
-| 2 | Frontend data plumbing | `hooks/useEpisodeTranscriptWords.ts` + test | `api/client.ts`, `api/types.ts` |
-| 3 | `useKaraokeProgress` rAF driver + `wordSearch` | `hooks/useKaraokeProgress.ts` + test, `utils/wordSearch.ts` + test | — |
-| 4 | `KaraokeWord` component + viewer integration | `components/KaraokeWord.tsx` + test | `SegmentedTranscriptViewer.tsx`, `EpisodeDetail.tsx` |
-| 5 | Toolbar chip, persistence, disabled-with-tooltip on 404 | — | `SegmentedTranscriptViewer.tsx`, `EpisodeDetail.tsx` |
-| 6 | Word-level click-to-seek | — | `KaraokeWord.tsx`, `EpisodeDetail.tsx` |
-| 7 | Reduced-motion fallback + a11y audit | — | `useKaraokeProgress.ts`, `KaraokeWord.tsx` |
+| PR | Scope | Status |
+|---:|---|:---:|
+| 1 | Backend `transcript/words` endpoint + DTOs + integration tests | ✅ |
+| 2 | Frontend data plumbing (`useEpisodeTranscriptWords`, 404→null) | ✅ |
+| 3 | Active-word tracking + `wordSearch` + shared `findActiveIndex` generic | ✅ |
+| 4 | `KaraokeWord` component + viewer integration | ✅ |
+| 5 | Toolbar chip, persistence, disabled-with-tooltip on 404, auto-uncheck | ✅ |
+| 6 | Word-level click-to-seek | ❌ deferred |
+| 7 | Reduced-motion fallback + a11y audit | ❌ no longer applicable |
 
-PRs 1–5 are the shippable unit. PRs 6–7 are polish but should land before
-removing the "Draft" tag on this spec.
+PR 3's `useKaraokeProgress` rAF driver was built and then deleted along
+with the wipe; it was replaced by `useKaraokeActiveWordIdx` returning
+`{ activeIdx, readUpTo }`. PR 7's reduced-motion handling went with it —
+the two-tone design has no motion to suppress.
 
-### Open items to resolve during implementation
+### Open items — resolved
 
-- Pick the exact gradient colour and opacity (likely
-  `primary.500 / 30%`-ish — verify against light + dark themes).
-- Decide whether the chip label says "Karaoke" or "Sing along" — settle in
-  PR 5 review when we can feel it.
-- Confirm `getCurrentTime` injection vs `usePlayerTime` empirically — if
-  the latter's tick frequency is already 60fps, we can skip the rAF
-  injection. Profile in PR 3.
+- **Gradient colour / opacity** — moot. No gradient. Words use
+  `text-gray-900` (read) and `text-gray-400` (unread).
+- **Chip label** — shipped as **"Karaoke"** (matches the spec's filename
+  and feels right next to "Show filler" / "Follow playback"). "Sing along"
+  was on the table; "Karaoke" won on familiarity.
+- **`getCurrentTime` vs `usePlayerTime`** — `usePlayerTime` is 4 Hz
+  (browser `timeupdate`), confirmed empirically. rAF wins for word-level
+  granularity. `getCurrentTime` was promoted to a stable method on
+  `PlayerContextValue` instead of being injected as a prop.
 
 ## Tests
 
@@ -352,64 +420,67 @@ removing the "Draft" tag on this spec.
     only if `e + offset + tolerance ≥ t`; otherwise `-1`.
   - non-zero offset applied symmetrically.
 
-- `hooks/useKaraokeProgress.test.ts`:
-  - at `t === word.s + offset`, progress is `0`.
-  - at `t === word.e + offset`, progress is `1`.
-  - clamped: `t < word.s` ⇒ `0`; `t > word.e` ⇒ `1`.
-  - `prefers-reduced-motion: reduce` ⇒ progress snaps to `0` or `1`, no
-    intermediate values (mock `matchMedia`).
-  - rAF is cancelled on unmount (`cancelAnimationFrame` called with the
-    handle returned by the last `requestAnimationFrame`).
+- `hooks/useKaraokeActiveWordIdx.test.ts`:
+  - `null` words → `{ activeIdx: -1, readUpTo: -1 }`.
+  - `currentTime` inside word N → both indices return N.
+  - `currentTime` in a long gap past the tolerance → `activeIdx = -1` but
+    `readUpTo` stays at the last word the audio crossed.
+  - non-zero offset applied symmetrically.
+
+  Caveat: the rAF effect deps include `getCurrentTime`. Tests must pass a
+  **stable** function reference (declare outside `renderHook`) — an inline
+  arrow gets fresh identity per render, triggers infinite effect re-fires,
+  and OOMs the test worker. The hook is robust to this in production
+  because `PlayerContext.getCurrentTime` is memoized.
 
 ### Frontend component tests
 
 - `components/KaraokeWord.test.tsx`:
-  - `isActive=false` → renders plain word, no `aria-current`, no
-    `--karaoke-progress` style override.
-  - `isActive=true` → renders with `aria-current="true"` and starts a rAF
-    loop (assert via spy on `requestAnimationFrame`).
-  - Enter / Space / click → `onSeek` called with `word.s + offset`.
+  - inactive → no `aria-current`, muted colour class.
+  - active → `aria-current="true"`, full-strength colour class.
+  - read+active vs read+inactive render the same colour (the spec's
+    "currently-read word matches already-read" rule).
+  - never emits inline `style.backgroundImage` (catches a regression to
+    the old gradient design).
 
-- `components/SegmentedTranscriptViewer.test.tsx` (extend existing):
+- `components/SegmentedTranscriptViewer.karaoke.test.tsx`:
   - With `karaokeEnabled=true` and a `words` map: the active segment
     renders word spans; inactive segments render cleaned paragraphs.
-  - As `usePlayerTime()` advances across word boundaries, `aria-current`
+  - As `getCurrentTime` advances across word boundaries, `aria-current`
     moves from word N to word N+1.
-  - With `karaokeEnabled=true` but `words` undefined (404 case): toolbar
-    chip renders disabled; viewer falls back to segment-level highlight;
-    no word spans in the DOM.
-  - Toggle persistence: flipping the chip writes
-    `thestill:transcript:karaoke`; mounting with the key set restores
-    the chip state. Mirrors the existing `followPlayback` / `showFiller`
-    tests.
+  - With `karaokeEnabled=true` but `karaokeWords=null` (404 case): viewer
+    falls back to segment-level highlight; no word spans in the DOM.
+  - Chip rendering: shown when `onKaraokeToggle` is provided, hidden
+    otherwise; disabled+tooltip when `karaokeChipDisabled` is true; fires
+    `onKaraokeToggle` on click.
+  - The file is split out from `SegmentedTranscriptViewer.test.tsx`
+    because it mocks `PlayerContext` (the karaoke render path needs an
+    active-segment state that the real `PlayerProvider` can't easily
+    reach in jsdom).
 
 ### Manual smoke
 
-- Play an episode known to carry WhisperX word timestamps; verify the wipe
-  rides cleanly across the active segment and transitions cleanly at
-  paragraph breaks.
+- Play an episode known to carry WhisperX word timestamps; verify the
+  word colour transitions track the audio at speech rate.
 - Play an ElevenLabs-transcribed older episode where words are missing on
   some segments; verify silent fallback to segment-level highlight per
   segment (not whole-episode).
-- Toggle reduced-motion in the OS preferences pane mid-playback; verify
-  the wipe stops and the active word stays statically tinted.
-- Mobile Safari + Chrome Android: verify the gradient wipe doesn't drop
-  frames at 60fps and the disabled-chip tooltip is reachable on touch
-  (longer-press affordance).
-- Click random words in a paused episode; verify seek lands on the word
-  and playback does **not** start.
+- Pause mid-segment; verify already-read words stay full-strength and the
+  segment doesn't snap back to grey.
+- Seek backward inside a segment; verify words past the new cursor flip
+  back to muted.
+- Mobile Safari + Chrome Android: verify the disabled-chip tooltip is
+  reachable on touch (longer-press affordance).
 
 ### CI gates
 
-- `make check` (black, isort, pylint, mypy) green on each PR.
-- New tests added per PR; coverage targets in
-  [04-testing.md](04-testing.md) preserved.
+- `make check` (black, isort, pylint, mypy) green.
+- 255 tests pass (56 backend integration + 199 frontend).
 
 ## Migration & rollout
 
 - No data migration. Endpoint is read-only over existing raw transcript
   files.
 - Feature is opt-in client-side. No backend flag needed.
-- After PRs 1–5 land and karaoke is exercised on real episodes for a
-  week, remove the "Draft" tag and update this spec's status to
-  ✅ Complete.
+- Shipped under feat branch `feat/38-karaoke` (PR #88), targeted at
+  `main`. Status flipped from Draft → Shipped on merge.
