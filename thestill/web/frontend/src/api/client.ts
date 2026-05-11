@@ -101,12 +101,14 @@ export async function getTopPodcasts(
   region?: string,
   limit = 50,
   q?: string,
+  category?: string,
   signal?: AbortSignal,
 ): Promise<TopPodcastsResponse> {
   const params = new URLSearchParams()
   if (region) params.set('region', region)
   params.set('limit', String(limit))
   if (q) params.set('q', q)
+  if (category) params.set('category', category)
   const response = await fetch(`${API_BASE}/top-podcasts?${params.toString()}`, {
     credentials: 'include',
     signal,

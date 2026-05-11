@@ -178,13 +178,25 @@ def seed_top_chart(app_state: AppState, region: str, entries: list[dict]) -> Non
         conn.execute("DELETE FROM podcasts")
 
         for entry in entries:
+            # Resolve ``category_name`` against the pre-seeded categories table
+            # (Apple taxonomy). Tests that don't pass a category get NULL —
+            # matches the production case where chart entries can lack a
+            # category mapping.
+            category_id = None
+            if entry.get("category_name"):
+                row = conn.execute(
+                    "SELECT id FROM categories WHERE name = ? LIMIT 1",
+                    (entry["category_name"],),
+                ).fetchone()
+                category_id = row[0] if row else None
+
             top_id = conn.execute(
                 """
                 INSERT INTO top_podcasts
-                    (name, artist, rss_url, first_seen_at, last_seen_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (name, artist, rss_url, category_id, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (entry["name"], entry.get("artist"), entry["rss_url"], now, now),
+                (entry["name"], entry.get("artist"), entry["rss_url"], category_id, now, now),
             ).lastrowid
             conn.execute(
                 """

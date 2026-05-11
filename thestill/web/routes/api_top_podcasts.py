@@ -81,14 +81,26 @@ async def list_top_podcasts(
         max_length=100,
         description="Case-insensitive substring matched against name and artist",
     ),
+    category: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=100,
+        description="Exact category name to filter by (matches Apple Podcasts taxonomy)",
+    ),
     state: AppState = Depends(get_app_state),
 ):
     """Return the top-podcast chart for the resolved region.
 
     When ``q`` is provided, the chart is filtered by case-insensitive substring
-    match against ``name`` and ``artist``; rank order is preserved. Each row
+    match against ``name`` and ``artist``; rank order is preserved. ``category``
+    filters by exact category name. Both filters can be combined. Each row
     carries an ``is_following`` flag — true iff the resolved user follows a
     podcast with the same ``rss_url``. Anonymous callers always see ``false``.
+
+    The response also includes ``available_categories`` — the distinct category
+    names that appear in the resolved region's chart (unaffected by ``q`` or
+    ``category``), so the UI can populate a category picker without a separate
+    round-trip.
     """
     user = get_current_user(request, state)
     user_region = user.region.lower() if user and user.region else None
@@ -101,6 +113,10 @@ async def list_top_podcasts(
     if not q_clean:
         q_clean = None
 
+    category_clean: Optional[str] = category.strip() if category else None
+    if not category_clean:
+        category_clean = None
+
     available = state.repository.get_top_podcast_regions()
     resolved = _resolve_region(region, user_region, available)
 
@@ -108,14 +124,18 @@ async def list_top_podcasts(
         resolved,
         limit=limit,
         q=q_clean,
+        category=category_clean,
         user_id=user_id,
     )
+
+    available_categories = state.repository.get_top_podcast_categories(resolved)
 
     logger.debug(
         "top_podcasts_served",
         region=resolved,
         user_id=user_id,
         q=q_clean,
+        category=category_clean,
         count=len(rows),
     )
 
@@ -123,6 +143,7 @@ async def list_top_podcasts(
         {
             "region": resolved,
             "available_regions": available,
+            "available_categories": available_categories,
             "user_region": user_region,
             "count": len(rows),
             "top_podcasts": rows,

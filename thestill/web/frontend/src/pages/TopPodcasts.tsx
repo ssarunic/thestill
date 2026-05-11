@@ -12,6 +12,8 @@ export default function TopPodcasts() {
   const { showToast } = useToast()
   const [region, setRegion] = useState<string | null>(null)
   const [available, setAvailable] = useState<string[]>([])
+  const [category, setCategory] = useState<string | null>(null)
+  const [availableCategories, setAvailableCategories] = useState<string[]>([])
   const [items, setItems] = useState<TopPodcast[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -19,18 +21,33 @@ export default function TopPodcasts() {
   // Per-row resolve state for the lazy-import → navigate flow. Keyed by
   // rss_url, same as ``adding`` above.
   const [resolving, setResolving] = useState<Record<string, boolean>>({})
+  // Search state — ``searchInput`` is what the user types; ``debouncedQ`` is
+  // what we actually send to the API. The 250ms gap keeps us from hammering
+  // /api/top-podcasts on every keystroke.
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(searchInput.trim()), 250)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   const requestedRegion = region ?? undefined
+  // Server's ``q`` validator rejects empty strings (min_length=1), so coerce
+  // the trimmed search into ``undefined`` when blank.
+  const requestedQ = debouncedQ || undefined
+  const requestedCategory = category ?? undefined
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    getTopPodcasts(requestedRegion, 500)
+    getTopPodcasts(requestedRegion, 500, requestedQ, requestedCategory)
       .then((res) => {
         if (cancelled) return
         setItems(res.top_podcasts)
         setAvailable(res.available_regions)
+        setAvailableCategories(res.available_categories)
         // Trust the server's resolved region — it may differ from what we asked for.
         setRegion(res.region)
       })
@@ -44,7 +61,7 @@ export default function TopPodcasts() {
     return () => {
       cancelled = true
     }
-  }, [requestedRegion])
+  }, [requestedRegion, requestedQ, requestedCategory])
 
   const headerLabel = useMemo(() => {
     if (!region) return 'Top podcasts'
@@ -93,20 +110,67 @@ export default function TopPodcasts() {
     <div className="max-w-4xl">
       <div className="flex items-baseline justify-between mb-2 gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">{headerLabel}</h1>
-        <label className="text-sm text-gray-600 flex items-center gap-2">
-          <span>Region</span>
-          <select
-            value={region ?? ''}
-            onChange={(e) => setRegion(e.target.value || null)}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-          >
-            {available.map((code) => (
-              <option key={code} value={code}>
-                {flagFor(code)} {code.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative">
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search top podcasts…"
+              aria-label="Search top podcasts"
+              className="rounded-md border border-gray-300 pl-8 pr-7 py-1 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 w-56"
+            />
+            <svg
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 110-16 8 8 0 010 16z" />
+            </svg>
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-sm leading-none px-1"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          <label className="text-sm text-gray-600 flex items-center gap-2">
+            <span>Category</span>
+            <select
+              value={category ?? ''}
+              onChange={(e) => setCategory(e.target.value || null)}
+              aria-label="Filter by category"
+              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              <option value="">All</option>
+              {availableCategories.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-gray-600 flex items-center gap-2">
+            <span>Region</span>
+            <select
+              value={region ?? ''}
+              onChange={(e) => setRegion(e.target.value || null)}
+              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            >
+              {available.map((code) => (
+                <option key={code} value={code}>
+                  {flagFor(code)} {code.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <p className="text-gray-600 mb-6">
@@ -132,7 +196,15 @@ export default function TopPodcasts() {
       {error && <div className="text-red-600">{error}</div>}
 
       {!loading && !error && items.length === 0 && (
-        <div className="text-gray-500">No top podcasts available for this region.</div>
+        <div className="text-gray-500">
+          {debouncedQ && category
+            ? `No top podcasts in ${category} match "${debouncedQ}".`
+            : debouncedQ
+              ? `No top podcasts match "${debouncedQ}".`
+              : category
+                ? `No top podcasts in ${category} for this region.`
+                : 'No top podcasts available for this region.'}
+        </div>
       )}
 
       <ol className="space-y-2">
@@ -169,6 +241,25 @@ export default function TopPodcasts() {
                   </span>
                 )}
               </span>
+              {podcast.image_url ? (
+                <img
+                  src={podcast.image_url}
+                  alt=""
+                  width={48}
+                  height={48}
+                  loading="lazy"
+                  className="w-12 h-12 rounded-md object-cover flex-shrink-0 aspect-square bg-gray-100"
+                />
+              ) : (
+                <div
+                  className="w-12 h-12 rounded-md flex-shrink-0 aspect-square bg-gradient-to-br from-primary-100 to-secondary-100 flex items-center justify-center"
+                  aria-hidden="true"
+                >
+                  <svg className="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-gray-900 truncate">{podcast.name}</div>
                 <div className="text-sm text-gray-500 truncate">

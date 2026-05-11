@@ -366,6 +366,10 @@ export interface TopPodcast {
   // been imported. ``null`` means the podcast must be lazy-imported via
   // POST /api/podcasts/resolve before the detail page can render.
   podcast_slug: string | null
+  // Artwork URL surfaced from the local ``podcasts`` row (stored from the
+  // RSS feed at import time). ``null`` for chart-only entries; the UI
+  // falls back to a placeholder.
+  image_url: string | null
 }
 
 // Resolve API Types (lazy-import path used by Top Podcasts)
@@ -386,6 +390,10 @@ export interface TopPodcastsResponse {
   timestamp: string
   region: string
   available_regions: string[]
+  // Distinct category names present in the resolved region's chart. Not
+  // affected by ``q`` or ``category`` filters — drives the category picker
+  // without an extra round-trip.
+  available_categories: string[]
   user_region: string | null
   count: number
   top_podcasts: TopPodcast[]

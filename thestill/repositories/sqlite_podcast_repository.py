@@ -1926,6 +1926,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute("SELECT region FROM top_podcasts_meta ORDER BY region")
             return [row["region"] for row in cursor.fetchall()]
 
+    def get_top_podcast_categories(self, region: str) -> List[str]:
+        """Return the distinct **top-level** category names in a region's chart.
+
+        Chart entries can be tagged with either a top-level category (Comedy)
+        or a sub-category (Comedy Interviews); we roll sub-categories up to
+        their parent so the UI matches Apple's primary category browser.
+
+        Sorted alphabetically, ``NULL``-categories suppressed. The list is
+        computed from the *unfiltered* ranking so the picker doesn't shrink
+        when the user applies a search or category filter.
+        """
+        if not region:
+            return []
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT DISTINCT COALESCE(parent.name, c.name) AS name
+                FROM top_podcast_rankings r
+                JOIN top_podcasts p ON p.id = r.top_podcast_id
+                JOIN categories c ON c.id = p.category_id
+                LEFT JOIN categories parent ON parent.id = c.parent_id
+                WHERE r.region = ? AND COALESCE(parent.name, c.name) IS NOT NULL
+                ORDER BY name COLLATE NOCASE
+                """,
+                (region.lower(),),
+            )
+            return [row["name"] for row in cursor.fetchall()]
+
     def get_chunks_health(self) -> Tuple[int, str]:
         """Spec #28 §2.10 — chunk row count + dominant embedding model.
 
@@ -3374,6 +3402,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         UI can link directly to the detail page for entries that already
         exist in the local DB (regardless of follow state). ``None`` means
         the podcast has not been imported yet.
+
+        ``image_url`` rides the same join and is whatever artwork URL the
+        original ``add_podcast`` flow stored (read from the RSS feed at
+        import time). ``None`` for unimported entries — chart-only rows
+        carry no artwork.
         """
         if not region:
             return []
@@ -3383,8 +3416,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         params: List[Any] = [user_id, region.lower()]
         category_filter = ""
         if category:
-            category_filter = " AND c.name = ?"
-            params.append(category)
+            # The UI picker shows top-level Apple categories, but chart
+            # entries can be tagged with either a top-level or sub-category
+            # (e.g. "Comedy Interviews" under "Comedy"). Match both sides
+            # so picking "Comedy" includes its sub-categorised rows too.
+            category_filter = " AND (c.name = ? OR cat_parent.name = ?)"
+            params.extend([category, category])
 
         query_filter = ""
         if q:
@@ -3400,10 +3437,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
                        c.name AS category, r.source_genre,
                        up.slug AS podcast_slug,
+                       up.image_url AS image_url,
                        CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id
                 LEFT JOIN categories c ON c.id = p.category_id
+                LEFT JOIN categories cat_parent ON cat_parent.id = c.parent_id
                 LEFT JOIN podcasts up ON up.rss_url = p.rss_url
                 LEFT JOIN podcast_followers pf
                        ON pf.podcast_id = up.id AND pf.user_id = ?

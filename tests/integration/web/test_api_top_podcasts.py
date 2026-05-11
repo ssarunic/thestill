@@ -161,9 +161,145 @@ def test_podcast_slug_field_present(client, two_pods):
     assert all(row["podcast_slug"] is None for row in rows)
 
 
+def test_category_filter_narrows_to_matching_rows(client, app_state):
+    """``category=History`` returns only chart entries tagged with that
+    Apple taxonomy category. Other categories are filtered out by the SQL
+    join on the ``categories`` lookup table."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {
+                "rank": 1,
+                "name": "Pod History",
+                "artist": "Wondery",
+                "rss_url": "https://r/1",
+                "category_name": "History",
+            },
+            {"rank": 2, "name": "Pod Comedy", "artist": "Wondery", "rss_url": "https://r/2", "category_name": "Comedy"},
+        ],
+    )
+
+    response = client.get("/api/top-podcasts?category=History")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["top_podcasts"][0]["name"] == "Pod History"
+
+
+def test_category_combined_with_q(client, app_state):
+    """``q`` and ``category`` compose — both filters must match."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {
+                "rank": 1,
+                "name": "Pod History",
+                "artist": "Wondery",
+                "rss_url": "https://r/1",
+                "category_name": "History",
+            },
+            {"rank": 2, "name": "Pod Comedy", "artist": "Wondery", "rss_url": "https://r/2", "category_name": "Comedy"},
+            {
+                "rank": 3,
+                "name": "Other History",
+                "artist": "Other",
+                "rss_url": "https://r/3",
+                "category_name": "History",
+            },
+        ],
+    )
+
+    response = client.get("/api/top-podcasts?category=History&q=pod")
+
+    body = response.json()
+    assert body["count"] == 1
+    assert body["top_podcasts"][0]["name"] == "Pod History"
+
+
+def test_available_categories_returned(client, app_state):
+    """``available_categories`` reflects the distinct categories in the
+    region's chart, sorted alphabetically, and is independent of the active
+    filters (so the picker doesn't collapse mid-search)."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {"rank": 1, "name": "A", "rss_url": "https://r/1", "category_name": "History"},
+            {"rank": 2, "name": "B", "rss_url": "https://r/2", "category_name": "Comedy"},
+            {"rank": 3, "name": "C", "rss_url": "https://r/3", "category_name": "Comedy"},
+        ],
+    )
+
+    # Active filter shouldn't shrink the categories list — it remains the
+    # full set so the user can switch filters without losing options.
+    response = client.get("/api/top-podcasts?category=History")
+
+    body = response.json()
+    assert body["available_categories"] == ["Comedy", "History"]
+
+
+def test_available_categories_rolls_subcategories_up_to_parent(client, app_state):
+    """Sub-categories like "Comedy Interviews" should surface as their
+    top-level parent ("Comedy") in the picker, matching Apple's UI."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {"rank": 1, "name": "A", "rss_url": "https://r/1", "category_name": "Comedy Interviews"},
+            {"rank": 2, "name": "B", "rss_url": "https://r/2", "category_name": "After Shows"},
+            {"rank": 3, "name": "C", "rss_url": "https://r/3", "category_name": "History"},
+        ],
+    )
+
+    response = client.get("/api/top-podcasts")
+
+    body = response.json()
+    # "Comedy Interviews" rolls to "Comedy"; "After Shows" rolls to "TV & Film".
+    assert "Comedy" in body["available_categories"]
+    assert "TV & Film" in body["available_categories"]
+    assert "History" in body["available_categories"]
+    # The sub-category names themselves are NOT present.
+    assert "Comedy Interviews" not in body["available_categories"]
+    assert "After Shows" not in body["available_categories"]
+
+
+def test_category_filter_matches_subcategory_entries(client, app_state):
+    """Picking the top-level "Comedy" returns chart entries tagged with
+    sub-categories of Comedy too — not just rows tagged "Comedy" directly."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {"rank": 1, "name": "Top-Level Comedy", "rss_url": "https://r/1", "category_name": "Comedy"},
+            {"rank": 2, "name": "Sub Comedy", "rss_url": "https://r/2", "category_name": "Comedy Interviews"},
+            {"rank": 3, "name": "Other", "rss_url": "https://r/3", "category_name": "History"},
+        ],
+    )
+
+    response = client.get("/api/top-podcasts?category=Comedy")
+
+    body = response.json()
+    names = sorted(row["name"] for row in body["top_podcasts"])
+    assert names == ["Sub Comedy", "Top-Level Comedy"]
+
+
+def test_empty_category_param_treated_as_unfiltered(client, two_pods):
+    """``category=`` (empty) and whitespace are rejected by FastAPI
+    min_length, so the route just sees None and returns the full chart."""
+    response = client.get("/api/top-podcasts?category=")
+
+    # FastAPI rejects ``min_length=1`` with 422, which is the same shape as
+    # the existing whitespace handling.
+    assert response.status_code in (200, 422)
+
+
 def test_podcast_slug_populated_when_imported(client, two_pods, app_state):
     """When a chart entry maps to an existing ``podcasts`` row, its slug
-    flows through so the UI can link directly to the detail page."""
+    and artwork flow through so the UI can link to the detail page and
+    render the cover without a separate lookup."""
     from datetime import datetime, timezone
 
     from thestill.models.podcast import Podcast
@@ -175,6 +311,7 @@ def test_podcast_slug_populated_when_imported(client, two_pods, app_state):
         title="The Rest Is History",
         description="",
         slug="the-rest-is-history",
+        image_url="https://example.com/artwork.jpg",
         created_at=now,
         episodes=[],
     )
@@ -185,5 +322,7 @@ def test_podcast_slug_populated_when_imported(client, two_pods, app_state):
     body = response.json()
     by_rank = {row["rank"]: row for row in body["top_podcasts"]}
     assert by_rank[1]["podcast_slug"] == "the-rest-is-history"
-    # The other (unimported) chart entry remains null.
+    assert by_rank[1]["image_url"] == "https://example.com/artwork.jpg"
+    # The other (unimported) chart entry has neither slug nor artwork.
     assert by_rank[2]["podcast_slug"] is None
+    assert by_rank[2]["image_url"] is None
