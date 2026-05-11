@@ -111,10 +111,9 @@ entities = [
     # the ``refined`` PyPI name is a placeholder for an unrelated 0.0.1
     # release. Pin to a tag once amazon-science cuts one.
     "refined @ git+https://github.com/amazon-science/ReFinED.git",
-    # ReFinED's tokenizer config relies on ``transformers`` < 4.40 —
-    # 4.40 made ``add_special_tokens`` a method on ``RobertaTokenizer``
-    # which collides with the same kwarg ReFinED's config passes in.
-    # Loosen this once amazon-science fixes the upstream issue.
+    # gliner caps ``transformers<5.2``; whisperx (in the
+    # local-transcription extra) caps it below 5 too. Keep the upper
+    # bound generous so future patch bumps stay in range.
     "transformers>=4.30,<5.9",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
@@ -136,9 +135,10 @@ entities = [
 # ``[entities]`` and ``[local-transcription]`` are deployed
 # separately and never installed into the same environment.
 # Telling uv they conflict lets the lockfile resolve each in its
-# own fork — without this, uv must satisfy both simultaneously and
-# fails because ReFinED pins ``transformers<4.40`` while whisperx
-# >= 3.7.1 requires ``transformers>=4.48``.
+# own fork — without this, uv must downgrade fsspec, jiwer,
+# protobuf, packaging, and grpcio-status to the older versions
+# the entities side accepts, which would regress the
+# transcription-side runtime.
 conflicts = [
     [
         { extra = "entities" },
