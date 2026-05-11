@@ -1,9 +1,10 @@
 import { useMemo, useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useEpisodeTranscriptWords } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('../components/TranscriptViewer'))
@@ -55,6 +56,31 @@ export default function EpisodeDetail() {
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
   const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(podcastSlug!, episodeSlug!)
+
+  // Spec #38 karaoke wipe. Chip state is persisted at the parent level so
+  // a single ``usePersistedBoolean`` drives both the chip checkbox and the
+  // gated ``useEpisodeTranscriptWords`` call. ``data === null`` is the
+  // 404 sentinel — the chip then renders disabled-with-tooltip and the
+  // viewer falls back to segment-level highlighting.
+  const [karaokeChipOn, setKaraokeChipOn] = usePersistedBoolean('thestill:transcript:karaoke', false)
+  const karaokeWordsQuery = useEpisodeTranscriptWords(
+    podcastSlug!,
+    episodeSlug!,
+    karaokeChipOn,
+  )
+  const karaokeUnavailable = karaokeChipOn && karaokeWordsQuery.isFetched && karaokeWordsQuery.data === null
+  const karaokeEffectivelyOn = karaokeChipOn && !karaokeUnavailable
+  const handleKaraokeToggle = useCallback(() => setKaraokeChipOn(!karaokeChipOn), [karaokeChipOn, setKaraokeChipOn])
+
+  // When the karaoke chip was carried over from a prior episode (the
+  // pref is global, not per-episode) but the new episode lacks word
+  // timestamps, auto-clear the persisted ``true`` so the next episode
+  // that *does* have words starts unchecked. Without this, the chip
+  // would render checked-and-disabled with no way to interact with it,
+  // since ``disabled`` blocks the onChange handler.
+  useEffect(() => {
+    if (karaokeUnavailable) setKaraokeChipOn(false)
+  }, [karaokeUnavailable, setKaraokeChipOn])
 
   // Reading position persistence - auto-restores when episode ID is available
   useReadingPosition(episodeData?.episode?.id)
@@ -463,6 +489,11 @@ export default function EpisodeDetail() {
                       />
                     ) : null
                   }
+                  karaokeEnabled={karaokeEffectivelyOn}
+                  karaokeWords={karaokeWordsQuery.data}
+                  karaokeChipChecked={karaokeChipOn}
+                  karaokeChipDisabled={karaokeUnavailable}
+                  onKaraokeToggle={handleKaraokeToggle}
                 />
               )}
             </Suspense>
@@ -550,6 +581,13 @@ interface TranscriptPanelProps {
   // Slot for the filter bar — rendered above the segmented viewer so
   // it shares the panel's padding and lives under the sub-tab toggle.
   entityFilterBar?: React.ReactNode
+  // Spec #38 karaoke wipe — threaded through from EpisodeDetail which
+  // owns the chip state + the words query.
+  karaokeEnabled?: boolean
+  karaokeWords?: import('../api/types').KaraokeWordsByEpisode | null
+  karaokeChipChecked?: boolean
+  karaokeChipDisabled?: boolean
+  onKaraokeToggle?: () => void
 }
 
 // Passively probe an audio URL for its duration without playing it. We
@@ -629,6 +667,11 @@ function TranscriptPanel({
   focusedEntityId,
   onFocusEntity,
   entityFilterBar,
+  karaokeEnabled,
+  karaokeWords,
+  karaokeChipChecked,
+  karaokeChipDisabled,
+  onKaraokeToggle,
 }: TranscriptPanelProps) {
   const hasSegments = !!transcriptData?.segments
   const hasLegacy = !!transcriptData?.content && transcriptData.content.length > 0
@@ -723,6 +766,11 @@ function TranscriptPanel({
             visibleSegmentIds={visibleSegmentIds}
             focusedEntityId={focusedEntityId}
             onFocusEntity={onFocusEntity}
+            karaokeEnabled={karaokeEnabled}
+            karaokeWords={karaokeWords}
+            karaokeChipChecked={karaokeChipChecked}
+            karaokeChipDisabled={karaokeChipDisabled}
+            onKaraokeToggle={onKaraokeToggle}
           />
         </>
       ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (

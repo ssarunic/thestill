@@ -7,6 +7,7 @@ import type {
   EpisodesResponse,
   EpisodeDetailResponse,
   ContentResponse,
+  TranscriptWordsResponse,
   RefreshRequest,
   RefreshResponse,
   RefreshTaskStatus,
@@ -196,6 +197,25 @@ export async function getEpisodeTranscript(podcastSlug: string, episodeSlug: str
 
 export async function getEpisodeSummary(podcastSlug: string, episodeSlug: string): Promise<ContentResponse> {
   return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/summary`)
+}
+
+// Spec #38 — karaoke wipe data source. 404 is a valid response shape
+// (episode has no word-level timestamps), not an error condition, so it
+// resolves to ``null`` instead of throwing. The chip in the viewer
+// toolbar reads this null sentinel and renders disabled-with-tooltip.
+export async function getEpisodeTranscriptWords(
+  podcastSlug: string,
+  episodeSlug: string,
+): Promise<TranscriptWordsResponse | null> {
+  const response = await fetch(
+    `${API_BASE}/podcasts/${podcastSlug}/episodes/${episodeSlug}/transcript/words`,
+    { credentials: 'include' },
+  )
+  if (response.status === 404) return null
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
 }
 
 // Commands API

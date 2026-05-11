@@ -266,6 +266,43 @@ export interface ShadowTranscript {
   content: string
 }
 
+// ---------------------------------------------------------------------------
+// Spec #38 — karaoke wipe word-level timestamps
+// ---------------------------------------------------------------------------
+//
+// Short field names mirror the backend Pydantic DTOs (``WordTimestamp``) —
+// chosen to keep a 10k-word episode's payload around 100–150 KB gzipped.
+// The hook layer transforms ``segments`` into ``Map<segment_id, WordTimestamp[]>``
+// so the viewer doesn't repeat the work per render.
+
+export interface WordTimestamp {
+  w: string
+  s: number
+  e: number
+}
+
+export interface SegmentWords {
+  segment_id: number
+  words: WordTimestamp[]
+}
+
+export interface TranscriptWordsResponse {
+  status: string
+  timestamp: string
+  episode_id: string
+  playback_time_offset_seconds: number
+  segments: SegmentWords[]
+}
+
+// Pre-indexed view the karaoke driver consumes. ``offset`` is the
+// ``playback_time_offset_seconds`` to add to each word's ``s``/``e`` before
+// comparing to the audio element's ``currentTime``.
+export interface KaraokeWordsByEpisode {
+  episodeId: string
+  offset: number
+  wordsBySegmentId: Map<number, WordTimestamp[]>
+}
+
 export interface ContentResponse {
   status: string
   timestamp: string

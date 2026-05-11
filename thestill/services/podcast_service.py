@@ -24,8 +24,10 @@ from pydantic import BaseModel, computed_field
 from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
-from ..models.annotated_transcript import AnnotatedTranscript
+from ..models.annotated_transcript import AnnotatedTranscript, WordSpan
 from ..models.podcast import Episode, Podcast
+from ..models.transcript import Segment as RawSegment
+from ..models.transcript import Word
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
 from ..utils.path_manager import PathManager
@@ -103,6 +105,56 @@ class SegmentedTranscriptResult(NamedTuple):
     """
 
     annotated: AnnotatedTranscript
+
+
+class SegmentWordsResult(NamedTuple):
+    """One ``AnnotatedSegment`` worth of raw word-level timestamps.
+
+    ``segment_id`` matches ``AnnotatedSegment.id`` so the client can join
+    against the segmented transcript it already holds. ``words`` carries
+    the raw ``Word`` objects (with ``start``/``end`` in raw audio seconds);
+    the client adds the response's ``playback_time_offset_seconds`` before
+    comparing to ``audio.currentTime``.
+    """
+
+    segment_id: int
+    words: List[Word]
+
+
+class TranscriptWordsResult(NamedTuple):
+    """Per-segment word-level timestamps for the karaoke wipe (spec #38).
+
+    Segments with no resolvable word data (no ``source_word_span``, or a
+    span pointing at raw words that have no timestamps) are omitted, not
+    empty-array'd, so the client can cheaply fall back to segment-level
+    highlighting on a per-segment basis.
+    """
+
+    playback_time_offset_seconds: float
+    segments: List[SegmentWordsResult]
+
+
+def _collect_words_in_span(span: WordSpan, raw_by_id: dict[int, RawSegment]) -> List[Word]:
+    """Walk a ``WordSpan`` and collect the raw ``Word`` objects it points to.
+
+    A span is inclusive on both endpoints and may cross multiple raw
+    segments. Words without ``start``/``end`` timestamps are skipped — they
+    can't drive a karaoke wipe even though they're part of the span.
+
+    Mismatched indices (segment id not present, word index out of range)
+    raise ``KeyError`` / ``IndexError`` — corrupted data should fail loudly
+    rather than silently produce a malformed response.
+    """
+    words: List[Word] = []
+    for seg_id in range(span.start_segment_id, span.end_segment_id + 1):
+        raw_seg = raw_by_id[seg_id]
+        start_idx = span.start_word_index if seg_id == span.start_segment_id else 0
+        end_idx = span.end_word_index if seg_id == span.end_segment_id else len(raw_seg.words) - 1
+        for i in range(start_idx, end_idx + 1):
+            w = raw_seg.words[i]
+            if w.start is not None and w.end is not None:
+                words.append(w)
+    return words
 
 
 class PodcastWithIndex(BaseModel):
@@ -664,6 +716,67 @@ class PodcastService:
 
         annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
         return SegmentedTranscriptResult(annotated=annotated)
+
+    def get_transcript_words_for_episode(self, episode: Episode) -> Optional[TranscriptWordsResult]:
+        """Load per-segment word-level timestamps for the karaoke wipe (spec #38).
+
+        Reads two sidecars: the segmented JSON (for ``AnnotatedSegment.id`` →
+        ``source_word_span`` mapping) and the raw transcript JSON (for the
+        actual ``Word`` objects with their start/end seconds).
+
+        Returns ``None`` — which the route translates to 404 — when:
+          - the segmented JSON sidecar is missing (episode wasn't cleaned
+            through the spec #18 path);
+          - the raw transcript file is missing;
+          - no segment has resolvable word data (Whisper-CPU mode or other
+            providers that didn't surface word timestamps).
+
+        A ``source_word_span`` that references a non-existent raw segment or
+        an out-of-bounds word index is treated as data corruption: the
+        resulting ``KeyError`` / ``IndexError`` propagates to the route's
+        generic 500 handler.
+        """
+        if not episode.clean_transcript_json_path or not episode.raw_transcript_path:
+            return None
+
+        annotated_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+        raw_path = self.path_manager.raw_transcript_file(episode.raw_transcript_path)
+
+        if not annotated_path.exists() or not raw_path.exists():
+            logger.warning(
+                "transcript_words.file_missing",
+                episode_id=episode.id,
+                annotated_present=annotated_path.exists(),
+                raw_present=raw_path.exists(),
+            )
+            return None
+
+        from ..models.transcript import Transcript
+
+        with open(annotated_path, "r", encoding="utf-8") as fh:
+            annotated = AnnotatedTranscript.model_validate_json(fh.read())
+        with open(raw_path, "r", encoding="utf-8") as fh:
+            raw = Transcript.model_validate_json(fh.read())
+
+        raw_by_id: dict[int, RawSegment] = {seg.id: seg for seg in raw.segments}
+
+        segments_out: List[SegmentWordsResult] = []
+        for ann_seg in annotated.segments:
+            span = ann_seg.source_word_span
+            if span is None:
+                continue
+            words = _collect_words_in_span(span, raw_by_id)
+            if not words:
+                continue
+            segments_out.append(SegmentWordsResult(segment_id=ann_seg.id, words=words))
+
+        if not segments_out:
+            return None
+
+        return TranscriptWordsResult(
+            playback_time_offset_seconds=episode.playback_time_offset_seconds,
+            segments=segments_out,
+        )
 
     def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
         """
