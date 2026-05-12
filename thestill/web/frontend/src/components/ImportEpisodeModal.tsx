@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { importEpisode } from '../api/client'
@@ -33,13 +33,11 @@ export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeMod
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [state, setState] = useState<ImportState>({ kind: 'idle' })
-  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!isOpen) return
     setUrl('')
     setState({ kind: 'idle' })
-    inputRef.current?.focus()
   }, [isOpen])
 
   const handleSubmit = useCallback(
@@ -105,7 +103,7 @@ export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeMod
         ) : (
           <form onSubmit={handleSubmit}>
             <input
-              ref={inputRef}
+              autoFocus
               type="url"
               value={url}
               onChange={(e) => {
