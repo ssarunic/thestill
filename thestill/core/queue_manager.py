@@ -40,13 +40,14 @@ Usage:
 import json
 import random
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from structlog import get_logger
 
@@ -238,6 +239,15 @@ class Task:
         }
 
 
+_R = TypeVar("_R")
+
+# Backoff schedule for retrying SQLite write attempts that lose the 5s
+# ``busy_timeout`` race against concurrent writers (reindex/cooccurrence
+# stages can hold the WAL writer for a few seconds at a time). Each entry
+# is the sleep BEFORE the next attempt; the final attempt has no follow-up.
+_LOCK_RETRY_DELAYS: tuple[float, ...] = (0.1, 0.3, 0.7, 1.5, 3.0)
+
+
 def calculate_backoff(retry_count: int) -> timedelta:
     """
     Calculate exponential backoff delay with jitter.
@@ -285,6 +295,33 @@ class QueueManager:
         self.db_path = Path(db_path)
         self._ensure_table()
         logger.info(f"QueueManager initialized: {self.db_path}")
+
+    def _exec_with_lock_retry(self, op_name: str, fn: Callable[[], _R]) -> _R:
+        """Retry an idempotent SQLite write on transient ``database is locked``.
+
+        The task handler's actual work (transcript files, facts, etc.) is on
+        disk by the time bookkeeping writes like ``complete_task`` and
+        ``schedule_retry`` run. Losing one of those one-row UPDATEs to a
+        lock race strands the task in ``processing`` forever, so we pay a
+        short backoff to get the write to land. Non-lock errors propagate
+        immediately.
+        """
+        for attempt, delay in enumerate(_LOCK_RETRY_DELAYS):
+            try:
+                return fn()
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e).lower():
+                    raise
+                logger.warning(
+                    "queue_write_lock_retry",
+                    op=op_name,
+                    attempt=attempt + 1,
+                    sleep_s=delay,
+                    error=str(e),
+                )
+                time.sleep(delay)
+        # Final attempt; whatever it raises is the caller's problem.
+        return fn()
 
     @contextmanager
     def _get_connection(self):
@@ -568,14 +605,17 @@ class QueueManager:
         max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
         metadata_json = json.dumps(metadata) if metadata else None
 
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
-                VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-            """,
-                (task_id, episode_id, stage.value, priority, max_retries, metadata_json, now, now),
-            )
+        def _write() -> None:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                """,
+                    (task_id, episode_id, stage.value, priority, max_retries, metadata_json, now, now),
+                )
+
+        self._exec_with_lock_retry("add_task", _write)
 
         logger.info(f"Task queued: {task_id} - {stage.value} for episode {episode_id}")
 
@@ -698,15 +738,18 @@ class QueueManager:
         """
         now = datetime.utcnow().isoformat()
 
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE tasks
-                SET status = 'completed', completed_at = ?, updated_at = ?
-                WHERE id = ?
-            """,
-                (now, now, task_id),
-            )
+        def _write() -> None:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'completed', completed_at = ?, updated_at = ?
+                    WHERE id = ?
+                """,
+                    (now, now, task_id),
+                )
+
+        self._exec_with_lock_retry("complete_task", _write)
 
         logger.info(f"Task completed: {task_id}")
 
@@ -1033,62 +1076,66 @@ class QueueManager:
         now = datetime.utcnow()
         now_iso = now.isoformat()
 
-        with self._get_connection() as conn:
-            # Get current task state
-            cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-            row = cursor.fetchone()
-            if not row:
-                logger.warning(f"Cannot schedule retry for unknown task: {task_id}")
-                return None
+        def _write() -> None:
+            with self._get_connection() as conn:
+                # Get current task state
+                cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"Cannot schedule retry for unknown task: {task_id}")
+                    return
 
-            current_retry = row["retry_count"] or 0
-            max_retries = row["max_retries"] or self.DEFAULT_MAX_RETRIES
-            new_retry_count = current_retry + 1
+                current_retry = row["retry_count"] or 0
+                max_retries = row["max_retries"] or self.DEFAULT_MAX_RETRIES
+                new_retry_count = current_retry + 1
 
-            if new_retry_count >= max_retries:
-                # Exhausted retries - mark as failed
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'failed',
-                        retry_count = ?,
-                        error_message = ?,
-                        last_error = ?,
-                        error_type = 'transient',
-                        completed_at = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                """,
-                    (new_retry_count, error_message, error_message, now_iso, now_iso, task_id),
-                )
-                logger.warning(f"Task {task_id} exhausted retries ({new_retry_count}/{max_retries}), marked as failed")
-            else:
-                # Schedule retry with exponential backoff
-                backoff = calculate_backoff(new_retry_count)
-                next_retry = now + backoff
-                next_retry_iso = next_retry.isoformat()
+                if new_retry_count >= max_retries:
+                    # Exhausted retries - mark as failed
+                    conn.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'failed',
+                            retry_count = ?,
+                            error_message = ?,
+                            last_error = ?,
+                            error_type = 'transient',
+                            completed_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                    """,
+                        (new_retry_count, error_message, error_message, now_iso, now_iso, task_id),
+                    )
+                    logger.warning(
+                        f"Task {task_id} exhausted retries ({new_retry_count}/{max_retries}), marked as failed"
+                    )
+                else:
+                    # Schedule retry with exponential backoff
+                    backoff = calculate_backoff(new_retry_count)
+                    next_retry = now + backoff
+                    next_retry_iso = next_retry.isoformat()
 
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'retry_scheduled',
-                        retry_count = ?,
-                        next_retry_at = ?,
-                        last_error = ?,
-                        error_type = 'transient',
-                        started_at = NULL,
-                        updated_at = ?
-                    WHERE id = ?
-                """,
-                    (new_retry_count, next_retry_iso, error_message, now_iso, task_id),
-                )
-                logger.info(
-                    f"Task {task_id} scheduled for retry {new_retry_count}/{max_retries} "
-                    f"at {next_retry_iso} (in {backoff.total_seconds():.0f}s)"
-                )
+                    conn.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'retry_scheduled',
+                            retry_count = ?,
+                            next_retry_at = ?,
+                            last_error = ?,
+                            error_type = 'transient',
+                            started_at = NULL,
+                            updated_at = ?
+                        WHERE id = ?
+                    """,
+                        (new_retry_count, next_retry_iso, error_message, now_iso, task_id),
+                    )
+                    logger.info(
+                        f"Task {task_id} scheduled for retry {new_retry_count}/{max_retries} "
+                        f"at {next_retry_iso} (in {backoff.total_seconds():.0f}s)"
+                    )
 
-            # Return updated task
-            return self.get_task(task_id)
+        self._exec_with_lock_retry("schedule_retry", _write)
+        # Return updated task (read can hit the same lock; retry through the helper too).
+        return self._exec_with_lock_retry("schedule_retry_readback", lambda: self.get_task(task_id))
 
     def mark_dead(self, task_id: str, error_message: str) -> Optional[Task]:
         """

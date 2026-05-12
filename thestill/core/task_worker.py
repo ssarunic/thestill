@@ -237,6 +237,11 @@ class TaskWorker:
             stage: asyncio.Semaphore(self.parallel_jobs_per_stage[stage]) for stage in TaskStage
         }
         pollers = [asyncio.create_task(self._stage_poll_loop(stage, semaphores[stage])) for stage in TaskStage]
+        # Long-running watchdog that catches tasks left in ``processing`` by
+        # crashes or by the lock-race bookkeeping failure that motivated
+        # ``_safe_schedule_retry``. Sweeps far less often than the stage
+        # pollers — a wedged task only needs to recover eventually, not fast.
+        pollers.append(asyncio.create_task(self._periodic_stale_task_reset()))
 
         try:
             await asyncio.gather(*pollers, return_exceptions=True)
@@ -244,6 +249,35 @@ class TaskWorker:
             pass
 
         logger.info("task_worker_loop_ended")
+
+    async def _periodic_stale_task_reset(self) -> None:
+        """Periodically reclaim tasks stuck in ``processing``.
+
+        The startup-only reset at ``_async_worker_loop`` entry handles
+        server-restart recovery, but a task can also wedge mid-run when a
+        post-handler bookkeeping write loses a SQLite lock race (the failure
+        mode that produced this method). Sweeping at ``stale_timeout_minutes
+        / 5`` keeps a wedged row out of ``processing`` for at most ~1.2× the
+        stale timeout instead of "until next restart".
+        """
+        # Sweep at one-fifth of the stale window, clamped to [60s, 600s] so
+        # tests with short stale timeouts still get a useful cadence and
+        # default 30-min installs don't sweep every few seconds.
+        interval_s = max(60.0, min(600.0, self.stale_timeout_minutes * 60 / 5))
+        logger.info("stale_task_reset_poll_started", interval_s=interval_s)
+        try:
+            while self._running:
+                await asyncio.sleep(interval_s)
+                if not self._running:
+                    break
+                # ``_reset_stale_tasks`` already swallows exceptions; this
+                # is belt-and-suspenders for the asyncio task itself.
+                try:
+                    self._reset_stale_tasks()
+                except Exception as e:
+                    logger.warning("periodic_stale_task_reset_error", error=str(e))
+        finally:
+            logger.info("stale_task_reset_poll_ended")
 
     async def _stage_poll_loop(self, stage: TaskStage, sem: asyncio.Semaphore) -> None:
         """Poll the queue for a single stage and dispatch up to its capacity."""
@@ -362,7 +396,7 @@ class TaskWorker:
                 # Fatal error - move to DLQ, no retry
                 error_msg = str(e)
                 logger.error("task_fatal_error", error=error_msg, destination="dlq", exc_info=True)
-                self.queue_manager.mark_dead(task.id, error_msg)
+                self._safe_mark_dead(task, error_msg)
                 self._mark_episode_failed(task, error_msg, "fatal")
                 self._report_failure(task.id, error_msg)
 
@@ -370,7 +404,7 @@ class TaskWorker:
                 # Transient error - schedule retry with backoff
                 error_msg = str(e)
                 logger.warning("task_transient_error", error=error_msg, will_retry=True, exc_info=True)
-                updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+                updated_task = self._safe_schedule_retry(task, error_msg)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
                     self._mark_episode_failed(task, error_msg, "transient")
@@ -380,7 +414,7 @@ class TaskWorker:
                 # Unknown exception - treat as transient and retry
                 error_msg = str(e)
                 logger.exception("task_unexpected_error", error=error_msg, exc_info=True)
-                updated_task = self.queue_manager.schedule_retry(task.id, error_msg)
+                updated_task = self._safe_schedule_retry(task, error_msg)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
                     self._mark_episode_failed(task, error_msg, "transient")
@@ -538,3 +572,63 @@ class TaskWorker:
                 logger.info(f"Reset {reset_count} stale tasks on startup")
         except Exception as e:
             logger.warning(f"Failed to reset stale tasks: {e}")
+
+    def _safe_schedule_retry(self, task: Task, error_msg: str) -> Optional[Task]:
+        """Schedule a retry without leaving the row stuck in ``processing``.
+
+        Two failure modes the naive call can't survive:
+
+        1. The handler succeeded but a post-handler bookkeeping write
+           (``complete_task`` / ``add_task``) raised. Calling
+           ``schedule_retry`` here would re-run a stage whose work is
+           already on disk. If the row is already ``completed`` we skip
+           the retry entirely.
+        2. ``schedule_retry`` itself loses a SQLite lock race even after
+           the in-method retry helper exhausts its budget. We swallow
+           the exception and rely on the periodic stale-task reset
+           (see ``_periodic_stale_task_reset``) to recover the row.
+        """
+        try:
+            current = self.queue_manager.get_task(task.id)
+        except Exception as e:
+            logger.warning("safe_schedule_retry_lookup_failed", task_id=task.id, error=str(e))
+            current = None
+
+        if current is not None and current.status.value == "completed":
+            logger.warning(
+                "task_post_handler_bookkeeping_failed",
+                task_id=task.id,
+                stage=task.stage.value,
+                note="handler already marked task completed; not rescheduling",
+                error=error_msg,
+            )
+            return current
+
+        try:
+            return self.queue_manager.schedule_retry(task.id, error_msg)
+        except Exception as e:
+            logger.error(
+                "schedule_retry_failed",
+                task_id=task.id,
+                stage=task.stage.value,
+                original_error=error_msg,
+                schedule_error=str(e),
+                note="stale-task reset will recover this row",
+                exc_info=True,
+            )
+            return None
+
+    def _safe_mark_dead(self, task: Task, error_msg: str) -> None:
+        """``mark_dead`` analogue of ``_safe_schedule_retry``: never leave processing."""
+        try:
+            self.queue_manager.mark_dead(task.id, error_msg)
+        except Exception as e:
+            logger.error(
+                "mark_dead_failed",
+                task_id=task.id,
+                stage=task.stage.value,
+                original_error=error_msg,
+                mark_dead_error=str(e),
+                note="stale-task reset will recover this row",
+                exc_info=True,
+            )
