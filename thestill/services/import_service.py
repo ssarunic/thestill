@@ -527,9 +527,13 @@ class ImportService:
             source="import",
         )
         if episode_created:
+            # Imports start at TRANSCRIBE: the Dalston transcribe handler detects
+            # `audio_url` + no downsampled path and fetches the audio itself, so
+            # we skip the local download/downsample stages entirely. `run_full_pipeline`
+            # keeps clean → summarize → entities chaining after transcribe.
             self._queue.add_task(
                 episode_id=episode_id,
-                stage=TaskStage.DOWNLOAD,
+                stage=TaskStage.TRANSCRIBE,
                 metadata={"run_full_pipeline": True, "initiated_by": "import"},
             )
             logger.info(

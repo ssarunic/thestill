@@ -56,10 +56,12 @@ def test_post_imports_returns_201_shape_and_creates_row(client, app_state):
         assert ep["podcast_id"] == SYNTHETIC_AUDIO_IMPORTS_ID
         assert ep["canonical_id"] == payload["canonical_id"]
 
-    # The download task was queued.
-    task = app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD)
+    # The TRANSCRIBE task was queued — imports skip download/downsample and let
+    # the Dalston transcribe handler fetch the audio from the URL.
+    task = app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert task is not None
     assert task.episode_id == payload["episode_id"]
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD) is None
 
 
 def test_post_imports_idempotent_for_same_url(client, app_state):
@@ -79,10 +81,10 @@ def test_post_imports_idempotent_for_same_url(client, app_state):
     assert e2["inbox_created"] is False
 
     # Pipeline only runs once.
-    first = app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD)
+    first = app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert first is not None
     assert first.episode_id == e1["episode_id"]
-    assert app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD) is None
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE) is None
 
 
 def test_post_imports_unsupported_url_returns_400(client):
@@ -124,9 +126,7 @@ def test_post_imports_youtube_returns_parent(client, app_state, fake_youtube_vid
         resolvers=[YouTubeResolver(metadata_fetcher=lambda url: fake_youtube_video_info)],
     )
 
-    response = client.post(
-        "/api/imports", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
-    )
+    response = client.post("/api/imports", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
     assert response.status_code == 200, response.text
     payload = response.json()["import"]
     assert payload["kind"] == "youtube"
@@ -137,9 +137,7 @@ def test_post_imports_youtube_returns_parent(client, app_state, fake_youtube_vid
     assert parent["id"]
 
 
-def test_post_imports_youtube_dedup_still_returns_parent(
-    client, app_state, fake_youtube_video_info
-):
+def test_post_imports_youtube_dedup_still_returns_parent(client, app_state, fake_youtube_video_info):
     """Dedup hit also returns the parent so re-imports drive the same CTA."""
     app_state.import_service = ImportService(
         repository=app_state.repository,

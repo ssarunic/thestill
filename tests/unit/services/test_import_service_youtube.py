@@ -28,10 +28,7 @@ import pytest
 from thestill.core.queue_manager import QueueManager, TaskStage
 from thestill.models.user import User
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-from thestill.repositories.sqlite_podcast_repository import (
-    SYNTHETIC_AUDIO_IMPORTS_ID,
-    SqlitePodcastRepository,
-)
+from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.import_service import ImportService, YouTubeResolver
 
@@ -118,9 +115,10 @@ def test_youtube_import_upserts_channel_as_auto_added(
         assert ep["podcast_id"] != SYNTHETIC_AUDIO_IMPORTS_ID
         assert ep["canonical_id"] == "youtube:dQw4w9WgXcQ"
 
-    # Pipeline kicked off.
-    task = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+    # Pipeline kicked off — imports start at TRANSCRIBE (URL mode), no DOWNLOAD.
+    task = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert task is not None and task.episode_id == result.episode_id
+    assert queue.get_next_task(stage=TaskStage.DOWNLOAD) is None
 
 
 # ============================================================================
@@ -147,9 +145,7 @@ def test_auto_added_channel_excluded_from_refresh_until_followed(
     rss = "https://www.youtube.com/feeds/videos.xml?channel_id=UCuAXFkgsw1L7xaCfnd5JJOw"
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        channel_id = conn.execute(
-            "SELECT id FROM podcasts WHERE rss_url = ?", (rss,)
-        ).fetchone()["id"]
+        channel_id = conn.execute("SELECT id FROM podcasts WHERE rss_url = ?", (rss,)).fetchone()["id"]
 
     # Before any follow: refresh skips both the synthetic parent AND the
     # auto-added channel, so the result is empty.
@@ -167,9 +163,7 @@ def test_auto_added_channel_excluded_from_refresh_until_followed(
 # ============================================================================
 
 
-def test_two_users_share_episode_and_channel(
-    repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info
-):
+def test_two_users_share_episode_and_channel(repo, inbox_repo, queue, user_repo, db_path, fake_youtube_video_info):
     alice = _make_user(user_repo, "alice@example.com")
     bob = _make_user(user_repo, "bob@example.com")
     svc = _service_with(repo, inbox_repo, queue, fake_youtube_video_info)
@@ -184,15 +178,13 @@ def test_two_users_share_episode_and_channel(
 
     rss = "https://www.youtube.com/feeds/videos.xml?channel_id=UCuAXFkgsw1L7xaCfnd5JJOw"
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT COUNT(*) AS n FROM podcasts WHERE rss_url = ?", (rss,)
-        ).fetchone()
+        rows = conn.execute("SELECT COUNT(*) AS n FROM podcasts WHERE rss_url = ?", (rss,)).fetchone()
         assert rows[0] == 1
 
     # Pipeline runs exactly once across both imports.
     seen = []
     while True:
-        t = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+        t = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
         if t is None:
             break
         seen.append(t)
@@ -228,8 +220,6 @@ def test_existing_followed_channel_is_not_overwritten_by_import(
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT id, auto_added FROM podcasts WHERE rss_url = ?", (rss,)
-        ).fetchone()
+        row = conn.execute("SELECT id, auto_added FROM podcasts WHERE rss_url = ?", (rss,)).fetchone()
         assert row["id"] == podcast_id  # same row, not a duplicate
         assert row["auto_added"] == 0  # NOT flipped back to auto_added

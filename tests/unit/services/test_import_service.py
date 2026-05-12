@@ -22,10 +22,7 @@ import pytest
 from thestill.core.queue_manager import QueueManager, TaskStage
 from thestill.models.user import User
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
-from thestill.repositories.sqlite_podcast_repository import (
-    SYNTHETIC_AUDIO_IMPORTS_ID,
-    SqlitePodcastRepository,
-)
+from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.import_service import (
     BareAudioResolver,
@@ -34,7 +31,6 @@ from thestill.services.import_service import (
     UnsupportedUrlError,
     _normalise_url,
 )
-
 
 # ============================================================================
 # BareAudioResolver
@@ -86,9 +82,7 @@ def test_bare_audio_resolver_title_derived_from_filename():
 
 
 def test_normalise_url_drops_tracking_params_only():
-    n = _normalise_url(
-        "https://Example.com/x.mp3?utm_source=a&utm_medium=b&keep=1&fbclid=c#frag"
-    )
+    n = _normalise_url("https://Example.com/x.mp3?utm_source=a&utm_medium=b&keep=1&fbclid=c#frag")
     assert "utm_" not in n
     assert "fbclid" not in n
     assert "keep=1" in n
@@ -143,9 +137,7 @@ def _make_user(user_repo, email):
 # ============================================================================
 
 
-def test_import_creates_synthetic_parent_episode_inbox_and_task(
-    service, repo, inbox_repo, queue, user_repo, db_path
-):
+def test_import_creates_synthetic_parent_episode_inbox_and_task(service, repo, inbox_repo, queue, user_repo, db_path):
     alice = _make_user(user_repo, "alice@example.com")
 
     result = service.import_url(user_id=alice.id, url="https://example.com/foo.mp3")
@@ -181,11 +173,14 @@ def test_import_creates_synthetic_parent_episode_inbox_and_task(
     assert entry.source == "import"
     assert entry.state == "unread"
 
-    # First (DOWNLOAD) pipeline task was queued.
-    next_task = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+    # First pipeline task is TRANSCRIBE — imports skip download/downsample and
+    # let Dalston fetch the audio from the URL directly.
+    next_task = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert next_task is not None
     assert next_task.episode_id == result.episode_id
     assert next_task.metadata.get("initiated_by") == "import"
+    # No DOWNLOAD task should have been queued for an import.
+    assert queue.get_next_task(stage=TaskStage.DOWNLOAD) is None
 
 
 def test_reimport_same_url_same_user_is_idempotent(service, queue, user_repo):
@@ -199,11 +194,11 @@ def test_reimport_same_url_same_user_is_idempotent(service, queue, user_repo):
     assert r2.episode_created is False
     assert r2.inbox_created is False
 
-    # Only the first import should have queued a DOWNLOAD task.
-    first = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+    # Only the first import should have queued a TRANSCRIBE task.
+    first = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert first is not None
     assert first.episode_id == r1.episode_id
-    second = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+    second = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
     assert second is None
 
 
@@ -225,7 +220,7 @@ def test_two_users_share_episode_each_gets_inbox_row(service, inbox_repo, queue,
     # Pipeline should run exactly once.
     pending = []
     while True:
-        t = queue.get_next_task(stage=TaskStage.DOWNLOAD)
+        t = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
         if t is None:
             break
         pending.append(t)
