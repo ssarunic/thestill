@@ -227,6 +227,7 @@ class EntityResolver:
             raise RuntimeError(
                 "refined is not installed — install the entities extra: " 'pip install -e ".[entities]"'
             ) from exc
+        _patch_autotokenizer_drop_init_method_kwargs()
         logger.info("refined_model_loading", model=self.model_name, entity_set=self.entity_set)
         self._model = Refined.from_pretrained(
             model_name=self.model_name,
@@ -485,3 +486,38 @@ def _build_entity_id(entity_type: EntityType, canonical_name: str, qid: Optional
     if base_slug == "unnamed" and qid:
         base_slug = qid.lower()
     return f"{entity_type.value}:{base_slug}"
+
+
+_AUTOTOKENIZER_PATCHED = False
+
+
+def _patch_autotokenizer_drop_init_method_kwargs() -> None:
+    """Strip tokenizer-method-name kwargs from AutoTokenizer.from_pretrained.
+
+    transformers ≥ 4.45 hard-errors when a kwarg passed through to a
+    tokenizer's ``__init__`` collides with a method name on the class
+    (``PreTrainedTokenizerBase.__init__`` raises
+    ``AttributeError: <key> conflicts with the method <key> in
+    <Tokenizer>``). ReFinED's ``data_lookups`` and ``preprocessor`` modules
+    call ``AutoTokenizer.from_pretrained(..., add_special_tokens=False)``;
+    ``add_special_tokens`` is a method on the tokenizer, so this now
+    aborts the resolver before it can load. The init-time kwarg was
+    always a no-op — ReFinED re-passes ``add_special_tokens=False`` at
+    ``encode_plus`` time, which is the only place it actually controls
+    behavior. Dropping it here is therefore safe; the patch is narrow
+    (only ``AutoTokenizer.from_pretrained``) and idempotent.
+    """
+    global _AUTOTOKENIZER_PATCHED
+    if _AUTOTOKENIZER_PATCHED:
+        return
+    from transformers import AutoTokenizer
+
+    original = AutoTokenizer.from_pretrained
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):  # type: ignore[no-redef]
+        kwargs.pop("add_special_tokens", None)
+        return original(*args, **kwargs)
+
+    AutoTokenizer.from_pretrained = from_pretrained  # type: ignore[assignment]
+    _AUTOTOKENIZER_PATCHED = True
