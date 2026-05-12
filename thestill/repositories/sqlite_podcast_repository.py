@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from structlog import get_logger
 
-from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from ..utils.slug import generate_slug
 from .podcast_repository import EpisodeRepository, PodcastRepository
@@ -1674,6 +1674,38 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_transcript_links_not_downloaded
                 ON episode_transcript_links(episode_id)
                 WHERE downloaded_path IS NULL;
+
+            -- ========================================================================
+            -- EPISODE ALTERNATE ENCLOSURES (Podcasting 2.0 <podcast:alternateEnclosure>)
+            -- ========================================================================
+            -- Observational record of alternate media variants attached to an
+            -- episode (HLS video, MP4, YouTube pointers, audio re-encodes, ...).
+            -- The audio <enclosure> on the Episode row remains canonical; rows
+            -- here are not consumed by the download/transcription pipeline yet.
+            CREATE TABLE IF NOT EXISTS episode_alternate_enclosures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id TEXT NOT NULL,
+                source_uri TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                length INTEGER NULL,
+                bitrate REAL NULL,
+                height INTEGER NULL,
+                title TEXT NULL,
+                rel TEXT NULL,
+                language TEXT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                UNIQUE(episode_id, source_uri),
+                CHECK (length(source_uri) > 0),
+                CHECK (length(mime_type) > 0),
+                CHECK (is_default IN (0, 1))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_alt_enclosures_episode
+                ON episode_alternate_enclosures(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_alt_enclosures_mime_type
+                ON episode_alternate_enclosures(mime_type);
 
             -- ========================================================================
             -- USERS TABLE (Authentication)
@@ -3617,6 +3649,100 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             language=row["language"],
             rel=row["rel"],
             downloaded_path=row["downloaded_path"],
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        )
+
+    # ============================================================================
+    # Alternate-enclosure operations (Podcasting 2.0 <podcast:alternateEnclosure>)
+    # ============================================================================
+
+    def get_alternate_enclosures(self, episode_id: str) -> List[AlternateEnclosure]:
+        """
+        Get all alternate-enclosure entries for an episode.
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            List of AlternateEnclosure objects for the episode.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, episode_id, source_uri, mime_type, length, bitrate, height,
+                       title, rel, language, is_default, created_at
+                FROM episode_alternate_enclosures
+                WHERE episode_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (episode_id,),
+            )
+            return [self._row_to_alternate_enclosure(row) for row in cursor.fetchall()]
+
+    def add_alternate_enclosures(self, episode_id: str, entries: List[AlternateEnclosure]) -> int:
+        """
+        Add alternate-enclosure entries for an episode.
+
+        Skips duplicates (same episode_id + source_uri).
+
+        Args:
+            episode_id: Episode UUID
+            entries: List of AlternateEnclosure objects to add
+
+        Returns:
+            Number of entries actually inserted (excludes duplicates).
+        """
+        if not entries:
+            return 0
+
+        inserted = 0
+        with self._get_connection() as conn:
+            for entry in entries:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO episode_alternate_enclosures
+                            (episode_id, source_uri, mime_type, length, bitrate, height,
+                             title, rel, language, is_default)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            episode_id,
+                            entry.source_uri,
+                            entry.mime_type,
+                            entry.length,
+                            entry.bitrate,
+                            entry.height,
+                            entry.title,
+                            entry.rel,
+                            entry.language,
+                            1 if entry.is_default else 0,
+                        ),
+                    )
+                    inserted += 1
+                except sqlite3.IntegrityError:
+                    logger.debug(f"Alternate enclosure already exists: {entry.source_uri}")
+                    continue
+
+        if inserted > 0:
+            logger.debug(f"Added {inserted} alternate enclosures for episode {episode_id}")
+
+        return inserted
+
+    def _row_to_alternate_enclosure(self, row: sqlite3.Row) -> AlternateEnclosure:
+        """Convert database row to AlternateEnclosure model."""
+        return AlternateEnclosure(
+            id=row["id"],
+            episode_id=row["episode_id"],
+            source_uri=row["source_uri"],
+            mime_type=row["mime_type"],
+            length=row["length"],
+            bitrate=row["bitrate"],
+            height=row["height"],
+            title=row["title"],
+            rel=row["rel"],
+            language=row["language"],
+            is_default=bool(row["is_default"]),
             created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         )
 

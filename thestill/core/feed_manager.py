@@ -600,8 +600,6 @@ class PodcastFeedManager:
 
             # Extract transcript links from RSS
             transcript_links_by_guid = source.extract_transcript_links(rss_content)
-            if not transcript_links_by_guid:
-                return
 
             # Save transcript links for each new episode
             total_saved = 0
@@ -630,6 +628,56 @@ class PodcastFeedManager:
             # Don't fail episode discovery if transcript link extraction fails
             logger.warning(
                 "Failed to extract transcript links",
+                podcast_title=podcast.title,
+                error=str(e),
+                exc_info=True,
+            )
+
+        # Alternate enclosures (Podcasting 2.0) — observational, audio path unaffected.
+        try:
+            alt_enclosures_by_guid = source.extract_alternate_enclosures(rss_content)
+            if not alt_enclosures_by_guid:
+                return
+
+            video_mimes = {"application/x-mpegurl", "application/vnd.apple.mpegurl"}
+            total_alt_saved = 0
+            total_video_alts = 0
+            for episode in episodes:
+                entries = alt_enclosures_by_guid.get(episode.external_id, [])
+                if not entries:
+                    continue
+                saved = self.repository.add_alternate_enclosures(episode.id, entries)
+                if saved > 0:
+                    total_alt_saved += saved
+                    video_entries = [
+                        e for e in entries
+                        if e.mime_type.lower().startswith("video/")
+                        or e.mime_type.lower() in video_mimes
+                    ]
+                    if video_entries:
+                        total_video_alts += len(video_entries)
+                        logger.info(
+                            "alternate_enclosure_detected",
+                            episode_id=episode.id,
+                            podcast_id=podcast.id,
+                            podcast_slug=podcast.slug,
+                            count=len(video_entries),
+                            mime_types=sorted({e.mime_type for e in video_entries}),
+                            max_height=max((e.height for e in video_entries if e.height), default=None),
+                            has_default=any(e.is_default for e in video_entries),
+                        )
+
+            if total_alt_saved > 0:
+                logger.info(
+                    "Saved alternate enclosures for new episodes",
+                    total_saved=total_alt_saved,
+                    video_count=total_video_alts,
+                    episode_count=len(episodes),
+                    podcast_title=podcast.title,
+                )
+        except Exception as e:
+            logger.warning(
+                "Failed to extract alternate enclosures",
                 podcast_title=podcast.title,
                 error=str(e),
                 exc_info=True,

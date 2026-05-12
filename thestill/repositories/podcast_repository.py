@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-from ..models.podcast import Episode, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, Podcast, TranscriptLink
 
 
 class PodcastRepository(ABC):
@@ -256,6 +256,22 @@ class PodcastRepository(ABC):
 
         Returns:
             Number of links actually inserted (excludes duplicates)
+        """
+        pass
+
+    @abstractmethod
+    def add_alternate_enclosures(self, episode_id: str, entries: List[AlternateEnclosure]) -> int:
+        """
+        Add Podcasting 2.0 alternate-enclosure entries for an episode.
+
+        Skips duplicates (same episode_id + source_uri).
+
+        Args:
+            episode_id: Episode UUID
+            entries: List of AlternateEnclosure objects to add
+
+        Returns:
+            Number of entries actually inserted (excludes duplicates)
         """
         pass
 

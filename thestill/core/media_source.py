@@ -41,7 +41,7 @@ from requests.adapters import HTTPAdapter
 from structlog import get_logger
 from urllib3.util.retry import Retry
 
-from ..models.podcast import Episode, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, TranscriptLink
 from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
@@ -1180,6 +1180,105 @@ class RSSMediaSource(MediaSource):
 
         if result:
             logger.info(f"Extracted transcript links for {len(result)} episodes")
+
+        return result
+
+    def extract_alternate_enclosures(self, rss_content: str) -> Dict[str, List[AlternateEnclosure]]:
+        """
+        Extract <podcast:alternateEnclosure> entries from raw RSS content.
+
+        Feedparser doesn't expose Podcasting 2.0 namespace tags reliably, so we
+        parse the raw XML. Each ``<podcast:alternateEnclosure>`` element may have
+        multiple ``<podcast:source uri="…">`` children; we emit one
+        ``AlternateEnclosure`` per source URI, sharing the parent's metadata
+        (mime, height, bitrate, default flag, etc.).
+
+        Args:
+            rss_content: Raw RSS XML content.
+
+        Returns:
+            Dict mapping episode GUID -> list of AlternateEnclosure objects.
+        """
+        result: Dict[str, List[AlternateEnclosure]] = {}
+
+        try:
+            root = ET.fromstring(rss_content)
+        except ET.ParseError as e:
+            logger.warning(f"Failed to parse RSS XML for alternate-enclosure extraction: {e}")
+            return result
+
+        ns = {"podcast": "https://podcastindex.org/namespace/1.0"}
+
+        for item in root.findall(".//item"):
+            guid_elem = item.find("guid")
+            id_elem = item.find("id")
+
+            if guid_elem is not None and guid_elem.text:
+                episode_guid = guid_elem.text
+            elif id_elem is not None and id_elem.text:
+                episode_guid = id_elem.text
+            else:
+                continue
+
+            alt_elems = item.findall("podcast:alternateEnclosure", ns)
+            if not alt_elems:
+                continue
+
+            entries: List[AlternateEnclosure] = []
+            for alt in alt_elems:
+                mime_type = alt.get("type")
+                if not mime_type:
+                    continue
+
+                length_attr = alt.get("length")
+                try:
+                    length = int(length_attr) if length_attr and length_attr.isdigit() else None
+                except (TypeError, ValueError):
+                    length = None
+
+                bitrate_attr = alt.get("bitrate")
+                try:
+                    bitrate = float(bitrate_attr) if bitrate_attr else None
+                except (TypeError, ValueError):
+                    bitrate = None
+
+                height_attr = alt.get("height")
+                try:
+                    height = int(height_attr) if height_attr and height_attr.isdigit() else None
+                except (TypeError, ValueError):
+                    height = None
+
+                is_default = (alt.get("default") or "").strip().lower() == "true"
+
+                shared = dict(
+                    mime_type=mime_type,
+                    length=length,
+                    bitrate=bitrate,
+                    height=height,
+                    title=alt.get("title"),
+                    rel=alt.get("rel"),
+                    language=alt.get("lang"),
+                    is_default=is_default,
+                )
+
+                for src in alt.findall("podcast:source", ns):
+                    uri = src.get("uri")
+                    if not uri:
+                        continue
+                    try:
+                        entries.append(AlternateEnclosure(source_uri=uri, **shared))
+                    except Exception as e:
+                        logger.debug(f"Failed to create AlternateEnclosure for {uri}: {e}")
+                        continue
+
+            if entries:
+                result[episode_guid] = entries
+                logger.debug(
+                    f"Found {len(entries)} alternate-enclosure entries for episode {episode_guid[:50]}..."
+                )
+
+        if result:
+            logger.info(f"Extracted alternate-enclosure entries for {len(result)} episodes")
 
         return result
 

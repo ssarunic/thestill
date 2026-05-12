@@ -101,6 +101,39 @@ class TranscriptLink(BaseModel):
         return mime_to_ext.get(self.mime_type, "txt")
 
 
+class AlternateEnclosure(BaseModel):
+    """
+    A <podcast:alternateEnclosure> entry from the Podcasting 2.0 namespace.
+
+    Captures the alternate media variants publishers attach to an RSS item —
+    typically video streams (HLS, MP4) or YouTube pointers — so we can observe
+    real-world adoption ahead of any pipeline support. The audio ``<enclosure>``
+    remains the canonical source; rows here are observational.
+
+    One row per ``<podcast:source>`` child URI: a single ``alternateEnclosure``
+    element may list multiple sources (e.g. MP4 + WebM fallback) that share the
+    parent element's mime_type / height / bitrate metadata.
+
+    See https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md#alternate-enclosure
+    """
+
+    id: Optional[int] = None
+    episode_id: Optional[str] = None
+
+    source_uri: str
+    mime_type: str
+
+    length: Optional[int] = None
+    bitrate: Optional[float] = None
+    height: Optional[int] = None
+    title: Optional[str] = None
+    rel: Optional[str] = None
+    language: Optional[str] = None
+    is_default: bool = False
+
+    created_at: Optional[datetime] = None
+
+
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID

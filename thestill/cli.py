@@ -4590,6 +4590,99 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
     click.echo(f"✓ chunks backfill complete: {inserted_total} inserted, {skipped_total} skipped")
 
 
+@main.command("backfill-alt-enclosures")
+@click.option("--podcast-id", default=None, help="Restrict to one podcast.")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be saved; do not write.")
+@click.pass_context
+@require_config
+@log_command
+def backfill_alt_enclosures(ctx, podcast_id, dry_run):
+    """Scan stored podcasts for <podcast:alternateEnclosure> (Podcasting 2.0).
+
+    Refetches each RSS feed, extracts alternate-enclosure entries, and writes
+    them to ``episode_alternate_enclosures``. Idempotent — re-running only
+    inserts entries missing from the table. Read-only for the audio pipeline.
+    """
+    from .core.media_source import RSSMediaSource
+
+    podcast_repo = ctx.obj.repository
+    path_manager = ctx.obj.path_manager
+    rss_source = RSSMediaSource(path_manager=path_manager)
+
+    if podcast_id:
+        podcast = podcast_repo.get(podcast_id)
+        if podcast is None:
+            click.echo(f"❌ No podcast with id={podcast_id}", err=True)
+            ctx.exit(1)
+        podcasts = [podcast]
+    else:
+        podcasts = podcast_repo.get_all()
+
+    podcasts_with_alt = 0
+    feeds_fetched = 0
+    feeds_failed = 0
+    total_saved = 0
+    total_video_saved = 0
+    video_mimes = {"application/x-mpegurl", "application/vnd.apple.mpegurl"}
+
+    for podcast in podcasts:
+        rss_url = str(podcast.rss_url) if podcast.rss_url else ""
+        if not rss_url or not rss_url.startswith(("http://", "https://")):
+            continue
+
+        result = rss_source.fetch_rss_content(rss_url, podcast_slug=podcast.slug)
+        if result.error or not result.content:
+            feeds_failed += 1
+            click.echo(f"  ! fetch failed: {podcast.title} ({result.error or 'empty body'})")
+            continue
+        feeds_fetched += 1
+
+        alt_by_guid = rss_source.extract_alternate_enclosures(result.content)
+        if not alt_by_guid:
+            continue
+
+        episodes = podcast.episodes or []
+        ep_by_external_id = {ep.external_id: ep for ep in episodes if ep.external_id}
+
+        podcast_saved = 0
+        podcast_video_saved = 0
+        for external_id, entries in alt_by_guid.items():
+            episode = ep_by_external_id.get(external_id)
+            if episode is None:
+                continue
+            video_in_batch = sum(
+                1 for e in entries
+                if e.mime_type.lower().startswith("video/")
+                or e.mime_type.lower() in video_mimes
+            )
+            if dry_run:
+                podcast_saved += len(entries)
+                podcast_video_saved += video_in_batch
+                continue
+            saved = podcast_repo.add_alternate_enclosures(episode.id, entries)
+            podcast_saved += saved
+            if saved > 0:
+                podcast_video_saved += video_in_batch
+
+        if podcast_saved > 0:
+            podcasts_with_alt += 1
+            total_saved += podcast_saved
+            total_video_saved += podcast_video_saved
+            verb = "would save" if dry_run else "saved"
+            click.echo(
+                f"  ✓ {podcast.title}: {verb} {podcast_saved} entries "
+                f"({podcast_video_saved} video)"
+            )
+
+    suffix = " (dry-run)" if dry_run else ""
+    click.echo(
+        f"\n✓ alt-enclosure backfill complete{suffix}: "
+        f"{podcasts_with_alt}/{feeds_fetched} podcasts had entries, "
+        f"{total_saved} total ({total_video_saved} video), "
+        f"{feeds_failed} feed fetches failed"
+    )
+
+
 @main.command("rebuild-entity-pages")
 @click.option(
     "--type",
