@@ -81,7 +81,9 @@ def app_state(app_config: Config) -> AppState:
     path_manager = PathManager(str(app_config.storage_path))
     repository = SqlitePodcastRepository(db_path=app_config.database_path)
     feed_manager = PodcastFeedManager(repository, path_manager)
-    podcast_service = PodcastService(app_config.storage_path, repository, path_manager)
+    podcast_service = PodcastService(
+        app_config.storage_path, repository, path_manager, file_storage=app_config.file_storage
+    )
     refresh_service = RefreshService(feed_manager, podcast_service)
     stats_service = StatsService(app_config.storage_path, repository, path_manager)
     queue_manager = QueueManager(app_config.database_path)
