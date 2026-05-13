@@ -117,6 +117,29 @@ class TranscriptCleaningError(ThestillError):
     pass
 
 
+class ProhibitedContentError(ThestillError):
+    """
+    Exception raised when an LLM provider refuses to generate output because
+    the content tripped a model-side, non-bypassable filter (e.g. Gemini's
+    ``FinishReason.PROHIBITED_CONTENT``).
+
+    Distinct from TransientError (retrying the same provider won't help) and
+    from FatalError (the input itself is fine; another provider may succeed).
+    Callers decide recovery — switch to a different LLM, pass the source
+    through unchanged, or surface the failure.
+
+    Example:
+        raise ProhibitedContentError(
+            "Gemini refused: PROHIBITED_CONTENT",
+            provider="gemini",
+            model="gemini-3-flash-preview",
+            finish_reason="PROHIBITED_CONTENT",
+        )
+    """
+
+    pass
+
+
 class TransientError(ThestillError):
     """
     Exception for transient errors that may succeed on retry.
@@ -169,4 +192,10 @@ class FatalError(ThestillError):
     pass
 
 
-__all__ = ["ThestillError", "TranscriptCleaningError", "TransientError", "FatalError"]
+__all__ = [
+    "ThestillError",
+    "TranscriptCleaningError",
+    "ProhibitedContentError",
+    "TransientError",
+    "FatalError",
+]
