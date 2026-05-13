@@ -162,7 +162,7 @@ async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> d
     one and roll up the metrics that matter for the operator: total
     runs, fallback rate, average actual/target runtime, average
     latency (when captured), and a pointer to the latest run so the
-    tile can deep-link into the digest viewer.
+    tile can deep-link into the briefing viewer.
     """
     narrations_dir = state.path_manager.narrations_dir()
     runs: List[dict] = []
@@ -187,11 +187,7 @@ async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> d
         for r in runs
         if isinstance(r["header"].get("target_duration_seconds"), int)
     ]
-    latency_values = [
-        int(r["header"]["latency_ms"])
-        for r in runs
-        if isinstance(r["header"].get("latency_ms"), int)
-    ]
+    latency_values = [int(r["header"]["latency_ms"]) for r in runs if isinstance(r["header"].get("latency_ms"), int)]
 
     avg_actual = (sum(actual_seconds_values) / len(actual_seconds_values)) if actual_seconds_values else None
     avg_target = (sum(target_seconds_values) / len(target_seconds_values)) if target_seconds_values else None
@@ -204,14 +200,14 @@ async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> d
             key=lambda r: r["header"].get("generated_at") or "",
         )
         header = latest_run["header"]
-        # ``digest_id`` is persisted in the JSON header by the runner
+        # ``briefing_id`` is persisted in the JSON header by the runner
         # so consumers don't have to parse the filename. Slugs may
         # contain ``-`` (e.g. ``custom-450s``) so the filename alone
         # is ambiguous; older artefacts written before this field
         # was added surface ``None`` and the tile hides its deep-link.
         latest = {
             "narration_id": latest_run["path"].stem,
-            "digest_id": header.get("digest_id"),
+            "briefing_id": header.get("briefing_id"),
             "generated_at": header.get("generated_at"),
             "mode": header.get("mode"),
             "fallback_reason": header.get("fallback_reason"),

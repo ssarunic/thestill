@@ -69,7 +69,7 @@ phase, items can land in any order.
   returns **401** when `ELEVENLABS_WEBHOOK_SECRET` is unset (escape hatch:
   `DEV_ALLOW_UNSIGNED_WEBHOOKS=1` for local dev). Signature verification
   also checks the signed timestamp is within ±5 min of wall-clock to block
-  replay, validates header parseability before `hmac.compare_digest`, and
+  replay, validates header parseability before `hmac.compare_briefing`, and
   supports versioned `v0`…`v9` signatures.
   Regression tests: [test_webhook_auth.py](../tests/unit/security/test_webhook_auth.py).
 - [x] **1.4 LLM prompt injection from transcripts → tool abuse.** ✅ Shipped
@@ -127,7 +127,7 @@ phase, items can land in any order.
   [duration.py](../thestill/utils/duration.py) now canonicalises the
   path (`Path.resolve()`) and calls `assert_audio_file` before invoking
   `ffprobe`, with the `--` separator to terminate option parsing.
-  Remaining yt-dlp supply-chain work (lockfile, digest-pinned Docker
+  Remaining yt-dlp supply-chain work (lockfile, briefing-pinned Docker
   image) lives in Phase 3 / deploy config — tracked in items 3.8 and
   5.1.
 - [x] **2.7 Unbounded audio download + no integrity check.** ✅ Shipped.
@@ -256,12 +256,12 @@ phase, items can land in any order.
      for critical yt-dlp CVEs.
 - [x] **5.1 Docker base-image pin.** ✅ Shipped (Pack B).
   All four ``FROM`` lines in [Dockerfile](../Dockerfile) now carry
-  ``@sha256:…`` digests:
+  ``@sha256:…`` briefings:
   - ``node:22-slim@sha256:d415caa…`` (frontend-builder)
   - ``mwader/static-ffmpeg:8.1@sha256:6fb8488…`` (ffmpeg-src)
   - ``python:3.12-slim@sha256:46cb7cc…`` (python-builder + base)
   Dependabot's docker ecosystem
-  ([dependabot.yml](../.github/dependabot.yml)) now has digests to
+  ([dependabot.yml](../.github/dependabot.yml)) now has briefings to
   bump weekly. Same Dependabot config also explicitly blocks the
   Python major bump (3.12 → 3.13) until ``pydub``'s ``audioop``
   dependency is resolved.
@@ -367,7 +367,7 @@ item also marks the finding resolved.
 | 23 | Low      | No JWT revocation list | utils/jwt.py | 4.2 | ✅ |
 | 24 | Low      | URL regex ReDoS footgun | media_source.py:223; youtube_downloader.py:57-65 | 4.3 | ✅ |
 | 25 | Low      | Webhook payloads unencrypted on disk | webhooks.py:171-180 | 4.4 | ✅ |
-| 26 | Info     | Dockerfile base-image not digest-pinned | Dockerfile | 5.1 | ✅ |
+| 26 | Info     | Dockerfile base-image not briefing-pinned | Dockerfile | 5.1 | ✅ |
 | 27 | Info     | No secret-scanning pre-commit | .pre-commit-config.yaml | 5.2 | ✅ |
 
 ## Gates

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-Episode selector for digest processing.
+Episode selector for briefing processing.
 
-Implements THES-25: Episode selector with safety limits for the digest command.
+Implements THES-25: Episode selector with safety limits for the briefing command.
 """
 
 from dataclasses import dataclass
@@ -25,30 +25,30 @@ from typing import List, Optional, Tuple
 from structlog import get_logger
 
 from ..models.podcast import Episode, EpisodeState, Podcast
-from ..repositories.digest_repository import DigestRepository
+from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.podcast_repository import EpisodeRepository
 
 logger = get_logger(__name__)
 
 
 @dataclass
-class DigestSelectionCriteria:
+class BriefingSelectionCriteria:
     """
-    Criteria for selecting episodes for digest processing.
+    Criteria for selecting episodes for briefing processing.
 
     Attributes:
         since_days: Only include episodes published within this many days (default: 7)
         max_episodes: Maximum number of episodes to return (default: 10)
         podcast_id: Filter to specific podcast by UUID (optional)
         ready_only: If True, only select SUMMARIZED episodes (skip pipeline processing)
-        exclude_digested: If True, exclude episodes already included in a digest
+        exclude_briefed: If True, exclude episodes already included in a briefing
     """
 
     since_days: int = 7
     max_episodes: int = 10
     podcast_id: Optional[str] = None
     ready_only: bool = False
-    exclude_digested: bool = False
+    exclude_briefed: bool = False
 
     @property
     def date_from(self) -> datetime:
@@ -57,7 +57,7 @@ class DigestSelectionCriteria:
 
 
 @dataclass
-class DigestSelectionResult:
+class BriefingSelectionResult:
     """
     Result of episode selection.
 
@@ -69,58 +69,58 @@ class DigestSelectionResult:
 
     episodes: List[Tuple[Podcast, Episode]]
     total_matching: int
-    criteria: DigestSelectionCriteria
+    criteria: BriefingSelectionCriteria
 
 
-class DigestEpisodeSelector:
+class BriefingEpisodeSelector:
     """
-    Selects episodes for digest processing with safety limits.
+    Selects episodes for briefing processing with safety limits.
 
-    This class implements the episode selection logic for the digest command,
+    This class implements the episode selection logic for the briefing command,
     applying safety limits to prevent accidentally processing too many episodes.
 
     Safety features:
-    - Default time window of 7 days (DIGEST_DEFAULT_SINCE_DAYS)
-    - Default max episodes of 10 (DIGEST_DEFAULT_MAX_EPISODES)
+    - Default time window of 7 days (BRIEFING_DEFAULT_SINCE_DAYS)
+    - Default max episodes of 10 (BRIEFING_DEFAULT_MAX_EPISODES)
     - Only selects episodes that need processing (excludes SUMMARIZED and FAILED)
 
     Ready-only mode (--ready-only):
-    - Only selects SUMMARIZED episodes for digest generation
+    - Only selects SUMMARIZED episodes for briefing generation
     - Skips pipeline processing entirely
-    - Can exclude already-digested episodes with exclude_digested flag
+    - Can exclude already-briefed episodes with exclude_briefed flag
     """
 
     def __init__(
         self,
         episode_repository: EpisodeRepository,
-        digest_repository: Optional[DigestRepository] = None,
+        briefing_repository: Optional[BriefingRepository] = None,
     ):
         """
-        Initialize digest episode selector.
+        Initialize briefing episode selector.
 
         Args:
             episode_repository: Repository for episode queries
-            digest_repository: Repository for digest queries (optional, needed for exclude_digested)
+            briefing_repository: Repository for briefing queries (optional, needed for exclude_briefed)
         """
         self.repository = episode_repository
-        self.digest_repository = digest_repository
+        self.briefing_repository = briefing_repository
 
-    def select(self, criteria: DigestSelectionCriteria) -> DigestSelectionResult:
+    def select(self, criteria: BriefingSelectionCriteria) -> BriefingSelectionResult:
         """
-        Select episodes for digest processing based on criteria.
+        Select episodes for briefing processing based on criteria.
 
         Normal mode (ready_only=False):
         - Selects episodes that need processing (excludes SUMMARIZED and FAILED states)
 
         Ready-only mode (ready_only=True):
-        - Selects only SUMMARIZED episodes for immediate digest generation
+        - Selects only SUMMARIZED episodes for immediate briefing generation
         - Skips pipeline processing entirely
 
         Episodes are selected if they:
         1. Were published within the specified time window (since_days)
         2. Match the state filter based on ready_only flag
         3. Match the podcast_id filter if specified
-        4. Are not already in a digest (if exclude_digested=True)
+        4. Are not already in a briefing (if exclude_briefed=True)
 
         Results are ordered by publish date (newest first) and limited by max_episodes.
 
@@ -128,15 +128,15 @@ class DigestEpisodeSelector:
             criteria: Selection criteria including time window, limits, and filters
 
         Returns:
-            DigestSelectionResult containing matched episodes and metadata
+            BriefingSelectionResult containing matched episodes and metadata
         """
         logger.info(
-            "Selecting episodes for digest",
+            "Selecting episodes for briefing",
             since_days=criteria.since_days,
             max_episodes=criteria.max_episodes,
             podcast_id=criteria.podcast_id,
             ready_only=criteria.ready_only,
-            exclude_digested=criteria.exclude_digested,
+            exclude_briefed=criteria.exclude_briefed,
         )
 
         # Query episodes without state filter - we'll filter in Python
@@ -175,12 +175,12 @@ class DigestEpisodeSelector:
                 if episode.state not in (EpisodeState.SUMMARIZED, EpisodeState.FAILED)
             ]
 
-        # Optionally exclude episodes already in a digest
-        if criteria.exclude_digested and self.digest_repository:
+        # Optionally exclude episodes already in a briefing
+        if criteria.exclude_briefed and self.briefing_repository:
             filtered = [
                 (podcast, episode)
                 for podcast, episode in filtered
-                if not self.digest_repository.is_episode_in_any_digest(episode.id)
+                if not self.briefing_repository.is_episode_in_any_briefing(episode.id)
             ]
 
         total_matching = len(filtered)
@@ -196,13 +196,13 @@ class DigestEpisodeSelector:
             ready_only=criteria.ready_only,
         )
 
-        return DigestSelectionResult(
+        return BriefingSelectionResult(
             episodes=selected,
             total_matching=total_matching,
             criteria=criteria,
         )
 
-    def preview(self, criteria: DigestSelectionCriteria) -> DigestSelectionResult:
+    def preview(self, criteria: BriefingSelectionCriteria) -> BriefingSelectionResult:
         """
         Preview episode selection without committing to processing.
 
@@ -213,6 +213,6 @@ class DigestEpisodeSelector:
             criteria: Selection criteria
 
         Returns:
-            DigestSelectionResult with preview of what would be selected
+            BriefingSelectionResult with preview of what would be selected
         """
         return self.select(criteria)

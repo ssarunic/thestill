@@ -4,7 +4,7 @@ The `thestill-mcp` console script (defined in `pyproject.toml`) speaks
 the Model Context Protocol over stdio. Once the server runs in your
 shell, Claude Desktop can route tool calls — `find_mentions`,
 `list_quotes_by`, `get_episode_clip`, `get_entity`, `list_episodes_by_entity`,
-plus the existing podcast/digest tools — through it.
+plus the existing podcast/briefing tools — through it.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ printf '%s\n%s\n' \
 Expected output: a JSON-RPC envelope listing
 `add_podcast`, `find_mentions`, `list_quotes_by`,
 `get_episode_clip`, `get_entity`, `list_episodes_by_entity`, plus the
-podcast/digest tools.
+podcast/briefing tools.
 
 ## Tool guide for the LLM
 

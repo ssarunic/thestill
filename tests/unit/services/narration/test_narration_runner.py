@@ -22,7 +22,7 @@ from typing import List, Optional
 import pytest
 from pydantic import HttpUrl
 
-from thestill.models.digest import Digest
+from thestill.models.briefing import Briefing
 from thestill.models.podcast import Episode, Podcast
 from thestill.services.narration import (
     NarrationConfig,
@@ -46,17 +46,17 @@ from .test_narration_generator import (
 )
 
 
-class _DigestRepo:
-    """In-memory stub of ``DigestRepository`` for the runner tests."""
+class _BriefingRepo:
+    """In-memory stub of ``BriefingRepository`` for the runner tests."""
 
-    def __init__(self, digests: Optional[List[Digest]] = None) -> None:
-        self._by_id = {d.id: d for d in digests or []}
-        self._latest = digests[-1] if digests else None
+    def __init__(self, briefings: Optional[List[Briefing]] = None) -> None:
+        self._by_id = {d.id: d for d in briefings or []}
+        self._latest = briefings[-1] if briefings else None
 
-    def get_by_id(self, digest_id: str) -> Optional[Digest]:
-        return self._by_id.get(digest_id)
+    def get_by_id(self, briefing_id: str) -> Optional[Briefing]:
+        return self._by_id.get(briefing_id)
 
-    def get_latest(self) -> Optional[Digest]:
+    def get_latest(self) -> Optional[Briefing]:
         return self._latest
 
 
@@ -87,8 +87,8 @@ def file_storage(storage: PathManager):
     return LocalFileStorage(base_path=str(storage.storage_path))
 
 
-def _digest(*, id_: str, episode_ids: list[str]) -> Digest:
-    return Digest(
+def _briefing(*, id_: str, episode_ids: list[str]) -> Briefing:
+    return Briefing(
         id=id_,
         user_id="user-1",
         period_start=datetime(2026, 5, 6, tzinfo=timezone.utc),
@@ -126,7 +126,7 @@ def _good_blocks() -> list[ScriptBlock]:
     ]
 
 
-def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager, file_storage) -> None:
+def test_runner_resolves_latest_briefing_and_writes_artefacts(storage: PathManager, file_storage) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -135,28 +135,28 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
         segments=(Segment(theme="Lead", angle="Lead angle", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
-    digest = _digest(id_="digest-001", episode_ids=["e1"])
+    briefing = _briefing(id_="briefing-001", episode_ids=["e1"])
     runner = NarrationRunner(
         generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
     run = runner.run(target_duration_seconds=300, slug="morning")
-    assert run.digest_id == "digest-001"
-    assert run.narration_id == "digest-001-morning"
+    assert run.briefing_id == "briefing-001"
+    assert run.narration_id == "briefing-001-morning"
     assert run.json_path is not None and run.json_path.exists()
-    assert run.json_path.name == "digest-001-morning.json"
+    assert run.json_path.name == "briefing-001-morning.json"
     assert run.markdown_path is not None and run.markdown_path.exists()
-    assert run.markdown_path.name == "digest-001-morning.md"
+    assert run.markdown_path.name == "briefing-001-morning.md"
 
     payload = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert payload["mode"] == "narrated"
     assert payload["episodes_covered"] == ["e1"]
 
 
-def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_storage) -> None:
+def test_runner_captures_latency_ms_and_briefing_id(storage: PathManager, file_storage) -> None:
     """Phase 5 instrumentation: ``content.latency_ms`` is populated by
-    the runner around ``generate()``, and ``digest_id`` is persisted in
+    the runner around ``generate()``, and ``briefing_id`` is persisted in
     the JSON header so the dashboard tile doesn't have to parse the
     filename to recover the join key.
     """
@@ -168,10 +168,10 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_sto
         segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
-    digest = _digest(id_="digest-uuid-001", episode_ids=["e1"])
+    briefing = _briefing(id_="briefing-uuid-001", episode_ids=["e1"])
     runner = NarrationRunner(
         generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
     run = runner.run(target_duration_seconds=300, slug="medium")
@@ -182,11 +182,11 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_sto
 
     payload = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert payload["latency_ms"] == run.content.latency_ms
-    assert payload["digest_id"] == "digest-uuid-001"
+    assert payload["briefing_id"] == "briefing-uuid-001"
     assert payload["slug"] == "medium"
 
 
-def test_runner_resolves_specific_digest_id(storage: PathManager, file_storage) -> None:
+def test_runner_resolves_specific_briefing_id(storage: PathManager, file_storage) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -195,18 +195,18 @@ def test_runner_resolves_specific_digest_id(storage: PathManager, file_storage) 
         segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
-    older = _digest(id_="older", episode_ids=["e1"])
-    newer = _digest(id_="newer", episode_ids=["e1"])
+    older = _briefing(id_="older", episode_ids=["e1"])
+    newer = _briefing(id_="newer", episode_ids=["e1"])
     runner = NarrationRunner(
         generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([older, newer]),
+        briefing_repository=_BriefingRepo([older, newer]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
-    run = runner.run(digest_id="older", target_duration_seconds=300)
-    assert run.digest_id == "older"
+    run = runner.run(briefing_id="older", target_duration_seconds=300)
+    assert run.briefing_id == "older"
 
 
-def test_runner_raises_when_no_digest(storage: PathManager, file_storage) -> None:
+def test_runner_raises_when_no_briefing(storage: PathManager, file_storage) -> None:
     runner = NarrationRunner(
         generator=_generator(
             storage,
@@ -216,15 +216,15 @@ def test_runner_raises_when_no_digest(storage: PathManager, file_storage) -> Non
             ),
             _good_blocks(),
         ),
-        digest_repository=_DigestRepo([]),
+        briefing_repository=_BriefingRepo([]),
         podcast_repository=_PodcastRepo({}),
     )
     with pytest.raises(NarrationRunnerError):
         runner.run()
 
 
-def test_runner_raises_when_unknown_digest_id(storage: PathManager, file_storage) -> None:
-    digest = _digest(id_="known", episode_ids=["e1"])
+def test_runner_raises_when_unknown_briefing_id(storage: PathManager, file_storage) -> None:
+    briefing = _briefing(id_="known", episode_ids=["e1"])
     runner = NarrationRunner(
         generator=_generator(
             storage,
@@ -234,15 +234,15 @@ def test_runner_raises_when_unknown_digest_id(storage: PathManager, file_storage
             ),
             _good_blocks(),
         ),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
         podcast_repository=_PodcastRepo({}),
     )
     with pytest.raises(NarrationRunnerError):
-        runner.run(digest_id="nope")
+        runner.run(briefing_id="nope")
 
 
 def test_runner_raises_when_all_episodes_missing(storage: PathManager, file_storage) -> None:
-    digest = _digest(id_="d1", episode_ids=["gone-1", "gone-2"])
+    briefing = _briefing(id_="d1", episode_ids=["gone-1", "gone-2"])
     runner = NarrationRunner(
         generator=_generator(
             storage,
@@ -252,8 +252,8 @@ def test_runner_raises_when_all_episodes_missing(storage: PathManager, file_stor
             ),
             _good_blocks(),
         ),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
         podcast_repository=_PodcastRepo({}),
     )
     with pytest.raises(NarrationRunnerError):
-        runner.run(digest_id="d1")
+        runner.run(briefing_id="d1")

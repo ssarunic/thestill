@@ -19,7 +19,7 @@ cp .env.example .env
 ## File Storage Backend
 
 Spec #35 — selects where pipeline artefacts (audio, transcripts, summaries,
-corpus pages, digests) are stored. `local` keeps the historical on-disk
+corpus pages, briefings) are stored. `local` keeps the historical on-disk
 layout under `STORAGE_PATH`; `s3` routes them to AWS S3.
 
 | Variable | Description | Default |

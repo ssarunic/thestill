@@ -14,9 +14,9 @@
 
 """On-disk narration artefact helpers (spec #33).
 
-The runner writes one ``<digest_id>-<slug>.json`` header per variant
+The runner writes one ``<briefing_id>-<slug>.json`` header per variant
 under ``data/narrations/``. Two API routes read those headers back to
-expose them to the UI: the digest detail endpoint (per-digest
+expose them to the UI: the briefing detail endpoint (per-briefing
 listing) and the dashboard tile aggregator. Both rely on the same
 read-and-skip-corrupt semantics, so the helper lives here next to the
 schema it understands.

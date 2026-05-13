@@ -437,7 +437,7 @@ def test_recent_published_episode_ids_excludes_unpublished(inbox_repo, podcast_r
 
 
 # ============================================================================
-# list_episode_ids_in_window (used by DigestService for inbox-driven selection)
+# list_episode_ids_in_window (used by BriefingService for inbox-driven selection)
 # ============================================================================
 
 

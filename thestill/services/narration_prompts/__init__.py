@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Anchor system prompts for the narrated digest (spec #33).
+"""Anchor system prompts for the narrated briefing (spec #33).
 
 Each anchor voice lives as its own Markdown file in this directory so
 prompts can be diffed, shipped, and overridden per environment without

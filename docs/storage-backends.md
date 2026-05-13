@@ -1,7 +1,7 @@
 # Storage Backends
 
 Thestill stores pipeline artefacts (audio, transcripts, summaries, corpus
-pages, digests) through a pluggable backend abstraction defined in spec
+pages, briefings) through a pluggable backend abstraction defined in spec
 [#35](../specs/35-pluggable-file-storage.md). Two backends ship today:
 
 - **`local`** (default) — on-disk under `STORAGE_PATH`, matching the
@@ -111,7 +111,7 @@ summarisation. Rule of thumb:
 |--------|----------------------|
 | `prod/original_audio/` | `STANDARD` → `STANDARD_IA` after 30 days → `GLACIER_IR` after 90 days |
 | `prod/downsampled_audio/` | Expire after 30 days (cheap to re-derive from the original) |
-| `prod/raw_transcripts/`, `prod/clean_transcripts/`, `prod/summaries/`, `prod/facts/`, `prod/digests/`, `prod/corpus/` | Stay in `STANDARD` |
+| `prod/raw_transcripts/`, `prod/clean_transcripts/`, `prod/summaries/`, `prod/facts/`, `prod/briefings/`, `prod/corpus/` | Stay in `STANDARD` |
 
 These run at the AWS side and need no application changes.
 

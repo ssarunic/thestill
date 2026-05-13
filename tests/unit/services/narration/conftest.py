@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared fixtures for narrated-digest (spec #33) unit tests."""
+"""Shared fixtures for narrated-briefing (spec #33) unit tests."""
 
 from datetime import datetime, timezone
 from typing import List
@@ -105,6 +105,6 @@ def well_formed_quote_text(words: int = 50) -> str:
         tokens = tokens[:words]
         # Ensure a sentence boundary.
         last = tokens[-1]
-        if not last.endswith(("." , "!", "?")):
+        if not last.endswith((".", "!", "?")):
             tokens[-1] = last.rstrip(",;:") + "."
     return " ".join(tokens)

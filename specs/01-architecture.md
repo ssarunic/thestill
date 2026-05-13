@@ -149,7 +149,7 @@ sense — the episode card stays green.
 
 Callers that explicitly stop early (`target_state="summarized"` on
 the `run_pipeline` API route) skip the entity stages; callers that
-omit `target_state` (the process-episode and digest flows) run the
+omit `target_state` (the process-episode and briefing flows) run the
 full chain through to `reindex`.
 
 ### Episode State Progression

@@ -1,17 +1,17 @@
-import type { Digest, DigestStatus, DigestPreviewEpisode, DashboardStats } from '../api/types'
+import type { Briefing, BriefingStatus, BriefingPreviewEpisode, DashboardStats } from '../api/types'
 
 // Factory functions for creating test data
 
-export function createDigest(overrides: Partial<Digest> = {}): Digest {
+export function createBriefing(overrides: Partial<Briefing> = {}): Briefing {
   return {
-    id: 'digest-123',
+    id: 'briefing-123',
     user_id: 'user-123',
     created_at: '2026-01-26T10:00:00Z',
     updated_at: '2026-01-26T10:05:00Z',
     period_start: '2026-01-19T00:00:00Z',
     period_end: '2026-01-26T10:00:00Z',
-    status: 'completed' as DigestStatus,
-    file_path: 'digest_20260126_100000.md',
+    status: 'completed' as BriefingStatus,
+    file_path: 'briefing_20260126_100000.md',
     episode_ids: ['ep-1', 'ep-2', 'ep-3'],
     episodes_total: 3,
     episodes_completed: 3,
@@ -24,9 +24,9 @@ export function createDigest(overrides: Partial<Digest> = {}): Digest {
   }
 }
 
-export function createPendingDigest(overrides: Partial<Digest> = {}): Digest {
-  return createDigest({
-    status: 'pending' as DigestStatus,
+export function createPendingBriefing(overrides: Partial<Briefing> = {}): Briefing {
+  return createBriefing({
+    status: 'pending' as BriefingStatus,
     episodes_completed: 0,
     success_rate: 0,
     is_complete: false,
@@ -36,9 +36,9 @@ export function createPendingDigest(overrides: Partial<Digest> = {}): Digest {
   })
 }
 
-export function createInProgressDigest(overrides: Partial<Digest> = {}): Digest {
-  return createDigest({
-    status: 'in_progress' as DigestStatus,
+export function createInProgressBriefing(overrides: Partial<Briefing> = {}): Briefing {
+  return createBriefing({
+    status: 'in_progress' as BriefingStatus,
     episodes_completed: 1,
     episodes_total: 3,
     success_rate: 33.3,
@@ -49,9 +49,9 @@ export function createInProgressDigest(overrides: Partial<Digest> = {}): Digest 
   })
 }
 
-export function createFailedDigest(overrides: Partial<Digest> = {}): Digest {
-  return createDigest({
-    status: 'failed' as DigestStatus,
+export function createFailedBriefing(overrides: Partial<Briefing> = {}): Briefing {
+  return createBriefing({
+    status: 'failed' as BriefingStatus,
     episodes_completed: 0,
     episodes_failed: 3,
     success_rate: 0,
@@ -61,7 +61,7 @@ export function createFailedDigest(overrides: Partial<Digest> = {}): Digest {
   })
 }
 
-export function createPreviewEpisode(overrides: Partial<DigestPreviewEpisode> = {}): DigestPreviewEpisode {
+export function createPreviewEpisode(overrides: Partial<BriefingPreviewEpisode> = {}): BriefingPreviewEpisode {
   return {
     episode_id: 'ep-123',
     episode_title: 'Episode Title',

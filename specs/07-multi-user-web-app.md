@@ -6,7 +6,7 @@
 
 ## Vision
 
-A web app where users can track their favorite podcasts, read transcripts and digest summaries, and filter out episodes that interest them. The core value is **saving time** by letting users quickly scan summaries to decide which episodes are worth listening to.
+A web app where users can track their favorite podcasts, read transcripts and briefing summaries, and filter out episodes that interest them. The core value is **saving time** by letting users quickly scan summaries to decide which episodes are worth listening to.
 
 **Key Principle**: "Process Once, Deliver to Many" - episode transcription and summarization happens once and is shared across all users who track that podcast.
 
@@ -177,9 +177,9 @@ data/
 - "Interested" / "Not Interested" / "Save for Later" actions
 - Track listening progress (optional)
 
-### 5. Newsletter Digests (Optional)
+### 5. Newsletter Briefings (Optional)
 
-- Opt-in daily/weekly email digests
+- Opt-in daily/weekly email briefings
 - Summaries of new episodes from tracked podcasts
 - Configurable: frequency, day/time, content preferences
 
@@ -254,7 +254,7 @@ data/
 | **Frontend** | React SPA (Vite) | TypeScript, in `thestill/web/frontend/` |
 | **Auth** | Google OAuth | No password management, JWT sessions |
 | **Database** | SQLite (existing) | Add new tables, migrate to PostgreSQL later |
-| **Email** | SendGrid | For newsletter digests (optional) |
+| **Email** | SendGrid | For newsletter briefings (optional) |
 | **Workers** | Python asyncio | Cloud-agnostic, GCP/AWS/Supabase compatible |
 
 ---
@@ -478,7 +478,7 @@ CREATE INDEX idx_jobs_locked ON job_queue(locked_by, locked_at);
 | `EpisodeFeedService` | `services/episode_feed_service.py` | Personalized feed with filters |
 | `UserEpisodeService` | `services/user_episode_service.py` | Read/saved/interest state |
 | `QueueService` | `services/queue_service.py` | Job queue operations |
-| `NewsletterService` | `services/newsletter_service.py` | Compile and send digests |
+| `NewsletterService` | `services/newsletter_service.py` | Compile and send briefings |
 
 ### Enhanced Existing Services
 

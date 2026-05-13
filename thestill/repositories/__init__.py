@@ -6,19 +6,19 @@ for data access, following the Repository Pattern to separate
 business logic from persistence concerns.
 """
 
-from .digest_repository import DigestRepository
+from .briefing_repository import BriefingRepository
 from .podcast_follower_repository import PodcastFollowerRepository
 from .podcast_repository import EpisodeRepository, PodcastRepository
-from .sqlite_digest_repository import SqliteDigestRepository
+from .sqlite_briefing_repository import SqliteBriefingRepository
 from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .sqlite_podcast_repository import SqlitePodcastRepository
 
 __all__ = [
-    "DigestRepository",
+    "BriefingRepository",
     "EpisodeRepository",
     "PodcastFollowerRepository",
     "PodcastRepository",
-    "SqliteDigestRepository",
+    "SqliteBriefingRepository",
     "SqlitePodcastFollowerRepository",
     "SqlitePodcastRepository",
 ]

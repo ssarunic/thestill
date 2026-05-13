@@ -451,15 +451,64 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute("ALTER TABLE users ADD COLUMN region_locked INTEGER NOT NULL DEFAULT 0")
                 logger.info("Migration complete: region columns added to users")
 
-        # THES-153 Migration: Create digests tables if they don't exist (idempotent)
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
-        if cursor.fetchone() is None:
-            logger.info("Migrating database: creating digests tables for THES-153")
+        # Briefing supersedes Digest in the product vocabulary. The
+        # create-if-missing block below handles the new-name indexes;
+        # this block only needs to move data out of the legacy tables.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('digests', 'briefings')")
+        existing = {row[0] for row in cursor.fetchall()}
+        has_old_digests = "digests" in existing
+        has_new_briefings = "briefings" in existing
+        if has_old_digests and not has_new_briefings:
+            logger.info("Migrating database: renaming digests -> briefings")
             conn.executescript(
                 """
-                -- Digest metadata table
+                ALTER TABLE digests RENAME TO briefings;
+                ALTER TABLE digest_episodes RENAME TO briefing_episodes;
+                ALTER TABLE briefing_episodes RENAME COLUMN digest_id TO briefing_id;
+                DROP INDEX IF EXISTS idx_digests_created_at;
+                DROP INDEX IF EXISTS idx_digests_status;
+                DROP INDEX IF EXISTS idx_digests_user_id;
+                DROP INDEX IF EXISTS idx_digest_episodes_episode;
+                """
+            )
+            logger.info("Migration complete: digests -> briefings rename done")
+        elif has_old_digests and has_new_briefings:
+            new_count = conn.execute("SELECT COUNT(*) FROM briefings").fetchone()[0]
+            old_count = conn.execute("SELECT COUNT(*) FROM digests").fetchone()[0]
+            if old_count == 0:
+                logger.info("Dropping empty legacy digests tables")
+                conn.executescript("DROP TABLE IF EXISTS digest_episodes; DROP TABLE IF EXISTS digests;")
+            elif new_count == 0:
+                logger.info("Migrating database: copying %d rows from digests to briefings", old_count)
+                conn.executescript(
+                    """
+                    INSERT INTO briefings SELECT * FROM digests;
+                    INSERT INTO briefing_episodes (briefing_id, episode_id)
+                        SELECT digest_id, episode_id FROM digest_episodes;
+                    DROP TABLE digest_episodes;
+                    DROP TABLE digests;
+                    """
+                )
+                logger.info("Migration complete: digests rows copied to briefings")
+            else:
+                # Both tables hold rows — automatic consolidation would risk PK
+                # collisions or row loss; surface loudly so an operator can
+                # reconcile by hand.
+                logger.warning(
+                    "Both digests and briefings tables have rows; skipping auto-migration",
+                    old_rows=old_count,
+                    new_rows=new_count,
+                )
+
+        # THES-153 Migration: Create briefings tables if they don't exist (idempotent)
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='briefings'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating briefings tables for THES-153")
+            conn.executescript(
+                """
+                -- Briefing metadata table
                 -- user_id references users table (required, uses default user in CLI mode)
-                CREATE TABLE IF NOT EXISTS digests (
+                CREATE TABLE IF NOT EXISTS briefings (
                     id TEXT PRIMARY KEY NOT NULL,
                     user_id TEXT NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -478,22 +527,22 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     CHECK (status IN ('pending', 'in_progress', 'completed', 'partial', 'failed'))
                 );
 
-                -- Junction table linking digests to episodes
-                -- Note: No FK on episode_id to preserve digest history if episodes are deleted
-                CREATE TABLE IF NOT EXISTS digest_episodes (
-                    digest_id TEXT NOT NULL,
+                -- Junction table linking briefings to episodes
+                -- Note: No FK on episode_id to preserve briefing history if episodes are deleted
+                CREATE TABLE IF NOT EXISTS briefing_episodes (
+                    briefing_id TEXT NOT NULL,
                     episode_id TEXT NOT NULL,
-                    PRIMARY KEY (digest_id, episode_id),
-                    FOREIGN KEY (digest_id) REFERENCES digests(id) ON DELETE CASCADE
+                    PRIMARY KEY (briefing_id, episode_id),
+                    FOREIGN KEY (briefing_id) REFERENCES briefings(id) ON DELETE CASCADE
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at);
-                CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
-                CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
-                CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
+                CREATE INDEX IF NOT EXISTS idx_briefings_created_at ON briefings(created_at);
+                CREATE INDEX IF NOT EXISTS idx_briefings_status ON briefings(status);
+                CREATE INDEX IF NOT EXISTS idx_briefings_user_id ON briefings(user_id);
+                CREATE INDEX IF NOT EXISTS idx_briefing_episodes_episode ON briefing_episodes(episode_id);
                 """
             )
-            logger.info("Migration complete: digests tables created for THES-153")
+            logger.info("Migration complete: briefings tables created for THES-153")
 
         # Spec #21 Migration: top_podcasts + rankings + meta tables (idempotent).
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='top_podcasts'")
@@ -1093,8 +1142,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         # The legacy ``user_briefings`` table was retired when the
         # user-facing "Today's briefing" path was folded into the
-        # ``digests`` table with inbox-driven selection (cursor =
-        # previous digest's ``period_end``). Drop the table on next boot.
+        # ``briefings`` table with inbox-driven selection (cursor =
+        # previous briefing's ``period_end``). Drop the table on next boot.
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_briefings'")
         if cursor.fetchone() is not None:
             logger.info("Migrating database: dropping legacy user_briefings table")
@@ -1847,11 +1896,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ON podcast_followers(podcast_id);
 
             -- ========================================================================
-            -- DIGESTS TABLE (THES-153: Digest persistence)
+            -- BRIEFINGS TABLE (THES-153: Briefing persistence)
             -- ========================================================================
-            -- Stores metadata about generated digests for tracking and querying.
+            -- Stores metadata about generated briefings for tracking and querying.
             -- user_id references users table (required, uses default user in CLI mode).
-            CREATE TABLE IF NOT EXISTS digests (
+            CREATE TABLE IF NOT EXISTS briefings (
                 id TEXT PRIMARY KEY NOT NULL,
                 user_id TEXT NOT NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1870,23 +1919,23 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 CHECK (status IN ('pending', 'in_progress', 'completed', 'partial', 'failed'))
             );
 
-            CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at);
-            CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
-            CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
+            CREATE INDEX IF NOT EXISTS idx_briefings_created_at ON briefings(created_at);
+            CREATE INDEX IF NOT EXISTS idx_briefings_status ON briefings(status);
+            CREATE INDEX IF NOT EXISTS idx_briefings_user_id ON briefings(user_id);
 
             -- ========================================================================
-            -- DIGEST_EPISODES TABLE (THES-153: Digest-Episode junction)
+            -- BRIEFING_EPISODES TABLE (THES-153: Briefing-Episode junction)
             -- ========================================================================
-            -- Many-to-many relationship: which episodes are included in each digest.
-            -- Note: No FK on episode_id to preserve digest history if episodes are deleted.
-            CREATE TABLE IF NOT EXISTS digest_episodes (
-                digest_id TEXT NOT NULL,
+            -- Many-to-many relationship: which episodes are included in each briefing.
+            -- Note: No FK on episode_id to preserve briefing history if episodes are deleted.
+            CREATE TABLE IF NOT EXISTS briefing_episodes (
+                briefing_id TEXT NOT NULL,
                 episode_id TEXT NOT NULL,
-                PRIMARY KEY (digest_id, episode_id),
-                FOREIGN KEY (digest_id) REFERENCES digests(id) ON DELETE CASCADE
+                PRIMARY KEY (briefing_id, episode_id),
+                FOREIGN KEY (briefing_id) REFERENCES briefings(id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_briefing_episodes_episode ON briefing_episodes(episode_id);
         """
         )
 

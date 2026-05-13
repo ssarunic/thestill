@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useDigests, useCreateDigest, useDeleteDigest, usePreviewDigest } from '../hooks/useApi'
-import type { Digest, DigestStatus, DigestPreviewEpisode, CreateDigestRequest } from '../api/types'
+import { useBriefings, useCreateBriefing, useDeleteBriefing, usePreviewBriefing } from '../hooks/useApi'
+import type { Briefing, BriefingStatus, BriefingPreviewEpisode, CreateBriefingRequest } from '../api/types'
 
 // Status colors for badges
-const statusColors: Record<DigestStatus, string> = {
+const statusColors: Record<BriefingStatus, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
   in_progress: 'bg-blue-100 text-blue-700',
   completed: 'bg-green-100 text-green-700',
@@ -13,7 +13,7 @@ const statusColors: Record<DigestStatus, string> = {
 }
 
 // Status labels
-const statusLabels: Record<DigestStatus, string> = {
+const statusLabels: Record<BriefingStatus, string> = {
   pending: 'Pending',
   in_progress: 'In Progress',
   completed: 'Completed',
@@ -39,22 +39,22 @@ function formatDuration(seconds: number | null): string {
   return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`
 }
 
-interface DigestCardProps {
-  digest: Digest
-  onDelete: (digestId: string) => void
+interface BriefingCardProps {
+  briefing: Briefing
+  onDelete: (briefingId: string) => void
   isDeleting: boolean
 }
 
-function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
+function BriefingCard({ briefing, onDelete, isDeleting }: BriefingCardProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const isActive = digest.status === 'pending' || digest.status === 'in_progress'
+  const isActive = briefing.status === 'pending' || briefing.status === 'in_progress'
 
   return (
     <div className={`bg-white rounded-lg border shadow-sm hover:shadow-md transition-shadow ${
       isActive ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
     }`}>
       <div className="p-4">
-        {/* Progress indicator for active digests */}
+        {/* Progress indicator for active briefings */}
         {isActive && (
           <div className="mb-3">
             <div className="flex items-center gap-2 text-sm text-blue-600 mb-2">
@@ -72,14 +72,14 @@ function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
               <div
                 className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
                 style={{
-                  width: digest.episodes_total > 0
-                    ? `${Math.round((digest.episodes_completed / digest.episodes_total) * 100)}%`
+                  width: briefing.episodes_total > 0
+                    ? `${Math.round((briefing.episodes_completed / briefing.episodes_total) * 100)}%`
                     : '0%'
                 }}
               />
             </div>
             <p className="text-xs text-blue-600 mt-1">
-              {digest.episodes_completed} of {digest.episodes_total} episodes completed
+              {briefing.episodes_completed} of {briefing.episodes_total} episodes completed
             </p>
           </div>
         )}
@@ -88,41 +88,41 @@ function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
           <div className="flex-1 min-w-0">
             {/* Title and link */}
             <Link
-              to={`/digests/${digest.id}`}
+              to={`/briefings/${briefing.id}`}
               className="font-medium text-gray-900 hover:text-primary-600"
             >
-              Digest from {formatDate(digest.created_at)}
+              Briefing from {formatDate(briefing.created_at)}
             </Link>
 
             {/* Period covered */}
             <p className="text-sm text-gray-500 mt-1">
-              Covers: {formatDate(digest.period_start)} - {formatDate(digest.period_end)}
+              Covers: {formatDate(briefing.period_start)} - {formatDate(briefing.period_end)}
             </p>
 
             {/* Badges */}
             <div className="flex flex-wrap items-center gap-2 mt-2">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[digest.status]}`}>
-                {statusLabels[digest.status]}
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[briefing.status]}`}>
+                {statusLabels[briefing.status]}
               </span>
               <span className="text-xs text-gray-500">
-                {digest.episodes_completed}/{digest.episodes_total} episodes
+                {briefing.episodes_completed}/{briefing.episodes_total} episodes
               </span>
-              {digest.success_rate > 0 && digest.success_rate < 100 && (
+              {briefing.success_rate > 0 && briefing.success_rate < 100 && (
                 <span className="text-xs text-gray-500">
-                  ({Math.round(digest.success_rate)}% success)
+                  ({Math.round(briefing.success_rate)}% success)
                 </span>
               )}
-              {digest.processing_time_seconds && (
+              {briefing.processing_time_seconds && (
                 <span className="text-xs text-gray-500">
-                  {formatDuration(digest.processing_time_seconds)}
+                  {formatDuration(briefing.processing_time_seconds)}
                 </span>
               )}
             </div>
 
             {/* Error message */}
-            {digest.error_message && (
+            {briefing.error_message && (
               <p className="mt-2 text-sm text-red-600 line-clamp-1">
-                {digest.error_message}
+                {briefing.error_message}
               </p>
             )}
           </div>
@@ -130,7 +130,7 @@ function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
           {/* Actions */}
           <div className="flex flex-col gap-2">
             <Link
-              to={`/digests/${digest.id}`}
+              to={`/briefings/${briefing.id}`}
               className="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-600 text-white hover:bg-primary-700 transition-colors text-center"
             >
               View
@@ -138,7 +138,7 @@ function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
             {showDeleteConfirm ? (
               <div className="flex gap-1">
                 <button
-                  onClick={() => onDelete(digest.id)}
+                  onClick={() => onDelete(briefing.id)}
                   disabled={isDeleting}
                   className="px-2 py-1 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700"
                 >
@@ -166,18 +166,18 @@ function DigestCard({ digest, onDelete, isDeleting }: DigestCardProps) {
   )
 }
 
-interface CreateDigestModalProps {
+interface CreateBriefingModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (request: CreateDigestRequest) => void
+  onSubmit: (request: CreateBriefingRequest) => void
   isCreating: boolean
-  preview: DigestPreviewEpisode[] | null
+  preview: BriefingPreviewEpisode[] | null
   previewTotal: number | null
-  onPreview: (request: CreateDigestRequest) => void
+  onPreview: (request: CreateBriefingRequest) => void
   isLoadingPreview: boolean
 }
 
-function CreateDigestModal({
+function CreateBriefingModal({
   isOpen,
   onClose,
   onSubmit,
@@ -186,11 +186,11 @@ function CreateDigestModal({
   previewTotal,
   onPreview,
   isLoadingPreview,
-}: CreateDigestModalProps) {
+}: CreateBriefingModalProps) {
   const [sinceDays, setSinceDays] = useState(7)
   const [maxEpisodes, setMaxEpisodes] = useState(10)
   const [readyOnly, setReadyOnly] = useState(true)
-  const [excludeDigested, setExcludeDigested] = useState(false)
+  const [excludeBriefed, setExcludeBriefed] = useState(false)
 
   if (!isOpen) return null
 
@@ -199,7 +199,7 @@ function CreateDigestModal({
       since_days: sinceDays,
       max_episodes: maxEpisodes,
       ready_only: readyOnly,
-      exclude_digested: excludeDigested,
+      exclude_briefed: excludeBriefed,
     })
   }
 
@@ -208,7 +208,7 @@ function CreateDigestModal({
       since_days: sinceDays,
       max_episodes: maxEpisodes,
       ready_only: readyOnly,
-      exclude_digested: excludeDigested,
+      exclude_briefed: excludeBriefed,
     })
   }
 
@@ -273,16 +273,16 @@ function CreateDigestModal({
             </label>
           </div>
 
-          {/* Exclude digested */}
+          {/* Exclude briefed */}
           <div className="flex items-center gap-3">
             <input
               type="checkbox"
-              id="excludeDigested"
-              checked={excludeDigested}
-              onChange={(e) => setExcludeDigested(e.target.checked)}
+              id="excludeBriefed"
+              checked={excludeBriefed}
+              onChange={(e) => setExcludeBriefed(e.target.checked)}
               className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
             />
-            <label htmlFor="excludeDigested" className="text-sm text-gray-700">
+            <label htmlFor="excludeBriefed" className="text-sm text-gray-700">
               Exclude episodes already in a briefing
             </label>
           </div>
@@ -349,30 +349,30 @@ function CreateDigestModal({
   )
 }
 
-export default function Digests() {
-  const { data, isLoading, error } = useDigests()
-  const createMutation = useCreateDigest()
-  const deleteMutation = useDeleteDigest()
-  const previewMutation = usePreviewDigest()
+export default function Briefings() {
+  const { data, isLoading, error } = useBriefings()
+  const createMutation = useCreateBriefing()
+  const deleteMutation = useDeleteBriefing()
+  const previewMutation = usePreviewBriefing()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const handleDelete = async (digestId: string) => {
-    setDeletingId(digestId)
+  const handleDelete = async (briefingId: string) => {
+    setDeletingId(briefingId)
     try {
-      await deleteMutation.mutateAsync(digestId)
+      await deleteMutation.mutateAsync(briefingId)
     } finally {
       setDeletingId(null)
     }
   }
 
-  const handleCreate = async (request: CreateDigestRequest) => {
+  const handleCreate = async (request: CreateBriefingRequest) => {
     await createMutation.mutateAsync(request)
     setShowCreateModal(false)
     previewMutation.reset()
   }
 
-  const handlePreview = async (request: CreateDigestRequest) => {
+  const handlePreview = async (request: CreateBriefingRequest) => {
     await previewMutation.mutateAsync(request)
   }
 
@@ -392,7 +392,7 @@ export default function Digests() {
     )
   }
 
-  const digests = data?.digests || []
+  const briefings = data?.briefings || []
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -418,31 +418,31 @@ export default function Digests() {
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-gray-900">{digests.length}</div>
+          <div className="text-2xl font-bold text-gray-900">{briefings.length}</div>
           <div className="text-sm text-gray-500">Total Briefings</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-green-600">
-            {digests.filter(d => d.status === 'completed').length}
+            {briefings.filter(d => d.status === 'completed').length}
           </div>
           <div className="text-sm text-gray-500">Completed</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-orange-600">
-            {digests.filter(d => d.status === 'partial').length}
+            {briefings.filter(d => d.status === 'partial').length}
           </div>
           <div className="text-sm text-gray-500">Partial</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-red-600">
-            {digests.filter(d => d.status === 'failed').length}
+            {briefings.filter(d => d.status === 'failed').length}
           </div>
           <div className="text-sm text-gray-500">Failed</div>
         </div>
       </div>
 
-      {/* Digest list */}
-      {digests.length === 0 ? (
+      {/* Briefing list */}
+      {briefings.length === 0 ? (
         <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
           <div className="text-gray-400 mb-2">
             <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -460,12 +460,12 @@ export default function Digests() {
         </div>
       ) : (
         <div className="space-y-3">
-          {digests.map((digest) => (
-            <DigestCard
-              key={digest.id}
-              digest={digest}
+          {briefings.map((briefing) => (
+            <BriefingCard
+              key={briefing.id}
+              briefing={briefing}
               onDelete={handleDelete}
-              isDeleting={deletingId === digest.id && deleteMutation.isPending}
+              isDeleting={deletingId === briefing.id && deleteMutation.isPending}
             />
           ))}
         </div>
@@ -491,7 +491,7 @@ export default function Digests() {
       </div>
 
       {/* Create modal */}
-      <CreateDigestModal
+      <CreateBriefingModal
         isOpen={showCreateModal}
         onClose={() => {
           setShowCreateModal(false)

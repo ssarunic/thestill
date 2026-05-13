@@ -151,7 +151,7 @@ verify.
 # Webhooks
 19. Signature verification is mandatory: the server returns 401 when
     the webhook-secret env var is unset (outside an explicit dev
-    guard). Uses `hmac.compare_digest`, not `==`.
+    guard). Uses `hmac.compare_briefing`, not `==`.
 20. Webhook payloads are size-capped and timestamp-checked (reject if
     `|now - t| > 5 min`) to block replay.
 
@@ -168,7 +168,7 @@ verify.
 # LLM integration
 24. Transcripts, feed text, and user-supplied content are injected
     into prompts inside explicit delimiters and labelled untrusted.
-    Summarize / clean / digest flows run in a tool-less context
+    Summarize / clean / briefing flows run in a tool-less context
     (no MCP mutation tools bound).
 25. MCP mutation tools (`remove_*`, `download_*`, `transcribe_*`,
     `summarize`) have per-session quotas and require confirmation for
@@ -186,7 +186,7 @@ verify.
     into logs. Strip before every `logger.*` call.
 
 # Container / deploy
-29. Dockerfile pins the base image by digest (`@sha256:…`), runs as
+29. Dockerfile pins the base image by briefing (`@sha256:…`), runs as
     non-root, copies no secrets, and respects `.dockerignore` (which
     must exclude `.env`, `data/`, `.git/`).
 30. `docker-compose.yml` does not mount host secrets as bind mounts

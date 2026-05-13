@@ -186,8 +186,8 @@ class BareAudioResolver:
 
     def resolve(self, url: str) -> CanonicalSource:
         normalised = _normalise_url(url)
-        digest = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
-        canonical_id = f"audio:{digest}"
+        url_hash = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+        canonical_id = f"audio:{url_hash}"
         parsed = urlparse(normalised)
         filename = (parsed.path.rsplit("/", 1)[-1] or "audio").rsplit(".", 1)[0]
         title = filename.replace("_", " ").replace("-", " ").strip() or "Imported audio"
@@ -197,7 +197,7 @@ class BareAudioResolver:
             audio_url=normalised,
             title=title,
             source_handle=parsed.hostname or "",
-            external_id=digest,
+            external_id=url_hash,
         )
 
 

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-Abstract repository interface for digest persistence.
+Abstract repository interface for briefing persistence.
 
-This interface defines the contract for digest storage operations,
+This interface defines the contract for briefing storage operations,
 supporting CRUD operations and episode tracking for THES-153.
 """
 
@@ -23,26 +23,26 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
 
-from ..models.digest import Digest, DigestStatus
+from ..models.briefing import Briefing, BriefingStatus
 
 
-class DigestRepository(ABC):
+class BriefingRepository(ABC):
     """
-    Abstract repository for digest persistence operations.
+    Abstract repository for briefing persistence operations.
 
-    Implementations must provide thread-safe access to digest data.
+    Implementations must provide thread-safe access to briefing data.
     """
 
     @abstractmethod
-    def get_by_id(self, digest_id: str) -> Optional[Digest]:
+    def get_by_id(self, briefing_id: str) -> Optional[Briefing]:
         """
-        Get digest by internal UUID (primary key).
+        Get briefing by internal UUID (primary key).
 
         Args:
-            digest_id: Internal UUID of the digest
+            briefing_id: Internal UUID of the briefing
 
         Returns:
-            Digest if found, None otherwise
+            Briefing if found, None otherwise
         """
         pass
 
@@ -51,79 +51,79 @@ class DigestRepository(ABC):
         self,
         limit: int = 50,
         offset: int = 0,
-        status: Optional[DigestStatus] = None,
+        status: Optional[BriefingStatus] = None,
         user_id: Optional[str] = None,
-    ) -> List[Digest]:
+    ) -> List[Briefing]:
         """
-        Get all digests with optional filtering.
+        Get all briefings with optional filtering.
 
         Args:
-            limit: Maximum number of digests to return
-            offset: Number of digests to skip
+            limit: Maximum number of briefings to return
+            offset: Number of briefings to skip
             status: Optional status filter
             user_id: Optional user ID filter (None for all users)
 
         Returns:
-            List of digests ordered by created_at descending
+            List of briefings ordered by created_at descending
         """
         pass
 
     @abstractmethod
-    def get_latest(self) -> Optional[Digest]:
+    def get_latest(self) -> Optional[Briefing]:
         """
-        Get the most recently created digest.
+        Get the most recently created briefing.
 
         Returns:
-            Most recent digest if any exist, None otherwise
+            Most recent briefing if any exist, None otherwise
         """
         pass
 
     @abstractmethod
-    def save(self, digest: Digest) -> Digest:
+    def save(self, briefing: Briefing) -> Briefing:
         """
-        Save or update a digest.
+        Save or update a briefing.
 
-        If a digest with the same ID exists, it will be updated.
-        Otherwise, a new digest will be created.
+        If a briefing with the same ID exists, it will be updated.
+        Otherwise, a new briefing will be created.
 
         Args:
-            digest: Digest to save or update
+            briefing: Briefing to save or update
 
         Returns:
-            The saved digest
+            The saved briefing
         """
         pass
 
     @abstractmethod
-    def delete(self, digest_id: str) -> bool:
+    def delete(self, briefing_id: str) -> bool:
         """
-        Delete digest by ID.
+        Delete briefing by ID.
 
         Args:
-            digest_id: Internal UUID of the digest to delete
+            briefing_id: Internal UUID of the briefing to delete
 
         Returns:
-            True if digest was deleted, False if not found
+            True if briefing was deleted, False if not found
         """
         pass
 
     @abstractmethod
-    def get_episodes_in_digest(self, digest_id: str) -> List[str]:
+    def get_episodes_in_briefing(self, briefing_id: str) -> List[str]:
         """
-        Get list of episode IDs included in a digest.
+        Get list of episode IDs included in a briefing.
 
         Args:
-            digest_id: Internal UUID of the digest
+            briefing_id: Internal UUID of the briefing
 
         Returns:
-            List of episode UUIDs included in the digest
+            List of episode UUIDs included in the briefing
         """
         pass
 
     @abstractmethod
-    def is_episode_in_any_digest(self, episode_id: str) -> bool:
+    def is_episode_in_any_briefing(self, episode_id: str) -> bool:
         """
-        Check if an episode has been included in any digest.
+        Check if an episode has been included in any briefing.
 
         Useful for --ready-only mode to prevent duplicate inclusions.
 
@@ -131,33 +131,33 @@ class DigestRepository(ABC):
             episode_id: Internal UUID of the episode
 
         Returns:
-            True if episode is in at least one digest
+            True if episode is in at least one briefing
         """
         pass
 
     @abstractmethod
-    def get_digests_containing_episode(self, episode_id: str, user_id: Optional[str] = None) -> List[Digest]:
+    def get_briefings_containing_episode(self, episode_id: str, user_id: Optional[str] = None) -> List[Briefing]:
         """
-        Get all digests that contain a specific episode.
+        Get all briefings that contain a specific episode.
 
         Args:
             episode_id: Internal UUID of the episode
             user_id: Optional user ID filter (None for all users)
 
         Returns:
-            List of digests containing the episode
+            List of briefings containing the episode
         """
         pass
 
     @abstractmethod
-    def get_digests_in_period(
+    def get_briefings_in_period(
         self,
         start: datetime,
         end: datetime,
         user_id: Optional[str] = None,
-    ) -> List[Digest]:
+    ) -> List[Briefing]:
         """
-        Get digests whose period overlaps with the given time range.
+        Get briefings whose period overlaps with the given time range.
 
         Args:
             start: Start of the time range
@@ -165,18 +165,18 @@ class DigestRepository(ABC):
             user_id: Optional user ID filter (None for all users)
 
         Returns:
-            List of digests with overlapping periods
+            List of briefings with overlapping periods
         """
         pass
 
     @abstractmethod
     def count(
         self,
-        status: Optional[DigestStatus] = None,
+        status: Optional[BriefingStatus] = None,
         user_id: Optional[str] = None,
     ) -> int:
         """
-        Count digests with optional filtering.
+        Count briefings with optional filtering.
 
         More efficient than get_all() when only the count is needed.
 
@@ -185,6 +185,6 @@ class DigestRepository(ABC):
             user_id: Optional user ID filter (None for all users)
 
         Returns:
-            Total count of matching digests
+            Total count of matching briefings
         """
         pass

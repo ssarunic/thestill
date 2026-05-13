@@ -1,10 +1,10 @@
-# Per-User Digest from Inbox
+# Per-User Briefing from Inbox
 
 > **Status:** 📝 Draft
 > **Created:** 2026-05-08
 > **Updated:** 2026-05-08
 > **Author:** Product & Engineering
-> **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#33 narrated-digest](33-narrated-digest.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
+> **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#33 narrated-briefing](33-narrated-briefing.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
 
 ---
 
@@ -15,26 +15,26 @@ should select from each user's **inbox**, not from a global "recent episodes"
 window. Same generator, same script schema, same audio pipeline — only the
 selection input changes. This spec covers the small wiring change that
 unblocks the per-user briefing path explicitly anticipated by [#33 §87,
-§490, §515](33-narrated-digest.md) and [#34 §78, O2](34-briefing-audio-and-feeds.md).
+§490, §515](33-narrated-briefing.md) and [#34 §78, O2](34-briefing-audio-and-feeds.md).
 
 The unit of work is *what landed in my inbox since my last briefing*. The
 output surfaces as a "Today's briefing" card at the top of `/inbox` (per
-[#33 §490](33-narrated-digest.md#L490)). Audio becomes per-user as a
+[#33 §490](33-narrated-briefing.md#L490)). Audio becomes per-user as a
 natural consequence (per [#34 §78](34-briefing-audio-and-feeds.md#L78)).
 
-**Mental model:** the inbox is the substrate; the digest is a recurring
+**Mental model:** the inbox is the substrate; the briefing is a recurring
 read-out of *the part of the inbox the user hasn't been read out yet*.
 
 ---
 
 ## Motivation
 
-`thestill digest` today selects episodes via
-[digest_selector.py:35](../thestill/services/digest_selector.py#L35) using a
+`thestill briefing` today selects episodes via
+[briefing_selector.py:35](../thestill/services/briefing_selector.py#L35) using a
 global `since_days` window — every user gets the same selection. Three
 problems:
 
-1. **Wrong scope.** The Inbox is now the per-user truth. A digest pulled from
+1. **Wrong scope.** The Inbox is now the per-user truth. A briefing pulled from
    the global window can include episodes that never reached my inbox (I
    don't follow that podcast) and miss episodes that did (I followed yesterday
    and the seed delivered them).
@@ -57,7 +57,7 @@ problems:
 | User | A "Today's briefing" card at the top of my inbox | The morning ritual lives where I already triage |
 | User | Mark a briefing as listened so the next one starts from a fresh cursor | I don't re-cover ground |
 | User | An empty-state message when nothing new has landed | The system feels honest, not scrambling for filler |
-| Self-hoster | Continue running `thestill digest` from cron | The CLI workflow doesn't break |
+| Self-hoster | Continue running `thestill briefing` from cron | The CLI workflow doesn't break |
 
 ### Core behaviors
 
@@ -66,13 +66,13 @@ problems:
    `state IN ('unread','saved')` (dismissed and read are excluded).
 2. **Cursor is `last_briefing_at`.** Stored on a new `user_briefings` table
    (one row per generated briefing per user). Defaults: epoch on first run.
-3. **Re-runs are idempotent within a window.** A second `digest` call within
+3. **Re-runs are idempotent within a window.** A second `briefing` call within
    `BRIEFING_MIN_INTERVAL` (default 6h) returns the same briefing rather
    than generating a new one. Forces explicit `--force` to override.
 4. **No retroactive coverage.** A briefing covers exactly the inbox items
    delivered between `last_briefing_at` and `now()`. Missed days compound
    into a longer briefing rather than splitting.
-5. **CLI compatibility.** `thestill digest` keeps working. Without
+5. **CLI compatibility.** `thestill briefing` keeps working. Without
    `--user-id`, it iterates over every user with at least one unbriefed
    inbox row; with `--user-id`, it generates only that user's briefing.
 6. **Inbox card is read-only delivery.** Clicking "Today's briefing" routes
@@ -97,7 +97,7 @@ problems:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  CLI: thestill digest [--user-id X] [--force]                   │
+│  CLI: thestill briefing [--user-id X] [--force]                   │
 └─────────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────────────────────────────────────────┐
@@ -110,7 +110,7 @@ problems:
 │    2. inbox = InboxService.list(user_id, since=cursor,          │
 │                                 state in {unread, saved})       │
 │    3. if inbox empty → return None (or "nothing new" briefing)  │
-│    4. script = DigestGenerator.generate(inbox.episodes, …)      │
+│    4. script = BriefingGenerator.generate(inbox.episodes, …)      │
 │    5. persist user_briefings row + script artifact              │
 │    6. (optional / spec #34) render audio, persist briefing_audio│
 └─────────────────────────────────────────────────────────────────┘
@@ -126,8 +126,8 @@ problems:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The existing `DigestGenerator` is unchanged: it accepts a list of
-`DigestEpisodeInfo` and emits the [#33](33-narrated-digest.md) script.
+The existing `BriefingGenerator` is unchanged: it accepts a list of
+`BriefingEpisodeInfo` and emits the [#33](33-narrated-briefing.md) script.
 The only new piece is the *selector* on the inbox.
 
 ---
@@ -208,7 +208,7 @@ class BriefingService:
         self,
         briefing_repository: BriefingRepository,
         inbox_service: InboxService,
-        digest_generator: DigestGenerator,
+        briefing_generator: BriefingGenerator,
         config: AppConfig,
     ) -> None: ...
 
@@ -238,16 +238,16 @@ class BriefingService:
     def mark_listened(self, user_id: str, briefing_id: str) -> Briefing: ...
 ```
 
-### `DigestGenerator` — no shape change
+### `BriefingGenerator` — no shape change
 
-`DigestGenerator.generate()` already takes a list of episode info
-([digest_generator.py:77](../thestill/services/digest_generator.py#L77)).
+`BriefingGenerator.generate()` already takes a list of episode info
+([briefing_generator.py:77](../thestill/services/briefing_generator.py#L77)).
 The new selector feeds it directly; the generator does not need to know
 about users or inboxes.
 
-### `DigestEpisodeSelector` — keep as fallback
+### `BriefingEpisodeSelector` — keep as fallback
 
-[digest_selector.py:75](../thestill/services/digest_selector.py#L75) stays
+[briefing_selector.py:75](../thestill/services/briefing_selector.py#L75) stays
 for the global / admin path (e.g., a self-hoster running single-user mode
 with no follows yet). New code paths go through `BriefingService`.
 
@@ -255,7 +255,7 @@ with no follows yet). New code paths go through `BriefingService`.
 
 ## Pipeline Integration Points
 
-### 1. CLI: `thestill digest`
+### 1. CLI: `thestill briefing`
 
 Behavior changes:
 
@@ -313,8 +313,8 @@ behind feature work that builds rate limits + cost controls.
 ### Existing endpoints
 
 - `/api/inbox` is unchanged.
-- `/api/digests/...` (the legacy global digest endpoint, if present at
-  [thestill/web/routes/api_digests.py](../thestill/web/routes/api_digests.py))
+- `/api/briefings/...` (the legacy global briefing endpoint, if present at
+  [thestill/web/routes/api_briefings.py](../thestill/web/routes/api_briefings.py))
   is kept for one release as the fallback for single-user mode, then
   deprecated. Not in v1.
 
@@ -325,8 +325,8 @@ behind feature work that builds rate limits + cost controls.
 1. **Schema:** add `user_briefings` table + indexes inside the existing
    `_ensure_database_exists` migration block at
    [thestill/repositories/sqlite_podcast_repository.py](../thestill/repositories/sqlite_podcast_repository.py).
-2. **No data backfill needed.** Pre-existing global digests under
-   [data/digests/](../data/digests/) stay where they are; the new
+2. **No data backfill needed.** Pre-existing global briefings under
+   [data/briefings/](../data/briefings/) stay where they are; the new
    per-user briefings live under `data/briefings/<user_id>/<briefing_id>/`.
 3. **First run per user starts from epoch.** Empty `user_briefings`
    means `cursor_from = epoch`, so the first briefing covers the whole
@@ -334,16 +334,16 @@ behind feature work that builds rate limits + cost controls.
    noisy.
 4. **Frontend:** add the inbox card + briefing detail route.
 5. **Rollback:** dropping `user_briefings` and restoring the old
-   `thestill digest` CLI is a single migration. No data loss.
+   `thestill briefing` CLI is a single migration. No data loss.
 
 ---
 
 ## Naming Conventions
 
-- **Schema/code:** `briefing` for the per-user object; `digest` for the
+- **Schema/code:** `briefing` for the per-user object; `briefing` for the
   legacy global object (kept until removed). Table `user_briefings`,
   service `BriefingService`, model `Briefing`.
-- **User-facing label:** "Today's briefing" / "Briefing". `Digest` is
+- **User-facing label:** "Today's briefing" / "Briefing". `Briefing` is
   retired from the UI on this work.
 - **Cursor field name:** `cursor_from` / `cursor_to`, not `since` /
   `until`. The latter pair reads like a query filter; the former reads
@@ -365,19 +365,19 @@ behind feature work that builds rate limits + cost controls.
 
 ### Phase 2 — CLI integration
 
-- [ ] `thestill digest` switches to `BriefingService.generate_for_all_users`.
+- [ ] `thestill briefing` switches to `BriefingService.generate_for_all_users`.
 - [ ] `--user-id` flag added.
 - [ ] Single-user-mode shortcut: skip the new path if there's only one
       user and zero followed podcasts (preserves day-one self-host
       behavior).
-- [ ] Integration test: follow → publish → digest produces a per-user
+- [ ] Integration test: follow → publish → briefing produces a per-user
       briefing covering exactly the new inbox rows.
 
 ### Phase 3 — API + frontend
 
 - [ ] Routes: `GET /api/briefings/latest`, `/api/briefings/{id}`,
       `POST /api/briefings/{id}/listened`, `GET /api/briefings`.
-- [ ] Inbox top-card component (placement matches [#33 §490](33-narrated-digest.md#L490)).
+- [ ] Inbox top-card component (placement matches [#33 §490](33-narrated-briefing.md#L490)).
 - [ ] Briefing detail route: render script (markdown) + audio player
       when `audio_path` is set.
 - [ ] E2E test: empty inbox → no card; populated inbox → card → read →
@@ -386,7 +386,7 @@ behind feature work that builds rate limits + cost controls.
 ### Phase 4 — Audio per-user (interlocks with [#34](34-briefing-audio-and-feeds.md))
 
 - [ ] Audio render trigger fires per `user_briefings` row instead of
-      per global digest.
+      per global briefing.
 - [ ] Personal feed (#34 §125) sources from `user_briefings` filtered
       to the requesting user.
 - [ ] Update [#34 O2](34-briefing-audio-and-feeds.md#L690) to mark the
@@ -428,7 +428,7 @@ behind feature work that builds rate limits + cost controls.
   day, which produces the right effect for free.
 - **Mid-briefing edits** ("swap this episode out").
 - **Auto-generation scheduler.** Out of scope; CLI-triggered for v1.
-- **Migration of historical global digests** under [data/digests/](../data/digests/)
+- **Migration of historical global briefings** under [data/briefings/](../data/briefings/)
   into per-user briefings. They stay where they are; the new flow
   starts from now.
 
@@ -438,7 +438,7 @@ behind feature work that builds rate limits + cost controls.
 
 - [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) — supplies
   the per-user inbox rows this spec selects from. Shipped.
-- [#33 narrated-digest](33-narrated-digest.md) — defines the script
+- [#33 narrated-briefing](33-narrated-briefing.md) — defines the script
   schema and inbox-card placement; this spec wires the per-user
   selection into the same generator.
 - [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) —
@@ -456,5 +456,5 @@ behind feature work that builds rate limits + cost controls.
 | 2026-05-08 | Briefings live next to the inbox, not in a separate "Briefings" tab | Reinforces the mental model: briefing = readout of the inbox subset. Two surfaces = two competing concepts. |
 | 2026-05-08 | Cursor stored as (`cursor_from`, `cursor_to`) on the briefing row | Reproducibility without time-travel queries against the inbox; future "rebuild this briefing" is straightforward. |
 | 2026-05-08 | Operator-triggered generation in v1 | Adds the wiring without committing to a cron / timezone / rate-limit story; that's a follow-up. |
-| 2026-05-08 | Keep global `DigestEpisodeSelector` as single-user-mode fallback | Avoids breaking day-one self-host UX where no follows exist yet. |
+| 2026-05-08 | Keep global `BriefingEpisodeSelector` as single-user-mode fallback | Avoids breaking day-one self-host UX where no follows exist yet. |
 | 2026-05-08 | Briefings are per-user 1:1 (no shared briefings) | Keeps content / audio / cursor / read-state on a single owner; no co-edit semantics needed. |

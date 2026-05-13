@@ -46,11 +46,11 @@ thestill summarize                  # 6. Summarize
 # All commands support: --podcast-id, --max-episodes, --dry-run
 
 # Batch processing (morning briefing)
-thestill digest                     # Process new episodes & generate digest
-thestill digest --dry-run           # Preview what would be processed
-thestill digest --since 24h         # Episodes from last 24 hours
-thestill digest --ready-only        # Digest already-summarized episodes only
-thestill digest --no-limit --yes    # Process all (non-interactive)
+thestill briefing                     # Process new episodes & generate briefing
+thestill briefing --dry-run           # Preview what would be processed
+thestill briefing --since 24h         # Episodes from last 24 hours
+thestill briefing --ready-only        # Briefing already-summarized episodes only
+thestill briefing --no-limit --yes    # Process all (non-interactive)
 
 # Web server
 thestill server                     # Start on localhost:8000
@@ -85,7 +85,7 @@ data/
 ├── raw_transcripts/       # JSON transcripts
 ├── clean_transcripts/     # Cleaned Markdown
 ├── summaries/             # Episode analysis
-├── digests/               # Generated digest documents
+├── briefings/               # Generated briefing documents
 ├── podcast_facts/         # Podcast-level facts
 └── episode_facts/         # Episode-level facts
 ```

@@ -141,5 +141,5 @@ replacement for it.
 ## Out of scope for this spec
 
 - Surfacing processing state on the Dashboard recent-activity feed.
-- Showing a processing indicator on search results or digests.
+- Showing a processing indicator on search results or briefings.
 - Animations beyond the existing `animate-pulse` dot.

@@ -289,7 +289,7 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         responsibility, routed through ``FileStorage`` (spec #35) so the
         summary lands on the configured backend (local or S3). Internal
         file I/O was removed to avoid the half-migrated state where
-        summaries were written to local disk while ``DigestGenerator``
+        summaries were written to local disk while ``BriefingGenerator``
         read them through ``FileStorage``.
 
         Args:

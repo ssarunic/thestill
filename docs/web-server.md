@@ -53,18 +53,18 @@ thestill server --workers 4        # Multiple worker processes
 | `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
 | `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
 
-### Digests (`/api/digests`)
+### Briefings (`/api/briefings`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/digests` | GET | List digests (filterable by status) |
-| `/api/digests` | POST | Create new digest |
-| `/api/digests/latest` | GET | Get most recent digest |
-| `/api/digests/preview` | POST | Preview episode selection |
-| `/api/digests/{digest_id}` | GET | Get digest details |
-| `/api/digests/{digest_id}` | DELETE | Delete digest |
-| `/api/digests/{digest_id}/content` | GET | Get digest markdown content |
-| `/api/digests/{digest_id}/episodes` | GET | Get episodes in digest |
+| `/api/briefings` | GET | List briefings (filterable by status) |
+| `/api/briefings` | POST | Create new briefing |
+| `/api/briefings/latest` | GET | Get most recent briefing |
+| `/api/briefings/preview` | POST | Preview episode selection |
+| `/api/briefings/{briefing_id}` | GET | Get briefing details |
+| `/api/briefings/{briefing_id}` | DELETE | Delete briefing |
+| `/api/briefings/{briefing_id}/content` | GET | Get briefing markdown content |
+| `/api/briefings/{briefing_id}/episodes` | GET | Get episodes in briefing |
 
 ### Authentication (`/auth`)
 
@@ -99,7 +99,7 @@ thestill/web/
 │   ├── api_podcasts.py      # Podcast CRUD endpoints
 │   ├── api_episodes.py      # Episode content endpoints
 │   ├── api_commands.py      # Processing commands (pipeline, DLQ)
-│   ├── api_digests.py       # Digest CRUD and content endpoints
+│   ├── api_briefings.py       # Briefing CRUD and content endpoints
 │   └── auth.py              # Authentication endpoints (OAuth, JWT)
 ├── frontend/                # React SPA
 │   ├── src/
@@ -109,8 +109,8 @@ thestill/web/
 │   │   │   ├── Podcasts.tsx
 │   │   │   ├── Episodes.tsx
 │   │   │   ├── EpisodeDetail.tsx
-│   │   │   ├── Digests.tsx          # Digest list with create modal
-│   │   │   ├── DigestDetail.tsx     # Digest content and episodes
+│   │   │   ├── Briefings.tsx          # Briefing list with create modal
+│   │   │   ├── BriefingDetail.tsx     # Briefing content and episodes
 │   │   │   ├── FailedTasks.tsx
 │   │   │   └── Login.tsx            # Google OAuth login page
 │   │   ├── contexts/
@@ -121,7 +121,7 @@ thestill/web/
 │   │   │   ├── PipelineActionButton.tsx
 │   │   │   ├── FailureBanner.tsx
 │   │   │   ├── FailureDetailsModal.tsx
-│   │   │   ├── MorningBriefingWidget.tsx  # Dashboard digest widget
+│   │   │   ├── MorningBriefingWidget.tsx  # Dashboard briefing widget
 │   │   │   ├── ProtectedRoute.tsx   # Route protection wrapper
 │   │   │   └── UserMenu.tsx         # User avatar dropdown
 │   │   └── api/
@@ -223,67 +223,67 @@ When "Run Full Pipeline" is triggered from the Web UI:
 3. Pipeline continues until summarization or failure
 4. Progress is tracked in real-time via polling
 
-## Digest Interface
+## Briefing Interface
 
-The web UI provides a full interface for creating and viewing digests - consolidated summaries of multiple podcast episodes.
+The web UI provides a full interface for creating and viewing briefings - consolidated summaries of multiple podcast episodes.
 
 ### Dashboard Widget
 
-The **Morning Briefing Widget** on the dashboard provides quick access to digest functionality:
+The **Morning Briefing Widget** on the dashboard provides quick access to briefing functionality:
 
 - Shows count of episodes ready to summarize
-- Displays status of the latest digest
-- **Quick Catch-Up** button creates a digest with default settings:
+- Displays status of the latest briefing
+- **Quick Catch-Up** button creates a briefing with default settings:
   - Last 7 days of episodes
   - Maximum 10 episodes
   - Only already-summarized episodes (`ready_only=true`)
-  - Excludes previously digested episodes
+  - Excludes previously briefed episodes
 
-### Digests Page (`/digests`)
+### Briefings Page (`/briefings`)
 
-The digests page provides:
+The briefings page provides:
 
-- **Stats cards**: Total digests, completed count, partial count
-- **Digest list**: All digests with status badges and episode counts
-- **Progress indicators**: Active digests show real-time progress with polling
-- **Create modal**: Configure and create new digests
+- **Stats cards**: Total briefings, completed count, partial count
+- **Briefing list**: All briefings with status badges and episode counts
+- **Progress indicators**: Active briefings show real-time progress with polling
+- **Create modal**: Configure and create new briefings
 
-### Creating a Digest
+### Creating a Briefing
 
-1. Click "New Digest" button
+1. Click "New Briefing" button
 2. Configure options:
    - **Time range**: Episodes from last N days (1-365)
    - **Max episodes**: Limit number of episodes (1-100)
    - **Podcast filter**: Optional - limit to specific podcast
    - **Ready only**: Only include already-summarized episodes
-   - **Exclude digested**: Skip episodes already in other digests
+   - **Exclude briefed**: Skip episodes already in other briefings
 3. Click "Preview" to see which episodes would be included
-4. Click "Create Digest" to generate
+4. Click "Create Briefing" to generate
 
-**Digest Status Values**:
+**Briefing Status Values**:
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Digest created, episodes being processed |
-| `in_progress` | Actively generating digest content |
+| `pending` | Briefing created, episodes being processed |
+| `in_progress` | Actively generating briefing content |
 | `completed` | Successfully generated with all episodes |
 | `partial` | Completed with some episode failures |
 | `failed` | Generation failed |
 
-### Digest Detail Page (`/digests/{id}`)
+### Briefing Detail Page (`/briefings/{id}`)
 
-Shows complete digest information:
+Shows complete briefing information:
 
 - **Header**: Creation date, period covered, status badge
 - **Stats**: Episode counts (total/completed/failed), success rate, processing time
-- **Content tab**: Rendered markdown digest document
+- **Content tab**: Rendered markdown briefing document
 - **Episodes tab**: List of included episodes with links to episode details
-- **Delete action**: Remove digest with confirmation
+- **Delete action**: Remove briefing with confirmation
 
 ### Real-Time Progress
 
-When a digest is being processed (status `pending` or `in_progress`):
+When a briefing is being processed (status `pending` or `in_progress`):
 
-- Digest list automatically polls every 3 seconds
+- Briefing list automatically polls every 3 seconds
 - Progress bar shows episodes completed vs total
 - Status updates as processing progresses

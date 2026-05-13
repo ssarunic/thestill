@@ -4,17 +4,17 @@
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-06
 > **Author:** Product & Engineering
-> **Related:** [#33 narrated-digest](33-narrated-digest.md), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#06 authentication](06-authentication.md), [#07 multi-user-web-app](07-multi-user-web-app.md)
+> **Related:** [#33 narrated-briefing](33-narrated-briefing.md), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#06 authentication](06-authentication.md), [#07 multi-user-web-app](07-multi-user-web-app.md)
 
 ---
 
 ## Executive Summary
 
-Turn the briefing script produced by [#33](33-narrated-digest.md) into actual audio and get it to the user wherever they listen — primarily as a **private personal podcast feed** they subscribe to in Apple Podcasts / Overcast / Pocket Casts, plus an in-app player and direct download. Original-audio quote clips are spliced in where the script has quote blocks, so the briefing alternates between a synthesised anchor voice and the real voices of the hosts and guests.
+Turn the briefing script produced by [#33](33-narrated-briefing.md) into actual audio and get it to the user wherever they listen — primarily as a **private personal podcast feed** they subscribe to in Apple Podcasts / Overcast / Pocket Casts, plus an in-app player and direct download. Original-audio quote clips are spliced in where the script has quote blocks, so the briefing alternates between a synthesised anchor voice and the real voices of the hosts and guests.
 
 **Mental model:** Each user has their own private podcast — "Sasa's Morning Briefing" — that publishes a new episode every morning. The user subscribes to it once with a token-protected RSS URL; from then on, the daily briefing arrives in their podcast app like any other show. This is the pinnacle thestill is building toward: the user's personal pile of subscriptions, distilled into a single episode that fits in their commute and plays through whichever app they already use.
 
-**Key principle:** **The script is the source of truth.** Everything in this spec consumes [#33](33-narrated-digest.md)'s JSON script and renders it into audio + distribution surfaces. No new editorial choices happen here — only synthesis, splicing, packaging, and delivery. If a briefing reads well, it should listen well; if it doesn't read well, audio won't save it.
+**Key principle:** **The script is the source of truth.** Everything in this spec consumes [#33](33-narrated-briefing.md)'s JSON script and renders it into audio + distribution surfaces. No new editorial choices happen here — only synthesis, splicing, packaging, and delivery. If a briefing reads well, it should listen well; if it doesn't read well, audio won't save it.
 
 ---
 
@@ -43,7 +43,7 @@ Turn the briefing script produced by [#33](33-narrated-digest.md) into actual au
 
 ## Motivation
 
-[Spec #33](33-narrated-digest.md) treats reading as first-class on purpose: the script must work as text. But the *pinnacle* of thestill — the experience the whole pipeline exists to deliver — is the user opening their podcast app on the way to work and hearing one curated episode that distils everything they would otherwise have skipped.
+[Spec #33](33-narrated-briefing.md) treats reading as first-class on purpose: the script must work as text. But the *pinnacle* of thestill — the experience the whole pipeline exists to deliver — is the user opening their podcast app on the way to work and hearing one curated episode that distils everything they would otherwise have skipped.
 
 Three reasons to make this an explicit spec rather than a footnote on #33:
 
@@ -72,7 +72,7 @@ Three reasons to make this an explicit spec rather than a footnote on #33:
 
 ### Core Behaviors
 
-1. **Audio is rendered from the JSON script** ([#33](33-narrated-digest.md)) with the same content the markdown surface uses. No editorial drift between read and listen modes.
+1. **Audio is rendered from the JSON script** ([#33](33-narrated-briefing.md)) with the same content the markdown surface uses. No editorial drift between read and listen modes.
 2. **Quote blocks splice original audio** when available; fall back to TTS-of-the-text when the source audio file is missing or out-of-range.
 3. **Personal feeds are token-protected** at the URL level (RSS clients don't speak bearer auth). Token can be rotated or revoked from settings.
 4. **One canonical MP3 per briefing.** In v1 the audio is shared (one synthesis run per briefing run). When [#29](29-per-user-inbox-fanout.md) brings per-user briefings, audio also becomes per-user.
@@ -361,7 +361,7 @@ A `Download MP3` link on the briefing reader page. Same URL as the player, with 
 
 ### Future channels (deferred)
 
-- **Email digest** with audio link (one weekly summary, not daily — daily is what the feed is for).
+- **Email briefing** with audio link (one weekly summary, not daily — daily is what the feed is for).
 - **iOS / Android apps** — the feed makes them lower-priority since the user's existing app already works.
 - **Smart speakers** (Alexa/Google) via flash briefing skills — interesting but each platform is its own integration project.
 
@@ -521,7 +521,7 @@ thestill briefing audio --dry-run                              # show plan + cos
 
 # Chained from narrate (preferred end-to-end morning workflow)
 thestill narrate --audio                                       # script + audio + feed publish
-thestill digest --narrate --audio                              # full chain
+thestill briefing --narrate --audio                              # full chain
 
 # Feed admin (single-user / self-hosted)
 thestill feed mint                                             # creates a token, prints URL
@@ -586,7 +586,7 @@ A new settings panel.
   - "+ New token" button. Modal shows the URL once, with copy + "I've saved this" confirm.
   - One-click subscribe links: Apple Podcasts, Overcast, Pocket Casts (these are deep links that take the user's podcast app and pre-fill the feed URL).
 - **Voice preset** picker (account default).
-- **Briefing length default** picker (links to [#33](33-narrated-digest.md)'s presets).
+- **Briefing length default** picker (links to [#33](33-narrated-briefing.md)'s presets).
 - **Retention** slider: how many briefings to keep in the feed.
 
 ### Onboarding hook
@@ -665,7 +665,7 @@ Pure-additive. No backfill required.
 
 If [#29](29-per-user-inbox-fanout.md) lands later: per-user briefings produce per-user audio; entitlements become per-user authoritative; the rest of the pipeline is unchanged.
 
-If [#33](33-narrated-digest.md) is amended to pre-extract quote clips (Open Question O3): that's a small change to the quote-selection step in #33 and a config flag in the audio pipeline to read clips from the script's `clips/` directory instead of original audio. Backwards-compatible.
+If [#33](33-narrated-briefing.md) is amended to pre-extract quote clips (Open Question O3): that's a small change to the quote-selection step in #33 and a config flag in the audio pipeline to read clips from the script's `clips/` directory instead of original audio. Backwards-compatible.
 
 ---
 
@@ -745,7 +745,7 @@ If [#33](33-narrated-digest.md) is amended to pre-extract quote clips (Open Ques
 
 ## Cross-References
 
-- **Spec #33** — Narrated digest. Produces the JSON script that this spec consumes. May need a small amendment (pre-extract quote clips; Open Question O3).
+- **Spec #33** — Narrated briefing. Produces the JSON script that this spec consumes. May need a small amendment (pre-extract quote clips; Open Question O3).
 - **Spec #29** — Per-user inbox fanout. v1 audio is shared; per-user audio lands once #29 makes content per-user.
 - **Spec #06** — Authentication. Personal feed tokens are a parallel credential class to the existing user auth; both should converge on the same user identity.
 - **Spec #07** — Multi-user web app. Feed entitlements + per-user voice preferences slot into the multi-user data model.

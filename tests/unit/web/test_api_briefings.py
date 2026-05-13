@@ -13,16 +13,16 @@
 # limitations under the License.
 
 """
-Unit tests for digest API endpoints.
+Unit tests for briefing API endpoints.
 
 Tests cover:
-- GET /api/digests - List digests with pagination and filtering
-- GET /api/digests/{digest_id} - Get single digest
-- GET /api/digests/{digest_id}/content - Get digest markdown content
-- GET /api/digests/{digest_id}/episodes - Get episodes in digest
-- POST /api/digests - Create new digest
-- POST /api/digests/preview - Preview digest selection
-- DELETE /api/digests/{digest_id} - Delete digest
+- GET /api/briefings - List briefings with pagination and filtering
+- GET /api/briefings/{briefing_id} - Get single briefing
+- GET /api/briefings/{briefing_id}/content - Get briefing markdown content
+- GET /api/briefings/{briefing_id}/episodes - Get episodes in briefing
+- POST /api/briefings - Create new briefing
+- POST /api/briefings/preview - Preview briefing selection
+- DELETE /api/briefings/{briefing_id} - Delete briefing
 """
 
 import tempfile
@@ -34,10 +34,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from thestill.models.digest import Digest, DigestStatus
+from thestill.models.briefing import Briefing, BriefingStatus
 from thestill.models.podcast import Episode, EpisodeState, Podcast
 from thestill.models.user import User
-from thestill.web.routes import api_digests
+from thestill.web.routes import api_briefings
 
 
 @pytest.fixture
@@ -51,18 +51,18 @@ def mock_user():
 
 
 @pytest.fixture
-def sample_digest():
-    """Create a sample digest for testing."""
+def sample_briefing():
+    """Create a sample briefing for testing."""
     now = datetime.now(timezone.utc)
-    return Digest(
-        id="test-digest-id",
+    return Briefing(
+        id="test-briefing-id",
         user_id="test-user-id",
         created_at=now - timedelta(hours=1),
         updated_at=now,
         period_start=now - timedelta(days=7),
         period_end=now,
-        status=DigestStatus.COMPLETED,
-        file_path="digest_20250126_120000.md",
+        status=BriefingStatus.COMPLETED,
+        file_path="briefing_20250126_120000.md",
         episode_ids=["ep-1", "ep-2", "ep-3"],
         episodes_total=3,
         episodes_completed=3,
@@ -99,24 +99,24 @@ def sample_episode():
 
 
 @pytest.fixture
-def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
+def mock_app_state(mock_user, sample_briefing, sample_podcast, sample_episode):
     """Create mock app state with all required dependencies."""
     state = MagicMock()
 
-    # Mock digest repository
-    state.digest_repository = MagicMock()
-    state.digest_repository.get_all.return_value = [sample_digest]
-    state.digest_repository.get_by_id.return_value = sample_digest
-    state.digest_repository.save.return_value = sample_digest
-    state.digest_repository.delete.return_value = True
-    state.digest_repository.count.return_value = 1
+    # Mock briefing repository
+    state.briefing_repository = MagicMock()
+    state.briefing_repository.get_all.return_value = [sample_briefing]
+    state.briefing_repository.get_by_id.return_value = sample_briefing
+    state.briefing_repository.save.return_value = sample_briefing
+    state.briefing_repository.delete.return_value = True
+    state.briefing_repository.count.return_value = 1
 
-    # Mock digest service (used by GET /api/digests/latest for inbox-driven
+    # Mock briefing service (used by GET /api/briefings/latest for inbox-driven
     # lazy generation). The default return mirrors "throttled, returns the
-    # most-recent digest" — tests that want the 404 path override this
+    # most-recent briefing" — tests that want the 404 path override this
     # to return None.
-    state.digest_service = MagicMock()
-    state.digest_service.generate_for_user.return_value = sample_digest
+    state.briefing_service = MagicMock()
+    state.briefing_service.generate_for_user.return_value = sample_briefing
 
     # Mock podcast repository
     state.repository = MagicMock()
@@ -127,9 +127,9 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
     )
 
     # Mock path manager — real tempdirs so the narration variant
-    # filesystem listing in GET /digests/{id} can read files we write.
+    # filesystem listing in GET /briefings/{id} can read files we write.
     state.path_manager = MagicMock()
-    state.path_manager.digests_dir.return_value = Path(tempfile.mkdtemp())
+    state.path_manager.briefings_dir.return_value = Path(tempfile.mkdtemp())
     narrations_root = Path(tempfile.mkdtemp())
     state.path_manager.narrations_dir.return_value = narrations_root
 
@@ -146,7 +146,7 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
 def test_app(mock_app_state, mock_user):
     """Create test FastAPI app with mocked dependencies."""
     app = FastAPI()
-    app.include_router(api_digests.router, prefix="/api/digests")
+    app.include_router(api_briefings.router, prefix="/api/briefings")
 
     # Override dependencies
     def get_mock_state():
@@ -155,8 +155,8 @@ def test_app(mock_app_state, mock_user):
     def get_mock_user():
         return mock_user
 
-    app.dependency_overrides[api_digests.get_app_state] = get_mock_state
-    app.dependency_overrides[api_digests.require_auth] = get_mock_user
+    app.dependency_overrides[api_briefings.get_app_state] = get_mock_state
+    app.dependency_overrides[api_briefings.require_auth] = get_mock_user
 
     return app
 
@@ -167,80 +167,80 @@ def client(test_app):
     return TestClient(test_app)
 
 
-class TestListDigests:
-    """Tests for GET /api/digests endpoint."""
+class TestListBriefings:
+    """Tests for GET /api/briefings endpoint."""
 
-    def test_list_digests_returns_paginated_response(self, client, sample_digest):
-        """List digests returns paginated response with digest data."""
-        response = client.get("/api/digests")
+    def test_list_briefings_returns_paginated_response(self, client, sample_briefing):
+        """List briefings returns paginated response with briefing data."""
+        response = client.get("/api/briefings")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
-        assert "digests" in data
+        assert "briefings" in data
         assert "total" in data
         assert "offset" in data
         assert "limit" in data
         assert "has_more" in data
 
-    def test_list_digests_with_pagination_params(self, client, mock_app_state):
-        """List digests respects pagination parameters."""
-        response = client.get("/api/digests?limit=10&offset=5")
+    def test_list_briefings_with_pagination_params(self, client, mock_app_state):
+        """List briefings respects pagination parameters."""
+        response = client.get("/api/briefings?limit=10&offset=5")
 
         assert response.status_code == 200
         # Verify repository was called with correct params
-        mock_app_state.digest_repository.get_all.assert_called()
+        mock_app_state.briefing_repository.get_all.assert_called()
 
-    def test_list_digests_with_status_filter(self, client, mock_app_state):
-        """List digests can filter by status."""
-        response = client.get("/api/digests?status=completed")
+    def test_list_briefings_with_status_filter(self, client, mock_app_state):
+        """List briefings can filter by status."""
+        response = client.get("/api/briefings?status=completed")
 
         assert response.status_code == 200
-        mock_app_state.digest_repository.get_all.assert_called()
+        mock_app_state.briefing_repository.get_all.assert_called()
 
-    def test_list_digests_invalid_status_returns_400(self, client):
+    def test_list_briefings_invalid_status_returns_400(self, client):
         """Invalid status filter returns 400."""
-        response = client.get("/api/digests?status=invalid")
+        response = client.get("/api/briefings?status=invalid")
 
         assert response.status_code == 400
         assert "Invalid status" in response.json()["detail"]
 
 
-class TestGetDigest:
-    """Tests for GET /api/digests/{digest_id} endpoint."""
+class TestGetBriefing:
+    """Tests for GET /api/briefings/{briefing_id} endpoint."""
 
-    def test_get_digest_returns_digest(self, client, sample_digest):
-        """Get digest by ID returns digest data."""
-        response = client.get("/api/digests/test-digest-id")
+    def test_get_briefing_returns_briefing(self, client, sample_briefing):
+        """Get briefing by ID returns briefing data."""
+        response = client.get("/api/briefings/test-briefing-id")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
-        assert "digest" in data
-        assert data["digest"]["id"] == sample_digest.id
+        assert "briefing" in data
+        assert data["briefing"]["id"] == sample_briefing.id
 
-    def test_get_digest_not_found_returns_404(self, client, mock_app_state):
-        """Get non-existent digest returns 404."""
-        mock_app_state.digest_repository.get_by_id.return_value = None
+    def test_get_briefing_not_found_returns_404(self, client, mock_app_state):
+        """Get non-existent briefing returns 404."""
+        mock_app_state.briefing_repository.get_by_id.return_value = None
 
-        response = client.get("/api/digests/non-existent")
-
-        assert response.status_code == 404
-
-    def test_get_digest_wrong_user_returns_404(self, client, mock_app_state, sample_digest):
-        """Get digest owned by different user returns 404."""
-        sample_digest.user_id = "different-user"
-        mock_app_state.digest_repository.get_by_id.return_value = sample_digest
-
-        response = client.get("/api/digests/test-digest-id")
+        response = client.get("/api/briefings/non-existent")
 
         assert response.status_code == 404
 
-    def test_get_digest_includes_narration_variants(self, client, mock_app_state, sample_digest):
+    def test_get_briefing_wrong_user_returns_404(self, client, mock_app_state, sample_briefing):
+        """Get briefing owned by different user returns 404."""
+        sample_briefing.user_id = "different-user"
+        mock_app_state.briefing_repository.get_by_id.return_value = sample_briefing
+
+        response = client.get("/api/briefings/test-briefing-id")
+
+        assert response.status_code == 404
+
+    def test_get_briefing_includes_narration_variants(self, client, mock_app_state, sample_briefing):
         """GET surfaces narration variants present on disk."""
         narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
         for slug, target in [("short", 180), ("medium", 300), ("long", 600)]:
-            json_path = narrations_dir / f"{sample_digest.id}-{slug}.json"
+            json_path = narrations_dir / f"{sample_briefing.id}-{slug}.json"
             json_path.write_text(
                 f'{{"target_duration_seconds": {target}, '
                 f'"actual_duration_seconds": {target - 10}, '
@@ -248,41 +248,41 @@ class TestGetDigest:
                 f'"generated_at": "2026-05-08T07:00:00+00:00"}}',
                 encoding="utf-8",
             )
-            (narrations_dir / f"{sample_digest.id}-{slug}.md").write_text(
+            (narrations_dir / f"{sample_briefing.id}-{slug}.md").write_text(
                 "# briefing\n",
                 encoding="utf-8",
             )
 
-        response = client.get(f"/api/digests/{sample_digest.id}")
+        response = client.get(f"/api/briefings/{sample_briefing.id}")
         assert response.status_code == 200
         data = response.json()
         narrations = data["narrations"]
         slugs = sorted(n["slug"] for n in narrations)
         assert slugs == ["long", "medium", "short"]
-        # All variants share the digest id as the prefix.
-        assert all(n["narration_id"].startswith(f"{sample_digest.id}-") for n in narrations)
+        # All variants share the briefing id as the prefix.
+        assert all(n["narration_id"].startswith(f"{sample_briefing.id}-") for n in narrations)
         assert all(n["markdown_path"] for n in narrations)
 
-    def test_get_digest_with_no_narrations_returns_empty_list(self, client, sample_digest):
-        response = client.get(f"/api/digests/{sample_digest.id}")
+    def test_get_briefing_with_no_narrations_returns_empty_list(self, client, sample_briefing):
+        response = client.get(f"/api/briefings/{sample_briefing.id}")
         assert response.status_code == 200
         assert response.json()["narrations"] == []
 
-    def test_get_digest_skips_corrupt_narration_json(self, client, mock_app_state, sample_digest):
+    def test_get_briefing_skips_corrupt_narration_json(self, client, mock_app_state, sample_briefing):
         narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
-        (narrations_dir / f"{sample_digest.id}-medium.json").write_text(
+        (narrations_dir / f"{sample_briefing.id}-medium.json").write_text(
             "{not valid json",
             encoding="utf-8",
         )
-        response = client.get(f"/api/digests/{sample_digest.id}")
+        response = client.get(f"/api/briefings/{sample_briefing.id}")
         assert response.status_code == 200
         assert response.json()["narrations"] == []
 
 
-class TestNarrateDigest:
-    """Tests for POST /api/digests/{digest_id}/narrate endpoint."""
+class TestNarrateBriefing:
+    """Tests for POST /api/briefings/{briefing_id}/narrate endpoint."""
 
-    def _stub_run(self, digest_id="test-digest-id", slug="short", mode="narrated"):
+    def _stub_run(self, briefing_id="test-briefing-id", slug="short", mode="narrated"):
         from thestill.services.narration.models import NarrationContent, NarrationStats
         from thestill.services.narration.narration_runner import NarrationRun
 
@@ -305,21 +305,21 @@ class TestNarrateDigest:
             mode=mode,
             markdown="# briefing\n",
             generated_at=datetime(2026, 5, 8, 7, 0, tzinfo=timezone.utc),
-            json_script_path=Path(f"/tmp/{digest_id}-{slug}.json"),
-            markdown_path=Path(f"/tmp/{digest_id}-{slug}.md"),
+            json_script_path=Path(f"/tmp/{briefing_id}-{slug}.json"),
+            markdown_path=Path(f"/tmp/{briefing_id}-{slug}.md"),
         )
-        return NarrationRun(digest_id=digest_id, slug=slug, content=content)
+        return NarrationRun(briefing_id=briefing_id, slug=slug, content=content)
 
-    def test_returns_503_when_runner_disabled(self, client, sample_digest):
+    def test_returns_503_when_runner_disabled(self, client, sample_briefing):
         # Default mock_app_state.narration_runner is None.
-        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
+        response = client.post(f"/api/briefings/{sample_briefing.id}/narrate", json={})
         assert response.status_code == 503
 
-    def test_resolves_preset_string_into_slug(self, client, mock_app_state, sample_digest):
+    def test_resolves_preset_string_into_slug(self, client, mock_app_state, sample_briefing):
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.narration_runner.run.return_value = self._stub_run(slug="short")
         response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate",
+            f"/api/briefings/{sample_briefing.id}/narrate",
             json={"target_duration": "short"},
         )
         assert response.status_code == 201
@@ -330,81 +330,81 @@ class TestNarrateDigest:
         assert kwargs["target_duration_seconds"] == 180
         assert kwargs["slug"] == "short"
 
-    def test_int_seconds_default_to_custom_slug(self, client, mock_app_state, sample_digest):
+    def test_int_seconds_default_to_custom_slug(self, client, mock_app_state, sample_briefing):
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.narration_runner.run.return_value = self._stub_run(slug="custom-450s")
         response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate",
+            f"/api/briefings/{sample_briefing.id}/narrate",
             json={"target_duration": 450},
         )
         assert response.status_code == 201
         kwargs = mock_app_state.narration_runner.run.call_args.kwargs
         assert kwargs["slug"] == "custom-450s"
 
-    def test_explicit_slug_is_honoured(self, client, mock_app_state, sample_digest):
+    def test_explicit_slug_is_honoured(self, client, mock_app_state, sample_briefing):
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.narration_runner.run.return_value = self._stub_run(slug="weekend")
         response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate",
+            f"/api/briefings/{sample_briefing.id}/narrate",
             json={"target_duration": 300, "slug": "weekend"},
         )
         assert response.status_code == 201
         kwargs = mock_app_state.narration_runner.run.call_args.kwargs
         assert kwargs["slug"] == "weekend"
 
-    def test_rejects_traversal_slug(self, client, mock_app_state, sample_digest):
+    def test_rejects_traversal_slug(self, client, mock_app_state, sample_briefing):
         mock_app_state.narration_runner = MagicMock()
         response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate",
+            f"/api/briefings/{sample_briefing.id}/narrate",
             json={"slug": "../etc/passwd"},
         )
         assert response.status_code == 422
 
-    def test_404_when_digest_unknown(self, client, mock_app_state):
+    def test_404_when_briefing_unknown(self, client, mock_app_state):
         mock_app_state.narration_runner = MagicMock()
-        mock_app_state.digest_repository.get_by_id.return_value = None
-        response = client.post("/api/digests/missing/narrate", json={})
+        mock_app_state.briefing_repository.get_by_id.return_value = None
+        response = client.post("/api/briefings/missing/narrate", json={})
         assert response.status_code == 404
 
-    def test_404_when_runner_raises(self, client, mock_app_state, sample_digest):
+    def test_404_when_runner_raises(self, client, mock_app_state, sample_briefing):
         from thestill.services.narration import NarrationRunnerError
 
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.narration_runner.run.side_effect = NarrationRunnerError("no resolvable episodes")
-        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
+        response = client.post(f"/api/briefings/{sample_briefing.id}/narrate", json={})
         assert response.status_code == 404
 
-    def test_owner_check_returns_404_for_other_user(self, client, mock_app_state, sample_digest):
+    def test_owner_check_returns_404_for_other_user(self, client, mock_app_state, sample_briefing):
         mock_app_state.narration_runner = MagicMock()
-        sample_digest.user_id = "different-user"
-        mock_app_state.digest_repository.get_by_id.return_value = sample_digest
-        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
+        sample_briefing.user_id = "different-user"
+        mock_app_state.briefing_repository.get_by_id.return_value = sample_briefing
+        response = client.post(f"/api/briefings/{sample_briefing.id}/narrate", json={})
         assert response.status_code == 404
 
 
-class TestGetDigestContent:
-    """Tests for GET /api/digests/{digest_id}/content endpoint."""
+class TestGetBriefingContent:
+    """Tests for GET /api/briefings/{briefing_id}/content endpoint."""
 
-    def test_get_content_returns_markdown(self, client, mock_app_state, sample_digest):
-        """Get digest content returns markdown content."""
+    def test_get_content_returns_markdown(self, client, mock_app_state, sample_briefing):
+        """Get briefing content returns markdown content."""
         # Create a test file
-        content = "# Test Digest\n\nThis is test content."
-        digest_file = mock_app_state.path_manager.digests_dir() / sample_digest.file_path
-        digest_file.write_text(content)
+        content = "# Test Briefing\n\nThis is test content."
+        briefing_file = mock_app_state.path_manager.briefings_dir() / sample_briefing.file_path
+        briefing_file.write_text(content)
 
-        response = client.get("/api/digests/test-digest-id/content")
+        response = client.get("/api/briefings/test-briefing-id/content")
 
         assert response.status_code == 200
         data = response.json()
         assert data["available"] is True
         assert data["content"] == content
 
-    def test_get_content_unavailable(self, client, mock_app_state, sample_digest):
+    def test_get_content_unavailable(self, client, mock_app_state, sample_briefing):
         """Get content when file doesn't exist returns available=False."""
-        sample_digest.file_path = None
-        mock_app_state.digest_repository.get_by_id.return_value = sample_digest
+        sample_briefing.file_path = None
+        mock_app_state.briefing_repository.get_by_id.return_value = sample_briefing
 
-        response = client.get("/api/digests/test-digest-id/content")
+        response = client.get("/api/briefings/test-briefing-id/content")
 
         assert response.status_code == 200
         data = response.json()
@@ -412,12 +412,12 @@ class TestGetDigestContent:
         assert data["content"] is None
 
 
-class TestGetDigestEpisodes:
-    """Tests for GET /api/digests/{digest_id}/episodes endpoint."""
+class TestGetBriefingEpisodes:
+    """Tests for GET /api/briefings/{briefing_id}/episodes endpoint."""
 
     def test_get_episodes_returns_list(self, client, sample_podcast, sample_episode):
-        """Get digest episodes returns episode list."""
-        response = client.get("/api/digests/test-digest-id/episodes")
+        """Get briefing episodes returns episode list."""
+        response = client.get("/api/briefings/test-briefing-id/episodes")
 
         assert response.status_code == 200
         data = response.json()
@@ -425,48 +425,48 @@ class TestGetDigestEpisodes:
         assert "count" in data
 
 
-class TestCreateDigest:
-    """Tests for POST /api/digests endpoint."""
+class TestCreateBriefing:
+    """Tests for POST /api/briefings endpoint."""
 
-    def test_create_digest_ready_only_delegates_to_service(self, client, mock_app_state, sample_digest):
-        """ready_only=True goes through ``DigestService.generate_from_criteria``."""
-        mock_app_state.digest_service.generate_from_criteria.return_value = sample_digest
+    def test_create_briefing_ready_only_delegates_to_service(self, client, mock_app_state, sample_briefing):
+        """ready_only=True goes through ``BriefingService.generate_from_criteria``."""
+        mock_app_state.briefing_service.generate_from_criteria.return_value = sample_briefing
 
         response = client.post(
-            "/api/digests",
+            "/api/briefings",
             json={"ready_only": True, "since_days": 7, "max_episodes": 10},
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "completed"
-        assert data["digest_id"] == sample_digest.id
-        assert data["episodes_selected"] == sample_digest.episodes_total
+        assert data["briefing_id"] == sample_briefing.id
+        assert data["episodes_selected"] == sample_briefing.episodes_total
         # The criteria passed to the service should mirror the request body.
-        call = mock_app_state.digest_service.generate_from_criteria.call_args
+        call = mock_app_state.briefing_service.generate_from_criteria.call_args
         assert call.args[0] == "test-user-id"
         criteria = call.args[1]
         assert criteria.since_days == 7
         assert criteria.max_episodes == 10
         assert criteria.ready_only is True
 
-    def test_create_digest_no_episodes(self, client, mock_app_state):
+    def test_create_briefing_no_episodes(self, client, mock_app_state):
         """When the service returns None, ready_only POST yields ``no_episodes``."""
-        mock_app_state.digest_service.generate_from_criteria.return_value = None
+        mock_app_state.briefing_service.generate_from_criteria.return_value = None
 
         response = client.post(
-            "/api/digests",
+            "/api/briefings",
             json={"ready_only": True},
         )
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "no_episodes"
-        assert data["digest_id"] is None
+        assert data["briefing_id"] is None
 
-    def test_create_digest_non_ready_only_marks_pending(self, client, mock_app_state):
+    def test_create_briefing_non_ready_only_marks_pending(self, client, mock_app_state):
         """ready_only=False still uses the selector inline and saves a PENDING row."""
-        with patch("thestill.web.routes.api_digests.DigestEpisodeSelector") as mock_selector:
+        with patch("thestill.web.routes.api_briefings.BriefingEpisodeSelector") as mock_selector:
             mock_result = MagicMock()
             mock_result.episodes = [
                 (MagicMock(id="podcast-1"), MagicMock(id="ep-1")),
@@ -474,7 +474,7 @@ class TestCreateDigest:
             mock_selector.return_value.select.return_value = mock_result
 
             response = client.post(
-                "/api/digests",
+                "/api/briefings",
                 json={"ready_only": False, "since_days": 7, "max_episodes": 10},
             )
 
@@ -482,58 +482,58 @@ class TestCreateDigest:
             data = response.json()
             assert data["status"] == "pending"
             # Service path must NOT be hit for the pipeline-processing flow.
-            mock_app_state.digest_service.generate_from_criteria.assert_not_called()
+            mock_app_state.briefing_service.generate_from_criteria.assert_not_called()
 
 
 class TestCreateMorningBriefing:
-    """Tests for POST /api/digests/morning-briefing endpoint."""
+    """Tests for POST /api/briefings/morning-briefing endpoint."""
 
-    def test_morning_briefing_delegates_to_service(self, client, mock_app_state, sample_digest):
-        """POST /morning-briefing routes through DigestService with config defaults."""
-        mock_app_state.config.digest_default_since_days = 3
-        mock_app_state.config.digest_default_max_episodes = 5
-        mock_app_state.digest_service.generate_from_criteria.return_value = sample_digest
+    def test_morning_briefing_delegates_to_service(self, client, mock_app_state, sample_briefing):
+        """POST /morning-briefing routes through BriefingService with config defaults."""
+        mock_app_state.config.briefing_default_since_days = 3
+        mock_app_state.config.briefing_default_max_episodes = 5
+        mock_app_state.briefing_service.generate_from_criteria.return_value = sample_briefing
 
-        response = client.post("/api/digests/morning-briefing")
+        response = client.post("/api/briefings/morning-briefing")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "completed"
-        assert data["digest_id"] == sample_digest.id
+        assert data["briefing_id"] == sample_briefing.id
 
-        criteria = mock_app_state.digest_service.generate_from_criteria.call_args.args[1]
+        criteria = mock_app_state.briefing_service.generate_from_criteria.call_args.args[1]
         assert criteria.since_days == 3
         assert criteria.max_episodes == 5
         assert criteria.ready_only is True
-        assert criteria.exclude_digested is True
+        assert criteria.exclude_briefed is True
 
     def test_morning_briefing_no_episodes(self, client, mock_app_state):
         """Service returning None surfaces as ``no_episodes``."""
-        mock_app_state.config.digest_default_since_days = 3
-        mock_app_state.config.digest_default_max_episodes = 5
-        mock_app_state.digest_service.generate_from_criteria.return_value = None
+        mock_app_state.config.briefing_default_since_days = 3
+        mock_app_state.config.briefing_default_max_episodes = 5
+        mock_app_state.briefing_service.generate_from_criteria.return_value = None
 
-        response = client.post("/api/digests/morning-briefing")
+        response = client.post("/api/briefings/morning-briefing")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "no_episodes"
-        assert data["digest_id"] is None
+        assert data["briefing_id"] is None
 
 
-class TestPreviewDigest:
-    """Tests for POST /api/digests/preview endpoint."""
+class TestPreviewBriefing:
+    """Tests for POST /api/briefings/preview endpoint."""
 
     def test_preview_returns_episode_list(self, client, mock_app_state, sample_podcast, sample_episode):
-        """Preview digest returns list of episodes that would be included."""
-        with patch("thestill.web.routes.api_digests.DigestEpisodeSelector") as mock_selector:
+        """Preview briefing returns list of episodes that would be included."""
+        with patch("thestill.web.routes.api_briefings.BriefingEpisodeSelector") as mock_selector:
             mock_result = MagicMock()
             mock_result.episodes = [(sample_podcast, sample_episode)]
             mock_result.total_matching = 1
             mock_selector.return_value.preview.return_value = mock_result
 
             response = client.post(
-                "/api/digests/preview",
+                "/api/briefings/preview",
                 json={"since_days": 7, "max_episodes": 10},
             )
 
@@ -544,46 +544,46 @@ class TestPreviewDigest:
             assert "criteria" in data
 
 
-class TestDeleteDigest:
-    """Tests for DELETE /api/digests/{digest_id} endpoint."""
+class TestDeleteBriefing:
+    """Tests for DELETE /api/briefings/{briefing_id} endpoint."""
 
-    def test_delete_digest_success(self, client, mock_app_state, sample_digest):
-        """Delete digest removes record and file."""
+    def test_delete_briefing_success(self, client, mock_app_state, sample_briefing):
+        """Delete briefing removes record and file."""
         # Create a test file
-        digest_file = mock_app_state.path_manager.digests_dir() / sample_digest.file_path
-        digest_file.write_text("test content")
+        briefing_file = mock_app_state.path_manager.briefings_dir() / sample_briefing.file_path
+        briefing_file.write_text("test content")
 
-        response = client.delete("/api/digests/test-digest-id")
+        response = client.delete("/api/briefings/test-briefing-id")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
-        mock_app_state.digest_repository.delete.assert_called_once_with("test-digest-id")
+        mock_app_state.briefing_repository.delete.assert_called_once_with("test-briefing-id")
 
-    def test_delete_digest_not_found_returns_404(self, client, mock_app_state):
-        """Delete non-existent digest returns 404."""
-        mock_app_state.digest_repository.get_by_id.return_value = None
+    def test_delete_briefing_not_found_returns_404(self, client, mock_app_state):
+        """Delete non-existent briefing returns 404."""
+        mock_app_state.briefing_repository.get_by_id.return_value = None
 
-        response = client.delete("/api/digests/non-existent")
+        response = client.delete("/api/briefings/non-existent")
 
         assert response.status_code == 404
 
 
-class TestLatestDigest:
-    """Tests for GET /api/digests/latest endpoint."""
+class TestLatestBriefing:
+    """Tests for GET /api/briefings/latest endpoint."""
 
-    def test_get_latest_digest_success(self, client, mock_app_state, sample_digest):
-        """Get latest digest returns most recent digest."""
-        response = client.get("/api/digests/latest")
+    def test_get_latest_briefing_success(self, client, mock_app_state, sample_briefing):
+        """Get latest briefing returns most recent briefing."""
+        response = client.get("/api/briefings/latest")
 
         assert response.status_code == 200
         data = response.json()
-        assert "digest" in data
+        assert "briefing" in data
 
-    def test_get_latest_digest_none_returns_404(self, client, mock_app_state):
+    def test_get_latest_briefing_none_returns_404(self, client, mock_app_state):
         """Get latest when no eligible inbox items returns 404."""
-        mock_app_state.digest_service.generate_for_user.return_value = None
+        mock_app_state.briefing_service.generate_for_user.return_value = None
 
-        response = client.get("/api/digests/latest")
+        response = client.get("/api/briefings/latest")
 
         assert response.status_code == 404

@@ -39,17 +39,17 @@ import {
   cancelPipeline,
   followPodcast,
   unfollowPodcast,
-  getDigests,
-  getDigest,
-  getLatestDigest,
-  getDigestContent,
-  getDigestEpisodes,
-  previewDigest,
-  createDigest,
-  deleteDigest,
+  getBriefings,
+  getBriefing,
+  getLatestBriefing,
+  getBriefingContent,
+  getBriefingEpisodes,
+  previewBriefing,
+  createBriefing,
+  deleteBriefing,
   getMorningBriefing,
   createMorningBriefing,
-  narrateDigest,
+  narrateBriefing,
   getNarration,
   quickSearch,
   corpusSearch,
@@ -58,7 +58,7 @@ import {
   getInbox,
   type GetInboxOptions,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateBriefingRequest, BriefingStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -536,75 +536,75 @@ export function useCancelPipeline() {
 }
 
 // ============================================================================
-// Digest hooks
+// Briefing hooks
 // ============================================================================
 
-export function useDigests(limit = 50, status?: DigestStatus) {
+export function useBriefings(limit = 50, status?: BriefingStatus) {
   return useQuery({
-    queryKey: ['digests', limit, status],
-    queryFn: () => getDigests(limit, 0, status),
+    queryKey: ['briefings', limit, status],
+    queryFn: () => getBriefings(limit, 0, status),
     refetchInterval: (query) => {
-      // Poll every 3 seconds while there are pending or in_progress digests
-      const digests = query.state.data?.digests || []
-      const hasActiveDigest = digests.some(
+      // Poll every 3 seconds while there are pending or in_progress briefings
+      const briefings = query.state.data?.briefings || []
+      const hasActiveBriefing = briefings.some(
         (d) => d.status === 'pending' || d.status === 'in_progress'
       )
-      return hasActiveDigest ? 3000 : false
+      return hasActiveBriefing ? 3000 : false
     },
   })
 }
 
-export function useDigestsInfinite(limit = 20, status?: DigestStatus) {
+export function useBriefingsInfinite(limit = 20, status?: BriefingStatus) {
   return useInfiniteQuery({
-    queryKey: ['digests', 'infinite', limit, status],
-    queryFn: ({ pageParam = 0 }) => getDigests(limit, pageParam, status),
+    queryKey: ['briefings', 'infinite', limit, status],
+    queryFn: ({ pageParam = 0 }) => getBriefings(limit, pageParam, status),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
   })
 }
 
-export function useDigest(digestId: string | null) {
+export function useBriefing(briefingId: string | null) {
   return useQuery({
-    queryKey: ['digests', digestId],
-    queryFn: () => getDigest(digestId!),
-    enabled: !!digestId,
+    queryKey: ['briefings', briefingId],
+    queryFn: () => getBriefing(briefingId!),
+    enabled: !!briefingId,
   })
 }
 
 // Backs the "Today's briefing" card on /inbox. The GET endpoint
-// lazy-generates a digest when eligible; a 404 means "nothing to brief
+// lazy-generates a briefing when eligible; a 404 means "nothing to brief
 // about right now" — keep ``retry: false`` so React Query doesn't
 // hammer the lazy-generate endpoint on the empty-window path.
 // ``staleTime`` matches the backend's perceived "still fresh" window.
-export function useLatestDigest() {
+export function useLatestBriefing() {
   return useQuery({
-    queryKey: ['digests', 'latest'],
-    queryFn: getLatestDigest,
+    queryKey: ['briefings', 'latest'],
+    queryFn: getLatestBriefing,
     staleTime: 60_000,
     retry: false,
   })
 }
 
-export function useDigestContent(digestId: string | null) {
+export function useBriefingContent(briefingId: string | null) {
   return useQuery({
-    queryKey: ['digests', digestId, 'content'],
-    queryFn: () => getDigestContent(digestId!),
-    enabled: !!digestId,
+    queryKey: ['briefings', briefingId, 'content'],
+    queryFn: () => getBriefingContent(briefingId!),
+    enabled: !!briefingId,
     staleTime: 60000, // 1 minute
   })
 }
 
-export function useDigestEpisodes(digestId: string | null) {
+export function useBriefingEpisodes(briefingId: string | null) {
   return useQuery({
-    queryKey: ['digests', digestId, 'episodes'],
-    queryFn: () => getDigestEpisodes(digestId!),
-    enabled: !!digestId,
+    queryKey: ['briefings', briefingId, 'episodes'],
+    queryFn: () => getBriefingEpisodes(briefingId!),
+    enabled: !!briefingId,
   })
 }
 
-export function usePreviewDigest() {
+export function usePreviewBriefing() {
   return useMutation({
-    mutationFn: (request: CreateDigestRequest) => previewDigest(request),
+    mutationFn: (request: CreateBriefingRequest) => previewBriefing(request),
   })
 }
 
@@ -624,33 +624,33 @@ export function useCreateMorningBriefing() {
   return useMutation({
     mutationFn: createMorningBriefing,
     onSuccess: () => {
-      // Invalidate digests list and morning briefing preview
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
+      // Invalidate briefings list and morning briefing preview
+      queryClient.invalidateQueries({ queryKey: ['briefings'] })
       queryClient.invalidateQueries({ queryKey: ['morning-briefing'] })
     },
   })
 }
 
-export function useCreateDigest() {
+export function useCreateBriefing() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (request: CreateDigestRequest) => createDigest(request),
+    mutationFn: (request: CreateBriefingRequest) => createBriefing(request),
     onSuccess: () => {
-      // Invalidate digests list to show the new digest
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
+      // Invalidate briefings list to show the new briefing
+      queryClient.invalidateQueries({ queryKey: ['briefings'] })
     },
   })
 }
 
-export function useDeleteDigest() {
+export function useDeleteBriefing() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (digestId: string) => deleteDigest(digestId),
+    mutationFn: (briefingId: string) => deleteBriefing(briefingId),
     onSuccess: () => {
-      // Invalidate digests list
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
+      // Invalidate briefings list
+      queryClient.invalidateQueries({ queryKey: ['briefings'] })
     },
   })
 }
@@ -668,17 +668,17 @@ export function useNarration(narrationId: string | null) {
   })
 }
 
-export function useNarrateDigest() {
+export function useNarrateBriefing() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ digestId, request }: { digestId: string; request: NarrateDigestRequest }) =>
-      narrateDigest(digestId, request),
-    onSuccess: (data, { digestId }) => {
-      // Refresh the digest detail so the new variant appears in the
+    mutationFn: ({ briefingId, request }: { briefingId: string; request: NarrateBriefingRequest }) =>
+      narrateBriefing(briefingId, request),
+    onSuccess: (data, { briefingId }) => {
+      // Refresh the briefing detail so the new variant appears in the
       // ``narrations`` list, and the targeted narration query so the
       // reader picks up the new markdown if it was already cached.
-      queryClient.invalidateQueries({ queryKey: ['digests', digestId] })
+      queryClient.invalidateQueries({ queryKey: ['briefings', briefingId] })
       queryClient.invalidateQueries({
         queryKey: ['narrations', data.narration_id],
       })

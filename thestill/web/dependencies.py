@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
     from ..core.task_worker import TaskWorker
     from ..models.user import User
-    from ..repositories.digest_repository import DigestRepository
+    from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.inbox_repository import InboxRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
-    from ..services.digest_service import DigestService
+    from ..services.briefing_service import BriefingService
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..services.narration import NarrationRunner
@@ -84,7 +84,7 @@ class AppState:
         auth_service: Authentication service
         follower_repository: Podcast follower relationship repository
         follower_service: Follower management service
-        digest_repository: Digest persistence repository
+        briefing_repository: Briefing persistence repository
     """
 
     config: "Config"
@@ -105,8 +105,8 @@ class AppState:
     inbox_repository: "InboxRepository"
     inbox_service: "InboxService"
     import_service: "ImportService"
-    digest_repository: "DigestRepository"
-    digest_service: "DigestService"
+    briefing_repository: "BriefingRepository"
+    briefing_service: "BriefingService"
     # Spec #28 — entity layer. Repository is always available; the
     # ``EntityExtractor`` model is loaded lazily on the first
     # ``extract-entities`` task because the GLiNER weights are large
@@ -128,7 +128,7 @@ class AppState:
     # semantic/hybrid query or first REINDEX task).
     search_backend: "Optional[SearchBackend]" = None
     embedding_model: "Optional[EmbeddingModel]" = None
-    # Spec #33 Phase 3 — narrated-digest runner. ``None`` when
+    # Spec #33 Phase 3 — narrated-briefing runner. ``None`` when
     # ``narration_enabled`` is False; the API surface returns 503 in
     # that mode so callers can handle the rollout gate cleanly.
     narration_runner: "Optional[NarrationRunner]" = None

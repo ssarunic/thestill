@@ -80,7 +80,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
     </svg>
   )
 
-  const digestsIcon = (
+  const briefingsIcon = (
     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     </svg>
@@ -148,7 +148,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
           <NavItem to="/podcasts" icon={podcastsIcon} label="Podcasts" onClick={onClose} />
           <NavItem to="/top" icon={topIcon} label="Top" onClick={onClose} />
           <NavItem to="/episodes" icon={episodesIcon} label="Episodes" onClick={onClose} />
-          <NavItem to="/digests" icon={digestsIcon} label="Briefings" onClick={onClose} />
+          <NavItem to="/briefings" icon={briefingsIcon} label="Briefings" onClick={onClose} />
           <NavItem to="/failed" icon={failedIcon} label="Failed Tasks" onClick={onClose} />
           <NavItem to="/queue" icon={queueIcon} label="Task Queue" onClick={onClose} />
           <NavItem to="/settings" icon={settingsIcon} label="Settings" onClick={onClose} />

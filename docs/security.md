@@ -10,7 +10,7 @@ upgrades, fast-patch response, and how the supply-chain protections
 |---|---|---|
 | Python deps | [`uv.lock`](../uv.lock) — every package pinned with sha256 | A compromised PyPI publish can't ambush a fresh install: hash mismatch → install fails. |
 | Python install | CI: `uv sync --frozen`. Docker: `pip wheel --require-hashes` | Both honour the lockfile; nothing in CI or in the shipped image floats. |
-| Docker base images | All `FROM` lines digest-pinned (`@sha256:…`) in [Dockerfile](../Dockerfile) | Tags (`:slim`, `:latest`) are mutable. Without a digest, every build pulls "whatever Docker Hub points at right now". |
+| Docker base images | All `FROM` lines briefing-pinned (`@sha256:…`) in [Dockerfile](../Dockerfile) | Tags (`:slim`, `:latest`) are mutable. Without a briefing, every build pulls "whatever Docker Hub points at right now". |
 | Frontend deps | `package-lock.json` committed; `npm ci` in CI | npm-ecosystem equivalent of the Python lockfile. |
 | Upgrade cadence | [Dependabot](../.github/dependabot.yml) — weekly Mondays for pip / npm / docker | Bot opens grouped minor/patch PRs; humans review and merge. Avoids drift while keeping a paper trail. |
 | Secret scanning | [gitleaks pre-commit + CI](../.github/workflows/ci.yml) | Catches accidentally-committed API keys, JWTs, etc. on push. |
@@ -21,7 +21,7 @@ Every Monday Dependabot opens grouped PRs for:
 
 1. **pip minor + patch** — backend Python deps.
 2. **npm minor + patch** — frontend deps.
-3. **docker** — base-image digest bumps.
+3. **docker** — base-image briefing bumps.
 
 Workflow:
 

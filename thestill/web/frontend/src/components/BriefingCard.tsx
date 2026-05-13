@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useLatestDigest } from '../hooks/useApi'
+import { useLatestBriefing } from '../hooks/useApi'
 
 function formatRelative(iso: string): string {
   const created = new Date(iso).getTime()
@@ -13,11 +13,11 @@ function formatRelative(iso: string): string {
 }
 
 // "Today's briefing" card at the top of /inbox. The card shows the
-// user's most recent inbox-driven digest; `GET /api/digests/latest`
+// user's most recent inbox-driven briefing; `GET /api/briefings/latest`
 // lazy-generates one if the throttle has elapsed and there are
 // eligible inbox items in the window.
 export default function BriefingCard() {
-  const { data, isLoading, error } = useLatestDigest()
+  const { data, isLoading, error } = useLatestBriefing()
 
   if (isLoading) {
     return (
@@ -27,12 +27,12 @@ export default function BriefingCard() {
 
   // 404 means "nothing eligible to brief about" — a normal empty state,
   // not a UI error. Hide the card silently.
-  if (error || !data?.digest) return null
-  const digest = data.digest
+  if (error || !data?.briefing) return null
+  const briefing = data.briefing
 
   return (
     <Link
-      to={`/digests/${digest.id}`}
+      to={`/briefings/${briefing.id}`}
       className="group flex items-center gap-4 p-4 bg-gradient-to-br from-primary-50 to-white border border-primary-200 rounded-lg hover:border-primary-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-all"
     >
       <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center flex-shrink-0">
@@ -51,9 +51,9 @@ export default function BriefingCard() {
           Today's briefing
         </p>
         <p className="text-sm text-gray-500">
-          {digest.episodes_total} episode{digest.episodes_total === 1 ? '' : 's'}
+          {briefing.episodes_total} episode{briefing.episodes_total === 1 ? '' : 's'}
           {' • '}
-          generated {formatRelative(digest.created_at)}
+          generated {formatRelative(briefing.created_at)}
         </p>
       </div>
       <span className="text-sm font-medium text-primary-700 group-hover:text-primary-800">

@@ -20,8 +20,8 @@ presentation layers (CLI, MCP server, web API, etc.)
 """
 
 from .batch_processor import BatchQueueResult, BatchQueueService, QueuedEpisode
-from .digest_generator import DigestContent, DigestEpisodeInfo, DigestGenerator, DigestStats
-from .digest_selector import DigestEpisodeSelector, DigestSelectionCriteria, DigestSelectionResult
+from .briefing_generator import BriefingContent, BriefingEpisodeInfo, BriefingGenerator, BriefingStats
+from .briefing_selector import BriefingEpisodeSelector, BriefingSelectionCriteria, BriefingSelectionResult
 from .follower_service import (
     AlreadyFollowingError,
     FollowerService,
@@ -37,13 +37,13 @@ __all__ = [
     "BatchQueueResult",
     "BatchQueueService",
     "QueuedEpisode",
-    "DigestContent",
-    "DigestEpisodeInfo",
-    "DigestGenerator",
-    "DigestStats",
-    "DigestEpisodeSelector",
-    "DigestSelectionCriteria",
-    "DigestSelectionResult",
+    "BriefingContent",
+    "BriefingEpisodeInfo",
+    "BriefingGenerator",
+    "BriefingStats",
+    "BriefingEpisodeSelector",
+    "BriefingSelectionCriteria",
+    "BriefingSelectionResult",
     "PodcastService",
     "PodcastWithIndex",
     "EpisodeWithIndex",

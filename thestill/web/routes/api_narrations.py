@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Narrated-digest artefact endpoints (spec #33).
+"""Narrated-briefing artefact endpoints (spec #33).
 
 These are direct-fetch endpoints for the on-disk artefacts, intended
 for the future TTS consumer and for clients that want to deep-link to
 a specific narration variant. The user-facing trigger now lives at
-``POST /api/digests/{digest_id}/narrate`` so the digest record stays
+``POST /api/briefings/{briefing_id}/narrate`` so the briefing record stays
 the durable join key for narrations.
 """
 
@@ -28,7 +28,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from structlog import get_logger
 
-from ...models.digest import Digest
+from ...models.briefing import Briefing
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, not_found
 
@@ -45,14 +45,14 @@ def _narration_paths(state: AppState, narration_id: str) -> tuple[Path, Path]:
     )
 
 
-def _resolve_owned_digest(state: AppState, narration_id: str, user_id: str) -> Optional[Digest]:
-    """Resolve the digest that owns ``narration_id`` and check ownership.
+def _resolve_owned_briefing(state: AppState, narration_id: str, user_id: str) -> Optional[Briefing]:
+    """Resolve the briefing that owns ``narration_id`` and check ownership.
 
-    Filenames are ``<digest_id>-<slug>.{json,md}``. Both the digest_id
+    Filenames are ``<briefing_id>-<slug>.{json,md}``. Both the briefing_id
     (UUID4) and the slug may contain hyphens, so we iterate possible
-    split points from longest digest_id prefix down to shortest, hitting
+    split points from longest briefing_id prefix down to shortest, hitting
     the repo until a row matches. Returns ``None`` when no row matches
-    or the matching digest belongs to another user — callers translate
+    or the matching briefing belongs to another user — callers translate
     both into a 404 so the endpoint isn't an enumeration oracle.
     """
     parts = narration_id.split("-")
@@ -60,12 +60,12 @@ def _resolve_owned_digest(state: AppState, narration_id: str, user_id: str) -> O
         return None
     for n in range(len(parts) - 1, 0, -1):
         candidate = "-".join(parts[:n])
-        digest = state.digest_repository.get_by_id(candidate)
-        if digest is None:
+        briefing = state.briefing_repository.get_by_id(candidate)
+        if briefing is None:
             continue
-        if digest.user_id != user_id:
+        if briefing.user_id != user_id:
             return None
-        return digest
+        return briefing
     return None
 
 
@@ -76,7 +76,7 @@ async def get_narration(
     user=Depends(require_auth),
 ):
     """Fetch the JSON script + Markdown body for a stored narration."""
-    if _resolve_owned_digest(app_state, narration_id, user.id) is None:
+    if _resolve_owned_briefing(app_state, narration_id, user.id) is None:
         not_found("Narration", narration_id)
     json_path, md_path = _narration_paths(app_state, narration_id)
     if not json_path.exists():
@@ -103,7 +103,7 @@ async def get_narration_script(
     user=Depends(require_auth),
 ):
     """Return the JSON script body verbatim — intended for downstream TTS consumers."""
-    if _resolve_owned_digest(app_state, narration_id, user.id) is None:
+    if _resolve_owned_briefing(app_state, narration_id, user.id) is None:
         not_found("Narration", narration_id)
     json_path, _ = _narration_paths(app_state, narration_id)
     if not json_path.exists():

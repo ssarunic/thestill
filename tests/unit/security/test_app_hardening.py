@@ -84,7 +84,7 @@ def _build_app(config: Config):
     # Patch repositories / services so we don't need a real DB or network.
     with (
         patch("thestill.web.app.SqlitePodcastRepository"),
-        patch("thestill.web.app.SqliteDigestRepository"),
+        patch("thestill.web.app.SqliteBriefingRepository"),
         patch("thestill.web.app.SqliteUserRepository"),
         patch("thestill.web.app.SqlitePodcastFollowerRepository"),
         patch("thestill.web.app.PodcastFeedManager"),

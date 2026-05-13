@@ -58,7 +58,7 @@ through `STORAGE_BACKEND` like every other persistent artefact.
 | `original_audio/` | `STORAGE_BACKEND` (default) | Persistent, large (50–200 MB), durably needed for re-processing |
 | `downsampled_audio/` | `STORAGE_BACKEND` (default) | Ephemeral by lifetime but cheaper to keep in S3 for STT providers that stream from S3 directly (Dalston, Google) — lifecycle rule expires it at 30d |
 | `raw_transcripts/`, `clean_transcripts/`, `clean_transcripts/*.json` | `STORAGE_BACKEND` (default) | Persistent, small |
-| `summaries/`, `digests/`, `podcast_facts/`, `episode_facts/`, `narrations/` | `STORAGE_BACKEND` (default) | Persistent |
+| `summaries/`, `briefings/`, `podcast_facts/`, `episode_facts/`, `narrations/` | `STORAGE_BACKEND` (default) | Persistent |
 | `external_transcripts/` | `STORAGE_BACKEND` (default) | Persistent |
 | `corpus/` | `STORAGE_BACKEND` (default) | Persistent (spec #28 corpus pages); Obsidian-local stance from #35 retired |
 | `evaluations/` | `STORAGE_BACKEND` (default) | Persistent (test artefacts) |

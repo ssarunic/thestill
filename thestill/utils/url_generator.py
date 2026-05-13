@@ -56,12 +56,10 @@ class UrlGenerator:
         """
         return f"/podcasts/{podcast_slug}/episodes/{episode_slug}"
 
-    def episode_at(
-        self, podcast_slug: str, episode_slug: str, start_seconds: float
-    ) -> str:
+    def episode_at(self, podcast_slug: str, episode_slug: str, start_seconds: float) -> str:
         """Episode page URL with a ``?t={seconds}`` deep-link cue.
 
-        Used by the narrated-digest markdown renderer (spec #33) and the
+        Used by the narrated-briefing markdown renderer (spec #33) and the
         search backend (api_search.py) to land the player at a specific
         timestamp. Negative offsets are clamped to zero — the frontend
         treats a negative ``t`` as "skip the cue".
@@ -95,14 +93,14 @@ class UrlGenerator:
         """
         return f"/podcasts/{podcast_slug}/episodes/{episode_slug}/summary"
 
-    def digest(self, digest_id: str) -> str:
+    def briefing(self, briefing_id: str) -> str:
         """
-        Generate URL for a digest page.
+        Generate URL for a briefing page.
 
         Args:
-            digest_id: Digest identifier
+            briefing_id: Briefing identifier
 
         Returns:
             Relative URL path
         """
-        return f"/digests/{digest_id}"
+        return f"/briefings/{briefing_id}"

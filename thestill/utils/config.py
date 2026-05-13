@@ -161,11 +161,11 @@ class Config(BaseModel):
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
 
-    # Digest Configuration
-    digest_default_since_days: int = 7  # Default time window for digest (days)
-    digest_default_max_episodes: int = 10  # Default max episodes per digest
+    # Briefing Configuration
+    briefing_default_since_days: int = 7  # Default time window for briefing (days)
+    briefing_default_max_episodes: int = 10  # Default max episodes per briefing
 
-    # Narrated Digest Configuration (spec #33). Default duration is the
+    # Narrated Briefing Configuration (spec #33). Default duration is the
     # ``medium`` preset; flip ``narration_enabled`` on once fallback rates
     # are measured in production (spec #33 §"Migration Strategy").
     narration_enabled: bool = False
@@ -175,13 +175,13 @@ class Config(BaseModel):
     # episodes as the on-follow seed so the inbox is non-empty immediately.
     inbox_seed_on_follow: int = 2
 
-    # Throttle window for per-user digests ("Today's briefing" in the UI):
-    # within this many seconds of the previous digest,
-    # ``DigestService.generate_for_user`` returns the existing digest
+    # Throttle window for per-user briefings ("Today's briefing" in the UI):
+    # within this many seconds of the previous briefing,
+    # ``BriefingService.generate_for_user`` returns the existing briefing
     # rather than creating a new one. Default 6 hours — short enough to
     # allow a same-day refresh, long enough to collapse accidental
     # double-triggers (cron racing the UI, etc.).
-    digest_min_interval_seconds: int = 6 * 60 * 60
+    briefing_min_interval_seconds: int = 6 * 60 * 60
 
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
@@ -461,13 +461,13 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
-        # Digest
-        "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
-        "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
+        # Briefing
+        "briefing_default_since_days": int(os.getenv("BRIEFING_DEFAULT_SINCE_DAYS", "7")),
+        "briefing_default_max_episodes": int(os.getenv("BRIEFING_DEFAULT_MAX_EPISODES", "10")),
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
-        "digest_min_interval_seconds": int(os.getenv("DIGEST_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
+        "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

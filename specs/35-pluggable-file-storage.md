@@ -10,7 +10,7 @@
 
 | PR | Scope | Status |
 |----|-------|--------|
-| [#93](https://github.com/ssarunic/thestill/pull/93) | `FileStorage` ABC + `LocalFileStorage` + `S3FileStorage` + `make_storage` factory; Phase 2.1 (digests), 2.2 (corpus pages), 2.3 (external transcripts); summary write migration; `[s3]` extra; `docs/storage-backends.md` | ✅ Merged |
+| [#93](https://github.com/ssarunic/thestill/pull/93) | `FileStorage` ABC + `LocalFileStorage` + `S3FileStorage` + `make_storage` factory; Phase 2.1 (briefings), 2.2 (corpus pages), 2.3 (external transcripts); summary write migration; `[s3]` extra; `docs/storage-backends.md` | ✅ Merged |
 | [#94](https://github.com/ssarunic/thestill/pull/94) | Spec [#40](40-storage-routing-ephemeral-vs-persistent.md): pending transcription operations move from `data/pending_operations/*.json` to a SQLite table; backfill migration | ✅ Merged |
 | [#95](https://github.com/ssarunic/thestill/pull/95) | Phase 2.5: `podcast_service.py` read paths (summary, raw + clean transcripts, segmented sidecar) | ✅ Merged |
 | [#96](https://github.com/ssarunic/thestill/pull/96) | Phase 2.4 + 2.6: transcribers (dalston/elevenlabs/google) return Transcript only; `handle_download`/`handle_downsample`/`handle_transcribe`/`handle_clean`/`handle_summarize` route through `FileStorage` via `local_copy` + `upload_file` | 🚧 In review |
@@ -39,13 +39,13 @@ The original branch's commits (for archival reference, all by `Claude <noreply@a
 
 ## Motivation
 
-The pipeline writes ~6 file artifact families per episode (original audio, downsampled WAV, raw transcript JSON, cleaned Markdown + JSON sidecar, summary, facts) plus corpus pages and digests. Today every byte lives on local disk under `data/`. Three forces push toward a storage abstraction, all of them now sharpened by an assumed **AWS production deployment target**:
+The pipeline writes ~6 file artifact families per episode (original audio, downsampled WAV, raw transcript JSON, cleaned Markdown + JSON sidecar, summary, facts) plus corpus pages and briefings. Today every byte lives on local disk under `data/`. Three forces push toward a storage abstraction, all of them now sharpened by an assumed **AWS production deployment target**:
 
 1. **AWS production hosting.** When Thestill is deployed to AWS (EC2 / ECS / App Runner — to be decided in [#05](05-docker-deployment.md) follow-up), local-disk persistence is a liability: instances are ephemeral, EBS volumes are single-AZ and don't share across tasks, and ECS task storage caps make audio-heavy workloads impractical. S3 is the natural primary store — durable, regionally-redundant, IAM-gated, and decouples storage lifetime from compute.
 2. **Docker / RPi5 deployment ([#05](05-docker-deployment.md)).** SD cards are slow and small; offloading audio + transcripts to S3 keeps the appliance lean. Spec #05 explicitly defers this and ships the slim image with local persistence — this spec is the natural follow-up. The same abstraction serves both the cloud deployment and the slim Docker target.
 3. **Pre-signed URLs for the web player.** Streaming audio to the browser today goes through FastAPI, which serves the file from local disk. With S3, a presigned URL hands streaming directly to S3 (and optionally CloudFront later) — cheaper, faster, and survives server restarts. No NAT bandwidth on the egress path.
 
-The point isn't to migrate everything off disk. The point is to make the storage layer *swappable*: with `STORAGE_BACKEND=s3` set, every persistent artefact (audio, transcripts, summaries, corpus pages, digests) lands on S3, while SQLite stays local on EBS (or migrates to RDS later). Spec [#40](40-storage-routing-ephemeral-vs-persistent.md) handles the two narrow carve-outs (pending ops → SQLite; debug feeds keep direct `Path` I/O).
+The point isn't to migrate everything off disk. The point is to make the storage layer *swappable*: with `STORAGE_BACKEND=s3` set, every persistent artefact (audio, transcripts, summaries, corpus pages, briefings) lands on S3, while SQLite stays local on EBS (or migrates to RDS later). Spec [#40](40-storage-routing-ephemeral-vs-persistent.md) handles the two narrow carve-outs (pending ops → SQLite; debug feeds keep direct `Path` I/O).
 
 ---
 
@@ -75,7 +75,7 @@ The point isn't to migrate everything off disk. The point is to make the storage
 - [`core/dalston_transcriber.py`](../thestill/core/dalston_transcriber.py), [`core/elevenlabs_transcriber.py`](../thestill/core/elevenlabs_transcriber.py), [`core/google_transcriber.py`](../thestill/core/google_transcriber.py) — open audio for upload, write transcripts and pending-operation state
 - [`core/entity_page_writer.py`](../thestill/core/entity_page_writer.py) — `path.write_bytes` for corpus Markdown pages
 - [`core/external_transcript_downloader.py`](../thestill/core/external_transcript_downloader.py) — RSS-supplied transcript downloads
-- [`services/digest_generator.py`](../thestill/services/digest_generator.py), [`services/podcast_service.py`](../thestill/services/podcast_service.py) — read transcripts, write digests
+- [`services/briefing_generator.py`](../thestill/services/briefing_generator.py), [`services/podcast_service.py`](../thestill/services/podcast_service.py) — read transcripts, write briefings
 
 There is **no single chokepoint** today. Adding a backend means either threading a storage object through every call site or doing a sweep that replaces direct I/O with abstraction calls. The branch chose the second path; this spec keeps that choice.
 
@@ -286,7 +286,7 @@ The diff is large but mechanically rote. Phase it so each PR keeps the tree gree
 
 | Sub-phase | Family | PR |
 |-----------|--------|----|
-| 2.1 | Digests (`services/digest_generator.py`) | #93 |
+| 2.1 | Briefings (`services/briefing_generator.py`) | #93 |
 | 2.2 | Corpus pages (`core/entity_page_writer.py`) | #93 |
 | 2.3 | External transcripts (`core/external_transcript_downloader.py`) | #93 |
 | 2.4 | Transcribers (dalston/elevenlabs/google) | #96 |
@@ -370,7 +370,7 @@ Audio files are large and rarely re-read after summarisation. Configure S3 lifec
 |---|---|
 | `prod/original_audio/` | `STANDARD` → `STANDARD_IA` after 30 days → `GLACIER_IR` after 90 days |
 | `prod/downsampled_audio/` | Expire after 30 days (cheap to re-derive from the original) |
-| `prod/raw_transcripts/`, `prod/clean_transcripts/`, `prod/summaries/`, `prod/facts/`, `prod/digests/`, `prod/corpus/` | Stay in `STANDARD` (small, frequently read) |
+| `prod/raw_transcripts/`, `prod/clean_transcripts/`, `prod/summaries/`, `prod/facts/`, `prod/briefings/`, `prod/corpus/` | Stay in `STANDARD` (small, frequently read) |
 
 Re-reading audio from Glacier IR for an unusual re-process is cheap and bounded; default storage costs without a lifecycle rule are not.
 

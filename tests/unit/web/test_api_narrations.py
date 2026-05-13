@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the narrated-digest artefact GET endpoints (spec #33 Phase 3).
+"""Tests for the narrated-briefing artefact GET endpoints (spec #33 Phase 3).
 
 The user-visible POST trigger lives at
-``POST /api/digests/{digest_id}/narrate`` (see test_api_digests.py); the
+``POST /api/briefings/{briefing_id}/narrate`` (see test_api_briefings.py); the
 endpoints here are for direct artefact access by TTS consumers.
 """
 
@@ -28,7 +28,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from thestill.models.digest import Digest, DigestStatus
+from thestill.models.briefing import Briefing, BriefingStatus
 from thestill.models.user import User
 from thestill.utils.path_manager import PathManager
 from thestill.web.routes import api_narrations
@@ -48,37 +48,37 @@ def storage(tmp_path: Path) -> PathManager:
     return pm
 
 
-def _make_digest(digest_id: str, user_id: str) -> Digest:
+def _make_briefing(briefing_id: str, user_id: str) -> Briefing:
     now = datetime.now(timezone.utc)
-    return Digest(
-        id=digest_id,
+    return Briefing(
+        id=briefing_id,
         user_id=user_id,
         created_at=now,
         updated_at=now,
         period_start=now,
         period_end=now,
-        status=DigestStatus.COMPLETED,
+        status=BriefingStatus.COMPLETED,
         episode_ids=[],
     )
 
 
 @pytest.fixture
 def mock_app_state(storage, mock_user):
-    """App state with a digest_repository that resolves a few canned digests.
+    """App state with a briefing_repository that resolves a few canned briefings.
 
     The endpoint walks the narration_id splitting on ``-`` to find the
-    owning digest, so tests register their digests by id.
+    owning briefing, so tests register their briefings by id.
     """
     state = MagicMock()
     state.path_manager = storage
 
-    digests: dict = {
-        "digest-001": _make_digest("digest-001", mock_user.id),
-        "digest-002": _make_digest("digest-002", mock_user.id),
-        "digest-tts-target": _make_digest("digest-tts-target", mock_user.id),
-        "other-user-digest": _make_digest("other-user-digest", "user-2"),
+    briefings: dict = {
+        "briefing-001": _make_briefing("briefing-001", mock_user.id),
+        "briefing-002": _make_briefing("briefing-002", mock_user.id),
+        "briefing-tts-target": _make_briefing("briefing-tts-target", mock_user.id),
+        "other-user-briefing": _make_briefing("other-user-briefing", "user-2"),
     }
-    state.digest_repository.get_by_id = lambda did: digests.get(did)
+    state.briefing_repository.get_by_id = lambda did: briefings.get(did)
     return state
 
 
@@ -93,7 +93,7 @@ def client(mock_app_state, mock_user):
 
 class TestGetNarration:
     def test_reads_artefacts_from_disk(self, client, storage):
-        narration_id = "digest-001-medium"
+        narration_id = "briefing-001-medium"
         narrations_dir = storage.narrations_dir()
         (narrations_dir / f"{narration_id}.json").write_text(
             json.dumps({"schema_version": "phase2", "blocks": []}),
@@ -111,7 +111,7 @@ class TestGetNarration:
         assert data["markdown"].startswith("# Briefing")
 
     def test_returns_null_markdown_when_only_json_exists(self, client, storage):
-        narration_id = "digest-002-medium"
+        narration_id = "briefing-002-medium"
         (storage.narrations_dir() / f"{narration_id}.json").write_text(
             json.dumps({"mode": "fallback"}),
             encoding="utf-8",
@@ -121,11 +121,11 @@ class TestGetNarration:
         assert response.json()["markdown"] is None
 
     def test_404_when_missing(self, client):
-        response = client.get("/api/narrations/digest-001-medium")
+        response = client.get("/api/narrations/briefing-001-medium")
         assert response.status_code == 404
 
-    def test_404_when_digest_not_found(self, client, storage):
-        narration_id = "ghost-digest-medium"
+    def test_404_when_briefing_not_found(self, client, storage):
+        narration_id = "ghost-briefing-medium"
         (storage.narrations_dir() / f"{narration_id}.json").write_text(
             json.dumps({"mode": "narrated"}),
             encoding="utf-8",
@@ -133,8 +133,8 @@ class TestGetNarration:
         response = client.get(f"/api/narrations/{narration_id}")
         assert response.status_code == 404
 
-    def test_404_when_other_user_owns_digest(self, client, storage):
-        narration_id = "other-user-digest-medium"
+    def test_404_when_other_user_owns_briefing(self, client, storage):
+        narration_id = "other-user-briefing-medium"
         (storage.narrations_dir() / f"{narration_id}.json").write_text(
             json.dumps({"mode": "narrated"}),
             encoding="utf-8",
@@ -145,7 +145,7 @@ class TestGetNarration:
 
 class TestGetNarrationScript:
     def test_returns_script_json(self, client, storage):
-        narration_id = "digest-tts-target-short"
+        narration_id = "briefing-tts-target-short"
         payload = {"schema_version": "phase2", "blocks": [{"kind": "narration"}]}
         (storage.narrations_dir() / f"{narration_id}.json").write_text(
             json.dumps(payload),
@@ -158,11 +158,11 @@ class TestGetNarrationScript:
         assert data["blocks"][0]["kind"] == "narration"
 
     def test_404_when_missing(self, client):
-        response = client.get("/api/narrations/digest-001-missing/script.json")
+        response = client.get("/api/narrations/briefing-001-missing/script.json")
         assert response.status_code == 404
 
-    def test_404_when_other_user_owns_digest(self, client, storage):
-        narration_id = "other-user-digest-short"
+    def test_404_when_other_user_owns_briefing(self, client, storage):
+        narration_id = "other-user-briefing-short"
         (storage.narrations_dir() / f"{narration_id}.json").write_text(
             json.dumps({"mode": "narrated"}),
             encoding="utf-8",

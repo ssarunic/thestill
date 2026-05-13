@@ -100,9 +100,7 @@ NARRATION_DURATION_PRESETS: dict[str, int] = {
 # Inverse map for ``slug_for_duration_seconds``. Built once at import
 # so the slug returned for a preset duration is always the same string
 # the parser accepts.
-_DURATION_SLUG_BY_SECONDS: dict[int, str] = {
-    seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()
-}
+_DURATION_SLUG_BY_SECONDS: dict[int, str] = {seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()}
 
 
 def slug_for_duration_seconds(seconds: int) -> str:
@@ -116,9 +114,7 @@ def slug_for_duration_seconds(seconds: int) -> str:
     return _DURATION_SLUG_BY_SECONDS.get(seconds, f"custom-{seconds}s")
 
 
-def resolve_target_or_default(
-    value: Optional[Union[int, str]], default: int
-) -> int:
+def resolve_target_or_default(value: Optional[Union[int, str]], default: int) -> int:
     """Resolve a target-duration request value to seconds.
 
     ``value`` may be ``None`` (use ``default``), a positive int
@@ -139,7 +135,7 @@ def resolve_target_or_default(
 
 
 def parse_target_duration(value: str) -> int:
-    """Parse a narrated-digest target duration to seconds.
+    """Parse a narrated-briefing target duration to seconds.
 
     Accepts the following forms (spec #33 §"Time Budget Model"):
 

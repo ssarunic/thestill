@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Batch processor for digest command.
+Batch processor for briefing command.
 
 Implements THES-26: Batch processor orchestration using the existing
 QueueManager and TaskWorker infrastructure for both CLI and Web/MCP use.

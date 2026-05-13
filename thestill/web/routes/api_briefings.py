@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-Digest API endpoints for Thestill web UI.
+Briefing API endpoints for Thestill web UI.
 
-Provides endpoints for listing, viewing, creating, and reading digest documents.
+Provides endpoints for listing, viewing, creating, and reading briefing documents.
 """
 
 from datetime import datetime, timezone
@@ -26,9 +26,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
-from ...models.digest import Digest, DigestStatus
+from ...models.briefing import Briefing, BriefingStatus
 from ...models.user import User
-from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
+from ...services.briefing_selector import BriefingEpisodeSelector, BriefingSelectionCriteria
 from ...services.narration import NarrationRunnerError, read_narration_header
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
@@ -45,8 +45,8 @@ router = APIRouter()
 # =============================================================================
 
 
-class DigestResponse(BaseModel):
-    """Response model for a single digest."""
+class BriefingResponse(BaseModel):
+    """Response model for a single briefing."""
 
     id: str
     user_id: str
@@ -66,36 +66,36 @@ class DigestResponse(BaseModel):
     is_complete: bool = False
 
 
-class CreateDigestRequest(BaseModel):
-    """Request body for creating a new digest."""
+class CreateBriefingRequest(BaseModel):
+    """Request body for creating a new briefing."""
 
     since_days: int = Field(default=7, ge=1, le=365)
     max_episodes: int = Field(default=10, ge=1, le=100)
     podcast_id: Optional[str] = None
     ready_only: bool = False
-    exclude_digested: bool = False
+    exclude_briefed: bool = False
 
 
-class CreateDigestResponse(BaseModel):
-    """Response for a successful digest creation."""
+class CreateBriefingResponse(BaseModel):
+    """Response for a successful briefing creation."""
 
     status: str
     message: str
-    digest_id: str
+    briefing_id: str
     episodes_selected: int
 
 
-class DigestPreviewRequest(BaseModel):
-    """Request body for previewing digest selection."""
+class BriefingPreviewRequest(BaseModel):
+    """Request body for previewing briefing selection."""
 
     since_days: int = Field(default=7, ge=1, le=365)
     max_episodes: int = Field(default=10, ge=1, le=100)
     podcast_id: Optional[str] = None
     ready_only: bool = False
-    exclude_digested: bool = False
+    exclude_briefed: bool = False
 
 
-class DigestPreviewEpisode(BaseModel):
+class BriefingPreviewEpisode(BaseModel):
     """Episode info in preview response."""
 
     episode_id: str
@@ -108,11 +108,11 @@ class DigestPreviewEpisode(BaseModel):
     pub_date: Optional[str] = None
 
 
-class DigestPreviewResponse(BaseModel):
-    """Response for digest preview."""
+class BriefingPreviewResponse(BaseModel):
+    """Response for briefing preview."""
 
     status: str
-    episodes: List[DigestPreviewEpisode]
+    episodes: List[BriefingPreviewEpisode]
     total_matching: int
     criteria: dict
 
@@ -122,41 +122,41 @@ class DigestPreviewResponse(BaseModel):
 # =============================================================================
 
 
-def _digest_to_response(digest: Digest) -> DigestResponse:
-    """Convert Digest model to response model."""
-    return DigestResponse(
-        id=digest.id,
-        user_id=digest.user_id,
-        created_at=digest.created_at.isoformat(),
-        updated_at=digest.updated_at.isoformat(),
-        period_start=digest.period_start.isoformat(),
-        period_end=digest.period_end.isoformat(),
-        status=digest.status.value,
-        file_path=digest.file_path,
-        episode_ids=digest.episode_ids,
-        episodes_total=digest.episodes_total,
-        episodes_completed=digest.episodes_completed,
-        episodes_failed=digest.episodes_failed,
-        processing_time_seconds=digest.processing_time_seconds,
-        error_message=digest.error_message,
-        success_rate=digest.success_rate,
-        is_complete=digest.is_complete,
+def _briefing_to_response(briefing: Briefing) -> BriefingResponse:
+    """Convert Briefing model to response model."""
+    return BriefingResponse(
+        id=briefing.id,
+        user_id=briefing.user_id,
+        created_at=briefing.created_at.isoformat(),
+        updated_at=briefing.updated_at.isoformat(),
+        period_start=briefing.period_start.isoformat(),
+        period_end=briefing.period_end.isoformat(),
+        status=briefing.status.value,
+        file_path=briefing.file_path,
+        episode_ids=briefing.episode_ids,
+        episodes_total=briefing.episodes_total,
+        episodes_completed=briefing.episodes_completed,
+        episodes_failed=briefing.episodes_failed,
+        processing_time_seconds=briefing.processing_time_seconds,
+        error_message=briefing.error_message,
+        success_rate=briefing.success_rate,
+        is_complete=briefing.is_complete,
     )
 
 
-def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[dict]:
-    """Filesystem-driven list of narration variants for ``digest_id``.
+def _list_narrations_for_briefing(narrations_dir: Path, briefing_id: str) -> List[dict]:
+    """Filesystem-driven list of narration variants for ``briefing_id``.
 
-    Each variant is keyed by ``<digest_id>-<slug>.json`` (the runner's
+    Each variant is keyed by ``<briefing_id>-<slug>.json`` (the runner's
     canonical filename), so a directory glob is sufficient — no schema
     column needed for v1. ``slug`` is recovered by stripping the
-    ``<digest_id>-`` prefix off the filename stem.
+    ``<briefing_id>-`` prefix off the filename stem.
     """
     if not narrations_dir.exists():
         return []
     out: List[dict] = []
-    prefix = f"{digest_id}-"
-    for json_path in sorted(narrations_dir.glob(f"{digest_id}-*.json")):
+    prefix = f"{briefing_id}-"
+    for json_path in sorted(narrations_dir.glob(f"{briefing_id}-*.json")):
         stem = json_path.stem
         if not stem.startswith(prefix):
             continue
@@ -185,8 +185,8 @@ def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[di
     return out
 
 
-class NarrateDigestRequest(BaseModel):
-    """Body for ``POST /api/digests/{digest_id}/narrate``."""
+class NarrateBriefingRequest(BaseModel):
+    """Body for ``POST /api/briefings/{briefing_id}/narrate``."""
 
     target_duration: Optional[Union[int, str]] = Field(
         default=None,
@@ -200,7 +200,7 @@ class NarrateDigestRequest(BaseModel):
         min_length=1,
         max_length=64,
         description=(
-            "Output slug (filenames are keyed on ``<digest_id>-<slug>``)."
+            "Output slug (filenames are keyed on ``<briefing_id>-<slug>``)."
             " Defaults to ``short``/``medium``/``long`` for the matching"
             " preset duration, otherwise ``custom-<seconds>s``."
         ),
@@ -223,7 +223,7 @@ class NarrateDigestRequest(BaseModel):
 
 
 @router.get("")
-async def list_digests(
+async def list_briefings(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
@@ -231,7 +231,7 @@ async def list_digests(
     user: User = Depends(require_auth),
 ):
     """
-    List digests for the current user.
+    List briefings for the current user.
 
     Supports pagination and optional status filtering.
     """
@@ -239,12 +239,12 @@ async def list_digests(
     status_enum = None
     if status:
         try:
-            status_enum = DigestStatus(status)
+            status_enum = BriefingStatus(status)
         except ValueError:
-            valid_statuses = [s.value for s in DigestStatus]
+            valid_statuses = [s.value for s in BriefingStatus]
             bad_request(f"Invalid status: {status}. Valid values: {valid_statuses}")
 
-    digests = state.digest_repository.get_all(
+    briefings = state.briefing_repository.get_all(
         limit=limit,
         offset=offset,
         status=status_enum,
@@ -252,45 +252,45 @@ async def list_digests(
     )
 
     # Get total count for pagination
-    total = state.digest_repository.count(
+    total = state.briefing_repository.count(
         status=status_enum,
         user_id=user.id,
     )
 
-    digest_responses = [_digest_to_response(d) for d in digests]
+    briefing_responses = [_briefing_to_response(d) for d in briefings]
 
     return paginated_response(
-        items=[d.model_dump() for d in digest_responses],
+        items=[d.model_dump() for d in briefing_responses],
         total=total,
         offset=offset,
         limit=limit,
-        items_key="digests",
+        items_key="briefings",
     )
 
 
 @router.get("/latest")
-async def get_latest_digest(
+async def get_latest_briefing(
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
-    Return the user's most recent digest, lazy-generating one when eligible.
+    Return the user's most recent briefing, lazy-generating one when eligible.
 
     Selection comes from the inbox window
-    ``[previous_digest.period_end, now)`` — so each delivered episode is
-    briefed exactly once. The throttle inside ``DigestService`` collapses
+    ``[previous_briefing.period_end, now)`` — so each delivered episode is
+    briefed exactly once. The throttle inside ``BriefingService`` collapses
     accidental rapid-fire triggers (cron racing the UI). Returns 404 when
     no eligible inbox items fall in the open window — callers should hide
     the "Today's briefing" card.
     """
-    digest = state.digest_service.generate_for_user(user.id)
-    if digest is None:
-        not_found("Digest", "latest")
+    briefing = state.briefing_service.generate_for_user(user.id)
+    if briefing is None:
+        not_found("Briefing", "latest")
 
-    narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest.id)
+    narrations = _list_narrations_for_briefing(state.path_manager.narrations_dir(), briefing.id)
     return api_response(
         {
-            "digest": _digest_to_response(digest).model_dump(),
+            "briefing": _briefing_to_response(briefing).model_dump(),
             "narrations": narrations,
         }
     )
@@ -304,19 +304,19 @@ async def get_morning_briefing(
     """
     Get morning briefing preview using server-configured defaults.
 
-    Returns episodes that would be included in a quick catch-up digest,
-    using DIGEST_DEFAULT_SINCE_DAYS and DIGEST_DEFAULT_MAX_EPISODES from config.
+    Returns episodes that would be included in a quick catch-up briefing,
+    using BRIEFING_DEFAULT_SINCE_DAYS and BRIEFING_DEFAULT_MAX_EPISODES from config.
     """
-    criteria = DigestSelectionCriteria(
-        since_days=state.config.digest_default_since_days,
-        max_episodes=state.config.digest_default_max_episodes,
+    criteria = BriefingSelectionCriteria(
+        since_days=state.config.briefing_default_since_days,
+        max_episodes=state.config.briefing_default_max_episodes,
         ready_only=True,
-        exclude_digested=True,
+        exclude_briefed=True,
     )
 
-    selector = DigestEpisodeSelector(
+    selector = BriefingEpisodeSelector(
         episode_repository=state.repository,
-        digest_repository=state.digest_repository,
+        briefing_repository=state.briefing_repository,
     )
 
     result = selector.preview(criteria)
@@ -324,7 +324,7 @@ async def get_morning_briefing(
     episodes = []
     for podcast, episode in result.episodes:
         episodes.append(
-            DigestPreviewEpisode(
+            BriefingPreviewEpisode(
                 episode_id=episode.id,
                 episode_title=episode.title,
                 episode_slug=episode.slug,
@@ -344,7 +344,7 @@ async def get_morning_briefing(
                 "since_days": criteria.since_days,
                 "max_episodes": criteria.max_episodes,
                 "ready_only": criteria.ready_only,
-                "exclude_digested": criteria.exclude_digested,
+                "exclude_briefed": criteria.exclude_briefed,
             },
         }
     )
@@ -356,27 +356,27 @@ async def create_morning_briefing(
     user: User = Depends(require_auth),
 ):
     """
-    Create a morning briefing digest using server-configured defaults.
+    Create a morning briefing briefing using server-configured defaults.
 
-    Uses DIGEST_DEFAULT_SINCE_DAYS and DIGEST_DEFAULT_MAX_EPISODES from config.
-    Only includes already-summarized episodes and excludes previously digested ones.
-    The render-write-save sequence lives in ``DigestService`` so this and
-    ``POST /api/digests`` (ready_only) stay in lockstep.
+    Uses BRIEFING_DEFAULT_SINCE_DAYS and BRIEFING_DEFAULT_MAX_EPISODES from config.
+    Only includes already-summarized episodes and excludes previously briefed ones.
+    The render-write-save sequence lives in ``BriefingService`` so this and
+    ``POST /api/briefings`` (ready_only) stay in lockstep.
     """
-    criteria = DigestSelectionCriteria(
-        since_days=state.config.digest_default_since_days,
-        max_episodes=state.config.digest_default_max_episodes,
+    criteria = BriefingSelectionCriteria(
+        since_days=state.config.briefing_default_since_days,
+        max_episodes=state.config.briefing_default_max_episodes,
         ready_only=True,
-        exclude_digested=True,
+        exclude_briefed=True,
     )
 
-    digest = state.digest_service.generate_from_criteria(user.id, criteria)
-    if digest is None:
+    briefing = state.briefing_service.generate_from_criteria(user.id, criteria)
+    if briefing is None:
         return api_response(
             {
                 "status": "no_episodes",
                 "message": "No episodes match the selection criteria",
-                "digest_id": None,
+                "briefing_id": None,
                 "episodes_selected": 0,
             }
         )
@@ -384,61 +384,61 @@ async def create_morning_briefing(
     return api_response(
         {
             "status": "completed",
-            "message": f"Digest created with {digest.episodes_total} episodes",
-            "digest_id": digest.id,
-            "episodes_selected": digest.episodes_total,
+            "message": f"Briefing created with {briefing.episodes_total} episodes",
+            "briefing_id": briefing.id,
+            "episodes_selected": briefing.episodes_total,
         }
     )
 
 
-@router.get("/{digest_id}")
-async def get_digest(
-    digest_id: str,
+@router.get("/{briefing_id}")
+async def get_briefing(
+    briefing_id: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Get a single digest by ID, plus any narration variants on disk."""
-    digest = state.digest_repository.get_by_id(digest_id)
+    """Get a single briefing by ID, plus any narration variants on disk."""
+    briefing = state.briefing_repository.get_by_id(briefing_id)
 
-    if not digest:
-        not_found("Digest", digest_id)
+    if not briefing:
+        not_found("Briefing", briefing_id)
 
-    if digest.user_id != user.id:
-        not_found("Digest", digest_id)
+    if briefing.user_id != user.id:
+        not_found("Briefing", briefing_id)
 
-    narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest_id)
+    narrations = _list_narrations_for_briefing(state.path_manager.narrations_dir(), briefing_id)
     return api_response(
         {
-            "digest": _digest_to_response(digest).model_dump(),
+            "briefing": _briefing_to_response(briefing).model_dump(),
             "narrations": narrations,
         }
     )
 
 
-@router.post("/{digest_id}/narrate", status_code=201)
-async def narrate_digest(
-    digest_id: str,
-    body: NarrateDigestRequest,
+@router.post("/{briefing_id}/narrate", status_code=201)
+async def narrate_briefing(
+    briefing_id: str,
+    body: NarrateBriefingRequest,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Generate (or regenerate) a narrated digest for ``digest_id``.
+    """Generate (or regenerate) a narrated briefing for ``briefing_id``.
 
     Used by the length-switcher UI: each click writes
-    ``<digest_id>-<slug>.{json,md}`` so previous variants are preserved.
+    ``<briefing_id>-<slug>.{json,md}`` so previous variants are preserved.
     """
-    digest = state.digest_repository.get_by_id(digest_id)
-    if not digest:
-        not_found("Digest", digest_id)
-    if digest.user_id != user.id:
-        not_found("Digest", digest_id)
+    briefing = state.briefing_repository.get_by_id(briefing_id)
+    if not briefing:
+        not_found("Briefing", briefing_id)
+    if briefing.user_id != user.id:
+        not_found("Briefing", briefing_id)
 
     if state.narration_runner is None:
         raise HTTPException(
             status_code=503,
             detail=(
                 "Narration is disabled — set NARRATION_ENABLED=true and"
-                " configure an LLM provider to enable digest narration."
+                " configure an LLM provider to enable briefing narration."
             ),
         )
 
@@ -453,23 +453,23 @@ async def narrate_digest(
 
     try:
         run = state.narration_runner.run(
-            digest_id=digest_id,
+            briefing_id=briefing_id,
             target_duration_seconds=target_seconds,
             slug=slug,
         )
     except NarrationRunnerError as exc:
         logger.warning(
-            "digest.narrate_failed",
-            digest_id=digest_id,
+            "briefing.narrate_failed",
+            briefing_id=briefing_id,
             error=str(exc),
         )
-        not_found("Digest", digest_id)
+        not_found("Briefing", briefing_id)
 
     stats = run.content.stats
     return api_response(
         {
             "narration_id": run.narration_id,
-            "digest_id": run.digest_id,
+            "briefing_id": run.briefing_id,
             "slug": slug,
             "mode": run.content.mode,
             "target_duration_seconds": stats.target_duration_seconds,
@@ -482,60 +482,60 @@ async def narrate_digest(
     )
 
 
-@router.get("/{digest_id}/content")
-async def get_digest_content(
-    digest_id: str,
+@router.get("/{briefing_id}/content")
+async def get_briefing_content(
+    briefing_id: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
-    Get the markdown content of a digest.
+    Get the markdown content of a briefing.
 
-    Returns the raw markdown content if the digest file exists.
+    Returns the raw markdown content if the briefing file exists.
     """
-    digest = state.digest_repository.get_by_id(digest_id)
+    briefing = state.briefing_repository.get_by_id(briefing_id)
 
-    if not digest:
-        not_found("Digest", digest_id)
+    if not briefing:
+        not_found("Briefing", briefing_id)
 
     # Verify ownership
-    if digest.user_id != user.id:
-        not_found("Digest", digest_id)
+    if briefing.user_id != user.id:
+        not_found("Briefing", briefing_id)
 
-    if not digest.file_path:
+    if not briefing.file_path:
         return api_response(
             {
-                "digest_id": digest_id,
+                "briefing_id": briefing_id,
                 "content": None,
                 "available": False,
             }
         )
 
-    # Read digest file
-    digest_file = state.path_manager.digests_dir() / digest.file_path
-    if not digest_file.exists():
+    # Read briefing file
+    briefing_file = state.path_manager.briefings_dir() / briefing.file_path
+    if not briefing_file.exists():
         return api_response(
             {
-                "digest_id": digest_id,
+                "briefing_id": briefing_id,
                 "content": None,
                 "available": False,
             }
         )
 
     try:
-        content = digest_file.read_text(encoding="utf-8")
+        content = briefing_file.read_text(encoding="utf-8")
         return api_response(
             {
-                "digest_id": digest_id,
+                "briefing_id": briefing_id,
                 "content": content,
                 "available": True,
             }
         )
     except Exception as e:
-        logger.error("Failed to read digest file", digest_id=digest_id, error=str(e))
+        logger.error("Failed to read briefing file", briefing_id=briefing_id, error=str(e))
         return api_response(
             {
-                "digest_id": digest_id,
+                "briefing_id": briefing_id,
                 "content": None,
                 "available": False,
                 "error": str(e),
@@ -543,28 +543,28 @@ async def get_digest_content(
         )
 
 
-@router.get("/{digest_id}/episodes")
-async def get_digest_episodes(
-    digest_id: str,
+@router.get("/{briefing_id}/episodes")
+async def get_briefing_episodes(
+    briefing_id: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
-    Get detailed information about episodes in a digest.
+    Get detailed information about episodes in a briefing.
 
-    Returns episode and podcast details for all episodes included in the digest.
+    Returns episode and podcast details for all episodes included in the briefing.
     """
-    digest = state.digest_repository.get_by_id(digest_id)
+    briefing = state.briefing_repository.get_by_id(briefing_id)
 
-    if not digest:
-        not_found("Digest", digest_id)
+    if not briefing:
+        not_found("Briefing", briefing_id)
 
     # Verify ownership
-    if digest.user_id != user.id:
-        not_found("Digest", digest_id)
+    if briefing.user_id != user.id:
+        not_found("Briefing", briefing_id)
 
     episodes_info = []
-    for episode_id in digest.episode_ids:
+    for episode_id in briefing.episode_ids:
         result = state.repository.get_episode(episode_id)
         if result:
             podcast, episode = result
@@ -585,7 +585,7 @@ async def get_digest_episodes(
 
     return api_response(
         {
-            "digest_id": digest_id,
+            "briefing_id": briefing_id,
             "episodes": episodes_info,
             "count": len(episodes_info),
         }
@@ -593,28 +593,28 @@ async def get_digest_episodes(
 
 
 @router.post("/preview")
-async def preview_digest(
-    request: DigestPreviewRequest,
+async def preview_briefing(
+    request: BriefingPreviewRequest,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
-    Preview which episodes would be included in a digest.
+    Preview which episodes would be included in a briefing.
 
     This is a dry-run operation that shows what would be selected
-    without actually creating a digest.
+    without actually creating a briefing.
     """
-    criteria = DigestSelectionCriteria(
+    criteria = BriefingSelectionCriteria(
         since_days=request.since_days,
         max_episodes=request.max_episodes,
         podcast_id=request.podcast_id,
         ready_only=request.ready_only,
-        exclude_digested=request.exclude_digested,
+        exclude_briefed=request.exclude_briefed,
     )
 
-    selector = DigestEpisodeSelector(
+    selector = BriefingEpisodeSelector(
         episode_repository=state.repository,
-        digest_repository=state.digest_repository,
+        briefing_repository=state.briefing_repository,
     )
 
     result = selector.preview(criteria)
@@ -622,7 +622,7 @@ async def preview_digest(
     episodes = []
     for podcast, episode in result.episodes:
         episodes.append(
-            DigestPreviewEpisode(
+            BriefingPreviewEpisode(
                 episode_id=episode.id,
                 episode_title=episode.title,
                 episode_slug=episode.slug,
@@ -643,64 +643,64 @@ async def preview_digest(
                 "max_episodes": criteria.max_episodes,
                 "podcast_id": criteria.podcast_id,
                 "ready_only": criteria.ready_only,
-                "exclude_digested": criteria.exclude_digested,
+                "exclude_briefed": criteria.exclude_briefed,
             },
         }
     )
 
 
 @router.post("")
-async def create_digest(
-    request: CreateDigestRequest,
+async def create_briefing(
+    request: CreateBriefingRequest,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
-    Create a new digest.
+    Create a new briefing.
 
-    This selects episodes based on the criteria and generates a digest document
+    This selects episodes based on the criteria and generates a briefing document
     immediately (synchronous for ready_only mode, or just records what needs
     processing for full pipeline mode).
 
-    For ready_only=True: Generates digest immediately from already-summarized episodes
-    (delegates to ``DigestService.generate_from_criteria`` — same render-write-save
-    path as ``POST /api/digests/morning-briefing``).
-    For ready_only=False: Creates a pending digest record for episodes that need processing.
+    For ready_only=True: Generates briefing immediately from already-summarized episodes
+    (delegates to ``BriefingService.generate_from_criteria`` — same render-write-save
+    path as ``POST /api/briefings/morning-briefing``).
+    For ready_only=False: Creates a pending briefing record for episodes that need processing.
     """
-    criteria = DigestSelectionCriteria(
+    criteria = BriefingSelectionCriteria(
         since_days=request.since_days,
         max_episodes=request.max_episodes,
         podcast_id=request.podcast_id,
         ready_only=request.ready_only,
-        exclude_digested=request.exclude_digested,
+        exclude_briefed=request.exclude_briefed,
     )
 
     if request.ready_only:
-        digest = state.digest_service.generate_from_criteria(user.id, criteria)
-        if digest is None:
+        briefing = state.briefing_service.generate_from_criteria(user.id, criteria)
+        if briefing is None:
             return api_response(
                 {
                     "status": "no_episodes",
                     "message": "No episodes match the selection criteria",
-                    "digest_id": None,
+                    "briefing_id": None,
                     "episodes_selected": 0,
                 }
             )
         return api_response(
             {
                 "status": "completed",
-                "message": f"Digest created with {digest.episodes_total} episodes",
-                "digest_id": digest.id,
-                "episodes_selected": digest.episodes_total,
+                "message": f"Briefing created with {briefing.episodes_total} episodes",
+                "briefing_id": briefing.id,
+                "episodes_selected": briefing.episodes_total,
             }
         )
 
     # ready_only=False: episodes still need pipeline processing, so we
     # only persist a PENDING row. Selector runs here because there's no
     # render to share with the service path.
-    selector = DigestEpisodeSelector(
+    selector = BriefingEpisodeSelector(
         episode_repository=state.repository,
-        digest_repository=state.digest_repository,
+        briefing_repository=state.briefing_repository,
     )
     result = selector.select(criteria)
 
@@ -709,71 +709,71 @@ async def create_digest(
             {
                 "status": "no_episodes",
                 "message": "No episodes match the selection criteria",
-                "digest_id": None,
+                "briefing_id": None,
                 "episodes_selected": 0,
             }
         )
 
     now = datetime.now(timezone.utc)
-    digest = Digest(
+    briefing = Briefing(
         user_id=user.id,
         period_start=criteria.date_from,
         period_end=now,
         episode_ids=[ep.id for _, ep in result.episodes],
         episodes_total=len(result.episodes),
-        status=DigestStatus.PENDING,
+        status=BriefingStatus.PENDING,
     )
-    state.digest_repository.save(digest)
+    state.briefing_repository.save(briefing)
 
     logger.info(
-        "Digest created (pending processing)",
-        digest_id=digest.id,
+        "Briefing created (pending processing)",
+        briefing_id=briefing.id,
         episodes_count=len(result.episodes),
     )
 
     return api_response(
         {
             "status": "pending",
-            "message": f"Digest created with {len(result.episodes)} episodes pending processing",
-            "digest_id": digest.id,
+            "message": f"Briefing created with {len(result.episodes)} episodes pending processing",
+            "briefing_id": briefing.id,
             "episodes_selected": len(result.episodes),
         }
     )
 
 
-@router.delete("/{digest_id}")
-async def delete_digest(
-    digest_id: str,
+@router.delete("/{briefing_id}")
+async def delete_briefing(
+    briefing_id: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Delete a digest."""
-    digest = state.digest_repository.get_by_id(digest_id)
+    """Delete a briefing."""
+    briefing = state.briefing_repository.get_by_id(briefing_id)
 
-    if not digest:
-        not_found("Digest", digest_id)
+    if not briefing:
+        not_found("Briefing", briefing_id)
 
     # Verify ownership
-    if digest.user_id != user.id:
-        not_found("Digest", digest_id)
+    if briefing.user_id != user.id:
+        not_found("Briefing", briefing_id)
 
     # Delete the file if it exists
-    if digest.file_path:
-        digest_file = state.path_manager.digests_dir() / digest.file_path
-        if digest_file.exists():
+    if briefing.file_path:
+        briefing_file = state.path_manager.briefings_dir() / briefing.file_path
+        if briefing_file.exists():
             try:
-                digest_file.unlink()
-                logger.info("Deleted digest file", path=str(digest_file))
+                briefing_file.unlink()
+                logger.info("Deleted briefing file", path=str(briefing_file))
             except Exception as e:
-                logger.warning("Failed to delete digest file", path=str(digest_file), error=str(e))
+                logger.warning("Failed to delete briefing file", path=str(briefing_file), error=str(e))
 
     # Delete the database record
-    state.digest_repository.delete(digest_id)
+    state.briefing_repository.delete(briefing_id)
 
     return api_response(
         {
             "status": "deleted",
-            "message": f"Digest {digest_id} deleted",
-            "digest_id": digest_id,
+            "message": f"Briefing {briefing_id} deleted",
+            "briefing_id": briefing_id,
         }
     )

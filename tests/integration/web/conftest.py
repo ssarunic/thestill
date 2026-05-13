@@ -39,7 +39,7 @@ from fastapi.testclient import TestClient
 from thestill.core.feed_manager import PodcastFeedManager
 from thestill.core.progress_store import ProgressStore
 from thestill.core.queue_manager import QueueManager
-from thestill.repositories.sqlite_digest_repository import SqliteDigestRepository
+from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -99,21 +99,21 @@ def app_state(app_config: Config) -> AppState:
         inbox_repository=inbox_repository,
         queue_manager=queue_manager,
     )
-    digest_repository = SqliteDigestRepository(db_path=app_config.database_path)
+    briefing_repository = SqliteBriefingRepository(db_path=app_config.database_path)
 
     from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
-    from thestill.services.digest_generator import DigestGenerator
-    from thestill.services.digest_service import DigestService
+    from thestill.services.briefing_generator import BriefingGenerator
+    from thestill.services.briefing_service import BriefingService
 
-    # Per-user "Today's briefing" reads/writes the ``digests`` table via
+    # Per-user "Today's briefing" reads/writes the ``briefings`` table via
     # inbox-driven selection. Renderer wired so generate_for_user can
     # produce a real script.md when tests cover the full path.
-    digest_service = DigestService.from_config(
+    briefing_service = BriefingService.from_config(
         app_config,
-        digest_repository,
+        briefing_repository,
         inbox_repository,
         repository,
-        DigestGenerator(path_manager, app_config.file_storage),
+        BriefingGenerator(path_manager, app_config.file_storage),
         path_manager,
     )
 
@@ -138,8 +138,8 @@ def app_state(app_config: Config) -> AppState:
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
         import_service=import_service,
-        digest_repository=digest_repository,
-        digest_service=digest_service,
+        briefing_repository=briefing_repository,
+        briefing_service=briefing_service,
         entity_repository=entity_repository,
     )
 

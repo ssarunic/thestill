@@ -35,10 +35,10 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .logging import configure_structlog
-from .models.digest import Digest, DigestStatus
+from .models.briefing import Briefing, BriefingStatus
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
-from .repositories.sqlite_digest_repository import SqliteDigestRepository
+from .repositories.sqlite_briefing_repository import SqliteBriefingRepository
 from .repositories.sqlite_inbox_repository import SqliteInboxRepository
 from .repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
@@ -46,9 +46,9 @@ from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
 from .services import (
     BatchQueueService,
-    DigestEpisodeSelector,
-    DigestGenerator,
-    DigestSelectionCriteria,
+    BriefingEpisodeSelector,
+    BriefingGenerator,
+    BriefingSelectionCriteria,
     PodcastService,
     RefreshService,
     StatsService,
@@ -86,7 +86,7 @@ class CLIContext:
         external_transcript_downloader,
         console: ConsoleOutput,
         auth_service: AuthService,
-        digest_repository: SqliteDigestRepository,
+        briefing_repository: SqliteBriefingRepository,
         follower_repository: SqlitePodcastFollowerRepository,
         inbox_repository: SqliteInboxRepository,
         inbox_service: InboxService,
@@ -120,7 +120,7 @@ class CLIContext:
         # load on first ``encode_one`` call.
         self.search_backend = search_backend
         self.embedding_model = embedding_model
-        self.digest_repository = digest_repository
+        self.briefing_repository = briefing_repository
         # Spec #40 — pending transcription operations now live in SQLite.
         # Optional for tests; production CLI always passes one.
         self.pending_ops_repository = pending_ops_repository
@@ -203,8 +203,8 @@ def main(ctx, config, quiet):
         user_repository = SqliteUserRepository(db_path=config_obj.database_path)
         auth_service = AuthService(config_obj, user_repository)
 
-        # Initialize digest repository for digest persistence
-        digest_repository = SqliteDigestRepository(str(config_obj.database_path))
+        # Initialize briefing repository for briefing persistence
+        briefing_repository = SqliteBriefingRepository(str(config_obj.database_path))
         # Spec #40 — pending transcription operations live in SQLite, not files.
         pending_ops_repository = SqlitePendingOperationsRepository(db_path=config_obj.database_path)
 
@@ -240,7 +240,7 @@ def main(ctx, config, quiet):
             external_transcript_downloader=external_transcript_downloader,
             console=console,
             auth_service=auth_service,
-            digest_repository=digest_repository,
+            briefing_repository=briefing_repository,
             follower_repository=follower_repository,
             inbox_repository=inbox_repository,
             inbox_service=inbox_service,
@@ -2111,7 +2111,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 @click.option("--podcast-id", help="Filter to specific podcast (index, URL, or UUID)")
 @click.option("--output", "-o", type=click.Path(), help="Custom output path for briefing file")
 @click.option("--ready-only", is_flag=True, help="Only include already-summarized episodes (skip processing)")
-@click.option("--exclude-digested", is_flag=True, help="Exclude episodes already included in a previous briefing")
+@click.option("--exclude-briefed", is_flag=True, help="Exclude episodes already included in a previous briefing")
 @click.option(
     "--async", "async_mode", is_flag=True, help="Queue processing and return immediately (requires worker process)"
 )
@@ -2129,7 +2129,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 @click.pass_context
 @require_config
 @log_command
-def digest(
+def briefing(
     ctx,
     since,
     max_episodes,
@@ -2140,7 +2140,7 @@ def digest(
     podcast_id,
     output,
     ready_only,
-    exclude_digested,
+    exclude_briefed,
     skip_narrate,
     narration_duration,
     async_mode,
@@ -2156,7 +2156,7 @@ def digest(
     transcription and summarization.
 
     Use --async to queue episodes for background processing and return immediately.
-    Check progress with 'thestill digest-status <briefing-id>'. Note: async mode
+    Check progress with 'thestill briefing-status <briefing-id>'. Note: async mode
     requires a separate worker process to be running ('thestill worker').
 
     By default, processes up to 10 episodes from the last 7 days. Use --no-limit
@@ -2182,7 +2182,7 @@ def digest(
             click.echo(f"❌ Invalid --since value: {e}", err=True)
             ctx.exit(2)
     else:
-        since_days = config.digest_default_since_days
+        since_days = config.briefing_default_since_days
 
     # Determine max_episodes
     if no_limit:
@@ -2190,7 +2190,7 @@ def digest(
     elif max_episodes is not None:
         effective_max_episodes = max_episodes
     else:
-        effective_max_episodes = config.digest_default_max_episodes
+        effective_max_episodes = config.briefing_default_max_episodes
 
     # Resolve podcast_id to UUID if provided
     resolved_podcast_id = None
@@ -2224,22 +2224,22 @@ def digest(
     mode_label = "summarized" if ready_only else "unprocessed"
     click.echo(f"\n🔍 Selecting {mode_label} episodes from last {since_days} days (max: {effective_max_episodes})...")
 
-    # Use digest_repository from context (needed for exclude_digested filtering and persistence)
-    digest_repository = ctx.obj.digest_repository
+    # Use briefing_repository from context (needed for exclude_briefed filtering and persistence)
+    briefing_repository = ctx.obj.briefing_repository
 
     # SqlitePodcastRepository implements EpisodeRepository interface
-    # Pass digest_repository if exclude_digested is enabled
-    selector = DigestEpisodeSelector(
+    # Pass briefing_repository if exclude_briefed is enabled
+    selector = BriefingEpisodeSelector(
         repository,
-        digest_repository if exclude_digested else None,
+        briefing_repository if exclude_briefed else None,
     )
 
-    criteria = DigestSelectionCriteria(
+    criteria = BriefingSelectionCriteria(
         since_days=since_days,
         max_episodes=effective_max_episodes,
         podcast_id=resolved_podcast_id,
         ready_only=ready_only,
-        exclude_digested=exclude_digested,
+        exclude_briefed=exclude_briefed,
     )
 
     selection = selector.select(criteria)
@@ -2288,7 +2288,7 @@ def digest(
         click.echo("   --async queues episodes for background processing")
         ctx.exit(2)
 
-    # Ready-only mode: skip processing, generate digest directly
+    # Ready-only mode: skip processing, generate briefing directly
     if ready_only:
         click.echo("\n📝 Generating briefing from summarized episodes...")
         start_time = time.time()
@@ -2317,19 +2317,19 @@ def digest(
         if async_mode:
             click.echo("\n🚀 Queueing episodes for background processing...")
 
-            # Create pending digest record first
+            # Create pending briefing record first
             auth_service = ctx.obj.auth_service
             default_user = auth_service.get_or_create_default_user()
 
-            digest_model = Digest(
+            briefing_model = Briefing(
                 user_id=default_user.id,
                 period_start=criteria.date_from,
                 period_end=datetime.now(timezone.utc),
                 episode_ids=[ep.id for _, ep in selection.episodes],
                 episodes_total=len(selection.episodes),
-                status=DigestStatus.PENDING,
+                status=BriefingStatus.PENDING,
             )
-            digest_repository.save(digest_model)
+            briefing_repository.save(briefing_model)
 
             # Queue episodes without waiting
             result = batch_service.queue_episodes(
@@ -2337,14 +2337,14 @@ def digest(
                 wait=False,
             )
 
-            # Update digest status to in_progress
-            digest_model.mark_in_progress()
-            digest_repository.save(digest_model)
+            # Update briefing status to in_progress
+            briefing_model.mark_in_progress()
+            briefing_repository.save(briefing_model)
 
-            click.echo(f"\n✓ Briefing created: {digest_model.id}")
+            click.echo(f"\n✓ Briefing created: {briefing_model.id}")
             click.echo(f"   Queued: {result.queued_count} episode(s)")
             click.echo(f"   Skipped: {result.skipped_count}")
-            click.echo(f"\n💡 Check progress with: thestill digest-status {digest_model.id}")
+            click.echo(f"\n💡 Check progress with: thestill briefing-status {briefing_model.id}")
             ctx.exit(0)
 
         # Sync mode: queue and wait for completion
@@ -2394,7 +2394,7 @@ def digest(
         # Step 4: Generate briefing
         click.echo("\n📝 Generating briefing...")
 
-        # Collect successful episodes for digest
+        # Collect successful episodes for briefing
         successful_episodes = []
         failed_episodes = []
 
@@ -2410,13 +2410,13 @@ def digest(
                 )
 
         # Add skipped episodes that were already summarized to successful list
-        # (They should be included in the digest)
+        # (They should be included in the briefing)
         for podcast, episode, reason in result.skipped:
             if reason == "already summarized":
                 successful_episodes.append((podcast, episode))
 
-    generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
-    digest_content = generator.generate(
+    generator = BriefingGenerator(path_manager, ctx.obj.config.file_storage)
+    briefing_content = generator.generate(
         episodes=successful_episodes,
         processing_time_seconds=processing_time,
         failures=failed_episodes,
@@ -2425,58 +2425,58 @@ def digest(
     # Determine output path and stored file_path
     # Always store just the filename for consistency and API compatibility
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    digest_filename = f"digest_{timestamp}.md"
+    briefing_filename = f"briefing_{timestamp}.md"
 
     if output:
         output_path = Path(output)
         # Store just the filename - API access only works for files in default directory
-        stored_file_path = digest_filename
+        stored_file_path = briefing_filename
     else:
-        output_path = path_manager.digest_file(digest_filename)
-        stored_file_path = digest_filename
+        output_path = path_manager.briefing_file(briefing_filename)
+        stored_file_path = briefing_filename
 
-    generator.write(digest_content, output_path)
+    generator.write(briefing_content, output_path)
 
-    # Persist digest to database
+    # Persist briefing to database
     auth_service = ctx.obj.auth_service
     default_user = auth_service.get_or_create_default_user()
 
-    # Create digest model with processing results
-    digest_model = Digest(
+    # Create briefing model with processing results
+    briefing_model = Briefing(
         user_id=default_user.id,
         period_start=criteria.date_from,
         period_end=datetime.now(timezone.utc),
         episode_ids=[ep.id for _, ep in successful_episodes],
-        episodes_total=digest_content.stats.total_episodes,
+        episodes_total=briefing_content.stats.total_episodes,
     )
 
     # Mark as completed with results
-    digest_model.mark_completed(
+    briefing_model.mark_completed(
         file_path=stored_file_path,
-        episodes_completed=digest_content.stats.successful_episodes,
-        episodes_failed=digest_content.stats.failed_episodes,
+        episodes_completed=briefing_content.stats.successful_episodes,
+        episodes_failed=briefing_content.stats.failed_episodes,
         processing_time_seconds=processing_time,
     )
 
     # Save to database
-    digest_repository.save(digest_model)
+    briefing_repository.save(briefing_model)
 
     # Final summary
     click.echo(f"\n🎉 Briefing generated!")
     click.echo(f"   Output: {output_path}")
-    click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
+    click.echo(f"   Episodes: {briefing_content.stats.successful_episodes}/{briefing_content.stats.total_episodes}")
     click.echo(f"   Processing time: {format_duration(int(processing_time))}")
 
     # Narration is opt-in per ``narration_enabled`` (spec #33 §"Migration
     # Strategy"). Explicit ``--narration-duration`` counts as a per-run
     # opt-in even when the flag is off. ``--no-narrate`` is a hard
-    # opt-out. The link-index digest above already shipped, so any
+    # opt-out. The link-index briefing above already shipped, so any
     # narration failure downgrades to a warning.
     narration_explicit = narration_duration is not None
     if not skip_narrate and (ctx.obj.config.narration_enabled or narration_explicit):
         _chain_narrate(
             ctx,
-            digest_id=digest_model.id,
+            briefing_id=briefing_model.id,
             target_duration=narration_duration,
         )
 
@@ -2514,17 +2514,17 @@ def _build_narration_runner(ctx, *, llm_provider):
     )
     return NarrationRunner(
         generator=generator,
-        digest_repository=ctx.obj.digest_repository,
+        briefing_repository=ctx.obj.briefing_repository,
         podcast_repository=ctx.obj.repository,
     )
 
 
 def _print_run_summary(run, *, include_target: bool) -> None:
-    """Render the per-run stats block shared by ``narrate`` and the chained ``digest`` flow."""
+    """Render the per-run stats block shared by ``narrate`` and the chained ``briefing`` flow."""
     stats = run.content.stats
     click.echo(f"   Mode: {run.content.mode}")
     if include_target:
-        click.echo(f"   Briefing: {run.digest_id}")
+        click.echo(f"   Briefing: {run.briefing_id}")
         click.echo(f"   Target: {format_duration(stats.target_duration_seconds)}")
     click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
     if include_target:
@@ -2538,11 +2538,11 @@ def _print_run_summary(run, *, include_target: bool) -> None:
         click.echo(f"   Markdown: {run.markdown_path}")
 
 
-def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> None:
-    """Run ``thestill narrate`` against ``digest_id`` from inside ``digest``.
+def _chain_narrate(ctx, *, briefing_id: str, target_duration: Optional[str]) -> None:
+    """Run ``thestill narrate`` against ``briefing_id`` from inside ``briefing``.
 
     Failures are surfaced as warnings, not exit-code errors — the
-    link-index digest already succeeded and the narrated rendering is
+    link-index briefing already succeeded and the narrated rendering is
     additive (spec #33 §"Migration Strategy").
     """
     from .services.narration import NarrationRunnerError
@@ -2560,7 +2560,7 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
     click.echo("\n🎙  Generating narrated briefing…")
     runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
-        run = runner.run(digest_id=digest_id, target_duration_seconds=target_seconds)
+        run = runner.run(briefing_id=briefing_id, target_duration_seconds=target_seconds)
     except NarrationRunnerError as exc:
         click.echo(f"⚠️  Narration skipped: {exc}", err=True)
         return
@@ -2569,8 +2569,8 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
 
 @main.command()
 @click.option(
-    "--digest",
-    "digest_id",
+    "--briefing",
+    "briefing_id",
     default=None,
     help="Briefing id to narrate. Defaults to the latest briefing.",
 )
@@ -2593,8 +2593,8 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
 @click.pass_context
 @require_config
 @log_command
-def narrate(ctx, digest_id, target_duration, slug, dry_run):
-    """Generate a narrated briefing from a previous `thestill digest` run.
+def narrate(ctx, briefing_id, target_duration, slug, dry_run):
+    """Generate a narrated briefing from a previous `thestill briefing` run.
 
     Reads the episode list from the briefing record, runs theme clustering
     + anchor-prose script generation (spec #33), and writes:
@@ -2627,7 +2627,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
         run = runner.run(
-            digest_id=digest_id,
+            briefing_id=briefing_id,
             target_duration_seconds=target_seconds,
             slug=slug,
         )
@@ -2640,56 +2640,56 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     _print_run_summary(run, include_target=True)
     # Fallback exits non-zero so the caller knows the LLM stage didn't
     # produce its intended output, even though the link-index artefact
-    # was still written. ``thestill digest`` ignores this in
-    # ``_chain_narrate`` since the digest itself already shipped.
+    # was still written. ``thestill briefing`` ignores this in
+    # ``_chain_narrate`` since the briefing itself already shipped.
     ctx.exit(0 if run.content.mode == "narrated" else 1)
 
 
-@main.command("digest-status")
-@click.argument("digest_id", required=False)
+@main.command("briefing-status")
+@click.argument("briefing_id", required=False)
 @click.option("--list", "-l", "list_all", is_flag=True, help="List all briefings")
 @click.option("--limit", type=int, default=10, help="Maximum briefings to list (default: 10)")
 @click.option("--finalize", "-f", is_flag=True, help="Finalize an async briefing (generate output file)")
 @click.pass_context
 @require_config
 @log_command
-def digest_status(ctx, digest_id, list_all, limit, finalize):
+def briefing_status(ctx, briefing_id, list_all, limit, finalize):
     """Check status of briefing generation or list all briefings.
 
     Without arguments, shows the status of the most recent briefing.
-    With DIGEST_ID, shows status of that specific briefing.
+    With BRIEFING_ID, shows status of that specific briefing.
     With --list, shows all briefings.
     With --finalize, generates the output file for a completed async briefing.
 
     Examples:
-      thestill digest-status                    # Show latest briefing status
-      thestill digest-status abc123             # Show specific briefing
-      thestill digest-status --list             # List all briefings
-      thestill digest-status abc123 --finalize  # Generate file for async briefing
+      thestill briefing-status                    # Show latest briefing status
+      thestill briefing-status abc123             # Show specific briefing
+      thestill briefing-status --list             # List all briefings
+      thestill briefing-status abc123 --finalize  # Generate file for async briefing
     """
     from .core.queue_manager import QueueManager, TaskStage, TaskStatus
 
     config = ctx.obj.config
     path_manager = ctx.obj.path_manager
-    digest_repository = ctx.obj.digest_repository
+    briefing_repository = ctx.obj.briefing_repository
     repository = ctx.obj.repository
 
-    # List all digests mode
+    # List all briefings mode
     if list_all:
-        digests = digest_repository.get_all(limit=limit)
+        briefings = briefing_repository.get_all(limit=limit)
 
-        if not digests:
+        if not briefings:
             click.echo("No briefings found.")
             ctx.exit(0)
 
-        click.echo(f"📋 Briefings (showing {len(digests)}):\n")
-        for d in digests:
+        click.echo(f"📋 Briefings (showing {len(briefings)}):\n")
+        for d in briefings:
             status_icon = {
-                DigestStatus.PENDING: "⏳",
-                DigestStatus.IN_PROGRESS: "🔄",
-                DigestStatus.COMPLETED: "✓",
-                DigestStatus.PARTIAL: "⚠️",
-                DigestStatus.FAILED: "❌",
+                BriefingStatus.PENDING: "⏳",
+                BriefingStatus.IN_PROGRESS: "🔄",
+                BriefingStatus.COMPLETED: "✓",
+                BriefingStatus.PARTIAL: "⚠️",
+                BriefingStatus.FAILED: "❌",
             }.get(d.status, "?")
 
             click.echo(f"{status_icon} {d.id[:8]}...")
@@ -2701,43 +2701,43 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
             click.echo()
         ctx.exit(0)
 
-    # Get specific or latest digest
-    if digest_id:
-        digest_model = digest_repository.get_by_id(digest_id)
-        if not digest_model:
-            click.echo(f"❌ Briefing not found: {digest_id}", err=True)
+    # Get specific or latest briefing
+    if briefing_id:
+        briefing_model = briefing_repository.get_by_id(briefing_id)
+        if not briefing_model:
+            click.echo(f"❌ Briefing not found: {briefing_id}", err=True)
             ctx.exit(2)
     else:
-        digest_model = digest_repository.get_latest()
-        if not digest_model:
-            click.echo("No briefings found. Run 'thestill digest' to create one.")
+        briefing_model = briefing_repository.get_latest()
+        if not briefing_model:
+            click.echo("No briefings found. Run 'thestill briefing' to create one.")
             ctx.exit(0)
 
-    # Show digest status
+    # Show briefing status
     status_icon = {
-        DigestStatus.PENDING: "⏳",
-        DigestStatus.IN_PROGRESS: "🔄",
-        DigestStatus.COMPLETED: "✓",
-        DigestStatus.PARTIAL: "⚠️",
-        DigestStatus.FAILED: "❌",
-    }.get(digest_model.status, "?")
+        BriefingStatus.PENDING: "⏳",
+        BriefingStatus.IN_PROGRESS: "🔄",
+        BriefingStatus.COMPLETED: "✓",
+        BriefingStatus.PARTIAL: "⚠️",
+        BriefingStatus.FAILED: "❌",
+    }.get(briefing_model.status, "?")
 
-    click.echo(f"\n{status_icon} Briefing: {digest_model.id}")
-    click.echo(f"   Status: {digest_model.status.value}")
-    click.echo(f"   Created: {digest_model.created_at.strftime('%Y-%m-%d %H:%M')}")
+    click.echo(f"\n{status_icon} Briefing: {briefing_model.id}")
+    click.echo(f"   Status: {briefing_model.status.value}")
+    click.echo(f"   Created: {briefing_model.created_at.strftime('%Y-%m-%d %H:%M')}")
     click.echo(
-        f"   Period: {digest_model.period_start.strftime('%Y-%m-%d')} to {digest_model.period_end.strftime('%Y-%m-%d')}"
+        f"   Period: {briefing_model.period_start.strftime('%Y-%m-%d')} to {briefing_model.period_end.strftime('%Y-%m-%d')}"
     )
 
-    # For in-progress digests, check task queue status
-    if digest_model.status == DigestStatus.IN_PROGRESS:
+    # For in-progress briefings, check task queue status
+    if briefing_model.status == BriefingStatus.IN_PROGRESS:
         queue_manager = QueueManager(str(config.database_path))
 
         completed = 0
         failed = 0
         pending = 0
 
-        for episode_id in digest_model.episode_ids:
+        for episode_id in briefing_model.episode_ids:
             tasks = queue_manager.get_tasks_for_episode(episode_id)
             if tasks:
                 latest_task = tasks[0]
@@ -2751,32 +2751,32 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
                 pending += 1
 
         click.echo(f"\n📊 Progress:")
-        click.echo(f"   Completed: {completed}/{digest_model.episodes_total}")
+        click.echo(f"   Completed: {completed}/{briefing_model.episodes_total}")
         click.echo(f"   Failed: {failed}")
         click.echo(f"   Pending: {pending}")
 
         if pending == 0:
             click.echo("\n💡 All episodes processed. Run with --finalize to generate the briefing file.")
 
-    elif digest_model.status in (DigestStatus.COMPLETED, DigestStatus.PARTIAL):
+    elif briefing_model.status in (BriefingStatus.COMPLETED, BriefingStatus.PARTIAL):
         click.echo(f"\n📊 Results:")
-        click.echo(f"   Completed: {digest_model.episodes_completed}/{digest_model.episodes_total}")
-        click.echo(f"   Failed: {digest_model.episodes_failed}")
-        if digest_model.processing_time_seconds:
-            click.echo(f"   Processing time: {format_duration(int(digest_model.processing_time_seconds))}")
-        if digest_model.file_path:
-            click.echo(f"   Output: {digest_model.file_path}")
+        click.echo(f"   Completed: {briefing_model.episodes_completed}/{briefing_model.episodes_total}")
+        click.echo(f"   Failed: {briefing_model.episodes_failed}")
+        if briefing_model.processing_time_seconds:
+            click.echo(f"   Processing time: {format_duration(int(briefing_model.processing_time_seconds))}")
+        if briefing_model.file_path:
+            click.echo(f"   Output: {briefing_model.file_path}")
 
-    elif digest_model.status == DigestStatus.FAILED:
-        click.echo(f"\n❌ Error: {digest_model.error_message or 'Unknown error'}")
+    elif briefing_model.status == BriefingStatus.FAILED:
+        click.echo(f"\n❌ Error: {briefing_model.error_message or 'Unknown error'}")
 
-    # Finalize mode: generate digest file for async digest
+    # Finalize mode: generate briefing file for async briefing
     if finalize:
-        if digest_model.status == DigestStatus.COMPLETED and digest_model.file_path:
+        if briefing_model.status == BriefingStatus.COMPLETED and briefing_model.file_path:
             click.echo("\n✓ Briefing already finalized.")
             ctx.exit(0)
 
-        if digest_model.status == DigestStatus.PENDING:
+        if briefing_model.status == BriefingStatus.PENDING:
             click.echo("\n❌ Cannot finalize: briefing is still pending", err=True)
             ctx.exit(1)
 
@@ -2788,7 +2788,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         failed_episodes = []
         missing_episode_ids = []
 
-        for episode_id in digest_model.episode_ids:
+        for episode_id in briefing_model.episode_ids:
             # Get episode and podcast from repository
             episode_data = repository.get_episode_by_id(episode_id)
             if not episode_data:
@@ -2817,32 +2817,32 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
             click.echo("❌ No processed episodes found", err=True)
             ctx.exit(1)
 
-        # Generate digest
-        generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
-        digest_content = generator.generate(
+        # Generate briefing
+        generator = BriefingGenerator(path_manager, ctx.obj.config.file_storage)
+        briefing_content = generator.generate(
             episodes=successful_episodes,
             processing_time_seconds=None,
             failures=failed_episodes,
         )
 
-        # Write output (store just filename since it's in default digests directory)
+        # Write output (store just filename since it's in default briefings directory)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        digest_filename = f"digest_{timestamp}.md"
-        output_path = path_manager.digest_file(digest_filename)
-        generator.write(digest_content, output_path)
+        briefing_filename = f"briefing_{timestamp}.md"
+        output_path = path_manager.briefing_file(briefing_filename)
+        generator.write(briefing_content, output_path)
 
-        # Update digest model
-        digest_model.mark_completed(
-            file_path=digest_filename,
-            episodes_completed=digest_content.stats.successful_episodes,
-            episodes_failed=digest_content.stats.failed_episodes,
+        # Update briefing model
+        briefing_model.mark_completed(
+            file_path=briefing_filename,
+            episodes_completed=briefing_content.stats.successful_episodes,
+            episodes_failed=briefing_content.stats.failed_episodes,
             processing_time_seconds=0,
         )
-        digest_repository.save(digest_model)
+        briefing_repository.save(briefing_model)
 
         click.echo(f"\n🎉 Briefing finalized!")
         click.echo(f"   Output: {output_path}")
-        click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
+        click.echo(f"   Episodes: {briefing_content.stats.successful_episodes}/{briefing_content.stats.total_episodes}")
         if missing_episode_ids:
             click.echo(
                 f"   ⚠️  {len(missing_episode_ids)} episode(s) not found in database (may have been deleted)",
@@ -3763,7 +3763,7 @@ def _date_range_from_since(since: Optional[str]):
 
     Returns ``None`` when ``since`` is None, leaving downstream queries
     unscoped. Reuses ``parse_time_window`` so the syntax matches the
-    existing CLI commands (``thestill digest --since 24h`` etc.).
+    existing CLI commands (``thestill briefing --since 24h`` etc.).
     """
     if since is None:
         return None

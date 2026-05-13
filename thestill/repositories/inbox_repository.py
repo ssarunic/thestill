@@ -117,7 +117,7 @@ class InboxRepository(ABC):
         Return episode IDs of inbox rows delivered in ``[since, until)`` whose
         ``state`` is in ``states``, ordered oldest-delivered first.
 
-        Used by ``DigestService`` to compose the candidate set for a
+        Used by ``BriefingService`` to compose the candidate set for a
         single inbox-driven briefing window.
         """
 

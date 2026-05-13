@@ -60,7 +60,7 @@ def _write_narration(
     latency_ms: int | None = 4000,
     generated_at: str = "2026-05-08T07:00:00+00:00",
     fallback_reason: str | None = None,
-    digest_id: str | None = None,
+    briefing_id: str | None = None,
 ) -> None:
     payload: dict = {
         "schema_version": "phase2",
@@ -70,11 +70,12 @@ def _write_narration(
         "latency_ms": latency_ms,
         "generated_at": generated_at,
         "fallback_reason": fallback_reason,
-        "digest_id": digest_id,
+        "briefing_id": briefing_id,
         "blocks": [],
     }
     (storage.narrations_dir() / f"{narration_id}.json").write_text(
-        json.dumps(payload), encoding="utf-8",
+        json.dumps(payload),
+        encoding="utf-8",
     )
 
 
@@ -91,18 +92,27 @@ def test_returns_zeros_when_no_narrations(client):
 
 def test_aggregates_runs_across_variants(client, storage):
     _write_narration(
-        storage, narration_id="d1-short", target_seconds=180,
-        actual_seconds=170.0, latency_ms=3000,
+        storage,
+        narration_id="d1-short",
+        target_seconds=180,
+        actual_seconds=170.0,
+        latency_ms=3000,
         generated_at="2026-05-08T06:00:00+00:00",
     )
     _write_narration(
-        storage, narration_id="d1-medium", target_seconds=300,
-        actual_seconds=290.0, latency_ms=4000,
+        storage,
+        narration_id="d1-medium",
+        target_seconds=300,
+        actual_seconds=290.0,
+        latency_ms=4000,
         generated_at="2026-05-08T07:00:00+00:00",
     )
     _write_narration(
-        storage, narration_id="d2-medium", target_seconds=300,
-        actual_seconds=280.0, latency_ms=5000,
+        storage,
+        narration_id="d2-medium",
+        target_seconds=300,
+        actual_seconds=280.0,
+        latency_ms=5000,
         generated_at="2026-05-08T08:00:00+00:00",
     )
     response = client.get("/api/dashboard/narration")
@@ -122,7 +132,9 @@ def test_aggregates_runs_across_variants(client, storage):
 def test_fallback_rate_reflects_mode_field(client, storage):
     _write_narration(storage, narration_id="d1-medium", mode="narrated")
     _write_narration(
-        storage, narration_id="d2-medium", mode="fallback",
+        storage,
+        narration_id="d2-medium",
+        mode="fallback",
         fallback_reason="word_budget_high",
         generated_at="2026-05-09T07:00:00+00:00",
     )
@@ -138,7 +150,8 @@ def test_fallback_rate_reflects_mode_field(client, storage):
 def test_skips_corrupt_json(client, storage):
     _write_narration(storage, narration_id="d1-medium")
     (storage.narrations_dir() / "d1-broken.json").write_text(
-        "{not valid", encoding="utf-8",
+        "{not valid",
+        encoding="utf-8",
     )
     response = client.get("/api/dashboard/narration")
     data = response.json()
@@ -154,8 +167,8 @@ def test_handles_missing_latency_field(client, storage):
     assert data["avg_latency_ms"] is None
 
 
-def test_latest_surfaces_digest_id_from_header(client, storage):
-    """Phase 5 hardening: the API surfaces ``digest_id`` straight from
+def test_latest_surfaces_briefing_id_from_header(client, storage):
+    """Phase 5 hardening: the API surfaces ``briefing_id`` straight from
     the JSON header so the frontend doesn't parse the filename. Slugs
     can contain hyphens (``custom-450s``) so filename parsing is
     ambiguous; reading the persisted field is correct.
@@ -163,24 +176,24 @@ def test_latest_surfaces_digest_id_from_header(client, storage):
     _write_narration(
         storage,
         narration_id="abc-custom-450s",
-        digest_id="abc",
+        briefing_id="abc",
     )
     response = client.get("/api/dashboard/narration")
     data = response.json()
-    assert data["latest"]["digest_id"] == "abc"
+    assert data["latest"]["briefing_id"] == "abc"
     assert data["latest"]["narration_id"] == "abc-custom-450s"
 
 
-def test_latest_digest_id_is_null_for_legacy_artefacts(client, storage):
-    """Older artefacts written before the runner persisted ``digest_id``
+def test_latest_briefing_id_is_null_for_legacy_artefacts(client, storage):
+    """Older artefacts written before the runner persisted ``briefing_id``
     surface ``None`` so the tile can hide its deep-link without
     inventing a fragile filename split.
     """
     _write_narration(
         storage,
         narration_id="legacy-medium",
-        digest_id=None,
+        briefing_id=None,
     )
     response = client.get("/api/dashboard/narration")
     data = response.json()
-    assert data["latest"]["digest_id"] is None
+    assert data["latest"]["briefing_id"] is None

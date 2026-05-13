@@ -18,9 +18,9 @@ Data models for Thestill
 This package contains Pydantic data models used throughout the application.
 """
 
-from .digest import Digest, DigestStatus
+from .briefing import Briefing, BriefingStatus
 
 __all__ = [
-    "Digest",
-    "DigestStatus",
+    "Briefing",
+    "BriefingStatus",
 ]

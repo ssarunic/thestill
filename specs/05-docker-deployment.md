@@ -416,7 +416,7 @@ All mutable state lives under `/data` inside the container:
 - `/data/podcasts.db`
 - `/data/original_audio/`, `/data/downsampled_audio/`
 - `/data/raw_transcripts/`, `/data/clean_transcripts/`
-- `/data/summaries/`, `/data/digests/`
+- `/data/summaries/`, `/data/briefings/`
 - `/data/podcast_facts/`, `/data/episode_facts/`
 - `/data/feeds.json`, `/data/debug_feeds/`, `/data/pending_operations/`
 
@@ -467,7 +467,7 @@ tar czf thestill-backup-$(date +%F).tgz -C /srv/thestill data
 
 **Strong recommendation: USB SSD, not SD card.** SQLite WAL writes plus podcast
 audio downloads will measurably wear an SD card over months, and random-read
-performance affects transcript cleaning and digest generation. An entry-level USB
+performance affects transcript cleaning and briefing generation. An entry-level USB
 SSD mounted at `/srv/thestill` solves both problems. Document this as a
 prerequisite in `docs/docker.md`.
 
@@ -547,7 +547,7 @@ Pi operator **must** set this explicitly before first run.
    ```bash
    docker exec -it thestill thestill add "https://example.com/feed.rss"
    docker exec -it thestill thestill refresh
-   docker exec -it thestill thestill digest --ready-only
+   docker exec -it thestill thestill briefing --ready-only
    ```
 
    Confirm an episode completes from discovery through transcription and summary.

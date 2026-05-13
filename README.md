@@ -16,7 +16,7 @@ thestill add "https://lexfridman.com/feed/podcast/"
 thestill add "https://www.youtube.com/@hubermanlab"
 
 # Generate your morning briefing
-thestill digest
+thestill briefing
 
 # Or run the web UI
 thestill server
@@ -78,14 +78,14 @@ cp .env.example .env
 
 # Add a podcast and process it
 thestill add "https://example.com/podcast/rss"
-thestill digest
+thestill briefing
 ```
 
 ## Features
 
 - **Web UI** - React dashboard for managing podcasts, viewing transcripts, monitoring queue
 - **Speaker Diarization** - Know who said what in multi-person conversations
-- **Morning Briefing** - Daily digest of new episodes with summaries
+- **Morning Briefing** - Daily briefing of new episodes with summaries
 - **MCP Server** - Natural language access to your podcast library via Claude Desktop
 - **Multi-user Auth** - Google OAuth for hosted deployments
 - **Failure Handling** - Automatic retries, dead letter queue for manual review
@@ -119,8 +119,8 @@ thestill clean-transcript   # Clean with LLM
 thestill summarize          # Generate summaries
 
 # Batch processing
-thestill digest             # Full pipeline + morning briefing
-thestill digest --dry-run   # Preview what would be processed
+thestill briefing             # Full pipeline + morning briefing
+thestill briefing --dry-run   # Preview what would be processed
 
 # Web server
 thestill server             # Start on localhost:8000
@@ -137,7 +137,7 @@ data/
 ├── raw_transcripts/     # JSON with timestamps & speakers
 ├── clean_transcripts/   # Cleaned Markdown
 ├── summaries/           # Episode analysis
-├── digests/             # Morning briefings
+├── briefings/             # Morning briefings
 └── podcasts.db          # SQLite database
 ```
 

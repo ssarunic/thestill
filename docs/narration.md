@@ -1,17 +1,17 @@
-# Narrated Digest
+# Narrated Briefing
 
-Spec [#33](../specs/33-narrated-digest.md). The narrated digest is a
+Spec [#33](../specs/33-narrated-briefing.md). The narrated briefing is a
 single-anchor, news-style readout of the day's processed episodes.
-The link-index digest still ships synchronously without an LLM; the
+The link-index briefing still ships synchronously without an LLM; the
 narration is a progressive enhancement that arrives behind it on the
-same `digest_id`.
+same `briefing_id`.
 
 ## How it works
 
 ```text
-thestill digest
-  ├─► link-index digest written immediately (no LLM)        data/digests/digest_<ts>.md
-  └─► narration runs after, when narration_enabled=true     data/narrations/<digest_id>-<slug>.{json,md}
+thestill briefing
+  ├─► link-index briefing written immediately (no LLM)        data/briefings/briefing_<ts>.md
+  └─► narration runs after, when narration_enabled=true     data/narrations/<briefing_id>-<slug>.{json,md}
        ├─► quote selection (deterministic)
        ├─► theme clustering   (LLM call #1)
        └─► script generation  (LLM call #2)
@@ -21,8 +21,8 @@ thestill digest
 When narration succeeds, the JSON script carries `mode: "narrated"` and a
 markdown read-through is written alongside it. When validation fails
 twice (or theme clustering errors out), the JSON carries `mode:
-"fallback"` and the markdown becomes the link-index digest with a
-"narration unavailable" banner — the user always gets a usable digest.
+"fallback"` and the markdown becomes the link-index briefing with a
+"narration unavailable" banner — the user always gets a usable briefing.
 
 ## Configuration
 
@@ -35,7 +35,7 @@ twice (or theme clustering errors out), the JSON carries `mode:
 The CLI also accepts `--no-narrate` to opt out per-run when you only
 want the link-index (e.g., offline testing). The `thestill narrate`
 standalone command always requires an LLM provider and a configured
-digest record.
+briefing record.
 
 ## Time-budget model
 
@@ -100,14 +100,14 @@ Three rules enforced after the script-generation LLM call:
 A failed run regenerates once with a tightened prompt that includes
 the failure tokens (`unknown_quote_id`, `verbatim_leak`,
 `word_budget_high`, `word_budget_low`). A second failure flips the
-run to fallback mode — the link-index digest renders behind a banner
+run to fallback mode — the link-index briefing renders behind a banner
 and the JSON still serialises with the failure reasons in
 `stats.fallback_reason` and a structured `narration.fallback` log
 event for ops dashboards.
 
 ## JSON script schema
 
-The on-disk JSON sidecar (`data/narrations/<digest_id>-<slug>.json`)
+The on-disk JSON sidecar (`data/narrations/<briefing_id>-<slug>.json`)
 is the canonical TTS contract. Schema version `phase2`:
 
 ```jsonc
@@ -120,7 +120,7 @@ is the canonical TTS contract. Schema version `phase2`:
   "mode": "narrated",            // "narrated" or "fallback"
   "fallback_reason": null,       // e.g. "word_budget_high,verbatim_leak" when mode=fallback
   "latency_ms": 4280,            // wall-clock around generate(), captured by NarrationRunner; null when generate() is called outside the runner (e.g. tests / programmatic callers / older artefacts)
-  "digest_id": "digest-uuid-…", // null when the artefact wasn't produced via the runner
+  "briefing_id": "briefing-uuid-…", // null when the artefact wasn't produced via the runner
   "slug": "medium",              // matches the second half of the filename basename
   "blocks": [
     {
@@ -183,14 +183,14 @@ quote pool + per-segment summaries). Prompt caching is honoured on
 providers that support it via the existing
 `generate_structured_cached` path.
 
-For per-user briefings (spec [#36](../specs/36-per-user-digest-from-inbox.md))
+For per-user briefings (spec [#36](../specs/36-per-user-briefing-from-inbox.md))
 the cost multiplies by user count. v1 keeps per-user briefings on the
 link-index for that reason; revisit when usage justifies the spend.
 
 ## Development
 
 The reference sample committed at
-[`examples/narrations/example-digest-medium.{json,md}`](../examples/narrations/)
+[`examples/narrations/example-briefing-medium.{json,md}`](../examples/narrations/)
 is a hand-curated artefact suitable as:
 
 - A reading exercise — what does a narration look like?

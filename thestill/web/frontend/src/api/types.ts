@@ -25,7 +25,7 @@ export interface DashboardStats {
 
 export interface NarrationLatestSummary {
   narration_id: string
-  digest_id: string | null
+  briefing_id: string | null
   generated_at: string | null
   mode: 'narrated' | 'fallback' | null
   fallback_reason: string | null
@@ -774,19 +774,19 @@ export interface ExtendedEpisodeTasksResponse {
 }
 
 // ============================================================================
-// Digest Types
+// Briefing Types
 // ============================================================================
 
-export type DigestStatus = 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed'
+export type BriefingStatus = 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed'
 
-export interface Digest {
+export interface Briefing {
   id: string
   user_id: string
   created_at: string
   updated_at: string
   period_start: string
   period_end: string
-  status: DigestStatus
+  status: BriefingStatus
   file_path: string | null
   episode_ids: string[]
   episodes_total: number
@@ -798,10 +798,10 @@ export interface Digest {
   is_complete: boolean
 }
 
-export interface DigestsResponse {
+export interface BriefingsResponse {
   status: string
   timestamp: string
-  digests: Digest[]
+  briefings: Briefing[]
   count: number
   total: number
   offset: number
@@ -825,16 +825,16 @@ export interface NarrationSummary {
   markdown_path: string | null
 }
 
-export interface NarrateDigestRequest {
+export interface NarrateBriefingRequest {
   target_duration?: number | string
   slug?: string
 }
 
-export interface NarrateDigestResponse {
+export interface NarrateBriefingResponse {
   status: string
   timestamp: string
   narration_id: string
-  digest_id: string
+  briefing_id: string
   slug: string
   mode: NarrationMode
   target_duration_seconds: number
@@ -853,23 +853,23 @@ export interface NarrationDetail {
   markdown: string | null
 }
 
-export interface DigestDetailResponse {
+export interface BriefingDetailResponse {
   status: string
   timestamp: string
-  digest: Digest
+  briefing: Briefing
   narrations: NarrationSummary[]
 }
 
-export interface DigestContentResponse {
+export interface BriefingContentResponse {
   status: string
   timestamp: string
-  digest_id: string
+  briefing_id: string
   content: string | null
   available: boolean
   error?: string
 }
 
-export interface DigestEpisodeInfo {
+export interface BriefingEpisodeInfo {
   episode_id: string
   episode_title: string
   episode_slug: string
@@ -882,31 +882,31 @@ export interface DigestEpisodeInfo {
   image_url: string | null
 }
 
-export interface DigestEpisodesResponse {
+export interface BriefingEpisodesResponse {
   status: string
   timestamp: string
-  digest_id: string
-  episodes: DigestEpisodeInfo[]
+  briefing_id: string
+  episodes: BriefingEpisodeInfo[]
   count: number
 }
 
-export interface CreateDigestRequest {
+export interface CreateBriefingRequest {
   since_days?: number
   max_episodes?: number
   podcast_id?: string
   ready_only?: boolean
-  exclude_digested?: boolean
+  exclude_briefed?: boolean
 }
 
-export interface CreateDigestResponse {
+export interface CreateBriefingResponse {
   status: string
   timestamp: string
   message: string
-  digest_id: string | null
+  briefing_id: string | null
   episodes_selected: number
 }
 
-export interface DigestPreviewEpisode {
+export interface BriefingPreviewEpisode {
   episode_id: string
   episode_title: string
   episode_slug: string
@@ -1041,17 +1041,17 @@ export interface QuickSearchOptions {
   has_entity?: string[]
 }
 
-export interface DigestPreviewResponse {
+export interface BriefingPreviewResponse {
   status: string
   timestamp: string
-  episodes: DigestPreviewEpisode[]
+  episodes: BriefingPreviewEpisode[]
   total_matching: number
   criteria: {
     since_days: number
     max_episodes: number
     podcast_id: string | null
     ready_only: boolean
-    exclude_digested: boolean
+    exclude_briefed: boolean
   }
 }
 

@@ -33,14 +33,14 @@ from ..core.audio_downloader import AudioDownloader
 from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
-from ..repositories.sqlite_digest_repository import SqliteDigestRepository
+from ..repositories.sqlite_briefing_repository import SqliteBriefingRepository
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import (
-    DigestEpisodeSelector,
-    DigestGenerator,
-    DigestSelectionCriteria,
+    BriefingEpisodeSelector,
+    BriefingGenerator,
+    BriefingSelectionCriteria,
     PodcastService,
     RefreshService,
     StatsService,
@@ -68,7 +68,7 @@ _MUTATING_TOOLS = frozenset(
         "clean_transcripts",
         "process_episode",
         "summarize_episodes",
-        "generate_digest",
+        "generate_briefing",
     }
 )
 
@@ -94,7 +94,7 @@ def setup_tools(server: Server, storage_path: str):
     # Initialize shared components
     path_manager = PathManager(storage_path)
     repository = SqlitePodcastRepository(db_path=config.database_path)
-    digest_repository = SqliteDigestRepository(db_path=config.database_path)
+    briefing_repository = SqliteBriefingRepository(db_path=config.database_path)
     # Spec #40 — pending transcription operations live in SQLite.
     from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
@@ -129,8 +129,8 @@ def setup_tools(server: Server, storage_path: str):
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)
-    digest_generator = DigestGenerator(path_manager, config.file_storage)
-    digest_selector = DigestEpisodeSelector(repository, digest_repository)
+    briefing_generator = BriefingGenerator(path_manager, config.file_storage)
+    briefing_selector = BriefingEpisodeSelector(repository, briefing_repository)
 
     @server.list_tools()
     @log_mcp_stdio
@@ -355,9 +355,9 @@ def setup_tools(server: Server, storage_path: str):
                     "required": ["podcast_id", "episode_id"],
                 },
             ),
-            # Digest tools
+            # Briefing tools
             Tool(
-                name="generate_digest",
+                name="generate_briefing",
                 description="Generate a morning briefing from summarized podcast episodes. Creates a consolidated markdown document with episode summaries grouped by podcast.",
                 inputSchema={
                     "type": "object",
@@ -376,7 +376,7 @@ def setup_tools(server: Server, storage_path: str):
                             "type": "string",
                             "description": "Optional: Filter to specific podcast (index, URL, or UUID)",
                         },
-                        "exclude_digested": {
+                        "exclude_briefed": {
                             "type": "boolean",
                             "description": "Exclude episodes already included in a previous briefing (default: false)",
                             "default": False,
@@ -386,7 +386,7 @@ def setup_tools(server: Server, storage_path: str):
                 },
             ),
             Tool(
-                name="list_digests",
+                name="list_briefings",
                 description="List all generated briefings with their metadata (date, episode count, status).",
                 inputSchema={
                     "type": "object",
@@ -406,12 +406,12 @@ def setup_tools(server: Server, storage_path: str):
                 },
             ),
             Tool(
-                name="get_digest",
+                name="get_briefing",
                 description="Get a specific briefing by ID or get the latest briefing. Returns the full markdown content and metadata.",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "digest_id": {
+                        "briefing_id": {
                             "type": "string",
                             "description": "Briefing UUID. If not provided, returns the latest briefing.",
                         },
@@ -1538,15 +1538,15 @@ def setup_tools(server: Server, storage_path: str):
                 # Return the summary content directly (not JSON-encoded)
                 return [TextContent(type="text", text=summary)]
 
-            elif name == "generate_digest":
+            elif name == "generate_briefing":
                 from datetime import datetime, timezone
 
-                from ..models.digest import Digest
+                from ..models.briefing import Briefing
 
                 since_days = arguments.get("since_days", 7)
                 max_episodes = arguments.get("max_episodes", 10)
                 podcast_id = arguments.get("podcast_id")
-                exclude_digested = arguments.get("exclude_digested", False)
+                exclude_briefed = arguments.get("exclude_briefed", False)
 
                 # Resolve podcast_id to UUID if provided
                 resolved_podcast_id = None
@@ -1564,15 +1564,15 @@ def setup_tools(server: Server, storage_path: str):
                     resolved_podcast_id = podcast.id
 
                 # Select summarized episodes (ready-only mode for MCP)
-                criteria = DigestSelectionCriteria(
+                criteria = BriefingSelectionCriteria(
                     since_days=since_days,
                     max_episodes=max_episodes,
                     podcast_id=resolved_podcast_id,
                     ready_only=True,  # MCP always uses ready-only (no processing)
-                    exclude_digested=exclude_digested,
+                    exclude_briefed=exclude_briefed,
                 )
 
-                selection = digest_selector.select(criteria)
+                selection = briefing_selector.select(criteria)
 
                 if not selection.episodes:
                     return [
@@ -1588,65 +1588,65 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Generate digest
+                # Generate briefing
                 import time
 
                 start_time = time.time()
-                digest_content = digest_generator.generate(
+                briefing_content = briefing_generator.generate(
                     episodes=selection.episodes,
                     processing_time_seconds=0,
                     failures=[],
                 )
                 processing_time = time.time() - start_time
 
-                # Write digest file (store just filename since it's in default digests directory)
+                # Write briefing file (store just filename since it's in default briefings directory)
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                digest_filename = f"digest_{timestamp}.md"
-                output_path = path_manager.digest_file(digest_filename)
-                digest_generator.write(digest_content, output_path)
+                briefing_filename = f"briefing_{timestamp}.md"
+                output_path = path_manager.briefing_file(briefing_filename)
+                briefing_generator.write(briefing_content, output_path)
 
                 # Persist to database
                 default_user = auth_service.get_or_create_default_user()
-                digest_model = Digest(
+                briefing_model = Briefing(
                     user_id=default_user.id,
                     period_start=criteria.date_from,
                     period_end=datetime.now(timezone.utc),
                     episode_ids=[ep.id for _, ep in selection.episodes],
-                    episodes_total=digest_content.stats.total_episodes,
+                    episodes_total=briefing_content.stats.total_episodes,
                 )
-                digest_model.mark_completed(
-                    file_path=digest_filename,
-                    episodes_completed=digest_content.stats.successful_episodes,
-                    episodes_failed=digest_content.stats.failed_episodes,
+                briefing_model.mark_completed(
+                    file_path=briefing_filename,
+                    episodes_completed=briefing_content.stats.successful_episodes,
+                    episodes_failed=briefing_content.stats.failed_episodes,
                     processing_time_seconds=processing_time,
                 )
-                digest_repository.save(digest_model)
+                briefing_repository.save(briefing_model)
 
                 result = {
                     "success": True,
-                    "message": f"Briefing generated with {digest_content.stats.successful_episodes} episode(s)",
-                    "digest_id": digest_model.id,
+                    "message": f"Briefing generated with {briefing_content.stats.successful_episodes} episode(s)",
+                    "briefing_id": briefing_model.id,
                     "file_path": str(output_path),
                     "stats": {
-                        "total_episodes": digest_content.stats.total_episodes,
-                        "successful_episodes": digest_content.stats.successful_episodes,
-                        "podcasts_count": digest_content.stats.podcasts_count,
+                        "total_episodes": briefing_content.stats.total_episodes,
+                        "successful_episodes": briefing_content.stats.successful_episodes,
+                        "podcasts_count": briefing_content.stats.podcasts_count,
                     },
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-            elif name == "list_digests":
-                from ..models.digest import DigestStatus
+            elif name == "list_briefings":
+                from ..models.briefing import BriefingStatus
 
                 limit = arguments.get("limit", 10)
                 status_str = arguments.get("status")
 
-                status_filter = DigestStatus(status_str) if status_str else None
+                status_filter = BriefingStatus(status_str) if status_str else None
 
-                digests = digest_repository.get_all(limit=limit, status=status_filter)
+                briefings = briefing_repository.get_all(limit=limit, status=status_filter)
 
                 result = {
-                    "digests": [
+                    "briefings": [
                         {
                             "id": d.id,
                             "created_at": d.created_at.isoformat(),
@@ -1658,65 +1658,65 @@ def setup_tools(server: Server, storage_path: str):
                             "period_start": d.period_start.isoformat(),
                             "period_end": d.period_end.isoformat(),
                         }
-                        for d in digests
+                        for d in briefings
                     ]
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-            elif name == "get_digest":
-                digest_id = arguments.get("digest_id")
+            elif name == "get_briefing":
+                briefing_id = arguments.get("briefing_id")
 
-                if digest_id:
-                    digest_model = digest_repository.get_by_id(digest_id)
-                    if not digest_model:
+                if briefing_id:
+                    briefing_model = briefing_repository.get_by_id(briefing_id)
+                    if not briefing_model:
                         return [
                             TextContent(
                                 type="text",
-                                text=json.dumps({"success": False, "error": f"Briefing not found: {digest_id}"}),
+                                text=json.dumps({"success": False, "error": f"Briefing not found: {briefing_id}"}),
                             )
                         ]
                 else:
-                    # Get latest digest
-                    digest_model = digest_repository.get_latest()
-                    if not digest_model:
+                    # Get latest briefing
+                    briefing_model = briefing_repository.get_latest()
+                    if not briefing_model:
                         return [
                             TextContent(
                                 type="text",
                                 text=json.dumps(
                                     {
                                         "success": False,
-                                        "error": "No briefings found. Use generate_digest first.",
+                                        "error": "No briefings found. Use generate_briefing first.",
                                     }
                                 ),
                             )
                         ]
 
-                # Read the digest content if file exists
+                # Read the briefing content if file exists
                 content = None
-                if digest_model.file_path:
+                if briefing_model.file_path:
                     try:
-                        digest_path = Path(digest_model.file_path)
-                        if digest_path.exists():
-                            with open(digest_path, "r", encoding="utf-8") as f:
+                        briefing_path = Path(briefing_model.file_path)
+                        if briefing_path.exists():
+                            with open(briefing_path, "r", encoding="utf-8") as f:
                                 content = f.read()
                     except Exception as e:
                         logger.warning(
-                            "Failed to read digest file",
-                            digest_id=digest_model.id,
+                            "Failed to read briefing file",
+                            briefing_id=briefing_model.id,
                             error=str(e),
                         )
 
                 result = {
-                    "id": digest_model.id,
-                    "created_at": digest_model.created_at.isoformat(),
-                    "status": digest_model.status.value,
-                    "episodes_total": digest_model.episodes_total,
-                    "episodes_completed": digest_model.episodes_completed,
-                    "episodes_failed": digest_model.episodes_failed,
-                    "file_path": digest_model.file_path,
-                    "period_start": digest_model.period_start.isoformat(),
-                    "period_end": digest_model.period_end.isoformat(),
-                    "processing_time_seconds": digest_model.processing_time_seconds,
+                    "id": briefing_model.id,
+                    "created_at": briefing_model.created_at.isoformat(),
+                    "status": briefing_model.status.value,
+                    "episodes_total": briefing_model.episodes_total,
+                    "episodes_completed": briefing_model.episodes_completed,
+                    "episodes_failed": briefing_model.episodes_failed,
+                    "file_path": briefing_model.file_path,
+                    "period_start": briefing_model.period_start.isoformat(),
+                    "period_end": briefing_model.period_end.isoformat(),
+                    "processing_time_seconds": briefing_model.processing_time_seconds,
                     "content": content,
                 }
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]

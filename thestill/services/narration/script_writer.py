@@ -20,7 +20,7 @@ The script-generation contract is load-bearing — the model must not
 paraphrase a quoted line, must not invent quote ids, and must stay
 inside the narration word budget. We validate every output and
 regenerate once with a tightened prompt before falling back to the
-link-index digest.
+link-index briefing.
 """
 
 import re

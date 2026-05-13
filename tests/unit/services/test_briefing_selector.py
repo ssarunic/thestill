@@ -1,7 +1,7 @@
 """
-Unit tests for DigestEpisodeSelector.
+Unit tests for BriefingEpisodeSelector.
 
-Tests the episode selection logic for digest processing with safety limits.
+Tests the episode selection logic for briefing processing with safety limits.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -10,9 +10,13 @@ from unittest.mock import Mock
 import pytest
 
 from thestill.models.podcast import Episode, EpisodeState, Podcast
-from thestill.repositories.digest_repository import DigestRepository
+from thestill.repositories.briefing_repository import BriefingRepository
 from thestill.repositories.podcast_repository import EpisodeRepository
-from thestill.services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria, DigestSelectionResult
+from thestill.services.briefing_selector import (
+    BriefingEpisodeSelector,
+    BriefingSelectionCriteria,
+    BriefingSelectionResult,
+)
 
 
 @pytest.fixture
@@ -22,9 +26,9 @@ def mock_repository():
 
 
 @pytest.fixture
-def mock_digest_repository():
-    """Create mock digest repository."""
-    return Mock(spec=DigestRepository)
+def mock_briefing_repository():
+    """Create mock briefing repository."""
+    return Mock(spec=BriefingRepository)
 
 
 @pytest.fixture
@@ -86,19 +90,19 @@ def make_episode(
     return episode
 
 
-class TestDigestSelectionCriteria:
-    """Tests for DigestSelectionCriteria dataclass."""
+class TestBriefingSelectionCriteria:
+    """Tests for BriefingSelectionCriteria dataclass."""
 
     def test_default_values(self):
         """Test default criteria values."""
-        criteria = DigestSelectionCriteria()
+        criteria = BriefingSelectionCriteria()
         assert criteria.since_days == 7
         assert criteria.max_episodes == 10
         assert criteria.podcast_id is None
 
     def test_custom_values(self):
         """Test custom criteria values."""
-        criteria = DigestSelectionCriteria(
+        criteria = BriefingSelectionCriteria(
             since_days=14,
             max_episodes=25,
             podcast_id="abc-123",
@@ -109,15 +113,15 @@ class TestDigestSelectionCriteria:
 
     def test_date_from_calculation(self):
         """Test that date_from is calculated correctly from since_days."""
-        criteria = DigestSelectionCriteria(since_days=7)
+        criteria = BriefingSelectionCriteria(since_days=7)
         expected = datetime.now(timezone.utc) - timedelta(days=7)
         # Allow 1 second tolerance for test execution time
         diff = abs((criteria.date_from - expected).total_seconds())
         assert diff < 1
 
 
-class TestDigestEpisodeSelector:
-    """Tests for DigestEpisodeSelector."""
+class TestBriefingEpisodeSelector:
+    """Tests for BriefingEpisodeSelector."""
 
     def test_select_excludes_summarized_and_failed(self, mock_repository, sample_podcast):
         """Test that SUMMARIZED and FAILED states are excluded."""
@@ -139,8 +143,8 @@ class TestDigestEpisodeSelector:
             5,
         )
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria())
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria())
 
         # Should exclude SUMMARIZED and FAILED
         assert len(result.episodes) == 3
@@ -159,8 +163,8 @@ class TestDigestEpisodeSelector:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 15)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(max_episodes=5))
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(max_episodes=5))
 
         assert len(result.episodes) == 5
         assert result.total_matching == 15
@@ -169,8 +173,8 @@ class TestDigestEpisodeSelector:
         """Test that podcast_id filter is passed to repository."""
         mock_repository.get_all_episodes.return_value = ([], 0)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        selector.select(DigestSelectionCriteria(podcast_id="specific-podcast-id"))
+        selector = BriefingEpisodeSelector(mock_repository)
+        selector.select(BriefingSelectionCriteria(podcast_id="specific-podcast-id"))
 
         # Verify podcast_id was passed to repository
         call_kwargs = mock_repository.get_all_episodes.call_args.kwargs
@@ -180,8 +184,8 @@ class TestDigestEpisodeSelector:
         """Test that date_from filter is passed to repository."""
         mock_repository.get_all_episodes.return_value = ([], 0)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        criteria = DigestSelectionCriteria(since_days=14)
+        selector = BriefingEpisodeSelector(mock_repository)
+        criteria = BriefingSelectionCriteria(since_days=14)
         selector.select(criteria)
 
         # Verify date_from was passed to repository
@@ -195,23 +199,23 @@ class TestDigestEpisodeSelector:
         """Test that episodes are ordered by pub_date descending."""
         mock_repository.get_all_episodes.return_value = ([], 0)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        selector.select(DigestSelectionCriteria())
+        selector = BriefingEpisodeSelector(mock_repository)
+        selector.select(BriefingSelectionCriteria())
 
         call_kwargs = mock_repository.get_all_episodes.call_args.kwargs
         assert call_kwargs["sort_by"] == "pub_date"
         assert call_kwargs["sort_order"] == "desc"
 
     def test_select_returns_correct_result_structure(self, mock_repository, sample_podcast):
-        """Test that DigestSelectionResult has correct structure."""
+        """Test that BriefingSelectionResult has correct structure."""
         episode = make_episode("ep1", "Test Episode", 1, EpisodeState.DISCOVERED)
         mock_repository.get_all_episodes.return_value = ([(sample_podcast, episode)], 1)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        criteria = DigestSelectionCriteria(since_days=7, max_episodes=10)
+        selector = BriefingEpisodeSelector(mock_repository)
+        criteria = BriefingSelectionCriteria(since_days=7, max_episodes=10)
         result = selector.select(criteria)
 
-        assert isinstance(result, DigestSelectionResult)
+        assert isinstance(result, BriefingSelectionResult)
         assert len(result.episodes) == 1
         assert result.total_matching == 1
         assert result.criteria == criteria
@@ -223,8 +227,8 @@ class TestDigestEpisodeSelector:
         episode = make_episode("ep1", "Test", 1, EpisodeState.DISCOVERED)
         mock_repository.get_all_episodes.return_value = ([(sample_podcast, episode)], 1)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        criteria = DigestSelectionCriteria()
+        selector = BriefingEpisodeSelector(mock_repository)
+        criteria = BriefingSelectionCriteria()
 
         select_result = selector.select(criteria)
         preview_result = selector.preview(criteria)
@@ -244,8 +248,8 @@ class TestDigestEpisodeSelector:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 5)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(max_episodes=100))
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(max_episodes=100))
 
         assert len(result.episodes) == 5
         states = {ep.state for _, ep in result.episodes}
@@ -262,14 +266,14 @@ class TestDigestEpisodeSelector:
         """Test handling of no matching episodes."""
         mock_repository.get_all_episodes.return_value = ([], 0)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria())
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria())
 
         assert len(result.episodes) == 0
         assert result.total_matching == 0
 
 
-class TestDigestEpisodeSelectorReadyOnly:
+class TestBriefingEpisodeSelectorReadyOnly:
     """Tests for ready_only mode (THES-154)."""
 
     def test_ready_only_selects_only_summarized(self, mock_repository, sample_podcast):
@@ -291,8 +295,8 @@ class TestDigestEpisodeSelectorReadyOnly:
             5,
         )
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(ready_only=True))
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(ready_only=True))
 
         # Should only include SUMMARIZED episodes
         assert len(result.episodes) == 2
@@ -307,8 +311,8 @@ class TestDigestEpisodeSelectorReadyOnly:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 10)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(ready_only=True, max_episodes=3))
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(ready_only=True, max_episodes=3))
 
         assert len(result.episodes) == 3
         assert result.total_matching == 10
@@ -321,24 +325,24 @@ class TestDigestEpisodeSelectorReadyOnly:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 2)
 
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(ready_only=True))
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(ready_only=True))
 
         assert len(result.episodes) == 0
         assert result.total_matching == 0
 
 
-class TestDigestEpisodeSelectorExcludeDigested:
-    """Tests for exclude_digested mode (THES-154)."""
+class TestBriefingEpisodeSelectorExcludeBriefed:
+    """Tests for exclude_briefed mode (THES-154)."""
 
-    def test_exclude_digested_filters_out_already_digested(
-        self, mock_repository, mock_digest_repository, sample_podcast
+    def test_exclude_briefed_filters_out_already_briefed(
+        self, mock_repository, mock_briefing_repository, sample_podcast
     ):
-        """Test that exclude_digested filters out episodes already in a digest."""
-        # Create episodes - ep1 and ep3 are already in a digest
-        ep1 = make_episode("ep1", "Already Digested 1", 1, EpisodeState.SUMMARIZED)
-        ep2 = make_episode("ep2", "Not Digested", 2, EpisodeState.SUMMARIZED)
-        ep3 = make_episode("ep3", "Already Digested 2", 3, EpisodeState.SUMMARIZED)
+        """Test that exclude_briefed filters out episodes already in a briefing."""
+        # Create episodes - ep1 and ep3 are already in a briefing
+        ep1 = make_episode("ep1", "Already Briefed 1", 1, EpisodeState.SUMMARIZED)
+        ep2 = make_episode("ep2", "Not Briefed", 2, EpisodeState.SUMMARIZED)
+        ep3 = make_episode("ep3", "Already Briefed 2", 3, EpisodeState.SUMMARIZED)
         episodes = [
             (sample_podcast, ep1),
             (sample_podcast, ep2),
@@ -346,35 +350,35 @@ class TestDigestEpisodeSelectorExcludeDigested:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 3)
 
-        # ep1 and ep3 are in a digest (use actual episode.id UUIDs)
-        digested_ids = {ep1.id, ep3.id}
-        mock_digest_repository.is_episode_in_any_digest.side_effect = lambda eid: eid in digested_ids
+        # ep1 and ep3 are in a briefing (use actual episode.id UUIDs)
+        briefed_ids = {ep1.id, ep3.id}
+        mock_briefing_repository.is_episode_in_any_briefing.side_effect = lambda eid: eid in briefed_ids
 
-        selector = DigestEpisodeSelector(mock_repository, mock_digest_repository)
-        result = selector.select(DigestSelectionCriteria(ready_only=True, exclude_digested=True))
+        selector = BriefingEpisodeSelector(mock_repository, mock_briefing_repository)
+        result = selector.select(BriefingSelectionCriteria(ready_only=True, exclude_briefed=True))
 
         # Only ep2 should be selected
         assert len(result.episodes) == 1
         assert result.episodes[0][1].external_id == "ep2"
 
-    def test_exclude_digested_without_digest_repository_does_nothing(self, mock_repository, sample_podcast):
-        """Test that exclude_digested is ignored when no digest repository is provided."""
+    def test_exclude_briefed_without_briefing_repository_does_nothing(self, mock_repository, sample_podcast):
+        """Test that exclude_briefed is ignored when no briefing repository is provided."""
         episodes = [
             (sample_podcast, make_episode("ep1", "Episode 1", 1, EpisodeState.SUMMARIZED)),
             (sample_podcast, make_episode("ep2", "Episode 2", 2, EpisodeState.SUMMARIZED)),
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 2)
 
-        # No digest repository provided
-        selector = DigestEpisodeSelector(mock_repository)
-        result = selector.select(DigestSelectionCriteria(ready_only=True, exclude_digested=True))
+        # No briefing repository provided
+        selector = BriefingEpisodeSelector(mock_repository)
+        result = selector.select(BriefingSelectionCriteria(ready_only=True, exclude_briefed=True))
 
-        # All episodes should be selected (exclude_digested is ignored)
+        # All episodes should be selected (exclude_briefed is ignored)
         assert len(result.episodes) == 2
 
-    def test_exclude_digested_works_with_normal_mode(self, mock_repository, mock_digest_repository, sample_podcast):
-        """Test that exclude_digested works in normal (non-ready_only) mode."""
-        # ep1 needs processing but is already in a digest, ep2 needs processing
+    def test_exclude_briefed_works_with_normal_mode(self, mock_repository, mock_briefing_repository, sample_podcast):
+        """Test that exclude_briefed works in normal (non-ready_only) mode."""
+        # ep1 needs processing but is already in a briefing, ep2 needs processing
         ep1 = make_episode("ep1", "Needs Processing 1", 1, EpisodeState.DISCOVERED)
         ep2 = make_episode("ep2", "Needs Processing 2", 2, EpisodeState.DISCOVERED)
         episodes = [
@@ -383,28 +387,28 @@ class TestDigestEpisodeSelectorExcludeDigested:
         ]
         mock_repository.get_all_episodes.return_value = (episodes, 2)
 
-        # ep1 is already in a digest (use actual episode.id UUID)
-        mock_digest_repository.is_episode_in_any_digest.side_effect = lambda eid: eid == ep1.id
+        # ep1 is already in a briefing (use actual episode.id UUID)
+        mock_briefing_repository.is_episode_in_any_briefing.side_effect = lambda eid: eid == ep1.id
 
-        selector = DigestEpisodeSelector(mock_repository, mock_digest_repository)
-        result = selector.select(DigestSelectionCriteria(exclude_digested=True))
+        selector = BriefingEpisodeSelector(mock_repository, mock_briefing_repository)
+        result = selector.select(BriefingSelectionCriteria(exclude_briefed=True))
 
         # Only ep2 should be selected
         assert len(result.episodes) == 1
         assert result.episodes[0][1].external_id == "ep2"
 
 
-class TestDigestSelectionCriteriaNewFlags:
-    """Tests for new ready_only and exclude_digested flags."""
+class TestBriefingSelectionCriteriaNewFlags:
+    """Tests for new ready_only and exclude_briefed flags."""
 
     def test_default_flags_are_false(self):
         """Test that new flags default to False."""
-        criteria = DigestSelectionCriteria()
+        criteria = BriefingSelectionCriteria()
         assert criteria.ready_only is False
-        assert criteria.exclude_digested is False
+        assert criteria.exclude_briefed is False
 
     def test_flags_can_be_set(self):
         """Test that new flags can be set."""
-        criteria = DigestSelectionCriteria(ready_only=True, exclude_digested=True)
+        criteria = BriefingSelectionCriteria(ready_only=True, exclude_briefed=True)
         assert criteria.ready_only is True
-        assert criteria.exclude_digested is True
+        assert criteria.exclude_briefed is True

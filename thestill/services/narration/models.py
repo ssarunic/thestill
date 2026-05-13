@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Data models for narrated-digest generation (spec #33)."""
+"""Data models for narrated-briefing generation (spec #33)."""
 
 import dataclasses
 import re
@@ -101,7 +101,7 @@ class NarrationContent:
 
     ``mode`` distinguishes a successful narration (``"narrated"``) from
     a link-index fallback (``"fallback"``). The fallback path still
-    emits ``markdown`` (the link-index digest) and ``stats`` so the
+    emits ``markdown`` (the link-index briefing) and ``stats`` so the
     surface treats both shapes uniformly; ``stats.fallback_reason``
     explains why narration was abandoned.
     """

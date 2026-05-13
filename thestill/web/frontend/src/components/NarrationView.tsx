@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { useNarrateDigest, useNarration } from '../hooks/useApi'
+import { useNarrateBriefing, useNarration } from '../hooks/useApi'
 import type { NarrationMode, NarrationSummary } from '../api/types'
 
 const PRESETS = [
@@ -58,7 +58,7 @@ function FallbackBanner({ reason }: FallbackBannerProps) {
 }
 
 interface LengthSwitcherProps {
-  digestId: string
+  briefingId: string
   narrations: NarrationSummary[]
   selectedSlug: string | null
   onSelect: (narration: NarrationSummary) => void
@@ -66,13 +66,13 @@ interface LengthSwitcherProps {
 }
 
 function LengthSwitcher({
-  digestId,
+  briefingId,
   narrations,
   selectedSlug,
   onSelect,
   disabled,
 }: LengthSwitcherProps) {
-  const narrate = useNarrateDigest()
+  const narrate = useNarrateBriefing()
   const slugMap = useMemo(
     () => new Map(narrations.map((n) => [n.slug, n])),
     [narrations],
@@ -88,10 +88,10 @@ function LengthSwitcher({
     }
     try {
       const result = await narrate.mutateAsync({
-        digestId,
+        briefingId,
         request: { target_duration: preset.slug },
       })
-      // The cache invalidation in the hook will refetch the digest,
+      // The cache invalidation in the hook will refetch the briefing,
       // which surfaces the new variant via ``onSelect`` on next render.
       // Optimistically select by id so the reader switches immediately.
       onSelect({
@@ -147,13 +147,13 @@ function LengthSwitcher({
 }
 
 interface NarrationViewProps {
-  digestId: string
+  briefingId: string
   narrations: NarrationSummary[]
   linkIndexFallback: React.ReactNode
 }
 
 export default function NarrationView({
-  digestId,
+  briefingId,
   narrations,
   linkIndexFallback,
 }: NarrationViewProps) {
@@ -180,7 +180,7 @@ export default function NarrationView({
     return (
       <div className="space-y-4">
         <LengthSwitcher
-          digestId={digestId}
+          briefingId={briefingId}
           narrations={[]}
           selectedSlug={null}
           onSelect={(n) => setSelectedSlug(n.slug)}
@@ -200,7 +200,7 @@ export default function NarrationView({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <LengthSwitcher
-          digestId={digestId}
+          briefingId={briefingId}
           narrations={narrations}
           selectedSlug={selected?.slug ?? null}
           onSelect={handleSelect}

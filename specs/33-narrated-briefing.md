@@ -1,16 +1,16 @@
-# Narrated Digest Specification
+# Narrated Briefing Specification
 
 > **Status:** ✅ Complete (Phases 1–5)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-09
 > **Author:** Product & Engineering
-> **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [digest_generator.py](../thestill/services/digest_generator.py)
+> **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [briefing_generator.py](../thestill/services/briefing_generator.py)
 
 ---
 
 ## Executive Summary
 
-Replace (and complement) the current concatenated digest with a **single-anchor news-style readout**: one coherent script that weaves the day's episodes into theme-grouped segments, with verbatim spoken quotes from hosts and guests inserted as cited clips. The output is a markdown read-through plus a structured JSON script ready for TTS once that lands.
+Replace (and complement) the current concatenated briefing with a **single-anchor news-style readout**: one coherent script that weaves the day's episodes into theme-grouped segments, with verbatim spoken quotes from hosts and guests inserted as cited clips. The output is a markdown read-through plus a structured JSON script ready for TTS once that lands.
 
 **Mental model:** A radio/TV evening briefing rendered as a script — readable on the page today, synthesisable to audio later. One anchor — informed, slightly wry, never breathless — opens with a 1–2 sentence headline tease, walks through 2–4 lead stories grouped by theme (not by podcast), drops in 1–3 verbatim quote clips per segment for texture and authority, finishes with a rapid-fire tail of "also today…" mentions and a sign-off. Length is bounded by a user-chosen target spoken duration.
 
@@ -43,7 +43,7 @@ Replace (and complement) the current concatenated digest with a **single-anchor 
 
 ## Motivation
 
-The current digest at [digest_generator.py:261](../thestill/services/digest_generator.py#L261) is a deterministic template: episodes grouped by podcast, each rendered as `### Title` + the 2-sentence "Gist" extracted from the summary. It's useful as a link index and as a what-was-processed log, but it does not answer what users actually want when they wake up to it: *what happened today, across all the shows I follow, and what should I care about?*
+The current briefing at [briefing_generator.py:261](../thestill/services/briefing_generator.py#L261) is a deterministic template: episodes grouped by podcast, each rendered as `### Title` + the 2-sentence "Gist" extracted from the summary. It's useful as a link index and as a what-was-processed log, but it does not answer what users actually want when they wake up to it: *what happened today, across all the shows I follow, and what should I care about?*
 
 A briefing format gives:
 
@@ -78,15 +78,15 @@ Stylistic touchstones: the hosts of *The Artificial Intelligence Show* (informed
 4. **Quote integrity.** All quoted text is verbatim from a cleaned transcript with a known speaker, episode, and start timestamp. The LLM never authors quote content.
 5. **Editorial cap with rapid-fire tail.** The model picks 2–4 lead segments, then sweeps remaining episodes into a brief "also today…" tail. The user does not control segment count directly; they control runtime, and the model self-allocates depth vs breadth.
 6. **Reproducible.** Given the same episodes and the same target duration, runs produce equivalent scripts (within LLM nondeterminism). Selected quotes are deterministic given the same episode set.
-7. **Additive to the existing digest.** The narrated digest does not replace [digest_generator.py](../thestill/services/digest_generator.py); it consumes the same episode selection and runs alongside. The link-index digest stays as the appendix and as the cheap fallback when narration is disabled or fails.
+7. **Additive to the existing briefing.** The narrated briefing does not replace [briefing_generator.py](../thestill/services/briefing_generator.py); it consumes the same episode selection and runs alongside. The link-index briefing stays as the appendix and as the cheap fallback when narration is disabled or fails.
 8. **Cheap fallback on partial input.** Episodes missing summaries or facts files are excluded from segment treatment but listed in the rapid-fire tail. The narrator never invents content for episodes that don't yet have summaries.
 
 ### Non-Goals
 
 - **TTS itself.** This spec produces the text + structured script; voice synthesis is the eventual pinnacle of thestill but a separate follow-up that consumes the JSON script. The text/markdown rendering is the v1 delivery surface and remains a first-class mode after audio lands — users who prefer to read are never second-class citizens.
-- **Per-user briefings.** v1 produces one narration per digest run, matching the current `thestill digest`. Per-user narration plugs in once [#29](29-per-user-inbox-fanout.md) lands and the inbox becomes the per-user trigger source.
+- **Per-user briefings.** v1 produces one narration per briefing run, matching the current `thestill briefing`. Per-user narration plugs in once [#29](29-per-user-inbox-fanout.md) lands and the inbox becomes the per-user trigger source.
 - **Multi-language.** English-only for v1, since transcripts are English-only today.
-- **Live/streaming generation.** v1 is batch; the user runs `thestill narrate` (or it runs after `digest` in the morning batch).
+- **Live/streaming generation.** v1 is batch; the user runs `thestill narrate` (or it runs after `briefing` in the morning batch).
 - **Editing the narrative after generation.** No in-place rewrites in v1; if the user dislikes a run, they regenerate.
 
 ---
@@ -98,8 +98,8 @@ Stylistic touchstones: the hosts of *The Artificial Intelligence Show* (informed
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  CLI / Web                                                   │
-│    thestill narrate [--target-duration 5m] [--digest <id>]   │
-│    POST /api/narrations { digest_id, target_duration }       │
+│    thestill narrate [--target-duration 5m] [--briefing <id>]   │
+│    POST /api/narrations { briefing_id, target_duration }       │
 └──────────────────────────────────────────────────────────────┘
                             │
 ┌──────────────────────────────────────────────────────────────┐
@@ -131,7 +131,7 @@ Stylistic touchstones: the hosts of *The Artificial Intelligence Show* (informed
 ### Data Flow
 
 ```
-DigestSelector (existing)              ┐
+BriefingSelector (existing)              ┐
    selects episodes                    │
                                        ▼
 NarrationGenerator.generate(episodes, target_seconds=300)
@@ -271,7 +271,7 @@ Hard contract enforced post-generation:
 - No quote text appears inside `kind: "narration"` blocks. (Heuristic check: if a narration block contains a substring ≥ 8 words long that matches verbatim against any quote candidate's text, flag and regenerate.)
 - Narration word count is within ±15% of the budget. Outside that, regenerate once with a tightened budget.
 
-After two failed regenerations, fall back to the existing concatenated digest and log a `narration.fallback` event.
+After two failed regenerations, fall back to the existing concatenated briefing and log a `narration.fallback` event.
 
 ### 5. Render
 
@@ -429,7 +429,7 @@ Pure-additive. No schema changes required for v1.
 
 - Output files live under `data/narrations/`. Filename pattern `YYYY-MM-DD-<slug>.{md,json}` where slug defaults to `morning` and can be overridden by the caller.
 - A future `narrations` table may track runs (id, generated_at, target_duration, episode_ids, output_path, fallback_reason) once the web UI surfaces a history view. Out of scope for v1.
-- The existing [SqliteDigestRepository](../thestill/repositories/sqlite_digest_repository.py) is unchanged. The narrated digest is a sibling artefact, not a replacement.
+- The existing [SqliteBriefingRepository](../thestill/repositories/sqlite_briefing_repository.py) is unchanged. The narrated briefing is a sibling artefact, not a replacement.
 
 ---
 
@@ -439,14 +439,14 @@ Pure-additive. No schema changes required for v1.
 
 ```bash
 # Standalone
-thestill narrate                          # uses last digest, default duration
+thestill narrate                          # uses last briefing, default duration
 thestill narrate --target-duration 10m
-thestill narrate --digest 2026-05-06-morning
+thestill narrate --briefing 2026-05-06-morning
 thestill narrate --dry-run                # plan + quote selection, no LLM script call
 
-# Chained from digest (preferred morning workflow)
-thestill digest --narrate
-thestill digest --narrate --target-duration short
+# Chained from briefing (preferred morning workflow)
+thestill briefing --narrate
+thestill briefing --narrate --target-duration short
 ```
 
 ### API
@@ -456,7 +456,7 @@ POST /api/narrations
 Content-Type: application/json
 
 {
-  "digest_id": "2026-05-06-morning",
+  "briefing_id": "2026-05-06-morning",
   "target_duration_seconds": 300
 }
 ```
@@ -490,7 +490,7 @@ A read view, not a heavy interaction surface for v1.
 - **Inbox-empty / morning hook.** A "Today's briefing" card appears at the top of the inbox when a recent narration exists. Click → reader view.
 - **Reader view.** Renders the markdown with quotes as styled block quotes. Each quote has a `▶ Listen at HH:MM` link that deep-links to the episode page at the timestamp ([spec #23](23-transcript-playback-sync.md)).
 - **Length switcher.** A small chip group at the top — `Short · Medium · Long` — re-runs the narration at a different duration. The previous version is preserved (filenames are keyed on duration).
-- **Fallback state.** If narration failed or fell back, the reader view says "We couldn't generate a briefing for today; here's the link index instead" and embeds the existing digest output.
+- **Fallback state.** If narration failed or fell back, the reader view says "We couldn't generate a briefing for today; here's the link index instead" and embeds the existing briefing output.
 
 The frontend is read-only against the markdown + JSON files via the API; no rendering logic in the browser.
 
@@ -500,11 +500,11 @@ The frontend is read-only against the markdown + JSON files via the API; no rend
 
 Pure-additive. No data backfill required.
 
-1. New service `NarrationGenerator` (sibling of [DigestGenerator](../thestill/services/digest_generator.py)).
-2. New CLI command `thestill narrate` and `--narrate` flag on `digest`.
+1. New service `NarrationGenerator` (sibling of [BriefingGenerator](../thestill/services/briefing_generator.py)).
+2. New CLI command `thestill narrate` and `--narrate` flag on `briefing`.
 3. New API endpoints under `/api/narrations`.
 4. New output directory `data/narrations/` (created lazily on first run).
-5. Existing digest behaviour is unchanged. The narrated digest is opt-in until the team is confident; the morning batch flips to `--narrate` when fallback rates are low enough in production.
+5. Existing briefing behaviour is unchanged. The narrated briefing is opt-in until the team is confident; the morning batch flips to `--narrate` when fallback rates are low enough in production.
 
 ---
 
@@ -512,7 +512,7 @@ Pure-additive. No data backfill required.
 
 - **TTS audio synthesis.** This spec produces the JSON script that a TTS stage consumes; voice selection, audio rendering, and clip splicing belong to a follow-up.
 - **Original-audio quote splicing.** v1 emits quote text only; future TTS work can swap quote blocks for original-audio clips using the `episode_id + start_seconds + duration_seconds` triple already in the JSON.
-- **Per-user narrations.** v1 is a single narration per digest run. Once [#29](29-per-user-inbox-fanout.md) lands and the inbox becomes the per-user trigger source, the same generator runs per user with their own preset.
+- **Per-user narrations.** v1 is a single narration per briefing run. Once [#29](29-per-user-inbox-fanout.md) lands and the inbox becomes the per-user trigger source, the same generator runs per user with their own preset.
 - **Multi-language.** English-only.
 - **Multi-anchor / co-host format.** Single voice in v1; the prompt is structured to allow alternative anchor personas (regional, topical, parodic) without code changes.
 - **Live edit of generated narrations.** No in-place rewrites; regenerate to change.
@@ -527,7 +527,7 @@ Pure-additive. No data backfill required.
 | O1 | Quote duration cap as a fraction of target — is 40% right? | Start at 40%; instrument and tune. Anything below 25% feels too narrated; above 50% the anchor disappears. |
 | O2 | Embedding-based quote scoring vs keyword fallback for v1 | Ship the keyword fallback first; promote to embeddings once they exist as a repo-wide capability. The scoring interface should be pluggable. |
 | O3 | When a segment has only one episode, is that still a "segment" or should it be merged into the tail? | Allow single-episode lead segments — the model decides editorially. Forcing a 2+-episode rule produces awkward groupings on light news days. |
-| O4 | Should the user be able to pin a "must cover this episode" hint? | Not in v1. The selection is whatever `digest` selected. Pin/unpin belongs to the per-user inbox model in [#29](29-per-user-inbox-fanout.md). |
+| O4 | Should the user be able to pin a "must cover this episode" hint? | Not in v1. The selection is whatever `briefing` selected. Pin/unpin belongs to the per-user inbox model in [#29](29-per-user-inbox-fanout.md). |
 | O5 | Where does the anchor prompt live — code, config, or DB? | File on disk under `thestill/services/narration_prompts/`. Easy to diff, ship, and override per environment. DB-stored prompts come if/when users get to author their own. |
 | O6 | What's the cost ceiling per run we're comfortable with? | Two LLM calls (cluster + script) per run is bounded; the script call dominates and scales with quote count + summary count. Estimate at ~$0.02–$0.05 per 5-minute briefing on Sonnet-tier; revisit when actuals land. |
 | O7 | If narration fails twice and falls back, do we surface that to the user or silently log? | Surface a soft banner ("link-index briefing today — narration unavailable") and log structured. Hiding fallbacks erodes trust. |
@@ -539,46 +539,47 @@ Pure-additive. No data backfill required.
 
 ### Phase 1 — Quote selection + JSON script (no LLM-narrated prose) ✅ Complete
 
-- Parse cleaned transcripts into turns with speaker resolution from facts files. _(`thestill/services/narration/transcript_loader.py` reads the `AnnotatedTranscript` JSON sidecar and pairs each `content` segment with the resolved name from the episode-facts `Speaker Mapping` section.)_
-- Implement deterministic quote scoring + selection. _(`thestill/services/narration/quote_selector.py` — keyword-overlap relevance with neutral fallback, length-fit triangle, self-containment penalties, neighbour suppression, per-speaker cap.)_
-- Emit a "skeleton" JSON script: per-episode chrome blocks + selected quote blocks, no anchor narration yet — proves the data path and the validation contract. _(`thestill/services/narration/narration_generator.py`; output at `data/narrations/YYYY-MM-DD-<slug>.json` with `schema_version: "phase1"`.)_
-- Tests: quote selection is deterministic, sponsor-read filter works, attribution is always resolved. _(`tests/unit/services/narration/`, 28 tests.)_
+- Parse cleaned transcripts into turns with speaker resolution from facts files. *(`thestill/services/narration/transcript_loader.py` reads the `AnnotatedTranscript` JSON sidecar and pairs each `content` segment with the resolved name from the episode-facts `Speaker Mapping` section.)*
+- Implement deterministic quote scoring + selection. *(`thestill/services/narration/quote_selector.py` — keyword-overlap relevance with neutral fallback, length-fit triangle, self-containment penalties, neighbour suppression, per-speaker cap.)*
+- Emit a "skeleton" JSON script: per-episode chrome blocks + selected quote blocks, no anchor narration yet — proves the data path and the validation contract. *(`thestill/services/narration/narration_generator.py`; output at `data/narrations/YYYY-MM-DD-<slug>.json` with `schema_version: "phase1"`.)*
+- Tests: quote selection is deterministic, sponsor-read filter works, attribution is always resolved. *(`tests/unit/services/narration/`, 28 tests.)*
 
 ### Phase 2 — Theme clustering + script generation ✅ Complete
 
-- Theme clustering LLM call with structured-output validation. _(`thestill/services/narration/theme_clusterer.py` — Pydantic-validated `_ThemePlanOut`; reconciliation drops invented ids, caps at 4 segments, routes overflow to the tail; LLM error degrades to tail-only.)_
-- Anchor system prompt + script-generation LLM call. _(`thestill/services/narration_prompts/default_anchor.md` loaded at runtime; `thestill/services/narration/script_writer.py`.)_
-- Validation contract: quote-id enforcement, no-verbatim-leak check (8-word n-gram match against any quote, normalised lowercase + collapsed punctuation), word-budget tolerance (±15%), regenerate-once-then-fallback. _(See `_validate` and `_tighten_prompt` in `script_writer.py`.)_
-- Markdown renderer. _(`thestill/services/narration/markdown_renderer.py` — date header + runtime byline, segment headings, block-quote attribution with `▶ Listen at HH:MM` deep links via the new `UrlGenerator.episode_at`, link-index appendix.)_
-- Fallback to the link-index digest on validation failure. _(`NarrationGenerator._build_fallback_narration`: produces `mode="fallback"` content with the existing `DigestGenerator` markdown prefixed by a "narration unavailable" banner; emits a `narration.fallback` structured log with the failure reasons.)_
+- Theme clustering LLM call with structured-output validation. *(`thestill/services/narration/theme_clusterer.py` — Pydantic-validated `_ThemePlanOut`; reconciliation drops invented ids, caps at 4 segments, routes overflow to the tail; LLM error degrades to tail-only.)*
+- Anchor system prompt + script-generation LLM call. *(`thestill/services/narration_prompts/default_anchor.md` loaded at runtime; `thestill/services/narration/script_writer.py`.)*
+- Validation contract: quote-id enforcement, no-verbatim-leak check (8-word n-gram match against any quote, normalised lowercase + collapsed punctuation), word-budget tolerance (±15%), regenerate-once-then-fallback. *(See `_validate` and `_tighten_prompt` in `script_writer.py`.)*
+- Markdown renderer. *(`thestill/services/narration/markdown_renderer.py` — date header + runtime byline, segment headings, block-quote attribution with `▶ Listen at HH:MM` deep links via the new `UrlGenerator.episode_at`, link-index appendix.)*
+- Fallback to the link-index briefing on validation failure. *(`NarrationGenerator._build_fallback_narration`: produces `mode="fallback"` content with the existing `BriefingGenerator` markdown prefixed by a "narration unavailable" banner; emits a `narration.fallback` structured log with the failure reasons.)*
 
 ### Phase 3 — CLI + API + opt-in morning workflow ✅ Complete
 
-- `thestill narrate` standalone command. _(`thestill/cli.py::narrate` — `--digest <id>` (defaults to latest), `--target-duration` (preset / `5m` / `0:05:00` / bare seconds), `--slug`, `--dry-run`. Writes `data/narrations/YYYY-MM-DD-<slug>.{json,md}`.)_
-- `thestill digest --narrate` chained command. _(New `--narrate` and `--narration-duration` flags on `thestill digest`; on success the digest record's id is fed to `_chain_narrate`. Narration failures degrade to warnings — the digest already wrote to disk.)_
-- `POST /api/narrations` and `GET /api/narrations/{id}` + `GET /api/narrations/{id}/script.json`. _(`thestill/web/routes/api_narrations.py`. The POST resolves a `digest_id` (defaulting to latest), parses `target_duration_seconds` or the `target_duration` string (`short` / `5m` / etc.), and returns `201 {id, digest_id, mode, target_duration_seconds, actual_duration_seconds, quote_count, episodes_covered, episodes_in_tail, fallback_reason, markdown_path, script_path}`. GET reads from disk; 503 when the runner is disabled, 404 on missing artefacts.)_
-- Structured logging + a `narration.fallback` metric. _(`narration.fallback` log lands in Phase 2; `NarrationRunner.run` adds `narration.run` per-invocation log with mode + actual seconds + fallback reason.)_
-- New shared service: `NarrationRunner` resolves a digest reference into `(Podcast, Episode)` tuples and chains the generator → JSON + Markdown writes. CLI and API call into the same runner so both surfaces produce identical artefacts.
+- `thestill narrate` standalone command. *(`thestill/cli.py::narrate` — `--briefing <id>` (defaults to latest), `--target-duration` (preset / `5m` / `0:05:00` / bare seconds), `--slug`, `--dry-run`. Writes `data/narrations/YYYY-MM-DD-<slug>.{json,md}`.)*
+- `thestill briefing --narrate` chained command. *(New `--narrate` and `--narration-duration` flags on `thestill briefing`; on success the briefing record's id is fed to `_chain_narrate`. Narration failures degrade to warnings — the briefing already wrote to disk.)*
+- `POST /api/narrations` and `GET /api/narrations/{id}` + `GET /api/narrations/{id}/script.json`. *(`thestill/web/routes/api_narrations.py`. The POST resolves a `briefing_id` (defaulting to latest), parses `target_duration_seconds` or the `target_duration` string (`short` / `5m` / etc.), and returns `201 {id, briefing_id, mode, target_duration_seconds, actual_duration_seconds, quote_count, episodes_covered, episodes_in_tail, fallback_reason, markdown_path, script_path}`. GET reads from disk; 503 when the runner is disabled, 404 on missing artefacts.)*
+- Structured logging + a `narration.fallback` metric. *(`narration.fallback` log lands in Phase 2; `NarrationRunner.run` adds `narration.run` per-invocation log with mode + actual seconds + fallback reason.)*
+- New shared service: `NarrationRunner` resolves a briefing reference into `(Podcast, Episode)` tuples and chains the generator → JSON + Markdown writes. CLI and API call into the same runner so both surfaces produce identical artefacts.
 - New helper: `parse_target_duration` in `thestill/utils/duration.py` — accepts presets, unit suffixes, `MM:SS`/`HH:MM:SS`, and bare seconds.
 - Config gate: `NARRATION_ENABLED=true` (default off) plus `NARRATION_DEFAULT_DURATION_SECONDS=300` so deployments can opt in once fallback rates are measured (spec §"Migration Strategy").
 
-### Phase 4 — Digest-as-narration consolidation 🚧 In progress
+### Phase 4 — Briefing-as-narration consolidation 🚧 In progress
 
 **Design shift from the original Phase 4.** Per a design call, the
-narrated digest is no longer a separate "narration" surface alongside
+narrated briefing is no longer a separate "narration" surface alongside
 the link-index; it becomes the canonical rendering of an existing
-digest, with the link-index remaining as the synchronous-fast view and
+briefing, with the link-index remaining as the synchronous-fast view and
 the narrated form arriving as a progressive enhancement. One artefact,
 one viewer, two renderings.
 
-- ✅ Narration filenames are keyed on the digest record (``data/narrations/<digest_id>-<slug>.{json,md}``) so the digest is the durable join key. Standalone callers fall back to ``YYYY-MM-DD-<slug>``.
-- ✅ ``thestill digest`` runs narration by default after the link-index ships when an LLM provider is configured. ``--no-narrate`` opts out (the old ``--narrate`` flag is replaced).
-- ✅ ``GET /api/digests/{id}`` surfaces a ``narrations: [{narration_id, slug, target_duration_seconds, mode, fallback_reason, …}]`` array — populated from the filesystem (no schema migration needed).
-- ✅ ``POST /api/digests/{id}/narrate`` triggers narration with a duration. Each call writes ``<digest_id>-<slug>.{json,md}``; previous variants are preserved so the length switcher can flip back without paying for a regen. Default slug derives from the duration preset (``short`` / ``medium`` / ``long``); custom durations get ``custom-<seconds>s``.
-- ✅ ``POST /api/narrations`` retired in favour of the digest-scoped route. ``GET /api/narrations/{id}`` and ``GET /api/narrations/{id}/script.json`` stay as direct artefact endpoints (TTS consumer).
-- ✅ Frontend: digest viewer renders narration when present, link-index when not. Length switcher chips (Short · Medium · Long) call `POST /api/digests/{id}/narrate`. Fallback banner when ``mode=fallback``. New ``NarrationView`` component composes the markdown reader, length switcher, "Show link-index" toggle, and the fallback banner; wired into ``DigestDetail.tsx`` so the existing digest viewer is the unified surface (no separate ``/narrations/:id`` route in v1).
+- ✅ Narration filenames are keyed on the briefing record (``data/narrations/<briefing_id>-<slug>.{json,md}``) so the briefing is the durable join key. Standalone callers fall back to ``YYYY-MM-DD-<slug>``.
+- ✅ ``thestill briefing`` runs narration by default after the link-index ships when an LLM provider is configured. ``--no-narrate`` opts out (the old ``--narrate`` flag is replaced).
+- ✅ ``GET /api/briefings/{id}`` surfaces a ``narrations: [{narration_id, slug, target_duration_seconds, mode, fallback_reason, …}]`` array — populated from the filesystem (no schema migration needed).
+- ✅ ``POST /api/briefings/{id}/narrate`` triggers narration with a duration. Each call writes ``<briefing_id>-<slug>.{json,md}``; previous variants are preserved so the length switcher can flip back without paying for a regen. Default slug derives from the duration preset (``short`` / ``medium`` / ``long``); custom durations get ``custom-<seconds>s``.
+- ✅ ``POST /api/narrations`` retired in favour of the briefing-scoped route. ``GET /api/narrations/{id}`` and ``GET /api/narrations/{id}/script.json`` stay as direct artefact endpoints (TTS consumer).
+- ✅ Frontend: briefing viewer renders narration when present, link-index when not. Length switcher chips (Short · Medium · Long) call `POST /api/briefings/{id}/narrate`. Fallback banner when ``mode=fallback``. New ``NarrationView`` component composes the markdown reader, length switcher, "Show link-index" toggle, and the fallback banner; wired into ``BriefingDetail.tsx`` so the existing briefing viewer is the unified surface (no separate ``/narrations/:id`` route in v1).
 
 **Out of v1 (deferred):**
+
 - "Today's briefing" inbox card — spec #36 already ships a per-user briefing card; promoting narrated content into the inbox card is a separate decision once per-user briefings adopt narration.
 - Per-user briefing narration (spec #36 + #33 join) — kept on link-index for now to avoid the per-user × LLM-cost multiplier.
 
@@ -586,7 +587,7 @@ one viewer, two renderings.
 
 - ✅ [`docs/narration.md`](../docs/narration.md) covers the rollout switch, time-budget math, anchor-prompt hot-reload, validation contract, JSON-script schema, observability, and cost expectations.
 - ✅ Latency-and-fallback dashboard tile. Runner captures wall-clock `latency_ms` around `generator.generate()` and persists it in the JSON header. New `GET /api/dashboard/narration` aggregates `data/narrations/*.json` headers (total runs, fallback rate with red/amber/green coding, avg actual/target runtime, avg latency, latest run with deep link). Frontend `NarrationStatsTile` renders the tile on the dashboard; hides itself when zero runs exist. Cost-from-token-counts is deferred to a follow-up since instrumentation differs per LLM provider.
-- ✅ Sample narration committed at [`examples/narrations/example-digest-medium.{json,md}`](../examples/narrations/) plus a [`README.md`](../examples/narrations/README.md) explaining how the artefacts double as a TTS-pipeline target and a `NarrationView` playground fixture.
+- ✅ Sample narration committed at [`examples/narrations/example-briefing-medium.{json,md}`](../examples/narrations/) plus a [`README.md`](../examples/narrations/README.md) explaining how the artefacts double as a TTS-pipeline target and a `NarrationView` playground fixture.
 
 ---
 
@@ -596,5 +597,5 @@ one viewer, two renderings.
 - **Spec #18 / #24** — Segment-preserving cleaning + word-level highlighting. Both unlock finer-grained quote slicing than the per-turn granularity in v1.
 - **Spec #23** — Transcript playback sync. The deep-linked `▶ Listen at HH:MM` quote links use the timestamp URLs introduced there.
 - **Spec #28** — Corpus search and entities. The entity index is a future input to theme clustering — "every episode mentioning Anthropic this week" becomes a free segment angle once entities are first-class.
-- **[digest_generator.py](../thestill/services/digest_generator.py)** — The current concatenated digest, retained as the appendix and as the fallback when narration validation fails.
-- **[digest_selector.py](../thestill/services/digest_selector.py)** — Episode selection. Unchanged; narration consumes whatever it selects.
+- **[briefing_generator.py](../thestill/services/briefing_generator.py)** — The current concatenated briefing, retained as the appendix and as the fallback when narration validation fails.
+- **[briefing_selector.py](../thestill/services/briefing_selector.py)** — Episode selection. Unchanged; narration consumes whatever it selects.

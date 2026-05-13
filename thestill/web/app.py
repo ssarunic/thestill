@@ -43,15 +43,15 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
-from ..repositories.sqlite_digest_repository import SqliteDigestRepository
+from ..repositories.sqlite_briefing_repository import SqliteBriefingRepository
 from ..repositories.sqlite_inbox_repository import SqliteInboxRepository
 from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
-from ..services.digest_generator import DigestGenerator
-from ..services.digest_service import DigestService
+from ..services.briefing_generator import BriefingGenerator
+from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
@@ -60,9 +60,9 @@ from ..utils.path_manager import PathManager
 from .dependencies import AppState
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
+    api_briefings,
     api_commands,
     api_dashboard,
-    api_digests,
     api_entities,
     api_episodes,
     api_imports,
@@ -105,7 +105,7 @@ def _build_narration_runner(
     config: Config,
     path_manager: PathManager,
     podcast_repository: SqlitePodcastRepository,
-    digest_repository: SqliteDigestRepository,
+    briefing_repository: SqliteBriefingRepository,
 ) -> Optional[NarrationRunner]:
     """Construct a ``NarrationRunner`` when narration is enabled (spec #33).
 
@@ -129,7 +129,7 @@ def _build_narration_runner(
     )
     return NarrationRunner(
         generator=generator,
-        digest_repository=digest_repository,
+        briefing_repository=briefing_repository,
         podcast_repository=podcast_repository,
     )
 
@@ -189,22 +189,22 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         feed_manager=feed_manager,
     )
 
-    # Initialize digest repository
-    digest_repository = SqliteDigestRepository(db_path=config.database_path)
+    # Initialize briefing repository
+    briefing_repository = SqliteBriefingRepository(db_path=config.database_path)
 
     # Spec #40 — pending transcription operations now live in SQLite.
     from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
     pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
 
-    # User-facing "Today's briefing" runs through the digest path with
-    # inbox-driven selection (cursor = previous digest's ``period_end``).
-    digest_service = DigestService.from_config(
+    # User-facing "Today's briefing" runs through the briefing path with
+    # inbox-driven selection (cursor = previous briefing's ``period_end``).
+    briefing_service = BriefingService.from_config(
         config,
-        digest_repository,
+        briefing_repository,
         inbox_repository,
         repository,
-        DigestGenerator(path_manager, config.file_storage),
+        BriefingGenerator(path_manager, config.file_storage),
         path_manager,
     )
 
@@ -244,13 +244,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
         import_service=import_service,
-        digest_repository=digest_repository,
-        digest_service=digest_service,
+        briefing_repository=briefing_repository,
+        briefing_service=briefing_service,
         pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
         embedding_model=embedding_model,
-        narration_runner=_build_narration_runner(config, path_manager, repository, digest_repository),
+        narration_runner=_build_narration_runner(config, path_manager, repository, briefing_repository),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -454,7 +454,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_entities.router, prefix="/api", tags=["entities"])
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
-    app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
+    app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
     app.include_router(api_narrations.router, prefix="/api/narrations", tags=["narrations"])
     app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])

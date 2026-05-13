@@ -1,7 +1,7 @@
 """
-Unit tests for DigestGenerator.
+Unit tests for BriefingGenerator.
 
-Tests the digest generation from processed episodes.
+Tests the briefing generation from processed episodes.
 """
 
 from datetime import datetime, timezone
@@ -11,7 +11,7 @@ from unittest.mock import Mock, mock_open, patch
 import pytest
 
 from thestill.models.podcast import Episode, EpisodeState, Podcast
-from thestill.services.digest_generator import DigestContent, DigestEpisodeInfo, DigestGenerator, DigestStats
+from thestill.services.briefing_generator import BriefingContent, BriefingEpisodeInfo, BriefingGenerator, BriefingStats
 from thestill.utils.file_storage import FileStorage
 from thestill.utils.path_manager import PathManager
 
@@ -121,12 +121,12 @@ Neural networks have revolutionized how we approach complex problems. This episo
 """
 
 
-class TestDigestStats:
-    """Tests for DigestStats dataclass."""
+class TestBriefingStats:
+    """Tests for BriefingStats dataclass."""
 
     def test_success_rate_calculation(self):
         """Test success rate calculation."""
-        stats = DigestStats(
+        stats = BriefingStats(
             total_episodes=10,
             successful_episodes=8,
             failed_episodes=2,
@@ -135,12 +135,12 @@ class TestDigestStats:
 
     def test_success_rate_zero_episodes(self):
         """Test success rate with no episodes."""
-        stats = DigestStats(total_episodes=0)
+        stats = BriefingStats(total_episodes=0)
         assert stats.success_rate == 0.0
 
     def test_success_rate_all_successful(self):
         """Test success rate with all successful."""
-        stats = DigestStats(
+        stats = BriefingStats(
             total_episodes=5,
             successful_episodes=5,
             failed_episodes=0,
@@ -148,12 +148,12 @@ class TestDigestStats:
         assert stats.success_rate == 100.0
 
 
-class TestDigestGeneratorExtraction:
+class TestBriefingGeneratorExtraction:
     """Tests for executive summary extraction."""
 
     def test_extract_executive_summary_with_emoji(self, mock_path_manager, mock_file_storage):
         """Extract summary from standard format with emoji."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY)
 
         assert result is not None
@@ -163,7 +163,7 @@ class TestDigestGeneratorExtraction:
 
     def test_extract_executive_summary_without_emoji(self, mock_path_manager, mock_file_storage):
         """Extract summary from format without emoji."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY_NO_EMOJI)
 
         assert result is not None
@@ -171,39 +171,39 @@ class TestDigestGeneratorExtraction:
 
     def test_extract_executive_summary_no_match(self, mock_path_manager, mock_file_storage):
         """Return None when no gist section found."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary("Random text without any sections")
 
         assert result is None
 
     def test_extract_removes_timestamps(self, mock_path_manager, mock_file_storage):
         """Timestamps should be removed from extracted text."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY)
 
         assert "[00:01:00]" not in result
 
 
-class TestDigestGeneratorGenerate:
-    """Tests for digest generation."""
+class TestBriefingGeneratorGenerate:
+    """Tests for briefing generation."""
 
     def test_generate_empty_list(self, mock_path_manager, mock_file_storage):
-        """Generate digest with empty episode list."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        """Generate briefing with empty episode list."""
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate([])
 
         assert content.stats.total_episodes == 0
         assert "# Today's Briefing" in content.markdown
 
     def test_generate_with_episodes(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate digest with episodes."""
+        """Generate briefing with episodes."""
         episode1 = make_episode("ep1", "Episode One", duration=1800)
         episode2 = make_episode("ep2", "Episode Two", duration=2400)
 
         # Mock the summary file
         mock_path_manager.summary_file.return_value = Path("/nonexistent/path.md")
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             [
                 (sample_podcast, episode1),
@@ -223,7 +223,7 @@ class TestDigestGeneratorGenerate:
         ep1 = make_episode("ep1", "Podcast 1 Episode", podcast_id="podcast-123")
         ep2 = make_episode("ep2", "Podcast 2 Episode", podcast_id="podcast-456")
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             [
                 (sample_podcast, ep1),
@@ -236,11 +236,11 @@ class TestDigestGeneratorGenerate:
         assert sample_podcast_2.title in content.markdown
 
     def test_generate_with_failures(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate digest with failed episodes."""
+        """Generate briefing with failed episodes."""
         episode = make_episode("ep1", "Successful Episode")
         failed_episode = make_episode("ep2", "Failed Episode")
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             episodes=[(sample_podcast, episode)],
             failures=[(sample_podcast, failed_episode, "Network timeout")],
@@ -253,10 +253,10 @@ class TestDigestGeneratorGenerate:
         assert "Network timeout" in content.markdown
 
     def test_generate_with_processing_time(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate digest with processing time."""
+        """Generate briefing with processing time."""
         episode = make_episode("ep1", "Episode")
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             episodes=[(sample_podcast, episode)],
             processing_time_seconds=754.5,  # 12m 34s
@@ -279,15 +279,15 @@ class TestDigestGeneratorGenerate:
         mock_file_storage.read_text.side_effect = None
         mock_file_storage.read_text.return_value = SAMPLE_SUMMARY
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate([(sample_podcast, episode)])
 
         # Should have extracted description from summary
         assert "temperature patterns" in content.markdown or "Episode with Summary" in content.markdown
 
 
-class TestDigestGeneratorWrite:
-    """Tests for digest file writing — uses a real LocalFileStorage rooted at
+class TestBriefingGeneratorWrite:
+    """Tests for briefing file writing — uses a real LocalFileStorage rooted at
     tmp_path so we exercise the actual write path end-to-end."""
 
     def _build_generator(self, tmp_path):
@@ -295,32 +295,32 @@ class TestDigestGeneratorWrite:
 
         pm = PathManager(storage_path=str(tmp_path))
         storage = LocalFileStorage(base_path=str(tmp_path))
-        return DigestGenerator(pm, storage), pm
+        return BriefingGenerator(pm, storage), pm
 
     def test_write_creates_directory(self, tmp_path):
         """Write should create parent directory if needed."""
         generator, pm = self._build_generator(tmp_path)
-        output_path = pm.digests_dir() / "subdir" / "digest.md"
+        output_path = pm.briefings_dir() / "subdir" / "briefing.md"
 
-        content = DigestContent(
-            markdown="# Test Digest",
-            stats=DigestStats(),
+        content = BriefingContent(
+            markdown="# Test Briefing",
+            stats=BriefingStats(),
         )
 
         result = generator.write(content, output_path)
 
         assert result == output_path
         assert output_path.exists()
-        assert output_path.read_text() == "# Test Digest"
+        assert output_path.read_text() == "# Test Briefing"
 
     def test_write_sets_output_path(self, tmp_path):
         """Write should set output_path on content."""
         generator, pm = self._build_generator(tmp_path)
-        output_path = pm.digests_dir() / "digest.md"
+        output_path = pm.briefings_dir() / "briefing.md"
 
-        content = DigestContent(
+        content = BriefingContent(
             markdown="# Test",
-            stats=DigestStats(),
+            stats=BriefingStats(),
         )
 
         generator.write(content, output_path)
@@ -328,22 +328,22 @@ class TestDigestGeneratorWrite:
         assert content.output_path == output_path
 
 
-class TestDigestGeneratorFormatting:
+class TestBriefingGeneratorFormatting:
     """Tests for formatting helpers."""
 
     def test_format_duration_seconds(self, mock_path_manager, mock_file_storage):
         """Format short durations in seconds."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(45) == "45s"
 
     def test_format_duration_minutes(self, mock_path_manager, mock_file_storage):
         """Format durations in minutes."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(754) == "12m 34s"
 
     def test_format_duration_hours(self, mock_path_manager, mock_file_storage):
         """Format long durations in hours."""
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(3725) == "1h 2m"
 
     def test_format_episode_with_all_metadata(self, mock_path_manager, mock_file_storage, sample_podcast):
@@ -356,8 +356,8 @@ class TestDigestGeneratorFormatting:
             pub_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
-        info = DigestEpisodeInfo(
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
+        info = BriefingEpisodeInfo(
             podcast=sample_podcast,
             episode=episode,
             brief_description="A great episode about testing.",
@@ -376,8 +376,8 @@ class TestDigestGeneratorFormatting:
         """Format episode with minimal metadata."""
         episode = make_episode("ep1", "Basic Episode")
 
-        generator = DigestGenerator(mock_path_manager, mock_file_storage)
-        info = DigestEpisodeInfo(
+        generator = BriefingGenerator(mock_path_manager, mock_file_storage)
+        info = BriefingEpisodeInfo(
             podcast=sample_podcast,
             episode=episode,
         )

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-Digest model for THES-153: Digest persistence.
+Briefing model for THES-153: Briefing persistence.
 
-Represents a generated digest document with metadata about included episodes,
+Represents a generated briefing document with metadata about included episodes,
 processing statistics, and status tracking.
 """
 
@@ -27,15 +27,15 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-class DigestStatus(str, Enum):
+class BriefingStatus(str, Enum):
     """
-    Digest generation status.
+    Briefing generation status.
 
-    - PENDING: Digest generation has been requested but not started
+    - PENDING: Briefing generation has been requested but not started
     - IN_PROGRESS: Episodes are being processed
     - COMPLETED: All episodes processed successfully
-    - PARTIAL: Some episodes failed, digest generated with available content
-    - FAILED: Digest generation failed completely
+    - PARTIAL: Some episodes failed, briefing generated with available content
+    - FAILED: Briefing generation failed completely
     """
 
     PENDING = "pending"
@@ -45,23 +45,23 @@ class DigestStatus(str, Enum):
     FAILED = "failed"
 
 
-class Digest(BaseModel):
+class Briefing(BaseModel):
     """
-    Represents a generated digest document.
+    Represents a generated briefing document.
 
-    A digest is a consolidated view of processed podcast episodes, typically
+    A briefing is a consolidated view of processed podcast episodes, typically
     generated for a specific time period (e.g., "morning briefing").
 
     Attributes:
         id: Unique identifier (UUID)
-        user_id: User who created this digest (required, uses default user in CLI mode)
-        created_at: When the digest was created
-        updated_at: When the digest was last updated
-        period_start: Start of the time period covered by this digest
-        period_end: End of the time period covered by this digest
-        status: Current status of digest generation
-        file_path: Path to the generated markdown file (relative to digests dir)
-        episode_ids: List of episode IDs included in this digest
+        user_id: User who created this briefing (required, uses default user in CLI mode)
+        created_at: When the briefing was created
+        updated_at: When the briefing was last updated
+        period_start: Start of the time period covered by this briefing
+        period_end: End of the time period covered by this briefing
+        status: Current status of briefing generation
+        file_path: Path to the generated markdown file (relative to briefings dir)
+        episode_ids: List of episode IDs included in this briefing
         episodes_total: Total number of episodes selected for processing
         episodes_completed: Number of episodes successfully processed
         episodes_failed: Number of episodes that failed processing
@@ -70,7 +70,7 @@ class Digest(BaseModel):
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str  # User who owns this digest (required, uses default user in CLI mode)
+    user_id: str  # User who owns this briefing (required, uses default user in CLI mode)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -79,7 +79,7 @@ class Digest(BaseModel):
     period_end: datetime
 
     # Status tracking
-    status: DigestStatus = DigestStatus.PENDING
+    status: BriefingStatus = BriefingStatus.PENDING
 
     # Output file
     file_path: Optional[str] = None
@@ -105,16 +105,16 @@ class Digest(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        """Check if digest generation is complete (success or failure)."""
+        """Check if briefing generation is complete (success or failure)."""
         return self.status in (
-            DigestStatus.COMPLETED,
-            DigestStatus.PARTIAL,
-            DigestStatus.FAILED,
+            BriefingStatus.COMPLETED,
+            BriefingStatus.PARTIAL,
+            BriefingStatus.FAILED,
         )
 
     def mark_in_progress(self) -> None:
-        """Mark digest as in progress."""
-        self.status = DigestStatus.IN_PROGRESS
+        """Mark briefing as in progress."""
+        self.status = BriefingStatus.IN_PROGRESS
         self.updated_at = datetime.now(timezone.utc)
 
     def mark_completed(
@@ -124,7 +124,7 @@ class Digest(BaseModel):
         episodes_failed: int,
         processing_time_seconds: float,
     ) -> None:
-        """Mark digest as completed with results."""
+        """Mark briefing as completed with results."""
         self.file_path = file_path
         self.episodes_completed = episodes_completed
         self.episodes_failed = episodes_failed
@@ -132,14 +132,14 @@ class Digest(BaseModel):
         self.updated_at = datetime.now(timezone.utc)
 
         if episodes_failed == 0:
-            self.status = DigestStatus.COMPLETED
+            self.status = BriefingStatus.COMPLETED
         elif episodes_completed > 0:
-            self.status = DigestStatus.PARTIAL
+            self.status = BriefingStatus.PARTIAL
         else:
-            self.status = DigestStatus.FAILED
+            self.status = BriefingStatus.FAILED
 
     def mark_failed(self, error_message: str) -> None:
-        """Mark digest as failed."""
-        self.status = DigestStatus.FAILED
+        """Mark briefing as failed."""
+        self.status = BriefingStatus.FAILED
         self.error_message = error_message
         self.updated_at = datetime.now(timezone.utc)

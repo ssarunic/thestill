@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Markdown read-through renderer for narrated digests (spec #33 §"Output Format").
+"""Markdown read-through renderer for narrated briefings (spec #33 §"Output Format").
 
 Walks the validated script blocks and the verbatim quote pool, emits a
 human-readable Markdown read-through with quotes as block-quoted spans
@@ -26,13 +26,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 from ...models.podcast import Episode, Podcast
 from ...utils.url_generator import UrlGenerator
-from .models import (
-    NarrationStats,
-    QuoteCandidate,
-    ScriptBlock,
-    Segment,
-    ThemePlan,
-)
+from .models import NarrationStats, QuoteCandidate, ScriptBlock, Segment, ThemePlan
 
 
 def _format_clock(seconds: float) -> str:
@@ -80,17 +74,13 @@ class NarrationMarkdownRenderer:
         whatever order the caller wants the link-index to follow. The
         renderer picks slugs from these tuples to build deep links.
         """
-        episode_lookup: Dict[str, Tuple[Podcast, Episode]] = {
-            ep.id: (pod, ep) for pod, ep in episodes
-        }
+        episode_lookup: Dict[str, Tuple[Podcast, Episode]] = {ep.id: (pod, ep) for pod, ep in episodes}
         quote_lookup: Dict[str, QuoteCandidate] = {q.quote_id: q for q in quotes}
         section_titles = self._segment_section_titles(plan)
 
         date_label = generated_at.astimezone(timezone.utc).strftime("%B %d, %Y")
         episodes_label = self._episodes_label(stats)
-        runtime_label = _format_runtime_label(
-            stats.target_duration_seconds, stats.actual_duration_seconds
-        )
+        runtime_label = _format_runtime_label(stats.target_duration_seconds, stats.actual_duration_seconds)
 
         lines: List[str] = [
             f"# Morning Briefing — {date_label}",
@@ -123,16 +113,12 @@ class NarrationMarkdownRenderer:
     @staticmethod
     def _segment_section_titles(plan: ThemePlan) -> Dict[str, str]:
         return {
-            f"segment-{seg.rank}": (
-                f"## Lead — {seg.theme}" if seg.rank == 1 else f"## {seg.theme}"
-            )
+            f"segment-{seg.rank}": (f"## Lead — {seg.theme}" if seg.rank == 1 else f"## {seg.theme}")
             for seg in plan.segments
         }
 
     @staticmethod
-    def _heading_for_section(
-        section: str, segment_headings: Dict[str, str]
-    ) -> str:
+    def _heading_for_section(section: str, segment_headings: Dict[str, str]) -> str:
         if section.startswith("segment-"):
             return segment_headings.get(section, f"## {section.replace('-', ' ').title()}")
         if section == "tail":
@@ -180,9 +166,7 @@ class NarrationMarkdownRenderer:
         podcast, episode = episode_pair
         if not podcast.slug or not episode.slug:
             return None
-        url = self.url_generator.episode_at(
-            podcast.slug, episode.slug, quote.start_seconds
-        )
+        url = self.url_generator.episode_at(podcast.slug, episode.slug, quote.start_seconds)
         return f"[▶ Listen at {_format_clock(quote.start_seconds)}]({url})"
 
     @staticmethod

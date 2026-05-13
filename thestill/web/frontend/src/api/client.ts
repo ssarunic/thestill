@@ -36,16 +36,16 @@ import type {
   RunPipelineResponse,
   CancelPipelineResponse,
   ExtendedEpisodeTasksResponse,
-  DigestsResponse,
-  DigestDetailResponse,
-  DigestContentResponse,
-  DigestEpisodesResponse,
-  CreateDigestRequest,
-  CreateDigestResponse,
-  DigestPreviewResponse,
-  DigestStatus,
-  NarrateDigestRequest,
-  NarrateDigestResponse,
+  BriefingsResponse,
+  BriefingDetailResponse,
+  BriefingContentResponse,
+  BriefingEpisodesResponse,
+  CreateBriefingRequest,
+  CreateBriefingResponse,
+  BriefingPreviewResponse,
+  BriefingStatus,
+  NarrateBriefingRequest,
+  NarrateBriefingResponse,
   NarrationDetail,
   TopPodcastsResponse,
   ResolvePodcastRequest,
@@ -515,40 +515,40 @@ export async function getEpisodeTasksExtended(episodeId: string): Promise<Extend
 }
 
 // ============================================================================
-// Digest API
+// Briefing API
 // ============================================================================
 
-export async function getDigests(
+export async function getBriefings(
   limit: number = 50,
   offset: number = 0,
-  status?: DigestStatus
-): Promise<DigestsResponse> {
+  status?: BriefingStatus
+): Promise<BriefingsResponse> {
   const params = new URLSearchParams()
   params.set('limit', limit.toString())
   params.set('offset', offset.toString())
   if (status) params.set('status', status)
 
-  return fetchApi<DigestsResponse>(`/digests?${params.toString()}`)
+  return fetchApi<BriefingsResponse>(`/briefings?${params.toString()}`)
 }
 
-export async function getDigest(digestId: string): Promise<DigestDetailResponse> {
-  return fetchApi<DigestDetailResponse>(`/digests/${digestId}`)
+export async function getBriefing(briefingId: string): Promise<BriefingDetailResponse> {
+  return fetchApi<BriefingDetailResponse>(`/briefings/${briefingId}`)
 }
 
-export async function getLatestDigest(): Promise<DigestDetailResponse> {
-  return fetchApi<DigestDetailResponse>('/digests/latest')
+export async function getLatestBriefing(): Promise<BriefingDetailResponse> {
+  return fetchApi<BriefingDetailResponse>('/briefings/latest')
 }
 
-export async function getDigestContent(digestId: string): Promise<DigestContentResponse> {
-  return fetchApi<DigestContentResponse>(`/digests/${digestId}/content`)
+export async function getBriefingContent(briefingId: string): Promise<BriefingContentResponse> {
+  return fetchApi<BriefingContentResponse>(`/briefings/${briefingId}/content`)
 }
 
-export async function getDigestEpisodes(digestId: string): Promise<DigestEpisodesResponse> {
-  return fetchApi<DigestEpisodesResponse>(`/digests/${digestId}/episodes`)
+export async function getBriefingEpisodes(briefingId: string): Promise<BriefingEpisodesResponse> {
+  return fetchApi<BriefingEpisodesResponse>(`/briefings/${briefingId}/episodes`)
 }
 
-export async function previewDigest(request: CreateDigestRequest): Promise<DigestPreviewResponse> {
-  const response = await fetch(`${API_BASE}/digests/preview`, {
+export async function previewBriefing(request: CreateBriefingRequest): Promise<BriefingPreviewResponse> {
+  const response = await fetch(`${API_BASE}/briefings/preview`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -568,8 +568,8 @@ export async function previewDigest(request: CreateDigestRequest): Promise<Diges
   return response.json()
 }
 
-export async function createDigest(request: CreateDigestRequest): Promise<CreateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests`, {
+export async function createBriefing(request: CreateBriefingRequest): Promise<CreateBriefingResponse> {
+  const response = await fetch(`${API_BASE}/briefings`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -589,8 +589,8 @@ export async function createDigest(request: CreateDigestRequest): Promise<Create
   return response.json()
 }
 
-export async function deleteDigest(digestId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/digests/${digestId}`, {
+export async function deleteBriefing(briefingId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/briefings/${briefingId}`, {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -608,19 +608,19 @@ export async function deleteDigest(digestId: string): Promise<void> {
 // Morning Briefing API (uses server-configured defaults)
 // ============================================================================
 
-export async function getMorningBriefing(): Promise<DigestPreviewResponse> {
-  return fetchApi<DigestPreviewResponse>('/digests/morning-briefing')
+export async function getMorningBriefing(): Promise<BriefingPreviewResponse> {
+  return fetchApi<BriefingPreviewResponse>('/briefings/morning-briefing')
 }
 
 // ============================================================================
 // Narration API (spec #33)
 // ============================================================================
 
-export async function narrateDigest(
-  digestId: string,
-  request: NarrateDigestRequest = {},
-): Promise<NarrateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests/${digestId}/narrate`, {
+export async function narrateBriefing(
+  briefingId: string,
+  request: NarrateBriefingRequest = {},
+): Promise<NarrateBriefingResponse> {
+  const response = await fetch(`${API_BASE}/briefings/${briefingId}/narrate`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -700,8 +700,8 @@ export async function corpusSearch(
   return response.json()
 }
 
-export async function createMorningBriefing(): Promise<CreateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests/morning-briefing`, {
+export async function createMorningBriefing(): Promise<CreateBriefingResponse> {
+  const response = await fetch(`${API_BASE}/briefings/morning-briefing`, {
     method: 'POST',
     credentials: 'include',
   })

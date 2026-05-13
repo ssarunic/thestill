@@ -21,7 +21,7 @@ installs the `local-transcription` optional-dependencies extra.
 - Docker Engine + Compose v2 on the host.
 - **USB SSD mounted at `/srv/thestill`** is strongly recommended. SQLite WAL
   writes and podcast audio downloads will wear an SD card over months, and
-  random-read performance matters for transcript cleaning and digest
+  random-read performance matters for transcript cleaning and briefing
   generation.
 
 ## First-time setup
@@ -89,7 +89,7 @@ With the container running, pipeline commands are invoked via `docker exec`:
 ```bash
 docker exec -it thestill thestill add "https://example.com/feed.rss"
 docker exec -it thestill thestill refresh
-docker exec -it thestill thestill digest --ready-only
+docker exec -it thestill thestill briefing --ready-only
 ```
 
 **Note — slim image:** `thestill transcribe` requires downsampled audio on

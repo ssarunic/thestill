@@ -3,23 +3,23 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import Digests from './Digests'
-import { createDigest, createPendingDigest, createInProgressDigest, createFailedDigest } from '../test/mocks'
+import Briefings from './Briefings'
+import { createBriefing, createPendingBriefing, createInProgressBriefing, createFailedBriefing } from '../test/mocks'
 
 // Mock the useApi hooks
 vi.mock('../hooks/useApi', () => ({
-  useDigests: vi.fn(),
-  useCreateDigest: vi.fn(),
-  useDeleteDigest: vi.fn(),
-  usePreviewDigest: vi.fn(),
+  useBriefings: vi.fn(),
+  useCreateBriefing: vi.fn(),
+  useDeleteBriefing: vi.fn(),
+  usePreviewBriefing: vi.fn(),
 }))
 
-import { useDigests, useCreateDigest, useDeleteDigest, usePreviewDigest } from '../hooks/useApi'
+import { useBriefings, useCreateBriefing, useDeleteBriefing, usePreviewBriefing } from '../hooks/useApi'
 
-const mockUseDigests = useDigests as ReturnType<typeof vi.fn>
-const mockUseCreateDigest = useCreateDigest as ReturnType<typeof vi.fn>
-const mockUseDeleteDigest = useDeleteDigest as ReturnType<typeof vi.fn>
-const mockUsePreviewDigest = usePreviewDigest as ReturnType<typeof vi.fn>
+const mockUseBriefings = useBriefings as ReturnType<typeof vi.fn>
+const mockUseCreateBriefing = useCreateBriefing as ReturnType<typeof vi.fn>
+const mockUseDeleteBriefing = useDeleteBriefing as ReturnType<typeof vi.fn>
+const mockUsePreviewBriefing = usePreviewBriefing as ReturnType<typeof vi.fn>
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -39,20 +39,20 @@ function createWrapper() {
   }
 }
 
-describe('Digests Page', () => {
+describe('Briefings Page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
     // Default mock implementations
-    mockUseCreateDigest.mockReturnValue({
+    mockUseCreateBriefing.mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false,
     })
-    mockUseDeleteDigest.mockReturnValue({
+    mockUseDeleteBriefing.mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false,
     })
-    mockUsePreviewDigest.mockReturnValue({
+    mockUsePreviewBriefing.mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false,
       data: null,
@@ -61,83 +61,83 @@ describe('Digests Page', () => {
   })
 
   describe('Loading state', () => {
-    it('shows loading message while fetching digests', () => {
-      mockUseDigests.mockReturnValue({
+    it('shows loading message while fetching briefings', () => {
+      mockUseBriefings.mockReturnValue({
         data: null,
         isLoading: true,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
-      expect(screen.getByText('Loading digests...')).toBeInTheDocument()
+      expect(screen.getByText('Loading briefings...')).toBeInTheDocument()
     })
   })
 
   describe('Error state', () => {
     it('shows error message when fetch fails', () => {
-      mockUseDigests.mockReturnValue({
+      mockUseBriefings.mockReturnValue({
         data: null,
         isLoading: false,
         error: new Error('Network error'),
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
-      expect(screen.getByText(/Error loading digests/)).toBeInTheDocument()
+      expect(screen.getByText(/Error loading briefings/)).toBeInTheDocument()
       expect(screen.getByText(/Network error/)).toBeInTheDocument()
     })
   })
 
   describe('Empty state', () => {
-    it('shows empty state message when no digests', () => {
-      mockUseDigests.mockReturnValue({
-        data: { digests: [], total: 0 },
+    it('shows empty state message when no briefings', () => {
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [], total: 0 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
-      expect(screen.getByText('No digests yet')).toBeInTheDocument()
-      expect(screen.getByText('Create your first digest to get started')).toBeInTheDocument()
+      expect(screen.getByText('No briefings yet')).toBeInTheDocument()
+      expect(screen.getByText('Create your first briefing to get started')).toBeInTheDocument()
     })
   })
 
-  describe('Digest list', () => {
-    it('renders list of digests', () => {
-      const digests = [
-        createDigest({ id: '1' }),
-        createDigest({ id: '2', status: 'partial', episodes_failed: 1 }),
+  describe('Briefing list', () => {
+    it('renders list of briefings', () => {
+      const briefings = [
+        createBriefing({ id: '1' }),
+        createBriefing({ id: '2', status: 'partial', episodes_failed: 1 }),
       ]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 2 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 2 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
-      expect(screen.getAllByText(/Digest from/)).toHaveLength(2)
+      expect(screen.getAllByText(/Briefing from/)).toHaveLength(2)
     })
 
     it('shows correct status badge colors', () => {
-      const digests = [
-        createDigest({ id: '1', status: 'completed' }),
-        createPendingDigest({ id: '2' }),
-        createFailedDigest({ id: '3' }),
+      const briefings = [
+        createBriefing({ id: '1', status: 'completed' }),
+        createPendingBriefing({ id: '2' }),
+        createFailedBriefing({ id: '3' }),
       ]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 3 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 3 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
-      // "Completed" and "Failed" appear in both the digest-card badge and
+      // "Completed" and "Failed" appear in both the briefing-card badge and
       // the info box at the bottom of the page. "Pending" only appears in
       // the badge. Assert at least one match for each so the test tolerates
       // the info-box duplication.
@@ -147,47 +147,47 @@ describe('Digests Page', () => {
     })
   })
 
-  describe('Progress indicator for active digests', () => {
-    it('shows progress bar for pending digest', () => {
-      const digests = [createPendingDigest({ id: '1', episodes_total: 5, episodes_completed: 0 })]
+  describe('Progress indicator for active briefings', () => {
+    it('shows progress bar for pending briefing', () => {
+      const briefings = [createPendingBriefing({ id: '1', episodes_total: 5, episodes_completed: 0 })]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 1 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       expect(screen.getByText('Processing episodes...')).toBeInTheDocument()
       expect(screen.getByText('0 of 5 episodes completed')).toBeInTheDocument()
     })
 
-    it('shows progress bar for in_progress digest', () => {
-      const digests = [createInProgressDigest({ id: '1', episodes_total: 3, episodes_completed: 1 })]
+    it('shows progress bar for in_progress briefing', () => {
+      const briefings = [createInProgressBriefing({ id: '1', episodes_total: 3, episodes_completed: 1 })]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 1 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       expect(screen.getByText('Processing episodes...')).toBeInTheDocument()
       expect(screen.getByText('1 of 3 episodes completed')).toBeInTheDocument()
     })
 
-    it('does not show progress bar for completed digest', () => {
-      const digests = [createDigest({ id: '1', status: 'completed' })]
+    it('does not show progress bar for completed briefing', () => {
+      const briefings = [createBriefing({ id: '1', status: 'completed' })]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 1 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       expect(screen.queryByText('Processing episodes...')).not.toBeInTheDocument()
     })
@@ -195,24 +195,24 @@ describe('Digests Page', () => {
 
   describe('Stats cards', () => {
     it('shows correct counts in stats cards', () => {
-      const digests = [
-        createDigest({ id: '1', status: 'completed' }),
-        createDigest({ id: '2', status: 'completed' }),
-        createDigest({ id: '3', status: 'partial' }),
-        createFailedDigest({ id: '4' }),
+      const briefings = [
+        createBriefing({ id: '1', status: 'completed' }),
+        createBriefing({ id: '2', status: 'completed' }),
+        createBriefing({ id: '3', status: 'partial' }),
+        createFailedBriefing({ id: '4' }),
       ]
 
-      mockUseDigests.mockReturnValue({
-        data: { digests, total: 4 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings, total: 4 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       // Scope each assertion to its stat card so we don't collide with the
       // identical count (1) shared by Partial and Failed.
-      const totalCard = screen.getByText('Total Digests').parentElement!
+      const totalCard = screen.getByText('Total Briefings').parentElement!
       expect(within(totalCard).getByText('4')).toBeInTheDocument()
 
       const completedCard = screen
@@ -235,39 +235,39 @@ describe('Digests Page', () => {
     })
   })
 
-  describe('Create digest modal', () => {
-    it('opens modal when New Digest button is clicked', async () => {
+  describe('Create briefing modal', () => {
+    it('opens modal when New Briefing button is clicked', async () => {
       const user = userEvent.setup()
 
-      mockUseDigests.mockReturnValue({
-        data: { digests: [], total: 0 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [], total: 0 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       await user.click(screen.getByRole('button', { name: /new briefing/i }))
 
       expect(screen.getByText('Create New Briefing')).toBeInTheDocument()
-      expect(screen.getByText('Generate a digest from your processed podcast episodes')).toBeInTheDocument()
+      expect(screen.getByText('Generate a briefing from your processed podcast episodes')).toBeInTheDocument()
     })
 
     it('closes modal when Cancel is clicked', async () => {
       const user = userEvent.setup()
 
-      mockUseDigests.mockReturnValue({
-        data: { digests: [], total: 0 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [], total: 0 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       await user.click(screen.getByRole('button', { name: /new briefing/i }))
       await user.click(screen.getByRole('button', { name: /cancel/i }))
 
-      expect(screen.queryByText('Create New Digest')).not.toBeInTheDocument()
+      expect(screen.queryByText('Create New Briefing')).not.toBeInTheDocument()
     })
   })
 
@@ -275,13 +275,13 @@ describe('Digests Page', () => {
     it('shows delete confirmation when Delete is clicked', async () => {
       const user = userEvent.setup()
 
-      mockUseDigests.mockReturnValue({
-        data: { digests: [createDigest({ id: '1' })], total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [createBriefing({ id: '1' })], total: 1 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       await user.click(screen.getByRole('button', { name: /delete/i }))
 
@@ -292,13 +292,13 @@ describe('Digests Page', () => {
     it('cancels delete when No is clicked', async () => {
       const user = userEvent.setup()
 
-      mockUseDigests.mockReturnValue({
-        data: { digests: [createDigest({ id: '1' })], total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [createBriefing({ id: '1' })], total: 1 },
         isLoading: false,
         error: null,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       await user.click(screen.getByRole('button', { name: /delete/i }))
       await user.click(screen.getByRole('button', { name: /no/i }))
@@ -312,22 +312,22 @@ describe('Digests Page', () => {
       const user = userEvent.setup()
       const mockDeleteAsync = vi.fn().mockResolvedValue({})
 
-      mockUseDigests.mockReturnValue({
-        data: { digests: [createDigest({ id: 'digest-123' })], total: 1 },
+      mockUseBriefings.mockReturnValue({
+        data: { briefings: [createBriefing({ id: 'briefing-123' })], total: 1 },
         isLoading: false,
         error: null,
       })
-      mockUseDeleteDigest.mockReturnValue({
+      mockUseDeleteBriefing.mockReturnValue({
         mutateAsync: mockDeleteAsync,
         isPending: false,
       })
 
-      render(<Digests />, { wrapper: createWrapper() })
+      render(<Briefings />, { wrapper: createWrapper() })
 
       await user.click(screen.getByRole('button', { name: /delete/i }))
       await user.click(screen.getByRole('button', { name: /yes/i }))
 
-      expect(mockDeleteAsync).toHaveBeenCalledWith('digest-123')
+      expect(mockDeleteAsync).toHaveBeenCalledWith('briefing-123')
     })
   })
 })

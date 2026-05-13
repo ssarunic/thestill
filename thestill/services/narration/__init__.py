@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Narrated digest generation (spec #33)."""
+"""Narrated briefing generation (spec #33)."""
 
 from .artefacts import read_narration_header
 from .markdown_renderer import NarrationMarkdownRenderer

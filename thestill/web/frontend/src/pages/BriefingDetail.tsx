@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useDigest, useDigestContent, useDigestEpisodes, useDeleteDigest } from '../hooks/useApi'
-import type { DigestStatus, DigestEpisodeInfo } from '../api/types'
+import { useBriefing, useBriefingContent, useBriefingEpisodes, useDeleteBriefing } from '../hooks/useApi'
+import type { BriefingStatus, BriefingEpisodeInfo } from '../api/types'
 import ReactMarkdown from 'react-markdown'
 import NarrationView from '../components/NarrationView'
 
 // Status colors for badges
-const statusColors: Record<DigestStatus, string> = {
+const statusColors: Record<BriefingStatus, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
   in_progress: 'bg-blue-100 text-blue-700',
   completed: 'bg-green-100 text-green-700',
@@ -15,7 +15,7 @@ const statusColors: Record<DigestStatus, string> = {
 }
 
 // Status labels
-const statusLabels: Record<DigestStatus, string> = {
+const statusLabels: Record<BriefingStatus, string> = {
   pending: 'Pending',
   in_progress: 'In Progress',
   completed: 'Completed',
@@ -67,14 +67,14 @@ interface LinkIndexFallbackProps {
   contentLoading: boolean
   contentAvailable: boolean
   contentText: string | null
-  digestStatus: DigestStatus | undefined
+  briefingStatus: BriefingStatus | undefined
 }
 
 function LinkIndexFallback({
   contentLoading,
   contentAvailable,
   contentText,
-  digestStatus,
+  briefingStatus,
 }: LinkIndexFallbackProps) {
   if (contentLoading) {
     return (
@@ -101,12 +101,12 @@ function LinkIndexFallback({
         </svg>
       </div>
       <p className="text-gray-500">Briefing content not available</p>
-      {digestStatus === 'pending' && (
+      {briefingStatus === 'pending' && (
         <p className="text-sm text-gray-400 mt-1">
           This briefing is still being processed
         </p>
       )}
-      {digestStatus === 'failed' && (
+      {briefingStatus === 'failed' && (
         <p className="text-sm text-gray-400 mt-1">
           Briefing generation failed
         </p>
@@ -116,7 +116,7 @@ function LinkIndexFallback({
 }
 
 interface EpisodeItemProps {
-  episode: DigestEpisodeInfo
+  episode: BriefingEpisodeInfo
 }
 
 function EpisodeItem({ episode }: EpisodeItemProps) {
@@ -160,31 +160,31 @@ function EpisodeItem({ episode }: EpisodeItemProps) {
   )
 }
 
-export default function DigestDetail() {
-  const { digestId } = useParams<{ digestId: string }>()
+export default function BriefingDetail() {
+  const { briefingId } = useParams<{ briefingId: string }>()
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('content')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  const { data: digestData, isLoading: digestLoading, error: digestError } = useDigest(digestId || null)
-  const { data: contentData, isLoading: contentLoading } = useDigestContent(digestId || null)
-  const { data: episodesData, isLoading: episodesLoading } = useDigestEpisodes(digestId || null)
-  const deleteMutation = useDeleteDigest()
+  const { data: briefingData, isLoading: briefingLoading, error: briefingError } = useBriefing(briefingId || null)
+  const { data: contentData, isLoading: contentLoading } = useBriefingContent(briefingId || null)
+  const { data: episodesData, isLoading: episodesLoading } = useBriefingEpisodes(briefingId || null)
+  const deleteMutation = useDeleteBriefing()
 
   const handleDelete = async () => {
-    if (digestId) {
-      await deleteMutation.mutateAsync(digestId)
-      navigate('/digests')
+    if (briefingId) {
+      await deleteMutation.mutateAsync(briefingId)
+      navigate('/briefings')
     }
   }
 
-  if (digestError) {
+  if (briefingError) {
     return (
       <div className="text-center py-12">
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md mx-auto">
           <h2 className="text-red-700 font-medium mb-2">Error loading briefing</h2>
-          <p className="text-red-600 text-sm">{digestError.message}</p>
-          <Link to="/digests" className="mt-4 inline-block text-primary-600 hover:underline">
+          <p className="text-red-600 text-sm">{briefingError.message}</p>
+          <Link to="/briefings" className="mt-4 inline-block text-primary-600 hover:underline">
             &larr; Back to briefings
           </Link>
         </div>
@@ -192,21 +192,21 @@ export default function DigestDetail() {
     )
   }
 
-  const digest = digestData?.digest
+  const briefing = briefingData?.briefing
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Breadcrumb */}
       <nav className="text-sm flex items-center gap-1">
-        <Link to="/digests" className="text-gray-500 hover:text-gray-700">Briefings</Link>
+        <Link to="/briefings" className="text-gray-500 hover:text-gray-700">Briefings</Link>
         <span className="text-gray-400">/</span>
         <span className="text-gray-900 truncate">
-          {digestLoading ? '...' : digest ? formatShortDate(digest.created_at) : 'Digest'}
+          {briefingLoading ? '...' : briefing ? formatShortDate(briefing.created_at) : 'Briefing'}
         </span>
       </nav>
 
       {/* Header */}
-      {digestLoading ? (
+      {briefingLoading ? (
         <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-6 space-y-4">
           <div className="h-8 bg-gray-200 rounded w-1/2" />
           <div className="h-5 bg-gray-200 rounded w-1/3" />
@@ -215,19 +215,19 @@ export default function DigestDetail() {
             <div className="h-6 bg-gray-200 rounded w-32" />
           </div>
         </div>
-      ) : digest ? (
+      ) : briefing ? (
         <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">
-                Digest from {formatDate(digest.created_at)}
+                Briefing from {formatDate(briefing.created_at)}
               </h1>
               <p className="text-gray-600 mt-1">
-                Covers: {formatShortDate(digest.period_start)} - {formatShortDate(digest.period_end)}
+                Covers: {formatShortDate(briefing.period_start)} - {formatShortDate(briefing.period_end)}
               </p>
             </div>
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColors[digest.status]}`}>
-              {statusLabels[digest.status]}
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColors[briefing.status]}`}>
+              {statusLabels[briefing.status]}
             </span>
           </div>
 
@@ -236,32 +236,32 @@ export default function DigestDetail() {
             <div>
               <span className="text-gray-500">Episodes:</span>{' '}
               <span className="font-medium text-gray-900">
-                {digest.episodes_completed}/{digest.episodes_total}
+                {briefing.episodes_completed}/{briefing.episodes_total}
               </span>
-              {digest.episodes_failed > 0 && (
-                <span className="text-red-600 ml-1">({digest.episodes_failed} failed)</span>
+              {briefing.episodes_failed > 0 && (
+                <span className="text-red-600 ml-1">({briefing.episodes_failed} failed)</span>
               )}
             </div>
-            {digest.success_rate > 0 && (
+            {briefing.success_rate > 0 && (
               <div>
                 <span className="text-gray-500">Success rate:</span>{' '}
-                <span className="font-medium text-gray-900">{Math.round(digest.success_rate)}%</span>
+                <span className="font-medium text-gray-900">{Math.round(briefing.success_rate)}%</span>
               </div>
             )}
-            {digest.processing_time_seconds && (
+            {briefing.processing_time_seconds && (
               <div>
                 <span className="text-gray-500">Processing time:</span>{' '}
                 <span className="font-medium text-gray-900">
-                  {formatDuration(digest.processing_time_seconds)}
+                  {formatDuration(briefing.processing_time_seconds)}
                 </span>
               </div>
             )}
           </div>
 
           {/* Error message */}
-          {digest.error_message && (
+          {briefing.error_message && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-700">{digest.error_message}</p>
+              <p className="text-sm text-red-700">{briefing.error_message}</p>
             </div>
           )}
 
@@ -335,13 +335,13 @@ export default function DigestDetail() {
                 contentLoading={contentLoading}
                 contentAvailable={contentData?.available ?? false}
                 contentText={contentData?.content ?? null}
-                digestStatus={digest?.status}
+                briefingStatus={briefing?.status}
               />
             )
-            return digestId ? (
+            return briefingId ? (
               <NarrationView
-                digestId={digestId}
-                narrations={digestData?.narrations ?? []}
+                briefingId={briefingId}
+                narrations={briefingData?.narrations ?? []}
                 linkIndexFallback={linkIndex}
               />
             ) : (
