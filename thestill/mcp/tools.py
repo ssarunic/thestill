@@ -113,7 +113,7 @@ def setup_tools(server: Server, storage_path: str):
         db_path=config.database_path,
         embedding_model=embedding_model,
     )
-    podcast_service = PodcastService(storage_path, repository, path_manager)
+    podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
         repository,

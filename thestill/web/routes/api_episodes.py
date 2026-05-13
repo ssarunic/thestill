@@ -121,12 +121,16 @@ async def get_all_episodes(
     # Format response
     episodes = []
     for podcast, episode in episodes_with_podcasts:
-        # Extract summary preview if summary exists
+        # Extract summary preview if summary exists. Spec #35 — read via
+        # FileStorage; FileNotFoundError replaces the prior exists() check.
         summary_preview = None
         if episode.summary_path:
             summary_file = app_state.path_manager.summary_file(episode.summary_path)
-            if summary_file.exists():
-                summary_preview = extract_summary_preview(summary_file)
+            try:
+                summary_text = app_state.config.file_storage.read_text(app_state.path_manager.to_relative(summary_file))
+                summary_preview = extract_summary_preview(summary_text)
+            except FileNotFoundError:
+                pass
 
         episodes.append(
             {

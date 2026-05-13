@@ -91,9 +91,18 @@ def mock_feed_manager():
 
 
 @pytest.fixture
-def podcast_service(temp_storage, mock_repository, mock_path_manager, mock_feed_manager):
+def file_storage(temp_storage):
+    """Spec #35 — real LocalFileStorage rooted at the same tmp_path the
+    PathManager uses, so reads/writes round-trip naturally."""
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return LocalFileStorage(base_path=str(temp_storage))
+
+
+@pytest.fixture
+def podcast_service(temp_storage, mock_repository, mock_path_manager, mock_feed_manager, file_storage):
     """Create PodcastService with mocked dependencies."""
-    service = PodcastService(temp_storage, mock_repository, mock_path_manager)
+    service = PodcastService(temp_storage, mock_repository, mock_path_manager, file_storage=file_storage)
     # Replace feed_manager with mock
     service.feed_manager = mock_feed_manager
     return service
@@ -102,17 +111,17 @@ def podcast_service(temp_storage, mock_repository, mock_path_manager, mock_feed_
 class TestPodcastServiceInitialization:
     """Test PodcastService initialization."""
 
-    def test_init_with_string_path(self, mock_repository, mock_path_manager):
+    def test_init_with_string_path(self, mock_repository, mock_path_manager, file_storage):
         """Should accept string path."""
-        service = PodcastService("/tmp/test", mock_repository, mock_path_manager)
+        service = PodcastService("/tmp/test", mock_repository, mock_path_manager, file_storage=file_storage)
         assert service.storage_path == Path("/tmp/test")
         assert service.repository is mock_repository
         assert service.path_manager is mock_path_manager
 
-    def test_init_with_path_object(self, mock_repository, mock_path_manager):
+    def test_init_with_path_object(self, mock_repository, mock_path_manager, file_storage):
         """Should accept Path object."""
         path_obj = Path("/tmp/test")
-        service = PodcastService(path_obj, mock_repository, mock_path_manager)
+        service = PodcastService(path_obj, mock_repository, mock_path_manager, file_storage=file_storage)
         assert service.storage_path == path_obj
         assert service.repository is mock_repository
         assert service.path_manager is mock_path_manager
@@ -385,14 +394,17 @@ class TestGetEpisode:
 class TestGetEpisodes:
     """Test get_episodes method."""
 
-    def test_get_episodes_basic(self, podcast_service, sample_podcasts, mock_path_manager):
+    def test_get_episodes_basic(self, podcast_service, sample_podcasts, mock_path_manager, temp_storage):
         """Should list episodes with indices."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
-        # Mock path_manager methods to return non-existent paths
-        mock_path_manager.raw_transcript_file = Mock(return_value=Path("/nonexistent"))
-        mock_path_manager.clean_transcript_file = Mock(return_value=Path("/nonexistent"))
-        mock_path_manager.summary_file = Mock(return_value=Path("/nonexistent"))
+        # Spec #35 — paths must be UNDER the storage root for to_relative()
+        # to work, but the files themselves don't need to exist; the new
+        # FileStorage-backed reads handle FileNotFoundError gracefully.
+        missing_under_root = temp_storage / "nonexistent.dat"
+        mock_path_manager.raw_transcript_file = Mock(return_value=missing_under_root)
+        mock_path_manager.clean_transcript_file = Mock(return_value=missing_under_root)
+        mock_path_manager.summary_file = Mock(return_value=missing_under_root)
 
         # Execute
         result = podcast_service.get_episodes(1)

@@ -59,7 +59,14 @@ def feed_manager(repository, path_manager):
 @pytest.fixture
 def podcast_service(temp_storage, repository, path_manager):
     """Create PodcastService for integration testing."""
-    return PodcastService(storage_path=temp_storage, podcast_repository=repository, path_manager=path_manager)
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return PodcastService(
+        storage_path=temp_storage,
+        podcast_repository=repository,
+        path_manager=path_manager,
+        file_storage=LocalFileStorage(base_path=str(temp_storage)),
+    )
 
 
 @pytest.fixture

@@ -30,6 +30,7 @@ from ..models.transcript import Segment as RawSegment
 from ..models.transcript import Word
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
+from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
@@ -38,34 +39,29 @@ logger = get_logger(__name__)
 TranscriptType = Literal["cleaned", "raw"]
 
 
-def extract_summary_preview(summary_path: Path, max_length: int = 200) -> Optional[str]:
-    """
-    Extract a preview from a summary file (The Gist section).
+def extract_summary_preview(content: str, max_length: int = 200) -> Optional[str]:
+    """Extract a preview from summary markdown content (The Gist section).
+
+    Takes the markdown content as a string — callers own the read. Spec #35
+    pushed file I/O up to ``FileStorage``; centralising the extraction here
+    keeps the regex + truncation logic in one place without recoupling it
+    to a specific storage backend.
 
     Args:
-        summary_path: Path to the summary markdown file
-        max_length: Maximum length of the preview
+        content: The full summary-markdown text.
+        max_length: Maximum length of the preview.
 
     Returns:
-        Preview text or None if not available
+        Preview text or None if no gist section is present / extraction fails.
     """
-    if not summary_path.exists():
-        return None
-
     try:
-        content = summary_path.read_text(encoding="utf-8")
-
-        # Try to extract "The Gist" section (## 1. 🎙️ The Gist)
         import re
 
         gist_match = re.search(r"##\s*1\.\s*🎙️\s*The Gist\s*\n+([\s\S]*?)(?=\n##|\n---|\Z)", content, re.IGNORECASE)
         if gist_match:
             gist_content = gist_match.group(1).strip()
-            # Get lines that aren't empty
             lines = [line.strip() for line in gist_content.split("\n") if line.strip()]
-            # Skip the first line (host/guest info) and get the summary paragraph
             if len(lines) > 1:
-                # Join remaining lines (the actual summary)
                 summary_text = " ".join(lines[1:])
             elif lines:
                 summary_text = lines[0]
@@ -77,7 +73,6 @@ def extract_summary_preview(summary_path: Path, max_length: int = 200) -> Option
             summary_text = re.sub(r"\*([^*]+)\*", r"\1", summary_text)  # *italic*
             summary_text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", summary_text)  # [link](url)
 
-            # Truncate if needed
             if len(summary_text) > max_length:
                 summary_text = summary_text[: max_length - 3].rsplit(" ", 1)[0] + "..."
 
@@ -253,25 +248,32 @@ class PodcastService:
         storage_path: Union[str, Path],
         podcast_repository: PodcastRepository,
         path_manager: PathManager,
+        file_storage: FileStorage,
     ) -> None:
         """
         Initialize podcast service.
 
         Args:
-            storage_path: Path to data storage directory (str or Path)
-            podcast_repository: Repository for podcast persistence
-            path_manager: Path manager for file path operations
+            storage_path: Path to data storage directory (str or Path).
+            podcast_repository: Repository for podcast persistence.
+            path_manager: Path manager for file path operations.
+            file_storage: Spec #35 backend for transcript / summary reads.
         """
         self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
         self.path_manager: PathManager = path_manager
         self.repository: PodcastRepository = podcast_repository
+        self.file_storage: FileStorage = file_storage
 
-        # Initialize FeedManager with repository and path manager
         self.feed_manager: PodcastFeedManager = PodcastFeedManager(
             podcast_repository=podcast_repository, path_manager=path_manager
         )
 
-        logger.info(f"PodcastService initialized with storage: {self.storage_path}")
+        logger.info("PodcastService initialized", storage=str(self.storage_path))
+
+    def _read_relative(self, absolute_path: Path) -> str:
+        """Spec #35 read helper — collapses the two-call ``read_text(to_relative(p))``
+        pattern into one. Used by every read-side method below."""
+        return self.file_storage.read_text(self.path_manager.to_relative(absolute_path))
 
     def add_podcast(self, url: str) -> Optional[Podcast]:
         """
@@ -539,12 +541,17 @@ class PodcastService:
         # Build result with indices (account for offset in indexing)
         result = []
         for idx, episode in enumerate(sorted_episodes, start=offset + 1):
-            # Extract summary preview if summary exists
+            # Extract summary preview if summary exists. Spec #35 — read via
+            # FileStorage and use FileNotFoundError to detect absence in one
+            # call instead of exists()+read (two S3 round-trips).
             summary_preview = None
             if episode.summary_path:
-                summary_file = self.path_manager.summary_file(episode.summary_path)
-                if summary_file.exists():
-                    summary_preview = extract_summary_preview(summary_file)
+                try:
+                    summary_preview = extract_summary_preview(
+                        self._read_relative(self.path_manager.summary_file(episode.summary_path))
+                    )
+                except FileNotFoundError:
+                    pass
 
             result.append(
                 EpisodeWithIndex(
@@ -560,12 +567,24 @@ class PodcastService:
                     duration=episode.duration,
                     external_id=episode.external_id,
                     state=episode.state.value,
+                    # Spec #35 — exists() probes also route through
+                    # FileStorage. Two HeadObject calls per episode on S3
+                    # is the price; the list-episodes path is a UI hot
+                    # path so we accept it for now (a future optimisation
+                    # could batch via list_files with a prefix).
                     transcript_available=bool(
                         episode.clean_transcript_path
-                        and self.path_manager.clean_transcript_file(episode.clean_transcript_path).exists()
+                        and self.file_storage.exists(
+                            self.path_manager.to_relative(
+                                self.path_manager.clean_transcript_file(episode.clean_transcript_path)
+                            )
+                        )
                     ),
                     summary_available=bool(
-                        episode.summary_path and self.path_manager.summary_file(episode.summary_path).exists()
+                        episode.summary_path
+                        and self.file_storage.exists(
+                            self.path_manager.to_relative(self.path_manager.summary_file(episode.summary_path))
+                        )
                     ),
                     image_url=episode.image_url,
                     summary_preview=summary_preview,
@@ -625,13 +644,13 @@ class PodcastService:
         ``Episode`` (the web route is one) — skips the podcast/episode
         re-lookup the id-based variant pays.
         """
-        # Try cleaned transcript first (preferred)
+        # Try cleaned transcript first (preferred). Spec #35 — route reads
+        # through FileStorage; the require_file_exists guard becomes a
+        # try/FileNotFoundError so we don't pay two S3 round-trips per call.
         if episode.clean_transcript_path:
             md_path = self.path_manager.clean_transcript_file(episode.clean_transcript_path)
             try:
-                self.path_manager.require_file_exists(md_path, "Cleaned transcript file not found")
-                with open(md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                content = self._read_relative(md_path)
                 logger.info(f"Retrieved cleaned transcript for: {episode.title}")
                 return TranscriptResult(content=content, transcript_type="cleaned")
             except FileNotFoundError:
@@ -647,9 +666,7 @@ class PodcastService:
 
                 from ..models.transcript import Transcript
 
-                self.path_manager.require_file_exists(json_path, "Raw transcript file not found")
-                with open(json_path, "r", encoding="utf-8") as f:
-                    transcript_data = json.load(f)
+                transcript_data = json.loads(self._read_relative(json_path))
                 # Render raw JSON via the spec #18 ``AnnotatedTranscript`` path
                 # rather than the legacy ``TranscriptFormatter``. The former
                 # is byte-identical to the latter for ``from_raw`` input
@@ -703,10 +720,7 @@ class PodcastService:
 
         json_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
         try:
-            self.path_manager.require_file_exists(json_path, "Segmented transcript JSON not found")
-            with open(json_path, "r", encoding="utf-8") as fh:
-                payload = fh.read()
-            annotated = AnnotatedTranscript.model_validate_json(payload)
+            annotated = AnnotatedTranscript.model_validate_json(self._read_relative(json_path))
         except FileNotFoundError:
             logger.warning(f"Segmented transcript JSON missing on disk: {json_path}")
             return None
@@ -742,21 +756,35 @@ class PodcastService:
         annotated_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
         raw_path = self.path_manager.raw_transcript_file(episode.raw_transcript_path)
 
-        if not annotated_path.exists() or not raw_path.exists():
+        # Spec #35 — collapse the prior exists+read into a single read,
+        # treating FileNotFoundError on either file as the same "missing"
+        # signal. The structured log line keeps the same shape so any
+        # alerting rules on it continue to work.
+        from ..models.transcript import Transcript
+
+        try:
+            annotated_payload = self._read_relative(annotated_path)
+        except FileNotFoundError:
             logger.warning(
                 "transcript_words.file_missing",
                 episode_id=episode.id,
-                annotated_present=annotated_path.exists(),
-                raw_present=raw_path.exists(),
+                annotated_present=False,
+                raw_present=None,
+            )
+            return None
+        try:
+            raw_payload = self._read_relative(raw_path)
+        except FileNotFoundError:
+            logger.warning(
+                "transcript_words.file_missing",
+                episode_id=episode.id,
+                annotated_present=True,
+                raw_present=False,
             )
             return None
 
-        from ..models.transcript import Transcript
-
-        with open(annotated_path, "r", encoding="utf-8") as fh:
-            annotated = AnnotatedTranscript.model_validate_json(fh.read())
-        with open(raw_path, "r", encoding="utf-8") as fh:
-            raw = Transcript.model_validate_json(fh.read())
+        annotated = AnnotatedTranscript.model_validate_json(annotated_payload)
+        raw = Transcript.model_validate_json(raw_payload)
 
         raw_by_id: dict[int, RawSegment] = {seg.id: seg for seg in raw.segments}
 
@@ -799,21 +827,17 @@ class PodcastService:
             logger.info(f"Episode not yet summarized: {episode.title}")
             return "N/A - Episode not yet summarized"
 
-        # Build full path to the summary file using PathManager
+        # Spec #35 — route through FileStorage. The single try/except
+        # replaces the prior require_file_exists + open() pair (two S3
+        # round-trips → one).
         summary_path = self.path_manager.summary_file(episode.summary_path)
-
-        # Verify summary file exists
         try:
-            self.path_manager.require_file_exists(summary_path, "Summary file not found")
+            content = self._read_relative(summary_path)
         except FileNotFoundError:
             logger.warning(f"Summary file not found: {summary_path}")
             return "N/A - Summary file not found"
-
-        try:
-            with open(summary_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            logger.info(f"Retrieved summary for: {episode.title}")
-            return content
         except Exception as e:
             logger.error(f"Error reading summary file: {e}")
             return f"N/A - Error reading summary: {e}"
+        logger.info(f"Retrieved summary for: {episode.title}")
+        return content
