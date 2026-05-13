@@ -36,7 +36,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
@@ -46,6 +46,9 @@ from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager, _validate_slug
 from ...utils.url_generator import UrlGenerator
 from ..digest_generator import DigestGenerator, extract_gist
+
+if TYPE_CHECKING:
+    from ...utils.file_storage import FileStorage
 from ..narration_prompts import load_default_anchor_prompt
 from .markdown_renderer import NarrationMarkdownRenderer
 from .models import (
@@ -143,6 +146,7 @@ class NarrationGenerator:
     def __init__(
         self,
         path_manager: PathManager,
+        file_storage: "FileStorage",
         facts_manager: Optional[FactsManager] = None,
         loader: Optional[TranscriptTurnLoader] = None,
         selector: Optional[QuoteSelector] = None,
@@ -155,12 +159,20 @@ class NarrationGenerator:
         anchor_prompt: Optional[str] = None,
     ):
         self.path_manager = path_manager
+        self.file_storage = file_storage
         self.facts_manager = facts_manager or FactsManager(path_manager)
         self.loader = loader or TranscriptTurnLoader(path_manager, self.facts_manager)
         self.selector = selector or QuoteSelector()
         self.url_generator = url_generator or UrlGenerator()
         self.markdown_renderer = markdown_renderer or NarrationMarkdownRenderer(url_generator=self.url_generator)
-        self.digest_generator = digest_generator or DigestGenerator(path_manager, url_generator=self.url_generator)
+        # Spec #35 — `file_storage` is required so callers can't accidentally
+        # default to local when ``STORAGE_BACKEND=s3``. The earlier fallback
+        # let production paths read summaries from the wrong backend
+        # (reviewer P2). The provided storage is also threaded into the
+        # auto-constructed DigestGenerator.
+        self.digest_generator = digest_generator or DigestGenerator(
+            path_manager, file_storage, url_generator=self.url_generator
+        )
         self.llm_provider = llm_provider
         self._anchor_prompt = anchor_prompt
         self.clusterer = clusterer
@@ -206,7 +218,6 @@ class NarrationGenerator:
         """
         cfg = config or NarrationConfig()
         narrations_dir = self.path_manager.narrations_dir()
-        narrations_dir.mkdir(parents=True, exist_ok=True)
         path = self.path_manager._assert_inside_root(narrations_dir / f"{cfg.file_basename(content.generated_at)}.json")
         payload = {
             "generated_at": content.generated_at.astimezone(timezone.utc).isoformat(),
@@ -223,7 +234,12 @@ class NarrationGenerator:
             "episodes_covered": list(content.episode_ids_covered),
             "episodes_in_tail": list(content.episode_ids_in_tail),
         }
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Spec #35 — go through FileStorage so artefacts land on the
+        # configured backend (was Path.write_text, missing S3 entirely).
+        self.file_storage.write_text(
+            self.path_manager.to_relative(path),
+            json.dumps(payload, indent=2, ensure_ascii=False),
+        )
         content.json_script_path = path
         logger.info(
             "narration json script written",
@@ -243,9 +259,10 @@ class NarrationGenerator:
             return None
         cfg = config or NarrationConfig()
         narrations_dir = self.path_manager.narrations_dir()
-        narrations_dir.mkdir(parents=True, exist_ok=True)
         path = self.path_manager._assert_inside_root(narrations_dir / f"{cfg.file_basename(content.generated_at)}.md")
-        path.write_text(content.markdown, encoding="utf-8")
+        # Spec #35 — route through FileStorage so the markdown lands on the
+        # configured backend.
+        self.file_storage.write_text(self.path_manager.to_relative(path), content.markdown)
         content.markdown_path = path
         logger.info(
             "narration markdown written",
@@ -461,16 +478,13 @@ class NarrationGenerator:
         if not episode.summary_path:
             return None
         path = self.path_manager.summary_file(episode.summary_path)
-        if not path.exists():
-            return None
+        # Spec #35 — go through FileStorage so summaries are found on the
+        # configured backend. ``StorageError`` (a ``TransientError``)
+        # propagates so the task worker's retry/DLQ layer can act; only
+        # genuine missing-summary cases return ``None``.
         try:
-            return path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "narration: failed to read summary",
-                episode_id=episode.id,
-                error=str(exc),
-            )
+            return self.file_storage.read_text(self.path_manager.to_relative(path))
+        except FileNotFoundError:
             return None
 
     def _read_gist(self, episode: Episode) -> Optional[str]:

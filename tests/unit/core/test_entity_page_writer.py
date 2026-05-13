@@ -12,6 +12,7 @@ from thestill.core.entity_page_writer import EntityPageWriter
 from thestill.models.entities import EntityRecord, EntityType
 from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from thestill.utils.file_storage import LocalFileStorage
 from thestill.utils.path_manager import PathManager
 
 
@@ -20,7 +21,8 @@ def _setup(tmp_path) -> tuple[EntityPageWriter, SqliteEntityRepository, PathMana
     SqlitePodcastRepository(db_path=db_path)
     repo = SqliteEntityRepository(db_path=db_path)
     pm = PathManager(storage_path=str(tmp_path))
-    return EntityPageWriter(path_manager=pm, entity_repository=repo), repo, pm
+    storage = LocalFileStorage(base_path=str(tmp_path))
+    return EntityPageWriter(path_manager=pm, entity_repository=repo, file_storage=storage), repo, pm
 
 
 class TestEntityPages:

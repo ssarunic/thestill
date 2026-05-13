@@ -20,7 +20,7 @@ Downloads external transcripts from RSS feeds in all available formats
 These transcripts are stored separately from locally-generated transcripts.
 """
 
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import requests
 from structlog import get_logger
@@ -29,6 +29,9 @@ from ..models.podcast import TranscriptLink
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..utils.path_manager import PathManager
 from ..utils.url_guard import UnsafeURLError, guarded_redirect_fetch
+
+if TYPE_CHECKING:
+    from ..utils.file_storage import FileStorage
 
 logger = get_logger(__name__)
 
@@ -47,16 +50,24 @@ class ExternalTranscriptDownloader:
     - Graceful error handling (continue on failure)
     """
 
-    def __init__(self, repository: SqlitePodcastRepository, path_manager: PathManager):
+    def __init__(
+        self,
+        repository: SqlitePodcastRepository,
+        path_manager: PathManager,
+        file_storage: "FileStorage",
+    ):
         """
         Initialize downloader.
 
         Args:
-            repository: Database repository for tracking download status
-            path_manager: Path manager for determining storage paths
+            repository: Database repository for tracking download status.
+            path_manager: Path manager for determining storage paths.
+            file_storage: Spec #35 backend — writes transcripts via the
+                storage abstraction so they land on S3 in production.
         """
         self.repository = repository
         self.path_manager = path_manager
+        self.file_storage = file_storage
 
     def download_all_for_episode(
         self,
@@ -89,9 +100,11 @@ class ExternalTranscriptDownloader:
 
         logger.info(f"Downloading {len(pending_links)} transcript format(s) for {episode_slug}")
 
-        # Ensure directory exists
+        # Spec #35 — write_bytes creates parent directories on local; no-op
+        # on S3 (object keys imply prefix existence). The historical mkdir
+        # call is now redundant but the resolved path is still useful for
+        # log/return values below.
         podcast_dir = self.path_manager.external_transcript_dir_for_podcast(podcast_slug)
-        podcast_dir.mkdir(parents=True, exist_ok=True)
 
         downloaded: Dict[str, str] = {}
 
@@ -134,9 +147,12 @@ class ExternalTranscriptDownloader:
         # Determine file path
         extension = link.format_extension
         file_path = self.path_manager.external_transcript_file(podcast_slug, episode_slug, extension)
+        relative_key = self.path_manager.to_relative(file_path)
 
-        # Skip if file already exists
-        if file_path.exists():
+        # Skip if file already exists. Spec #35 — ``exists`` is one round-trip
+        # on S3, but the alternative (download + write + later detect-dup)
+        # is worse. Keep the skip-check.
+        if self.file_storage.exists(relative_key):
             logger.debug(f"Transcript file already exists: {file_path}")
             return str(file_path)
 
@@ -162,9 +178,9 @@ class ExternalTranscriptDownloader:
             return None
         response.raise_for_status()
 
-        # Save to file
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(response.content)
+        # Spec #35 — write_bytes handles parent-dir creation on local;
+        # transparent on S3.
+        self.file_storage.write_bytes(relative_key, response.content)
 
         logger.debug(f"Saved transcript to {file_path}")
         return str(file_path)

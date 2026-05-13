@@ -24,26 +24,18 @@ from pydantic import HttpUrl
 
 from thestill.models.podcast import Episode, Podcast
 from thestill.services.narration.models import QuoteCandidate, ScriptBlock
-from thestill.services.narration.narration_generator import (
-    NarrationConfig,
-    NarrationGenerator,
-)
-from thestill.services.narration.quote_selector import (
-    QuoteSelector,
-    QuoteSelectorConfig,
-)
-from thestill.services.narration.transcript_loader import (
-    ResolvedTurn,
-    TranscriptTurnLoader,
-)
+from thestill.services.narration.narration_generator import NarrationConfig, NarrationGenerator
+from thestill.services.narration.quote_selector import QuoteSelector, QuoteSelectorConfig
+from thestill.services.narration.transcript_loader import ResolvedTurn, TranscriptTurnLoader
 from thestill.utils.path_manager import PathManager
 
 
 class _StaticLoader:
     """Stand-in loader: returns a hard-coded turn list per episode id."""
 
-    def __init__(self, turns_by_episode: dict[str, List[ResolvedTurn]],
-                 facts_by_episode: dict[str, object] | None = None) -> None:
+    def __init__(
+        self, turns_by_episode: dict[str, List[ResolvedTurn]], facts_by_episode: dict[str, object] | None = None
+    ) -> None:
         self._turns = turns_by_episode
         self._facts = facts_by_episode or {}
 
@@ -87,8 +79,13 @@ def _make_podcast(*, id_: str, title: str, slug: str) -> Podcast:
 
 
 def _good_turn(
-    *, episode_id: str, segment_id: int, start: float, speaker: str,
-    role: str = "host", text: str | None = None,
+    *,
+    episode_id: str,
+    segment_id: int,
+    start: float,
+    speaker: str,
+    role: str = "host",
+    text: str | None = None,
 ) -> ResolvedTurn:
     body = text or (
         "The shipping pipeline cleared every test in the new run, "
@@ -118,8 +115,18 @@ def storage(tmp_path: Path) -> PathManager:
     return pm
 
 
+@pytest.fixture
+def file_storage(storage: PathManager):
+    """Spec #35 — LocalFileStorage rooted at the same data root the
+    PathManager uses, so reads/writes round-trip naturally."""
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return LocalFileStorage(base_path=str(storage.storage_path))
+
+
 def test_generator_skeleton_emits_opener_segments_and_signoff(
     storage: PathManager,
+    file_storage,
 ) -> None:
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
     ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one", title="Ep One")
@@ -131,9 +138,7 @@ def test_generator_skeleton_emits_opener_segments_and_signoff(
             "e2": [_good_turn(episode_id="e2", segment_id=1, start=60.0, speaker="B")],
         }
     )
-    gen = NarrationGenerator(
-        path_manager=storage, loader=loader, selector=QuoteSelector()
-    )
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=loader, selector=QuoteSelector())
     content = gen.generate([(podcast, ep1), (podcast, ep2)])
     sections = [b.section for b in content.blocks]
     assert sections[0] == "opener"
@@ -147,7 +152,7 @@ def test_generator_skeleton_emits_opener_segments_and_signoff(
     assert content.stats.episodes_in_tail == 0
 
 
-def test_episodes_without_quotes_route_to_tail(storage: PathManager) -> None:
+def test_episodes_without_quotes_route_to_tail(storage: PathManager, file_storage) -> None:
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
     covered = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
     barren = _make_episode(id_="e2", podcast_id="p1", slug="ep-two", title="Quiet One")
@@ -157,9 +162,7 @@ def test_episodes_without_quotes_route_to_tail(storage: PathManager) -> None:
             "e2": [],
         }
     )
-    gen = NarrationGenerator(
-        path_manager=storage, loader=loader, selector=QuoteSelector()
-    )
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=loader, selector=QuoteSelector())
     content = gen.generate([(podcast, covered), (podcast, barren)])
     assert content.episode_ids_covered == ["e1"]
     assert content.episode_ids_in_tail == ["e2"]
@@ -168,7 +171,7 @@ def test_episodes_without_quotes_route_to_tail(storage: PathManager) -> None:
     assert "Quiet One" in (tail_blocks[0].text or "")
 
 
-def test_quote_share_cap_drops_lowest_scoring(storage: PathManager) -> None:
+def test_quote_share_cap_drops_lowest_scoring(storage: PathManager, file_storage) -> None:
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
     eps = [_make_episode(id_=f"e{i}", podcast_id="p1", slug=f"ep-{i}") for i in range(1, 6)]
     # Each episode contributes one quote of 18s (clean text). Five quotes
@@ -179,25 +182,19 @@ def test_quote_share_cap_drops_lowest_scoring(storage: PathManager) -> None:
     }
     loader = _StaticLoader(turns_by_episode=turns_by_ep)
     cfg = NarrationConfig(target_duration_seconds=60, max_quote_share=0.40)
-    gen = NarrationGenerator(
-        path_manager=storage, loader=loader, selector=QuoteSelector()
-    )
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=loader, selector=QuoteSelector())
     content = gen.generate([(podcast, ep) for ep in eps], cfg)
     cap_seconds = cfg.target_duration_seconds * cfg.max_quote_share
     assert content.stats.quote_seconds <= cap_seconds + 0.01
 
 
-def test_json_script_round_trips_through_disk(storage: PathManager) -> None:
+def test_json_script_round_trips_through_disk(storage: PathManager, file_storage) -> None:
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
     ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one", title="First")
     loader = _StaticLoader(
-        turns_by_episode={
-            "e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex")]
-        }
+        turns_by_episode={"e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex")]}
     )
-    gen = NarrationGenerator(
-        path_manager=storage, loader=loader, selector=QuoteSelector()
-    )
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=loader, selector=QuoteSelector())
     content = gen.generate([(podcast, ep1)])
     out_path = gen.write_json_script(content)
     assert out_path.exists()
@@ -240,11 +237,9 @@ class _StubScriptWriter:
 
 def test_full_phase2_path_renders_markdown_and_marks_narrated(
     storage: PathManager,
+    file_storage,
 ) -> None:
-    from thestill.services.narration.models import (
-        Segment,
-        ThemePlan,
-    )
+    from thestill.services.narration.models import Segment, ThemePlan
     from thestill.services.narration.script_writer import ScriptResult
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -255,9 +250,7 @@ def test_full_phase2_path_renders_markdown_and_marks_narrated(
         }
     )
     plan = ThemePlan(
-        segments=(
-            Segment(theme="AI agents", angle="Lead angle", episode_ids=("e1",), rank=1),
-        ),
+        segments=(Segment(theme="AI agents", angle="Lead angle", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
     blocks = [
@@ -265,14 +258,9 @@ def test_full_phase2_path_renders_markdown_and_marks_narrated(
         ScriptBlock(
             kind="narration",
             section="segment-1",
-            text=(
-                "On Test Podcast, the host argues the bar shifted. "
-                "Two takes from the same morning. " * 5
-            ),
+            text=("On Test Podcast, the host argues the bar shifted. " "Two takes from the same morning. " * 5),
         ),
-        ScriptBlock(
-            kind="quote", section="segment-1", quote_id="q1", duration_seconds=12.0
-        ),
+        ScriptBlock(kind="quote", section="segment-1", quote_id="q1", duration_seconds=12.0),
         ScriptBlock(
             kind="narration",
             section="segment-1",
@@ -284,6 +272,7 @@ def test_full_phase2_path_renders_markdown_and_marks_narrated(
 
     gen = NarrationGenerator(
         path_manager=storage,
+        file_storage=file_storage,
         loader=loader,
         selector=QuoteSelector(),
         clusterer=_StubClusterer(plan),
@@ -306,6 +295,7 @@ def test_full_phase2_path_renders_markdown_and_marks_narrated(
 
 def test_fallback_path_emits_link_index_when_validation_fails(
     storage: PathManager,
+    file_storage,
 ) -> None:
     from thestill.services.narration.models import ThemePlan, ValidationFailure
     from thestill.services.narration.script_writer import ScriptResult
@@ -326,6 +316,7 @@ def test_fallback_path_emits_link_index_when_validation_fails(
 
     gen = NarrationGenerator(
         path_manager=storage,
+        file_storage=file_storage,
         loader=loader,
         selector=QuoteSelector(),
         clusterer=_StubClusterer(plan),
@@ -342,7 +333,7 @@ def test_fallback_path_emits_link_index_when_validation_fails(
     assert content.episode_ids_in_tail == ["e1"]
 
 
-def test_run_is_deterministic(storage: PathManager) -> None:
+def test_run_is_deterministic(storage: PathManager, file_storage) -> None:
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
     eps = [_make_episode(id_=f"e{i}", podcast_id="p1", slug=f"ep-{i}") for i in range(1, 4)]
     turns_by_ep = {
@@ -354,8 +345,12 @@ def test_run_is_deterministic(storage: PathManager) -> None:
     }
     loader_a = _StaticLoader(turns_by_episode=turns_by_ep)
     loader_b = _StaticLoader(turns_by_episode=turns_by_ep)
-    gen_a = NarrationGenerator(path_manager=storage, loader=loader_a, selector=QuoteSelector())
-    gen_b = NarrationGenerator(path_manager=storage, loader=loader_b, selector=QuoteSelector())
+    gen_a = NarrationGenerator(
+        path_manager=storage, file_storage=file_storage, loader=loader_a, selector=QuoteSelector()
+    )
+    gen_b = NarrationGenerator(
+        path_manager=storage, file_storage=file_storage, loader=loader_b, selector=QuoteSelector()
+    )
     content_a = gen_a.generate([(podcast, ep) for ep in eps])
     content_b = gen_b.generate([(podcast, ep) for ep in eps])
     assert [b.section for b in content_a.blocks] == [b.section for b in content_b.blocks]

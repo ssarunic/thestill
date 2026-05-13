@@ -34,6 +34,7 @@ from structlog import get_logger
 
 from ..models.entities import EntityRecord, EntityType
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
@@ -67,9 +68,11 @@ class EntityPageWriter:
         self,
         path_manager: PathManager,
         entity_repository: SqliteEntityRepository,
+        file_storage: FileStorage,
     ):
         self.path_manager = path_manager
         self.entity_repository = entity_repository
+        self.file_storage = file_storage
 
     def write_entity_page(self, entity: EntityRecord) -> WrittenPaths:
         result = WrittenPaths()
@@ -77,11 +80,11 @@ class EntityPageWriter:
             return result
 
         out_md = self.path_manager.corpus_entity_file(entity.type.value, _slug_from_id(entity.id))
-        out_md.parent.mkdir(parents=True, exist_ok=True)
+        relative_key = self.path_manager.to_relative(out_md)
 
         summary = self.entity_repository.get_entity_summary(entity.id)
         body = _render_entity_page(entity=entity, summary=summary)
-        if _write_if_changed(out_md, body):
+        if _write_if_changed(self.file_storage, relative_key, body):
             result.written.append(out_md)
         else:
             result.skipped_unchanged.append(out_md)
@@ -173,14 +176,19 @@ def _yaml_string(value: str) -> str:
     return value
 
 
-def _write_if_changed(path: Path, content: str) -> bool:
+def _write_if_changed(storage: FileStorage, relative_key: str, content: str) -> bool:
+    """Spec #35 — route the change-detection write through the abstraction.
+
+    The skip-on-unchanged optimisation matters on S3 too: ``PutObject`` is
+    cheap but bills per-request and creates a new ETag, which invalidates
+    any downstream cache layered on top.
+    """
     payload = content.encode("utf-8")
-    if path.exists():
-        try:
-            existing = path.read_bytes()
-        except OSError:
-            existing = None
-        if existing == payload:
-            return False
-    path.write_bytes(payload)
+    try:
+        existing = storage.read_bytes(relative_key)
+    except FileNotFoundError:
+        existing = None
+    if existing == payload:
+        return False
+    storage.write_bytes(relative_key, payload)
     return True

@@ -598,10 +598,10 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             output_path = path_manager.summary_file(summary_filename)
             summary_db_path = summary_filename
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Summarize
-        summarizer.summarize(transcript_text, output_path, metadata=metadata)
+        # Summarize, then persist via FileStorage (spec #35) so the artefact
+        # lands on the configured backend rather than always-local disk.
+        summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+        state.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
 
         # Update episode state
         state.feed_manager.mark_episode_processed(

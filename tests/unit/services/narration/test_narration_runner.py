@@ -37,12 +37,12 @@ from thestill.utils.path_manager import PathManager
 
 # Re-use the test fixtures already defined for the generator tests.
 from .test_narration_generator import (
-    _StaticLoader,
-    _StubClusterer,
-    _StubScriptWriter,
     _good_turn,
     _make_episode,
     _make_podcast,
+    _StaticLoader,
+    _StubClusterer,
+    _StubScriptWriter,
 )
 
 
@@ -79,6 +79,14 @@ def storage(tmp_path: Path) -> PathManager:
     return pm
 
 
+@pytest.fixture
+def file_storage(storage: PathManager):
+    """Spec #35 — LocalFileStorage rooted at the data root."""
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return LocalFileStorage(base_path=str(storage.storage_path))
+
+
 def _digest(*, id_: str, episode_ids: list[str]) -> Digest:
     return Digest(
         id=id_,
@@ -90,7 +98,7 @@ def _digest(*, id_: str, episode_ids: list[str]) -> Digest:
     )
 
 
-def _generator(storage: PathManager, plan, script_blocks):
+def _generator(storage: PathManager, file_storage, plan, script_blocks):
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")  # noqa: F841
 
     loader = _StaticLoader(
@@ -100,20 +108,16 @@ def _generator(storage: PathManager, plan, script_blocks):
     )
     return NarrationGenerator(
         path_manager=storage,
+        file_storage=file_storage,
         loader=loader,
         selector=QuoteSelector(),
         clusterer=_StubClusterer(plan),
-        script_writer=_StubScriptWriter(
-            ScriptResult(blocks=tuple(script_blocks), failures=(), raw_word_count=80)
-        ),
+        script_writer=_StubScriptWriter(ScriptResult(blocks=tuple(script_blocks), failures=(), raw_word_count=80)),
     )
 
 
 def _good_blocks() -> list[ScriptBlock]:
-    long_text = (
-        "On Test Podcast, the host argues the bar shifted. "
-        "Two takes from the same morning. " * 5
-    )
+    long_text = "On Test Podcast, the host argues the bar shifted. " "Two takes from the same morning. " * 5
     return [
         ScriptBlock(kind="narration", section="opener", text="Today's lead."),
         ScriptBlock(kind="narration", section="segment-1", text=long_text),
@@ -122,7 +126,7 @@ def _good_blocks() -> list[ScriptBlock]:
     ]
 
 
-def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager) -> None:
+def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager, file_storage) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -133,7 +137,7 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
     )
     digest = _digest(id_="digest-001", episode_ids=["e1"])
     runner = NarrationRunner(
-        generator=_generator(storage, plan, _good_blocks()),
+        generator=_generator(storage, file_storage, plan, _good_blocks()),
         digest_repository=_DigestRepo([digest]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
@@ -150,7 +154,7 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
     assert payload["episodes_covered"] == ["e1"]
 
 
-def test_runner_captures_latency_ms_and_digest_id(storage: PathManager) -> None:
+def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_storage) -> None:
     """Phase 5 instrumentation: ``content.latency_ms`` is populated by
     the runner around ``generate()``, and ``digest_id`` is persisted in
     the JSON header so the dashboard tile doesn't have to parse the
@@ -166,7 +170,7 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager) -> None:
     )
     digest = _digest(id_="digest-uuid-001", episode_ids=["e1"])
     runner = NarrationRunner(
-        generator=_generator(storage, plan, _good_blocks()),
+        generator=_generator(storage, file_storage, plan, _good_blocks()),
         digest_repository=_DigestRepo([digest]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
@@ -182,7 +186,7 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager) -> None:
     assert payload["slug"] == "medium"
 
 
-def test_runner_resolves_specific_digest_id(storage: PathManager) -> None:
+def test_runner_resolves_specific_digest_id(storage: PathManager, file_storage) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -194,7 +198,7 @@ def test_runner_resolves_specific_digest_id(storage: PathManager) -> None:
     older = _digest(id_="older", episode_ids=["e1"])
     newer = _digest(id_="newer", episode_ids=["e1"])
     runner = NarrationRunner(
-        generator=_generator(storage, plan, _good_blocks()),
+        generator=_generator(storage, file_storage, plan, _good_blocks()),
         digest_repository=_DigestRepo([older, newer]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
@@ -202,10 +206,11 @@ def test_runner_resolves_specific_digest_id(storage: PathManager) -> None:
     assert run.digest_id == "older"
 
 
-def test_runner_raises_when_no_digest(storage: PathManager) -> None:
+def test_runner_raises_when_no_digest(storage: PathManager, file_storage) -> None:
     runner = NarrationRunner(
         generator=_generator(
             storage,
+            file_storage,
             __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
                 segments=(), tail_ids=()
             ),
@@ -218,11 +223,12 @@ def test_runner_raises_when_no_digest(storage: PathManager) -> None:
         runner.run()
 
 
-def test_runner_raises_when_unknown_digest_id(storage: PathManager) -> None:
+def test_runner_raises_when_unknown_digest_id(storage: PathManager, file_storage) -> None:
     digest = _digest(id_="known", episode_ids=["e1"])
     runner = NarrationRunner(
         generator=_generator(
             storage,
+            file_storage,
             __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
                 segments=(), tail_ids=()
             ),
@@ -235,11 +241,12 @@ def test_runner_raises_when_unknown_digest_id(storage: PathManager) -> None:
         runner.run(digest_id="nope")
 
 
-def test_runner_raises_when_all_episodes_missing(storage: PathManager) -> None:
+def test_runner_raises_when_all_episodes_missing(storage: PathManager, file_storage) -> None:
     digest = _digest(id_="d1", episode_ids=["gone-1", "gone-2"])
     runner = NarrationRunner(
         generator=_generator(
             storage,
+            file_storage,
             __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
                 segments=(), tail_ids=()
             ),
