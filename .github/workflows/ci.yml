@@ -36,12 +36,9 @@ jobs:
         run: uv sync --frozen --extra dev
 
       - name: pytest
-        # Skip tests/integration/pipeline/: they claim to be mocked but actually
-        # hit example.com over the network and fail; unrelated to CI setup.
-        # Track separately; fix and re-enable here when mocking is repaired.
         # Skip tests/perf/: a separate ``latency`` job runs them so noise on
         # the latency budget doesn't block unrelated unit-test work.
-        run: uv run pytest -q --tb=short --ignore=tests/integration/pipeline --ignore=tests/perf
+        run: uv run pytest -q --tb=short --ignore=tests/perf
 
   latency:
     # Spec #28 Phase 3.3 — per-tool P50/P95 latency budget gate.
