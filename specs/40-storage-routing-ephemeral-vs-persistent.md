@@ -1,6 +1,6 @@
 # Storage Routing — Ephemeral vs Persistent Artefacts
 
-> **Status:** 📝 Draft — implementation alongside
+> **Status:** ✅ Shipped in [#94](https://github.com/ssarunic/thestill/pull/94) (pending ops → SQLite) and [#96](https://github.com/ssarunic/thestill/pull/96) (downsampled WAV confirmed in main backend; corpus already routed via #93)
 > **Created:** 2026-05-13
 > **Updated:** 2026-05-13
 > **Author:** Engineering
@@ -283,33 +283,28 @@ to stop anchoring the design on a stale idea.
 
 ## Migration phases
 
-### Phase 1 — table + repository
+All phases shipped together in [#94](https://github.com/ssarunic/thestill/pull/94); doc updates in [#96](https://github.com/ssarunic/thestill/pull/96).
 
-- Migration block in `sqlite_podcast_repository.py` creates
-  `pending_transcription_operations` + indexes.
+### Phase 1 — table + repository ✅ Shipped (#94)
+
+- Migration block in `sqlite_podcast_repository.py` creates `pending_transcription_operations` + indexes.
 - New `SqlitePendingOperationsRepository` module + tests.
-- Construct the repo at the three DI seams (CLI, web, MCP) alongside the
-  other repositories.
+- Repo constructed at the three DI seams (CLI, web, MCP) alongside the other repositories.
 
-### Phase 2 — transcriber call-site migration
+### Phase 2 — transcriber call-site migration ✅ Shipped (#94)
 
-- ElevenLabs first (lower volume, easier resume semantics).
-- Google second (long-running operations, more state).
-- Each migration in its own commit so the diff stays reviewable.
+- Both ElevenLabs and Google migrated in the same PR (the shape was symmetric enough).
+- Each transcriber's `_save_pending_operation` / `_load_pending_operation` / `_clear_pending_operation` / `list_pending_operations` now route through the repository instead of `path_manager.pending_operations_dir()`.
 
-### Phase 3 — backfill
+### Phase 3 — backfill ✅ Shipped (#94)
 
-- One-shot migration that walks `data/pending_operations/*.json`, inserts into
-  the table, moves the file to `.migrated/`.
-- Runs unconditionally on every `Config.__init__` so first launch after the
-  upgrade picks up any in-flight ops. Idempotent.
+- One-shot migration that walks `data/pending_operations/*.json`, inserts into the table, moves the file to `.migrated/`.
+- Runs from inside the table-creation migration block (so it's gated by the table-existence check and effectively idempotent).
 
-### Phase 4 — docs
+### Phase 4 — docs ✅ Shipped (#96)
 
-- Update spec #35: strike the Obsidian footnote; cross-reference this spec
-  from the "Open questions" section item #1.
-- Update [`docs/storage-backends.md`](../docs/storage-backends.md) to mention
-  the carve-outs.
+- Spec #35 Open Question #1 (per-artifact routing) marked resolved with a link to this spec; the Obsidian footnote in the Motivation section was reworded.
+- Downsampled WAV stays in the main backend (this spec's Section 4) — confirmed by #96's `handle_downsample` migration.
 
 ---
 

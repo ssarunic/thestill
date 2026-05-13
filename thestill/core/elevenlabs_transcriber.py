@@ -260,12 +260,9 @@ class ElevenLabsTranscriber(Transcriber):
             if response_data is None:
                 raise TimeoutError("Transcription polling failed or timed out")
 
-        transcript = self._format_response(response_data, audio_path, start_time, language)
-
-        if output_path:
-            self._save_transcript(transcript, output_path)
-
-        return transcript
+        # Spec #35 — persistence is caller-owned via FileStorage. ``output_path``
+        # is kept on the signature for back-compat with the base class.
+        return self._format_response(response_data, audio_path, start_time, language)
 
     def _transcribe_async(
         self,
@@ -382,9 +379,7 @@ class ElevenLabsTranscriber(Transcriber):
         if self.path_manager:
             self._remove_pending_operation(transcription_id)
 
-        if output_path:
-            self._save_transcript(transcript, output_path)
-
+        # Spec #35 — caller persists the returned Transcript via FileStorage.
         return transcript
 
     def _log_error(self, e: Exception) -> None:

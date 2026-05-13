@@ -27,14 +27,26 @@ Usage:
 """
 
 import json
+import tempfile
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
 
 from structlog import get_logger
 
+from thestill.models.transcript import Transcript
 from thestill.utils.exceptions import FatalError, TransientError
+
+
+def _transcript_to_json(transcript: Transcript) -> str:
+    """Spec #35 — single JSON encoding for transcripts persisted via FileStorage.
+
+    Used by ``handle_transcribe`` and the equivalent CLI / MCP paths so the
+    on-disk shape stays identical across entry points.
+    """
+    return json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2)
+
 
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
@@ -104,7 +116,7 @@ def _handler_error_context(context_msg: str, default_transient: bool = True) -> 
         classify_and_raise(e, context=context_msg, default_transient=default_transient)
 
 
-def _convert_language_for_transcriber(language: str, provider: str) -> str:
+def convert_language_for_transcriber(language: str, provider: str) -> str:
     """
     Convert ISO 639-1 language code to format expected by transcriber.
 
@@ -164,34 +176,34 @@ def handle_download(task: Task, state: "AppState") -> None:
     """
     Download audio for an episode.
 
-    Args:
-        task: Task containing episode_id
-        state: Application state with services
-
-    Raises:
-        FatalError: If episode not found in database
-        TransientError: If download fails due to network issues
+    Spec #35 — the AudioDownloader still writes to local disk because the
+    streaming HTTP + yt-dlp paths require a real filesystem destination. We
+    point it at a tempdir, then upload the result to the configured backend.
+    For ``STORAGE_BACKEND=local`` the tempdir + upload pair degenerates to
+    a copy within the data root (still cheap on the same filesystem).
     """
     logger.info(f"Processing download task for episode {task.episode_id}")
 
     podcast, episode = _get_episode_or_fail(task, state)
 
     with _handler_error_context(f"downloading audio for {episode.title}"):
-        # Create downloader and download
-        # Note: download_episode raises DownloadError on failure (no longer returns None)
-        downloader = AudioDownloader(
-            str(state.path_manager.original_audio_dir()),
-            max_bytes=state.config.max_audio_bytes,
-        )
-        audio_path = downloader.download_episode(episode, podcast)
-
-        # Get duration from downloaded file
         from ..utils.duration import get_audio_duration
 
-        full_audio_path = state.path_manager.original_audio_file(audio_path)
-        duration_seconds = get_audio_duration(full_audio_path)
+        with tempfile.TemporaryDirectory(prefix="thestill_download_") as work_dir:
+            downloader = AudioDownloader(
+                work_dir,
+                max_bytes=state.config.max_audio_bytes,
+            )
+            # download_episode returns a path relative to ``work_dir`` shaped
+            # like "podcast-slug/episode.mp3"; that same shape is the
+            # FileStorage key we upload to.
+            audio_path = downloader.download_episode(episode, podcast)
+            local_audio_file = Path(work_dir) / audio_path
 
-        # Update episode state
+            target_path = state.path_manager.original_audio_file(audio_path)
+            state.config.file_storage.upload_file(local_audio_file, state.path_manager.to_relative(target_path))
+            duration_seconds = get_audio_duration(local_audio_file)
+
         state.feed_manager.mark_episode_downloaded(
             str(podcast.rss_url), episode.external_id, audio_path, duration=duration_seconds
         )
@@ -218,40 +230,57 @@ def handle_downsample(task: Task, state: "AppState") -> None:
     if not episode.audio_path:
         raise FatalError(f"No audio path set for episode: {task.episode_id}")
 
-    # Verify original audio exists
+    # Verify original audio exists in the configured backend. Spec #35 — was
+    # ``original_audio_file.exists()`` (filesystem-only); the FileStorage
+    # exists check is one HeadObject on S3 vs. a real ``stat`` on local.
     original_audio_file = state.path_manager.original_audio_file(episode.audio_path)
-    if not original_audio_file.exists():
+    original_audio_key = state.path_manager.to_relative(original_audio_file)
+    if not state.config.file_storage.exists(original_audio_key):
         raise FatalError(f"Original audio file not found: {original_audio_file}")
 
     # Audio processing errors are usually fatal (corrupt file, unsupported format)
     with _handler_error_context(f"downsampling audio for {episode.title}", default_transient=False):
-        # Determine output directory
+        # Determine output filename + storage-relative key.
         audio_path_obj = Path(episode.audio_path)
         if len(audio_path_obj.parts) > 1:
             podcast_subdir = audio_path_obj.parent
-            output_dir = state.path_manager.downsampled_audio_dir() / podcast_subdir
         else:
-            output_dir = state.path_manager.downsampled_audio_dir() / podcast.slug
+            podcast_subdir = Path(podcast.slug)
+        downsampled_filename = f"{Path(episode.audio_path).stem}.wav"
+        downsampled_full_path = state.path_manager.downsampled_audio_dir() / podcast_subdir / downsampled_filename
+        downsampled_key = state.path_manager.to_relative(downsampled_full_path)
+        relative_path = f"{podcast_subdir}/{downsampled_filename}"
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Skip if already downsampled — ``exists()`` is one HeadObject on S3
+        # which is much cheaper than running the pydub conversion twice.
+        if state.config.file_storage.exists(downsampled_key):
+            logger.info(f"Downsampled audio already exists, skipping: {relative_path}")
+            from ..utils.duration import get_audio_duration
 
-        # Downsample - use structlog logger to avoid stdout conflicts in worker thread
+            with state.config.file_storage.local_copy(downsampled_key) as wav_path:
+                duration_seconds = get_audio_duration(str(wav_path))
+            state.feed_manager.mark_episode_downsampled(
+                str(podcast.rss_url), episode.external_id, relative_path, duration=duration_seconds
+            )
+            return
+
+        # Materialise the input audio for pydub (real filesystem path required)
+        # and write the output to a tempdir; the FileStorage upload below moves
+        # it to the configured backend.
         preprocessor = AudioPreprocessor(logger=logger)
-        downsampled_path = preprocessor.downsample_audio(str(original_audio_file), str(output_dir))
+        with (
+            state.config.file_storage.local_copy(original_audio_key) as input_path,
+            tempfile.TemporaryDirectory(prefix="thestill_downsample_") as work_dir,
+        ):
+            tmp_output = preprocessor.downsample_audio(str(input_path), work_dir)
+            if not tmp_output:
+                raise FatalError(f"Downsampling returned no path for episode: {episode.title}")
+            state.config.file_storage.upload_file(tmp_output, downsampled_key)
 
-        if not downsampled_path:
-            raise FatalError(f"Downsampling returned no path for episode: {episode.title}")
+            from ..utils.duration import get_audio_duration
 
-        # Store relative path
-        downsampled_path_obj = Path(downsampled_path)
-        relative_path = f"{output_dir.name}/{downsampled_path_obj.name}"
+            duration_seconds = get_audio_duration(tmp_output)
 
-        # Get duration from downsampled file
-        from ..utils.duration import get_audio_duration
-
-        duration_seconds = get_audio_duration(downsampled_path)
-
-        # Update episode state
         state.feed_manager.mark_episode_downsampled(
             str(podcast.rss_url), episode.external_id, relative_path, duration=duration_seconds
         )
@@ -309,13 +338,16 @@ def handle_transcribe(
         config.transcription_provider == "dalston" and episode.audio_url and not episode.downsampled_audio_path
     )
 
+    audio_key: Optional[str] = None
+    audio_file = None
     if not use_dalston_url:
         if not episode.downsampled_audio_path:
             raise FatalError(f"No downsampled audio path for episode: {task.episode_id}")
 
-        # Verify audio file exists
+        # Verify audio file exists via FileStorage (one HeadObject on S3).
         audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
-        if not audio_file.exists():
+        audio_key = config.path_manager.to_relative(audio_file)
+        if not config.file_storage.exists(audio_key):
             raise FatalError(f"Downsampled audio file not found: {audio_file}")
 
     # Transcription errors are usually transient (API issues, rate limits)
@@ -333,50 +365,56 @@ def handle_transcribe(
         # Determine output path
         if use_dalston_url:
             podcast_subdir = podcast.slug
-            # Build a stable filename from episode slug
             transcript_filename = f"{episode.slug}_transcript.json"
-            audio_path_for_transcriber = f"{podcast_subdir}/{episode.slug}"
         else:
             path_parts = Path(episode.downsampled_audio_path).parts
             podcast_subdir = path_parts[0] if len(path_parts) >= 2 else podcast.slug
             transcript_filename = f"{audio_file.stem}_transcript.json"
-            audio_path_for_transcriber = str(audio_file)
 
-        transcript_dir = config.path_manager.raw_transcripts_dir() / podcast_subdir
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-
-        output = str(transcript_dir / transcript_filename)
+        transcript_path = config.path_manager.raw_transcripts_dir() / podcast_subdir / transcript_filename
         output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
-        # Convert language code to provider-specific format
-        language = _convert_language_for_transcriber(podcast.language, config.transcription_provider)
+        language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
         logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
 
-        # Transcribe
-        if use_dalston_url:
-            logger.info(f"Starting transcription via URL: {episode.audio_url}")
-        else:
-            file_size_mb = audio_file.stat().st_size / 1024 / 1024
-            logger.info(f"Starting transcription: {audio_file.name} ({file_size_mb:.1f}MB)")
+        # Spec #35 — materialise audio for transcribers via ``local_copy``.
+        # On the local backend this is the real path (no copy); on S3 it
+        # downloads to a tempfile and cleans up on context exit. Dalston's
+        # URL-fetch mode skips local audio entirely.
+        audio_context = nullcontext(enter_result=None) if use_dalston_url else config.file_storage.local_copy(audio_key)
 
-        transcript_data = transcriber.transcribe_audio(
-            audio_path_for_transcriber,
-            output,
-            options=TranscribeOptions(
-                language=language,
-                episode_id=episode.id,
-                podcast_slug=podcast.slug,
-                episode_slug=episode.slug,
-                audio_url=str(episode.audio_url) if use_dalston_url else None,
-                progress_callback=progress_callback,
-            ),
-        )
+        with audio_context as materialised_audio:
+            if use_dalston_url:
+                logger.info(f"Starting transcription via URL: {episode.audio_url}")
+                audio_path_for_transcriber = f"{podcast_subdir}/{episode.slug}"
+            else:
+                audio_path_for_transcriber = str(materialised_audio)
+                file_size_mb = materialised_audio.stat().st_size / 1024 / 1024
+                logger.info(f"Starting transcription: {materialised_audio.name} ({file_size_mb:.1f}MB)")
+
+            transcript_data = transcriber.transcribe_audio(
+                audio_path_for_transcriber,
+                options=TranscribeOptions(
+                    language=language,
+                    episode_id=episode.id,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
+                    audio_url=str(episode.audio_url) if use_dalston_url else None,
+                    progress_callback=progress_callback,
+                ),
+            )
         logger.info(f"Transcription completed, result: {type(transcript_data).__name__}")
 
         if not transcript_data:
             raise TransientError(f"Transcription returned no data for episode: {episode.title}")
 
-        # Update episode state
+        # Persist the returned Transcript via FileStorage so the artefact lands
+        # on the configured backend.
+        config.file_storage.write_text(
+            config.path_manager.to_relative(transcript_path),
+            _transcript_to_json(transcript_data),
+        )
+
         state.feed_manager.mark_episode_processed(
             str(podcast.rss_url),
             episode.external_id,
@@ -422,15 +460,18 @@ def handle_clean(task: Task, state: "AppState") -> None:
     config = state.config
     path_manager = state.path_manager
 
-    # Load transcript
+    # Load transcript via FileStorage (spec #35). FileNotFoundError replaces
+    # the prior exists()+open pair.
     transcript_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
-    if not transcript_path.exists():
-        raise FatalError(f"Transcript file not found: {transcript_path}")
+    transcript_key = path_manager.to_relative(transcript_path)
 
     # LLM errors are usually transient (rate limits, API issues)
     with _handler_error_context(f"cleaning transcript for {episode.title}"):
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            transcript_data = json.load(f)
+        try:
+            transcript_payload = config.file_storage.read_text(transcript_key)
+        except FileNotFoundError:
+            raise FatalError(f"Transcript file not found: {transcript_path}")
+        transcript_data = json.loads(transcript_payload)
 
         # Create LLM provider
         from .llm_provider import create_llm_provider_from_config
@@ -552,15 +593,16 @@ def handle_summarize(task: Task, state: "AppState") -> None:
     config = state.config
     path_manager = state.path_manager
 
-    # Load clean transcript
+    # Load clean transcript via FileStorage (spec #35).
     clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
-    if not clean_path.exists():
-        raise FatalError(f"Clean transcript file not found: {clean_path}")
+    clean_key = path_manager.to_relative(clean_path)
 
     # LLM errors are usually transient (rate limits, API issues)
     with _handler_error_context(f"summarizing {episode.title}"):
-        with open(clean_path, "r", encoding="utf-8") as f:
-            transcript_text = f.read()
+        try:
+            transcript_text = config.file_storage.read_text(clean_key)
+        except FileNotFoundError:
+            raise FatalError(f"Clean transcript file not found: {clean_path}")
 
         # Create LLM provider and summarizer
         from .llm_provider import create_llm_provider_from_config
