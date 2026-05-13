@@ -238,18 +238,17 @@ class DalstonTranscriber(Transcriber):
                 on_progress=on_progress,
             )
 
-            # Format the response
-            transcript = self._format_response(
+            # Format the response. Spec #35 — persistence is now the caller's
+            # responsibility (via ``config.file_storage``), so we return the
+            # Transcript directly and skip the legacy disk write. The
+            # ``output_path`` argument is retained on the signature for
+            # back-compat with the abstract base class but ignored here.
+            return self._format_response(
                 completed_job,
                 audio_path,
                 start_time,
                 effective_language,
             )
-
-            if output_path:
-                self._save_transcript(transcript, output_path)
-
-            return transcript
 
         except Exception as e:
             logger.error(

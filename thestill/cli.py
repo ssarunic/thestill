@@ -1559,15 +1559,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     "anthropic_api_key": config.anthropic_api_key,
                 }
 
-            # Convert language for provider (Google needs BCP-47 format)
-            transcribe_language = language
-            if config.transcription_provider.lower() == "google":
-                locale_map = {"en": "en-US", "hr": "hr-HR", "de": "de-DE", "es": "es-ES", "fr": "fr-FR", "it": "it-IT"}
-                transcribe_language = locale_map.get(language, f"{language}-{language.upper()}")
+            # Spec #35 — shared converter; the inline locale_map drifted from
+            # task_handlers' 25-language mapping.
+            from .core.task_handlers import convert_language_for_transcriber
+
+            transcribe_language = convert_language_for_transcriber(language, config.transcription_provider)
 
             transcript_data = transcriber.transcribe_audio(
                 transcription_audio_path,
-                output,
                 options=TranscribeOptions(language=transcribe_language),
             )
 
@@ -1576,6 +1575,19 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 preprocessor.cleanup_preprocessed_file(preprocessed_audio_path)
 
             if transcript_data:
+                # Spec #35 — persist via FileStorage so STORAGE_BACKEND=s3 routes
+                # the transcript to S3. ``output`` may live outside the storage
+                # root for standalone CLI runs (--output flag); fall back to a
+                # direct write in that case to keep the legacy command shape.
+                from .core.task_handlers import _transcript_to_json
+
+                output_path_obj = Path(output)
+                try:
+                    rel_key = ctx.obj.path_manager.to_relative(output_path_obj)
+                    ctx.obj.config.file_storage.write_text(rel_key, _transcript_to_json(transcript_data))
+                except ValueError:
+                    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    output_path_obj.write_text(_transcript_to_json(transcript_data), encoding="utf-8")
                 click.echo("✅ Transcription complete!")
                 click.echo(f"📄 Transcript saved to: {output}")
             elif getattr(ctx.obj, "using_webhook_mode", False):
@@ -1768,26 +1780,14 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                         "anthropic_api_key": config.anthropic_api_key,
                     }
 
-                # Convert language for provider (Google needs BCP-47 format)
-                episode_language = podcast.language
-                if config.transcription_provider.lower() == "google":
-                    locale_map = {
-                        "en": "en-US",
-                        "hr": "hr-HR",
-                        "de": "de-DE",
-                        "es": "es-ES",
-                        "fr": "fr-FR",
-                        "it": "it-IT",
-                    }
-                    episode_language = locale_map.get(
-                        podcast.language, f"{podcast.language}-{podcast.language.upper()}"
-                    )
+                from .core.task_handlers import _transcript_to_json, convert_language_for_transcriber
+
+                episode_language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
 
                 # Pass episode context for Google Cloud operation persistence
                 # This allows resuming transcriptions if the app is restarted
                 transcript_data = transcriber.transcribe_audio(
                     transcription_audio_path,
-                    output,
                     options=TranscribeOptions(
                         language=episode_language,
                         episode_id=episode.id,
@@ -1797,8 +1797,11 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                 )
 
                 if transcript_data:
-                    # Mark episode as having transcript
-                    # Clear clean_transcript_path and summary_path since underlying data changed
+                    # Spec #35 — persist via FileStorage.
+                    ctx.obj.config.file_storage.write_text(
+                        ctx.obj.path_manager.to_relative(Path(output)),
+                        _transcript_to_json(transcript_data),
+                    )
                     feed_manager.mark_episode_processed(
                         str(podcast.rss_url),
                         episode.external_id,

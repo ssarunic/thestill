@@ -930,29 +930,23 @@ def setup_tools(server: Server, storage_path: str):
                         output_path = str(transcript_dir / transcript_filename)
                         output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
-                        # Convert language for provider (Google needs BCP-47 format)
-                        episode_language = podcast.language
-                        if config.transcription_provider.lower() == "google":
-                            locale_map = {
-                                "en": "en-US",
-                                "hr": "hr-HR",
-                                "de": "de-DE",
-                                "es": "es-ES",
-                                "fr": "fr-FR",
-                                "it": "it-IT",
-                            }
-                            episode_language = locale_map.get(
-                                podcast.language, f"{podcast.language}-{podcast.language.upper()}"
-                            )
+                        from ..core.task_handlers import _transcript_to_json, convert_language_for_transcriber
 
-                        # Transcribe
+                        episode_language = convert_language_for_transcriber(
+                            podcast.language, config.transcription_provider
+                        )
+
                         transcript_data = transcriber.transcribe_audio(
                             str(audio_file),
-                            output_path,
                             options=TranscribeOptions(language=episode_language),
                         )
 
                         if transcript_data:
+                            # Spec #35 — persist via FileStorage.
+                            config.file_storage.write_text(
+                                path_manager.to_relative(Path(output_path)),
+                                _transcript_to_json(transcript_data),
+                            )
                             feed_manager.mark_episode_processed(
                                 str(podcast.rss_url), episode.external_id, raw_transcript_path=output_db_path
                             )
@@ -1250,27 +1244,22 @@ def setup_tools(server: Server, storage_path: str):
                         output_path = str(transcript_dir / transcript_filename)
                         output_db_path = f"{podcast_subdir}/{transcript_filename}"
 
-                        # Convert language for provider (Google needs BCP-47 format)
-                        episode_language = podcast.language
-                        if config.transcription_provider.lower() == "google":
-                            locale_map = {
-                                "en": "en-US",
-                                "hr": "hr-HR",
-                                "de": "de-DE",
-                                "es": "es-ES",
-                                "fr": "fr-FR",
-                                "it": "it-IT",
-                            }
-                            episode_language = locale_map.get(
-                                podcast.language, f"{podcast.language}-{podcast.language.upper()}"
-                            )
+                        from ..core.task_handlers import _transcript_to_json, convert_language_for_transcriber
+
+                        episode_language = convert_language_for_transcriber(
+                            podcast.language, config.transcription_provider
+                        )
 
                         transcript_data = transcriber.transcribe_audio(
                             str(audio_file),
-                            output_path,
                             options=TranscribeOptions(language=episode_language),
                         )
                         if transcript_data:
+                            # Spec #35 — persist via FileStorage.
+                            config.file_storage.write_text(
+                                path_manager.to_relative(Path(output_path)),
+                                _transcript_to_json(transcript_data),
+                            )
                             feed_manager.mark_episode_processed(
                                 str(podcast.rss_url), episode.external_id, raw_transcript_path=output_db_path
                             )

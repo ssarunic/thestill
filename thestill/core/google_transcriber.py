@@ -553,9 +553,9 @@ class GoogleCloudTranscriber(Transcriber):
             transcript_data.processing_time = processing_time
             self.console.success(f"Transcription completed in {self._format_time(processing_time)}")
 
-            if output_path:
-                self._save_transcript(transcript_data, output_path)
-
+            # Spec #35 — caller persists via FileStorage. ``output_path`` is
+            # still consulted for the ``chunks/`` debug-dump path elsewhere
+            # in this method, but the final-transcript disk write is gone.
             return transcript_data
 
         except Exception as e:

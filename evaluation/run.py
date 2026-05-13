@@ -118,7 +118,6 @@ def step_dalston_transcribe(ep, ctx: EvalContext, output_dir: Path) -> StepState
         )
         transcript = transcriber.transcribe_audio(
             audio_path=str(audio_path),
-            output_path=str(output_path),
             options=TranscribeOptions(language="en"),
         )
         if transcript is None:
@@ -163,7 +162,6 @@ def step_elevenlabs_transcribe(ep, ctx: EvalContext, output_dir: Path) -> StepSt
         )
         transcript = transcriber.transcribe_audio(
             audio_path=str(audio_path),
-            output_path=str(output_path),
             options=TranscribeOptions(language="en"),
         )
         if transcript is None:
