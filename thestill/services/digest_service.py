@@ -15,20 +15,24 @@
 """
 Per-user digest service.
 
-Generates a digest covering the inbox window
-``[last_digest.period_end, now)`` for a single user. Replaces the legacy
-global ``since_days`` selector path on the user-facing "Today's briefing"
-flow: selection comes from the inbox (spec #29 fan-out), the cursor chain
-guarantees each delivered episode is briefed exactly once, and a throttle
-window collapses accidental double-triggers (cron racing the UI).
+Owns digest generation for both supported selection modes:
 
-The digest row stays in the existing ``digests`` table — ``period_end``
-plays the role the briefing system's ``cursor_to`` did.
+* **Inbox-driven** (``generate_for_user``) — the "Today's briefing" flow.
+  Selection comes from the inbox window
+  ``[last_digest.period_end, now)``; the cursor chain guarantees each
+  delivered episode is briefed exactly once and a throttle window
+  collapses accidental double-triggers (cron racing the UI).
+* **Criteria-driven** (``generate_from_criteria``) — the ``since_days``
+  selector path used by ``POST /api/digests/morning-briefing`` and the
+  ``ready_only`` branch of ``POST /api/digests``. Each call selects a
+  fresh slice without advancing any cursor.
+
+Both modes share the same render → write → save sequence; route handlers
+must not reproduce it inline.
 """
 
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from structlog import get_logger
@@ -39,6 +43,7 @@ from ..repositories.digest_repository import DigestRepository
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from .digest_generator import DigestGenerator
+from .digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
 
 if TYPE_CHECKING:
     from ..utils.config import Config
@@ -46,22 +51,25 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# First-run cursor: epoch covers the whole inbox.
+# First-run cursor for the inbox-driven path: epoch covers the whole inbox.
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class DigestService:
     """
-    Per-user digest state machine.
+    Per-user digest orchestrator.
 
-    Selection: inbox rows in ``[cursor_from, now)`` whose ``state`` is
-    ``unread`` or ``saved``. Read and dismissed rows are excluded — the
-    digest is a readout of *what the user hasn't acted on*.
+    Inbox-driven selection (``generate_for_user``): inbox rows in
+    ``[cursor_from, now)`` whose ``state`` is ``unread`` or ``saved``.
+    Read and dismissed rows are excluded — the digest is a readout of
+    *what the user hasn't acted on*. The cursor chain
+    ``digest_n.period_end == digest_n+1.period_start`` guarantees each
+    delivered episode lands in at most one digest. The throttle window
+    collapses accidental rapid-fire triggers.
 
-    The cursor chain ``digest_n.period_end == digest_n+1.period_start``
-    guarantees each delivered episode lands in at most one digest. The
-    throttle window collapses accidental rapid-fire triggers (e.g. a
-    cron job that ran three times in 1.5 seconds because of a misfire).
+    Criteria-driven selection (``generate_from_criteria``): delegates to
+    ``DigestEpisodeSelector`` and produces a digest from the resulting
+    ``(Podcast, Episode)`` set without touching the cursor chain.
     """
 
     def __init__(
@@ -82,6 +90,10 @@ class DigestService:
         self._generator = digest_generator
         self._paths = path_manager
         self._min_interval = timedelta(seconds=min_interval_seconds)
+        self._selector = DigestEpisodeSelector(
+            episode_repository=podcast_repository,
+            digest_repository=digest_repository,
+        )
         logger.info(
             "DigestService initialized",
             min_interval_seconds=min_interval_seconds,
@@ -168,6 +180,69 @@ class DigestService:
             )
             return None
 
+        return self._render_write_save(
+            user_id=user_id,
+            episodes=episodes,
+            period_start=period_start,
+            period_end=period_end,
+            clock_now=clock_now,
+            source="inbox",
+        )
+
+    def generate_from_criteria(
+        self,
+        user_id: str,
+        criteria: DigestSelectionCriteria,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Optional[Digest]:
+        """
+        Generate a digest from a ``DigestSelectionCriteria`` selection.
+
+        Drives the ``since_days``-style routes (morning briefing and the
+        ``ready_only`` branch of ``POST /api/digests``). The throttle and
+        cursor chain are intentionally bypassed — these flows take an
+        explicit selection window and run on demand.
+
+        Returns ``None`` when the selector returned no episodes; callers
+        translate that to a ``no_episodes`` response.
+        """
+        clock_now = now or datetime.now(timezone.utc)
+        result = self._selector.select(criteria)
+        if not result.episodes:
+            return None
+        return self._render_write_save(
+            user_id=user_id,
+            episodes=result.episodes,
+            period_start=criteria.date_from,
+            period_end=clock_now,
+            clock_now=clock_now,
+            source="criteria",
+        )
+
+    def latest_for_user(self, user_id: str) -> Optional[Digest]:
+        """Return the user's most recent digest, or ``None``."""
+        rows = self._digests.get_all(limit=1, offset=0, user_id=user_id)
+        return rows[0] if rows else None
+
+    def _render_write_save(
+        self,
+        *,
+        user_id: str,
+        episodes: List[Tuple[Podcast, Episode]],
+        period_start: datetime,
+        period_end: datetime,
+        clock_now: datetime,
+        source: str,
+    ) -> Digest:
+        """Build, render, write, and persist a digest in one step.
+
+        Shared by ``generate_for_user`` (inbox window) and
+        ``generate_from_criteria`` (selector window). Rendering happens
+        before persistence so a render failure leaves no orphan row and
+        the inbox cursor (when applicable) doesn't advance — next call
+        retries the same window cleanly.
+        """
         digest = Digest(
             user_id=user_id,
             period_start=period_start,
@@ -176,11 +251,10 @@ class DigestService:
             episodes_total=len(episodes),
         )
 
-        # Render before persist so a render failure leaves no orphan row
-        # and the cursor doesn't advance — next call retries the same
-        # window cleanly.
         start = time.time()
         content = self._generator.generate(episodes=episodes)
+        # Include the digest id suffix so two digests rendered in the same
+        # second (cron + UI race) can't collide on disk.
         output_filename = f"digest_{clock_now.strftime('%Y%m%d_%H%M%S')}_{digest.id[:8]}.md"
         output_path = self._paths.digest_file(output_filename)
         self._generator.write(content, output_path)
@@ -202,13 +276,9 @@ class DigestService:
             period_start=period_start.isoformat(),
             period_end=period_end.isoformat(),
             file_path=output_filename,
+            source=source,
         )
         return digest
-
-    def latest_for_user(self, user_id: str) -> Optional[Digest]:
-        """Return the user's most recent digest, or ``None``."""
-        rows = self._digests.get_all(limit=1, offset=0, user_id=user_id)
-        return rows[0] if rows else None
 
     def _hydrate_episodes(self, episode_ids: List[str]) -> List[Tuple[Podcast, Episode]]:
         episodes: List[Tuple[Podcast, Episode]] = []

@@ -28,7 +28,7 @@ Tests cover:
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -428,47 +428,97 @@ class TestGetDigestEpisodes:
 class TestCreateDigest:
     """Tests for POST /api/digests endpoint."""
 
-    def test_create_digest_ready_only_success(self, client, mock_app_state):
-        """Create digest with ready_only=True generates immediately."""
-        with patch("thestill.web.routes.api_digests.DigestEpisodeSelector") as mock_selector:
-            with patch("thestill.web.routes.api_digests.DigestGenerator") as mock_generator:
-                # Setup mock selector
-                mock_result = MagicMock()
-                mock_result.episodes = [
-                    (MagicMock(id="podcast-1"), MagicMock(id="ep-1")),
-                ]
-                mock_selector.return_value.select.return_value = mock_result
+    def test_create_digest_ready_only_delegates_to_service(self, client, mock_app_state, sample_digest):
+        """ready_only=True goes through ``DigestService.generate_from_criteria``."""
+        mock_app_state.digest_service.generate_from_criteria.return_value = sample_digest
 
-                # Setup mock generator
-                mock_content = MagicMock()
-                mock_content.stats.successful_episodes = 1
-                mock_content.stats.failed_episodes = 0
-                mock_generator.return_value.generate.return_value = mock_content
+        response = client.post(
+            "/api/digests",
+            json={"ready_only": True, "since_days": 7, "max_episodes": 10},
+        )
 
-                response = client.post(
-                    "/api/digests",
-                    json={"ready_only": True, "since_days": 7, "max_episodes": 10},
-                )
-
-                assert response.status_code == 200
-                data = response.json()
-                assert data["status"] in ["completed", "ok"]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["digest_id"] == sample_digest.id
+        assert data["episodes_selected"] == sample_digest.episodes_total
+        # The criteria passed to the service should mirror the request body.
+        call = mock_app_state.digest_service.generate_from_criteria.call_args
+        assert call.args[0] == "test-user-id"
+        criteria = call.args[1]
+        assert criteria.since_days == 7
+        assert criteria.max_episodes == 10
+        assert criteria.ready_only is True
 
     def test_create_digest_no_episodes(self, client, mock_app_state):
-        """Create digest with no matching episodes returns no_episodes status."""
+        """When the service returns None, ready_only POST yields ``no_episodes``."""
+        mock_app_state.digest_service.generate_from_criteria.return_value = None
+
+        response = client.post(
+            "/api/digests",
+            json={"ready_only": True},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "no_episodes"
+        assert data["digest_id"] is None
+
+    def test_create_digest_non_ready_only_marks_pending(self, client, mock_app_state):
+        """ready_only=False still uses the selector inline and saves a PENDING row."""
         with patch("thestill.web.routes.api_digests.DigestEpisodeSelector") as mock_selector:
             mock_result = MagicMock()
-            mock_result.episodes = []
+            mock_result.episodes = [
+                (MagicMock(id="podcast-1"), MagicMock(id="ep-1")),
+            ]
             mock_selector.return_value.select.return_value = mock_result
 
             response = client.post(
                 "/api/digests",
-                json={"ready_only": True},
+                json={"ready_only": False, "since_days": 7, "max_episodes": 10},
             )
 
             assert response.status_code == 200
             data = response.json()
-            assert data["status"] == "no_episodes"
+            assert data["status"] == "pending"
+            # Service path must NOT be hit for the pipeline-processing flow.
+            mock_app_state.digest_service.generate_from_criteria.assert_not_called()
+
+
+class TestCreateMorningBriefing:
+    """Tests for POST /api/digests/morning-briefing endpoint."""
+
+    def test_morning_briefing_delegates_to_service(self, client, mock_app_state, sample_digest):
+        """POST /morning-briefing routes through DigestService with config defaults."""
+        mock_app_state.config.digest_default_since_days = 3
+        mock_app_state.config.digest_default_max_episodes = 5
+        mock_app_state.digest_service.generate_from_criteria.return_value = sample_digest
+
+        response = client.post("/api/digests/morning-briefing")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["digest_id"] == sample_digest.id
+
+        criteria = mock_app_state.digest_service.generate_from_criteria.call_args.args[1]
+        assert criteria.since_days == 3
+        assert criteria.max_episodes == 5
+        assert criteria.ready_only is True
+        assert criteria.exclude_digested is True
+
+    def test_morning_briefing_no_episodes(self, client, mock_app_state):
+        """Service returning None surfaces as ``no_episodes``."""
+        mock_app_state.config.digest_default_since_days = 3
+        mock_app_state.config.digest_default_max_episodes = 5
+        mock_app_state.digest_service.generate_from_criteria.return_value = None
+
+        response = client.post("/api/digests/morning-briefing")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "no_episodes"
+        assert data["digest_id"] is None
 
 
 class TestPreviewDigest:

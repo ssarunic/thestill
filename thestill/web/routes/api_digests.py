@@ -28,7 +28,6 @@ from structlog import get_logger
 
 from ...models.digest import Digest, DigestStatus
 from ...models.user import User
-from ...services.digest_generator import DigestGenerator
 from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
 from ...services.narration import NarrationRunnerError, read_narration_header
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
@@ -361,9 +360,9 @@ async def create_morning_briefing(
 
     Uses DIGEST_DEFAULT_SINCE_DAYS and DIGEST_DEFAULT_MAX_EPISODES from config.
     Only includes already-summarized episodes and excludes previously digested ones.
+    The render-write-save sequence lives in ``DigestService`` so this and
+    ``POST /api/digests`` (ready_only) stay in lockstep.
     """
-    import time
-
     criteria = DigestSelectionCriteria(
         since_days=state.config.digest_default_since_days,
         max_episodes=state.config.digest_default_max_episodes,
@@ -371,14 +370,8 @@ async def create_morning_briefing(
         exclude_digested=True,
     )
 
-    selector = DigestEpisodeSelector(
-        episode_repository=state.repository,
-        digest_repository=state.digest_repository,
-    )
-
-    result = selector.select(criteria)
-
-    if not result.episodes:
+    digest = state.digest_service.generate_from_criteria(user.id, criteria)
+    if digest is None:
         return api_response(
             {
                 "status": "no_episodes",
@@ -388,56 +381,12 @@ async def create_morning_briefing(
             }
         )
 
-    # Create digest record
-    now = datetime.now(timezone.utc)
-    digest = Digest(
-        user_id=user.id,
-        period_start=criteria.date_from,
-        period_end=now,
-        episode_ids=[ep.id for _, ep in result.episodes],
-        episodes_total=len(result.episodes),
-    )
-
-    # Generate digest immediately from summarized episodes
-    start_time = time.time()
-
-    generator = DigestGenerator(state.path_manager, state.config.file_storage)
-    content = generator.generate(
-        episodes=result.episodes,
-        processing_time_seconds=0,
-        failures=[],
-    )
-
-    # Write digest to file
-    output_filename = f"digest_{now.strftime('%Y%m%d_%H%M%S')}.md"
-    output_path = state.path_manager.digests_dir() / output_filename
-    generator.write(content, output_path)
-
-    processing_time = time.time() - start_time
-
-    # Update digest with completion info
-    digest.mark_completed(
-        file_path=output_filename,
-        episodes_completed=len(result.episodes),
-        episodes_failed=0,
-        processing_time_seconds=processing_time,
-    )
-
-    state.digest_repository.save(digest)
-
-    logger.info(
-        "Morning briefing digest created",
-        digest_id=digest.id,
-        episodes_count=len(result.episodes),
-        file_path=output_filename,
-    )
-
     return api_response(
         {
             "status": "completed",
-            "message": f"Digest created with {len(result.episodes)} episodes",
+            "message": f"Digest created with {digest.episodes_total} episodes",
             "digest_id": digest.id,
-            "episodes_selected": len(result.episodes),
+            "episodes_selected": digest.episodes_total,
         }
     )
 
@@ -713,11 +662,11 @@ async def create_digest(
     immediately (synchronous for ready_only mode, or just records what needs
     processing for full pipeline mode).
 
-    For ready_only=True: Generates digest immediately from already-summarized episodes.
+    For ready_only=True: Generates digest immediately from already-summarized episodes
+    (delegates to ``DigestService.generate_from_criteria`` — same render-write-save
+    path as ``POST /api/digests/morning-briefing``).
     For ready_only=False: Creates a pending digest record for episodes that need processing.
     """
-    import time
-
     criteria = DigestSelectionCriteria(
         since_days=request.since_days,
         max_episodes=request.max_episodes,
@@ -726,11 +675,33 @@ async def create_digest(
         exclude_digested=request.exclude_digested,
     )
 
+    if request.ready_only:
+        digest = state.digest_service.generate_from_criteria(user.id, criteria)
+        if digest is None:
+            return api_response(
+                {
+                    "status": "no_episodes",
+                    "message": "No episodes match the selection criteria",
+                    "digest_id": None,
+                    "episodes_selected": 0,
+                }
+            )
+        return api_response(
+            {
+                "status": "completed",
+                "message": f"Digest created with {digest.episodes_total} episodes",
+                "digest_id": digest.id,
+                "episodes_selected": digest.episodes_total,
+            }
+        )
+
+    # ready_only=False: episodes still need pipeline processing, so we
+    # only persist a PENDING row. Selector runs here because there's no
+    # render to share with the service path.
     selector = DigestEpisodeSelector(
         episode_repository=state.repository,
         digest_repository=state.digest_repository,
     )
-
     result = selector.select(criteria)
 
     if not result.episodes:
@@ -743,7 +714,6 @@ async def create_digest(
             }
         )
 
-    # Create digest record
     now = datetime.now(timezone.utc)
     digest = Digest(
         user_id=user.id,
@@ -751,70 +721,24 @@ async def create_digest(
         period_end=now,
         episode_ids=[ep.id for _, ep in result.episodes],
         episodes_total=len(result.episodes),
+        status=DigestStatus.PENDING,
+    )
+    state.digest_repository.save(digest)
+
+    logger.info(
+        "Digest created (pending processing)",
+        digest_id=digest.id,
+        episodes_count=len(result.episodes),
     )
 
-    if request.ready_only:
-        # Generate digest immediately from summarized episodes
-        start_time = time.time()
-
-        generator = DigestGenerator(state.path_manager, state.config.file_storage)
-        content = generator.generate(
-            episodes=result.episodes,
-            processing_time_seconds=0,  # Will be updated
-            failures=[],
-        )
-
-        # Write digest to file
-        output_filename = f"digest_{now.strftime('%Y%m%d_%H%M%S')}.md"
-        output_path = state.path_manager.digests_dir() / output_filename
-        generator.write(content, output_path)
-
-        processing_time = time.time() - start_time
-
-        # Update digest with completion info
-        digest.mark_completed(
-            file_path=output_filename,
-            episodes_completed=len(result.episodes),
-            episodes_failed=0,
-            processing_time_seconds=processing_time,
-        )
-
-        state.digest_repository.save(digest)
-
-        logger.info(
-            "Digest created",
-            digest_id=digest.id,
-            episodes_count=len(result.episodes),
-            file_path=output_filename,
-        )
-
-        return api_response(
-            {
-                "status": "completed",
-                "message": f"Digest created with {len(result.episodes)} episodes",
-                "digest_id": digest.id,
-                "episodes_selected": len(result.episodes),
-            }
-        )
-    else:
-        # For non-ready-only mode, mark as pending (episodes need processing)
-        digest.status = DigestStatus.PENDING
-        state.digest_repository.save(digest)
-
-        logger.info(
-            "Digest created (pending processing)",
-            digest_id=digest.id,
-            episodes_count=len(result.episodes),
-        )
-
-        return api_response(
-            {
-                "status": "pending",
-                "message": f"Digest created with {len(result.episodes)} episodes pending processing",
-                "digest_id": digest.id,
-                "episodes_selected": len(result.episodes),
-            }
-        )
+    return api_response(
+        {
+            "status": "pending",
+            "message": f"Digest created with {len(result.episodes)} episodes pending processing",
+            "digest_id": digest.id,
+            "episodes_selected": len(result.episodes),
+        }
+    )
 
 
 @router.delete("/{digest_id}")
