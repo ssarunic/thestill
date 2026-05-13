@@ -1078,7 +1078,7 @@ async def get_queue_tasks(
     Returns:
         QueueTasksResponse with categorized task lists
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     completed_limit = min(completed_limit, 50)  # Cap at 50
 
@@ -1095,29 +1095,35 @@ async def get_queue_tasks(
             return f"{hours}:{minutes:02d}:{secs:02d}"
         return f"{minutes}:{secs:02d}"
 
+    def as_utc(dt: datetime) -> datetime:
+        # The tasks table historically stored naive UTC; manual/recovery inserts
+        # may carry a +00:00 offset. Normalize to tz-aware UTC so arithmetic works
+        # regardless of which row supplied the value.
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
     def enrich_task(task: Task) -> QueuedTaskWithContext:
         """Add episode and podcast context to a task."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Calculate time in queue (for pending tasks - how long waiting so far)
         time_in_queue = None
         if task.created_at and task.status.value == "pending":
-            time_in_queue = int((now - task.created_at).total_seconds())
+            time_in_queue = int((now - as_utc(task.created_at)).total_seconds())
 
         # Calculate processing time
         processing_time = None
         if task.started_at:
             if task.status.value == "processing":
                 # Currently processing - time since start
-                processing_time = int((now - task.started_at).total_seconds())
+                processing_time = int((now - as_utc(task.started_at)).total_seconds())
             elif task.status.value == "completed" and task.completed_at:
                 # Completed - time from start to completion
-                processing_time = int((task.completed_at - task.started_at).total_seconds())
+                processing_time = int((as_utc(task.completed_at) - as_utc(task.started_at)).total_seconds())
 
         # Calculate wait time (time from created to started - for completed tasks)
         wait_time = None
         if task.created_at and task.started_at:
-            wait_time = int((task.started_at - task.created_at).total_seconds())
+            wait_time = int((as_utc(task.started_at) - as_utc(task.created_at)).total_seconds())
 
         # Get episode and podcast info
         episode_title = "[Episode not found]"
@@ -1184,7 +1190,7 @@ async def get_queue_tasks(
 
     return QueueTasksResponse(
         status="ok",
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         worker_running=state.task_worker.is_running(),
         stages=stages,
         processing_tasks=processing,
