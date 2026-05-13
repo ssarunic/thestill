@@ -12,7 +12,6 @@ const Episodes = lazy(() => import('./pages/Episodes'))
 const Inbox = lazy(() => import('./pages/Inbox'))
 const Digests = lazy(() => import('./pages/Digests'))
 const DigestDetail = lazy(() => import('./pages/DigestDetail'))
-const BriefingDetail = lazy(() => import('./pages/BriefingDetail'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const QueueViewer = lazy(() => import('./pages/QueueViewer'))
 const Settings = lazy(() => import('./pages/Settings'))
@@ -89,11 +88,6 @@ function App() {
         <Route path="digests/:digestId" element={
           <Suspense fallback={<PageLoader />}>
             <DigestDetail />
-          </Suspense>
-        } />
-        <Route path="briefings/:briefingId" element={
-          <Suspense fallback={<PageLoader />}>
-            <BriefingDetail />
           </Suspense>
         } />
         <Route path="failed" element={

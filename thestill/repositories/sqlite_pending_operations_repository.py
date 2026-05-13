@@ -19,7 +19,7 @@ Schema is owned by ``SqlitePodcastRepository._run_migrations`` (see the
 ``pending_transcription_operations`` migration block there).
 
 Connection-per-operation, raw SQL, ISO-8601 timestamps — mirrors the
-patterns in ``sqlite_digest_repository`` and ``sqlite_briefing_repository``.
+pattern in ``sqlite_digest_repository``.
 """
 
 from __future__ import annotations

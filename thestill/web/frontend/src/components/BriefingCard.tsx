@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useLatestBriefing } from '../hooks/useApi'
+import { useLatestDigest } from '../hooks/useApi'
 
 function formatRelative(iso: string): string {
   const created = new Date(iso).getTime()
@@ -12,12 +12,12 @@ function formatRelative(iso: string): string {
   return `${Math.round(days)} day${days >= 1.5 ? 's' : ''} ago`
 }
 
-// Spec #36: a "Today's briefing" card sits at the top of /inbox when a
-// recent briefing exists for the current user. Clicking it opens the
-// briefing detail page; the actual generation happens lazily on the
-// `/api/briefings/latest` GET inside `useLatestBriefing`.
+// "Today's briefing" card at the top of /inbox. The card shows the
+// user's most recent inbox-driven digest; `GET /api/digests/latest`
+// lazy-generates one if the throttle has elapsed and there are
+// eligible inbox items in the window.
 export default function BriefingCard() {
-  const { data, isLoading, error } = useLatestBriefing()
+  const { data, isLoading, error } = useLatestDigest()
 
   if (isLoading) {
     return (
@@ -27,11 +27,12 @@ export default function BriefingCard() {
 
   // 404 means "nothing eligible to brief about" — a normal empty state,
   // not a UI error. Hide the card silently.
-  if (error || !data) return null
+  if (error || !data?.digest) return null
+  const digest = data.digest
 
   return (
     <Link
-      to={`/briefings/${data.id}`}
+      to={`/digests/${digest.id}`}
       className="group flex items-center gap-4 p-4 bg-gradient-to-br from-primary-50 to-white border border-primary-200 rounded-lg hover:border-primary-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-all"
     >
       <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center flex-shrink-0">
@@ -50,10 +51,9 @@ export default function BriefingCard() {
           Today's briefing
         </p>
         <p className="text-sm text-gray-500">
-          {data.episode_count} episode{data.episode_count === 1 ? '' : 's'}
+          {digest.episodes_total} episode{digest.episodes_total === 1 ? '' : 's'}
           {' • '}
-          generated {formatRelative(data.created_at)}
-          {data.listened_at ? ' • listened' : ''}
+          generated {formatRelative(digest.created_at)}
         </p>
       </div>
       <span className="text-sm font-medium text-primary-700 group-hover:text-primary-800">

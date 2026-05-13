@@ -272,7 +272,7 @@ function LayoutContent() {
               <NavItem
                 to="/digests"
                 icon={digestsIcon}
-                label="Digests"
+                label="Briefings"
                 showLabel={showLabels}
               />
               <NavItem

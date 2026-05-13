@@ -57,10 +57,6 @@ import {
   getEntitySummary,
   getInbox,
   type GetInboxOptions,
-  getLatestBriefing,
-  getBriefing,
-  getBriefingScript,
-  markBriefingListened,
 } from '../api/client'
 import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
 
@@ -575,10 +571,17 @@ export function useDigest(digestId: string | null) {
   })
 }
 
+// Backs the "Today's briefing" card on /inbox. The GET endpoint
+// lazy-generates a digest when eligible; a 404 means "nothing to brief
+// about right now" — keep ``retry: false`` so React Query doesn't
+// hammer the lazy-generate endpoint on the empty-window path.
+// ``staleTime`` matches the backend's perceived "still fresh" window.
 export function useLatestDigest() {
   return useQuery({
     queryKey: ['digests', 'latest'],
     queryFn: getLatestDigest,
+    staleTime: 60_000,
+    retry: false,
   })
 }
 
@@ -754,46 +757,5 @@ export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) 
     queryFn: () => getInbox(options),
     staleTime: 15_000,
     refetchInterval,
-  })
-}
-
-// Per-user briefings (spec #36). The "latest" endpoint lazy-generates,
-// so a 404 means "nothing eligible to brief about right now" — callers
-// should treat it as a hide-the-card signal rather than an error.
-export function useLatestBriefing() {
-  return useQuery({
-    queryKey: ['briefings', 'latest'],
-    queryFn: getLatestBriefing,
-    staleTime: 60_000,
-    retry: false,
-  })
-}
-
-export function useBriefing(briefingId: string | null) {
-  return useQuery({
-    queryKey: ['briefings', briefingId],
-    queryFn: () => getBriefing(briefingId!),
-    enabled: !!briefingId,
-    staleTime: 60_000,
-  })
-}
-
-export function useBriefingScript(briefingId: string | null) {
-  return useQuery({
-    queryKey: ['briefings', briefingId, 'script'],
-    queryFn: () => getBriefingScript(briefingId!),
-    enabled: !!briefingId,
-    staleTime: 5 * 60_000,
-  })
-}
-
-export function useMarkBriefingListened() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (briefingId: string) => markBriefingListened(briefingId),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['briefings', 'latest'] })
-      queryClient.invalidateQueries({ queryKey: ['briefings', data.id] })
-    },
   })
 }

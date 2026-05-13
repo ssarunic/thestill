@@ -100,10 +100,10 @@ function LinkIndexFallback({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       </div>
-      <p className="text-gray-500">Digest content not available</p>
+      <p className="text-gray-500">Briefing content not available</p>
       {digestStatus === 'pending' && (
         <p className="text-sm text-gray-400 mt-1">
-          This digest is still being processed
+          This briefing is still being processed
         </p>
       )}
       {digestStatus === 'failed' && (
@@ -182,7 +182,7 @@ export default function DigestDetail() {
     return (
       <div className="text-center py-12">
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md mx-auto">
-          <h2 className="text-red-700 font-medium mb-2">Error loading digest</h2>
+          <h2 className="text-red-700 font-medium mb-2">Error loading briefing</h2>
           <p className="text-red-600 text-sm">{digestError.message}</p>
           <Link to="/digests" className="mt-4 inline-block text-primary-600 hover:underline">
             &larr; Back to digests
@@ -198,7 +198,7 @@ export default function DigestDetail() {
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Breadcrumb */}
       <nav className="text-sm flex items-center gap-1">
-        <Link to="/digests" className="text-gray-500 hover:text-gray-700">Digests</Link>
+        <Link to="/digests" className="text-gray-500 hover:text-gray-700">Briefings</Link>
         <span className="text-gray-400">/</span>
         <span className="text-gray-900 truncate">
           {digestLoading ? '...' : digest ? formatShortDate(digest.created_at) : 'Digest'}
@@ -269,7 +269,7 @@ export default function DigestDetail() {
           <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
             {showDeleteConfirm ? (
               <>
-                <span className="text-sm text-gray-600">Delete this digest?</span>
+                <span className="text-sm text-gray-600">Delete this briefing?</span>
                 <button
                   onClick={handleDelete}
                   disabled={deleteMutation.isPending}
@@ -373,7 +373,7 @@ export default function DigestDetail() {
             </div>
           ) : (
             <div className="text-center py-12">
-              <p className="text-gray-500">No episodes in this digest</p>
+              <p className="text-gray-500">No episodes in this briefing</p>
             </div>
           )}
         </div>

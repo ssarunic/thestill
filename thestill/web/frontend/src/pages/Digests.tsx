@@ -216,7 +216,7 @@ function CreateDigestModal({
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">Create New Digest</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Create New Briefing</h2>
           <p className="text-sm text-gray-500 mt-1">
             Generate a digest from your processed podcast episodes
           </p>
@@ -399,9 +399,9 @@ export default function Digests() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Digests</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Briefings</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Generated summaries of your podcast episodes
+            Daily readouts of new episodes from your inbox
           </p>
         </div>
         <button
@@ -411,7 +411,7 @@ export default function Digests() {
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          New Digest
+          New Briefing
         </button>
       </div>
 

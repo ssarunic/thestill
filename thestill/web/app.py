@@ -43,7 +43,6 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
-from ..repositories.sqlite_briefing_repository import SqliteBriefingRepository
 from ..repositories.sqlite_digest_repository import SqliteDigestRepository
 from ..repositories.sqlite_inbox_repository import SqliteInboxRepository
 from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
@@ -51,9 +50,8 @@ from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
-from ..services.briefing_renderer import BriefingRenderer
-from ..services.briefing_service import BriefingService
 from ..services.digest_generator import DigestGenerator
+from ..services.digest_service import DigestService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
@@ -62,7 +60,6 @@ from ..utils.path_manager import PathManager
 from .dependencies import AppState
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
-    api_briefings,
     api_commands,
     api_dashboard,
     api_digests,
@@ -200,20 +197,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
 
-    # Per-user briefings (spec #36). The renderer is wired in here so
-    # production briefings get a script.md on disk; tests/CLIs that
-    # only need the state machine can still pass renderer=None.
-    briefing_repository = SqliteBriefingRepository(db_path=config.database_path)
-    briefing_renderer = BriefingRenderer(
-        DigestGenerator(path_manager, config.file_storage),
-        repository,
-        path_manager,
-    )
-    briefing_service = BriefingService.from_config(
+    # User-facing "Today's briefing" runs through the digest path with
+    # inbox-driven selection (cursor = previous digest's ``period_end``).
+    digest_service = DigestService.from_config(
         config,
-        briefing_repository,
+        digest_repository,
         inbox_repository,
-        renderer=briefing_renderer,
+        repository,
+        DigestGenerator(path_manager, config.file_storage),
+        path_manager,
     )
 
     # Spec #28 — entity-layer repository. Schema is created by the
@@ -253,8 +245,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         inbox_service=inbox_service,
         import_service=import_service,
         digest_repository=digest_repository,
-        briefing_repository=briefing_repository,
-        briefing_service=briefing_service,
+        digest_service=digest_service,
         pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
@@ -465,7 +456,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
     app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
-    app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
     app.include_router(api_narrations.router, prefix="/api/narrations", tags=["narrations"])
     app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])
     app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])

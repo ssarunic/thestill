@@ -274,17 +274,20 @@ async def get_latest_digest(
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Get the most recently created digest for the current user."""
-    digests = state.digest_repository.get_all(
-        limit=1,
-        offset=0,
-        user_id=user.id,
-    )
+    """
+    Return the user's most recent digest, lazy-generating one when eligible.
 
-    if not digests:
+    Selection comes from the inbox window
+    ``[previous_digest.period_end, now)`` — so each delivered episode is
+    briefed exactly once. The throttle inside ``DigestService`` collapses
+    accidental rapid-fire triggers (cron racing the UI). Returns 404 when
+    no eligible inbox items fall in the open window — callers should hide
+    the "Today's briefing" card.
+    """
+    digest = state.digest_service.generate_for_user(user.id)
+    if digest is None:
         not_found("Digest", "latest")
 
-    digest = digests[0]
     narrations = _list_narrations_for_digest(state.path_manager.narrations_dir(), digest.id)
     return api_response(
         {

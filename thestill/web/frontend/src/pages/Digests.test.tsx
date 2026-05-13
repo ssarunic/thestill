@@ -247,9 +247,9 @@ describe('Digests Page', () => {
 
       render(<Digests />, { wrapper: createWrapper() })
 
-      await user.click(screen.getByRole('button', { name: /new digest/i }))
+      await user.click(screen.getByRole('button', { name: /new briefing/i }))
 
-      expect(screen.getByText('Create New Digest')).toBeInTheDocument()
+      expect(screen.getByText('Create New Briefing')).toBeInTheDocument()
       expect(screen.getByText('Generate a digest from your processed podcast episodes')).toBeInTheDocument()
     })
 
@@ -264,7 +264,7 @@ describe('Digests Page', () => {
 
       render(<Digests />, { wrapper: createWrapper() })
 
-      await user.click(screen.getByRole('button', { name: /new digest/i }))
+      await user.click(screen.getByRole('button', { name: /new briefing/i }))
       await user.click(screen.getByRole('button', { name: /cancel/i }))
 
       expect(screen.queryByText('Create New Digest')).not.toBeInTheDocument()

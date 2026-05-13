@@ -289,7 +289,7 @@ class DigestGenerator:
 
         # Header
         now = datetime.now(timezone.utc)
-        lines.append("# Podcast Digest")
+        lines.append("# Today's Briefing")
         lines.append(f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC")
         lines.append("")
 

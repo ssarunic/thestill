@@ -193,7 +193,7 @@ class TestDigestGeneratorGenerate:
         content = generator.generate([])
 
         assert content.stats.total_episodes == 0
-        assert "# Podcast Digest" in content.markdown
+        assert "# Today's Briefing" in content.markdown
 
     def test_generate_with_episodes(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Generate digest with episodes."""

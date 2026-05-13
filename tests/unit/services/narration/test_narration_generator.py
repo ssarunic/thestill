@@ -328,7 +328,7 @@ def test_fallback_path_emits_link_index_when_validation_fails(
     assert content.stats.fallback_reason and "word_budget_high" in content.stats.fallback_reason
     assert content.markdown is not None
     assert "Today's narration is unavailable" in content.markdown
-    assert "Podcast Digest" in content.markdown  # link-index header
+    assert "Today's Briefing" in content.markdown  # link-index header
     assert content.episode_ids_covered == []
     assert content.episode_ids_in_tail == ["e1"]
 

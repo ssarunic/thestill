@@ -111,6 +111,13 @@ def mock_app_state(mock_user, sample_digest, sample_podcast, sample_episode):
     state.digest_repository.delete.return_value = True
     state.digest_repository.count.return_value = 1
 
+    # Mock digest service (used by GET /api/digests/latest for inbox-driven
+    # lazy generation). The default return mirrors "throttled, returns the
+    # most-recent digest" — tests that want the 404 path override this
+    # to return None.
+    state.digest_service = MagicMock()
+    state.digest_service.generate_for_user.return_value = sample_digest
+
     # Mock podcast repository
     state.repository = MagicMock()
     state.repository.get_episode.return_value = (sample_podcast, sample_episode)
@@ -229,9 +236,7 @@ class TestGetDigest:
 
         assert response.status_code == 404
 
-    def test_get_digest_includes_narration_variants(
-        self, client, mock_app_state, sample_digest
-    ):
+    def test_get_digest_includes_narration_variants(self, client, mock_app_state, sample_digest):
         """GET surfaces narration variants present on disk."""
         narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
         for slug, target in [("short", 180), ("medium", 300), ("long", 600)]:
@@ -244,7 +249,8 @@ class TestGetDigest:
                 encoding="utf-8",
             )
             (narrations_dir / f"{sample_digest.id}-{slug}.md").write_text(
-                "# briefing\n", encoding="utf-8",
+                "# briefing\n",
+                encoding="utf-8",
             )
 
         response = client.get(f"/api/digests/{sample_digest.id}")
@@ -257,19 +263,16 @@ class TestGetDigest:
         assert all(n["narration_id"].startswith(f"{sample_digest.id}-") for n in narrations)
         assert all(n["markdown_path"] for n in narrations)
 
-    def test_get_digest_with_no_narrations_returns_empty_list(
-        self, client, sample_digest
-    ):
+    def test_get_digest_with_no_narrations_returns_empty_list(self, client, sample_digest):
         response = client.get(f"/api/digests/{sample_digest.id}")
         assert response.status_code == 200
         assert response.json()["narrations"] == []
 
-    def test_get_digest_skips_corrupt_narration_json(
-        self, client, mock_app_state, sample_digest
-    ):
+    def test_get_digest_skips_corrupt_narration_json(self, client, mock_app_state, sample_digest):
         narrations_dir = mock_app_state.path_manager.narrations_dir.return_value
         (narrations_dir / f"{sample_digest.id}-medium.json").write_text(
-            "{not valid json", encoding="utf-8",
+            "{not valid json",
+            encoding="utf-8",
         )
         response = client.get(f"/api/digests/{sample_digest.id}")
         assert response.status_code == 200
@@ -309,14 +312,10 @@ class TestNarrateDigest:
 
     def test_returns_503_when_runner_disabled(self, client, sample_digest):
         # Default mock_app_state.narration_runner is None.
-        response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate", json={}
-        )
+        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
         assert response.status_code == 503
 
-    def test_resolves_preset_string_into_slug(
-        self, client, mock_app_state, sample_digest
-    ):
+    def test_resolves_preset_string_into_slug(self, client, mock_app_state, sample_digest):
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.narration_runner.run.return_value = self._stub_run(slug="short")
         response = client.post(
@@ -331,13 +330,9 @@ class TestNarrateDigest:
         assert kwargs["target_duration_seconds"] == 180
         assert kwargs["slug"] == "short"
 
-    def test_int_seconds_default_to_custom_slug(
-        self, client, mock_app_state, sample_digest
-    ):
+    def test_int_seconds_default_to_custom_slug(self, client, mock_app_state, sample_digest):
         mock_app_state.narration_runner = MagicMock()
-        mock_app_state.narration_runner.run.return_value = self._stub_run(
-            slug="custom-450s"
-        )
+        mock_app_state.narration_runner.run.return_value = self._stub_run(slug="custom-450s")
         response = client.post(
             f"/api/digests/{sample_digest.id}/narrate",
             json={"target_duration": 450},
@@ -368,31 +363,22 @@ class TestNarrateDigest:
     def test_404_when_digest_unknown(self, client, mock_app_state):
         mock_app_state.narration_runner = MagicMock()
         mock_app_state.digest_repository.get_by_id.return_value = None
-        response = client.post(
-            "/api/digests/missing/narrate", json={}
-        )
+        response = client.post("/api/digests/missing/narrate", json={})
         assert response.status_code == 404
 
     def test_404_when_runner_raises(self, client, mock_app_state, sample_digest):
         from thestill.services.narration import NarrationRunnerError
+
         mock_app_state.narration_runner = MagicMock()
-        mock_app_state.narration_runner.run.side_effect = NarrationRunnerError(
-            "no resolvable episodes"
-        )
-        response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate", json={}
-        )
+        mock_app_state.narration_runner.run.side_effect = NarrationRunnerError("no resolvable episodes")
+        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
         assert response.status_code == 404
 
-    def test_owner_check_returns_404_for_other_user(
-        self, client, mock_app_state, sample_digest
-    ):
+    def test_owner_check_returns_404_for_other_user(self, client, mock_app_state, sample_digest):
         mock_app_state.narration_runner = MagicMock()
         sample_digest.user_id = "different-user"
         mock_app_state.digest_repository.get_by_id.return_value = sample_digest
-        response = client.post(
-            f"/api/digests/{sample_digest.id}/narrate", json={}
-        )
+        response = client.post(f"/api/digests/{sample_digest.id}/narrate", json={})
         assert response.status_code == 404
 
 
@@ -545,8 +531,8 @@ class TestLatestDigest:
         assert "digest" in data
 
     def test_get_latest_digest_none_returns_404(self, client, mock_app_state):
-        """Get latest when no digests exist returns 404."""
-        mock_app_state.digest_repository.get_all.return_value = []
+        """Get latest when no eligible inbox items returns 404."""
+        mock_app_state.digest_service.generate_for_user.return_value = None
 
         response = client.get("/api/digests/latest")
 

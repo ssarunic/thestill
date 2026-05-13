@@ -48,7 +48,7 @@ interface FallbackBannerProps {
 function FallbackBanner({ reason }: FallbackBannerProps) {
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-      <p className="font-medium">Narration unavailable for this digest</p>
+      <p className="font-medium">Narration unavailable for this briefing</p>
       <p className="mt-1 text-amber-700">
         Showing the link-index briefing instead{reason ? ` (reason: ${reason})` : ''}.
         Try regenerating with a different length.

@@ -148,7 +148,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
           <NavItem to="/podcasts" icon={podcastsIcon} label="Podcasts" onClick={onClose} />
           <NavItem to="/top" icon={topIcon} label="Top" onClick={onClose} />
           <NavItem to="/episodes" icon={episodesIcon} label="Episodes" onClick={onClose} />
-          <NavItem to="/digests" icon={digestsIcon} label="Digests" onClick={onClose} />
+          <NavItem to="/digests" icon={digestsIcon} label="Briefings" onClick={onClose} />
           <NavItem to="/failed" icon={failedIcon} label="Failed Tasks" onClick={onClose} />
           <NavItem to="/queue" icon={queueIcon} label="Task Queue" onClick={onClose} />
           <NavItem to="/settings" icon={settingsIcon} label="Settings" onClick={onClose} />

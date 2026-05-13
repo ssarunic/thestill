@@ -57,8 +57,6 @@ import type {
   EpisodeEntitiesResponse,
   EntitySummaryResponse,
   EntityType,
-  BriefingResponse,
-  BriefingScriptResponse,
   InboxListResponse,
   InboxState,
   InboxStateResponse,
@@ -780,38 +778,6 @@ export async function setInboxState(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ state }),
-  })
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
-    throw new Error(message)
-  }
-
-  return response.json()
-}
-
-// Per-user briefings (spec #36). ``getLatestBriefing`` lazy-generates a
-// fresh briefing if the throttle has elapsed and inbox items are eligible;
-// callers should treat 404 as "no briefing for now, hide the card".
-export async function getLatestBriefing(): Promise<BriefingResponse> {
-  return fetchApi<BriefingResponse>('/briefings/latest')
-}
-
-export async function getBriefing(briefingId: string): Promise<BriefingResponse> {
-  return fetchApi<BriefingResponse>(`/briefings/${briefingId}`)
-}
-
-export async function getBriefingScript(briefingId: string): Promise<BriefingScriptResponse> {
-  return fetchApi<BriefingScriptResponse>(`/briefings/${briefingId}/script`)
-}
-
-export async function markBriefingListened(briefingId: string): Promise<BriefingResponse> {
-  const response = await fetch(`${API_BASE}/briefings/${briefingId}/listened`, {
-    method: 'POST',
-    credentials: 'include',
   })
 
   if (!response.ok) {

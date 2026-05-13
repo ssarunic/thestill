@@ -175,12 +175,13 @@ class Config(BaseModel):
     # episodes as the on-follow seed so the inbox is non-empty immediately.
     inbox_seed_on_follow: int = 2
 
-    # Throttle window for per-user briefings (spec #36): within this many
-    # seconds of the previous briefing, ``BriefingService.generate_for_user``
-    # returns the existing briefing rather than creating a new one. Default
-    # 6 hours — short enough to allow a same-day refresh, long enough to
-    # avoid double-coverage from accidental double-runs.
-    briefing_min_interval_seconds: int = 6 * 60 * 60
+    # Throttle window for per-user digests ("Today's briefing" in the UI):
+    # within this many seconds of the previous digest,
+    # ``DigestService.generate_for_user`` returns the existing digest
+    # rather than creating a new one. Default 6 hours — short enough to
+    # allow a same-day refresh, long enough to collapse accidental
+    # double-triggers (cron racing the UI, etc.).
+    digest_min_interval_seconds: int = 6 * 60 * 60
 
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
@@ -466,7 +467,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
-        "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
+        "digest_min_interval_seconds": int(os.getenv("DIGEST_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

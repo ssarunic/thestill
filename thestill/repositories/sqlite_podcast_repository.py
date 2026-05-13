@@ -1091,39 +1091,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_episode_inbox table created")
 
-        # Per-user briefings (spec #36). Cursor (cursor_from, cursor_to)
-        # makes "what inbox window did this briefing cover" reproducible
-        # without joining back to the inbox at the same moment in time.
-        # ``script_path`` / ``audio_path`` are nullable so the rendering
-        # pipeline (Phase 1.5 / spec #34) can populate them later without
-        # blocking the state-machine on writes.
+        # The legacy ``user_briefings`` table was retired when the
+        # user-facing "Today's briefing" path was folded into the
+        # ``digests`` table with inbox-driven selection (cursor =
+        # previous digest's ``period_end``). Drop the table on next boot.
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_briefings'")
-        if cursor.fetchone() is None:
-            logger.info("Migrating database: creating user_briefings")
+        if cursor.fetchone() is not None:
+            logger.info("Migrating database: dropping legacy user_briefings table")
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS user_briefings (
-                    id              TEXT PRIMARY KEY NOT NULL,
-                    user_id         TEXT NOT NULL,
-                    cursor_from     TIMESTAMP NOT NULL,
-                    cursor_to       TIMESTAMP NOT NULL,
-                    episode_count   INTEGER NOT NULL,
-                    script_path     TEXT NULL,
-                    audio_path      TEXT NULL,
-                    created_at      TIMESTAMP NOT NULL
-                                    DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
-                    listened_at     TIMESTAMP NULL,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    CHECK (length(id) = 36),
-                    CHECK (cursor_to > cursor_from),
-                    CHECK (episode_count >= 0)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_user_briefings_user_recent
-                    ON user_briefings(user_id, created_at DESC);
+                DROP INDEX IF EXISTS idx_user_briefings_user_recent;
+                DROP TABLE IF EXISTS user_briefings;
                 """
             )
-            logger.info("Migration complete: user_briefings table created")
+            logger.info("Migration complete: user_briefings table dropped")
 
         # Imports + auto-add columns. Indexes are created unconditionally
         # (IF NOT EXISTS) so fresh databases (columns came from _create_schema)

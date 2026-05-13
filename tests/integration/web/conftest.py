@@ -101,19 +101,20 @@ def app_state(app_config: Config) -> AppState:
     )
     digest_repository = SqliteDigestRepository(db_path=app_config.database_path)
 
-    from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
     from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
-    from thestill.services.briefing_service import BriefingService
+    from thestill.services.digest_generator import DigestGenerator
+    from thestill.services.digest_service import DigestService
 
-    # Briefings (spec #36). Tests don't render audio; pass ``renderer=None``
-    # so the state machine returns scripts/audio_path NULL — fine for the
-    # API-shape assertions exercised here.
-    briefing_repository = SqliteBriefingRepository(db_path=app_config.database_path)
-    briefing_service = BriefingService.from_config(
+    # Per-user "Today's briefing" reads/writes the ``digests`` table via
+    # inbox-driven selection. Renderer wired so generate_for_user can
+    # produce a real script.md when tests cover the full path.
+    digest_service = DigestService.from_config(
         app_config,
-        briefing_repository,
+        digest_repository,
         inbox_repository,
-        renderer=None,
+        repository,
+        DigestGenerator(path_manager, app_config.file_storage),
+        path_manager,
     )
 
     entity_repository = SqliteEntityRepository(db_path=app_config.database_path)
@@ -138,8 +139,7 @@ def app_state(app_config: Config) -> AppState:
         inbox_service=inbox_service,
         import_service=import_service,
         digest_repository=digest_repository,
-        briefing_repository=briefing_repository,
-        briefing_service=briefing_service,
+        digest_service=digest_service,
         entity_repository=entity_repository,
     )
 
