@@ -358,7 +358,7 @@ def setup_tools(server: Server, storage_path: str):
             # Digest tools
             Tool(
                 name="generate_digest",
-                description="Generate a morning briefing digest from summarized podcast episodes. Creates a consolidated markdown document with episode summaries grouped by podcast.",
+                description="Generate a morning briefing from summarized podcast episodes. Creates a consolidated markdown document with episode summaries grouped by podcast.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -378,7 +378,7 @@ def setup_tools(server: Server, storage_path: str):
                         },
                         "exclude_digested": {
                             "type": "boolean",
-                            "description": "Exclude episodes already included in a previous digest (default: false)",
+                            "description": "Exclude episodes already included in a previous briefing (default: false)",
                             "default": False,
                         },
                     },
@@ -387,13 +387,13 @@ def setup_tools(server: Server, storage_path: str):
             ),
             Tool(
                 name="list_digests",
-                description="List all generated digests with their metadata (date, episode count, status).",
+                description="List all generated briefings with their metadata (date, episode count, status).",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of digests to return (default: 10)",
+                            "description": "Maximum number of briefings to return (default: 10)",
                             "default": 10,
                         },
                         "status": {
@@ -407,13 +407,13 @@ def setup_tools(server: Server, storage_path: str):
             ),
             Tool(
                 name="get_digest",
-                description="Get a specific digest by ID or get the latest digest. Returns the full markdown content and metadata.",
+                description="Get a specific briefing by ID or get the latest briefing. Returns the full markdown content and metadata.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "digest_id": {
                             "type": "string",
-                            "description": "Digest UUID. If not provided, returns the latest digest.",
+                            "description": "Briefing UUID. If not provided, returns the latest briefing.",
                         },
                     },
                     "required": [],
@@ -1581,7 +1581,7 @@ def setup_tools(server: Server, storage_path: str):
                             text=json.dumps(
                                 {
                                     "success": True,
-                                    "message": "No summarized episodes found for digest",
+                                    "message": "No summarized episodes found for briefing",
                                     "hint": "Use summarize_episodes first or adjust the time window",
                                 }
                             ),
@@ -1624,7 +1624,7 @@ def setup_tools(server: Server, storage_path: str):
 
                 result = {
                     "success": True,
-                    "message": f"Digest generated with {digest_content.stats.successful_episodes} episode(s)",
+                    "message": f"Briefing generated with {digest_content.stats.successful_episodes} episode(s)",
                     "digest_id": digest_model.id,
                     "file_path": str(output_path),
                     "stats": {
@@ -1672,7 +1672,7 @@ def setup_tools(server: Server, storage_path: str):
                         return [
                             TextContent(
                                 type="text",
-                                text=json.dumps({"success": False, "error": f"Digest not found: {digest_id}"}),
+                                text=json.dumps({"success": False, "error": f"Briefing not found: {digest_id}"}),
                             )
                         ]
                 else:
@@ -1685,7 +1685,7 @@ def setup_tools(server: Server, storage_path: str):
                                 text=json.dumps(
                                     {
                                         "success": False,
-                                        "error": "No digests found. Use generate_digest first.",
+                                        "error": "No briefings found. Use generate_digest first.",
                                     }
                                 ),
                             )

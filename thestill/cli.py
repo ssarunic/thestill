@@ -2109,9 +2109,9 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt for large batches")
 @click.option("--no-refresh", is_flag=True, help="Skip feed refresh (use existing discovered episodes)")
 @click.option("--podcast-id", help="Filter to specific podcast (index, URL, or UUID)")
-@click.option("--output", "-o", type=click.Path(), help="Custom output path for digest file")
+@click.option("--output", "-o", type=click.Path(), help="Custom output path for briefing file")
 @click.option("--ready-only", is_flag=True, help="Only include already-summarized episodes (skip processing)")
-@click.option("--exclude-digested", is_flag=True, help="Exclude episodes already included in a previous digest")
+@click.option("--exclude-digested", is_flag=True, help="Exclude episodes already included in a previous briefing")
 @click.option(
     "--async", "async_mode", is_flag=True, help="Queue processing and return immediately (requires worker process)"
 )
@@ -2119,12 +2119,12 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     "--no-narrate",
     "skip_narrate",
     is_flag=True,
-    help="Skip the narrated-digest enhancement (link-index only). Useful in offline / no-LLM runs.",
+    help="Skip the narrated-briefing enhancement (link-index only). Useful in offline / no-LLM runs.",
 )
 @click.option(
     "--narration-duration",
     default=None,
-    help="Target spoken duration for the narrated digest (preset short/medium/long, or 5m / 0:05:00).",
+    help="Target spoken duration for the narrated briefing (preset short/medium/long, or 5m / 0:05:00).",
 )
 @click.pass_context
 @require_config
@@ -2145,18 +2145,18 @@ def digest(
     narration_duration,
     async_mode,
 ):
-    """Process new episodes and generate a morning briefing digest.
+    """Process new episodes and generate a morning briefing.
 
     Runs the full pipeline (refresh -> download -> downsample -> transcribe ->
     clean -> summarize) on unprocessed episodes and generates a consolidated
-    markdown digest.
+    markdown briefing.
 
-    Use --ready-only to skip processing and generate a digest from already-summarized
-    episodes only. This is useful for quick digest generation without waiting for
+    Use --ready-only to skip processing and generate a briefing from already-summarized
+    episodes only. This is useful for quick briefing generation without waiting for
     transcription and summarization.
 
     Use --async to queue episodes for background processing and return immediately.
-    Check progress with 'thestill digest-status <digest-id>'. Note: async mode
+    Check progress with 'thestill digest-status <briefing-id>'. Note: async mode
     requires a separate worker process to be running ('thestill worker').
 
     By default, processes up to 10 episodes from the last 7 days. Use --no-limit
@@ -2290,7 +2290,7 @@ def digest(
 
     # Ready-only mode: skip processing, generate digest directly
     if ready_only:
-        click.echo("\n📝 Generating digest from summarized episodes...")
+        click.echo("\n📝 Generating briefing from summarized episodes...")
         start_time = time.time()
 
         # All selected episodes are already summarized
@@ -2341,7 +2341,7 @@ def digest(
             digest_model.mark_in_progress()
             digest_repository.save(digest_model)
 
-            click.echo(f"\n✓ Digest created: {digest_model.id}")
+            click.echo(f"\n✓ Briefing created: {digest_model.id}")
             click.echo(f"   Queued: {result.queued_count} episode(s)")
             click.echo(f"   Skipped: {result.skipped_count}")
             click.echo(f"\n💡 Check progress with: thestill digest-status {digest_model.id}")
@@ -2391,8 +2391,8 @@ def digest(
         if result.was_interrupted:
             click.echo("   ⚠️  Processing was interrupted")
 
-        # Step 4: Generate digest
-        click.echo("\n📝 Generating digest...")
+        # Step 4: Generate briefing
+        click.echo("\n📝 Generating briefing...")
 
         # Collect successful episodes for digest
         successful_episodes = []
@@ -2462,7 +2462,7 @@ def digest(
     digest_repository.save(digest_model)
 
     # Final summary
-    click.echo(f"\n🎉 Digest generated!")
+    click.echo(f"\n🎉 Briefing generated!")
     click.echo(f"   Output: {output_path}")
     click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
     click.echo(f"   Processing time: {format_duration(int(processing_time))}")
@@ -2524,7 +2524,7 @@ def _print_run_summary(run, *, include_target: bool) -> None:
     stats = run.content.stats
     click.echo(f"   Mode: {run.content.mode}")
     if include_target:
-        click.echo(f"   Digest: {run.digest_id}")
+        click.echo(f"   Briefing: {run.digest_id}")
         click.echo(f"   Target: {format_duration(stats.target_duration_seconds)}")
     click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
     if include_target:
@@ -2557,7 +2557,7 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
         click.echo(f"⚠️  Skipping narration — could not init LLM provider: {exc}", err=True)
         return
 
-    click.echo("\n🎙  Generating narrated digest…")
+    click.echo("\n🎙  Generating narrated briefing…")
     runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
         run = runner.run(digest_id=digest_id, target_duration_seconds=target_seconds)
@@ -2572,7 +2572,7 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
     "--digest",
     "digest_id",
     default=None,
-    help="Digest id to narrate. Defaults to the latest digest.",
+    help="Briefing id to narrate. Defaults to the latest briefing.",
 )
 @click.option(
     "--target-duration",
@@ -2594,16 +2594,16 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
 @require_config
 @log_command
 def narrate(ctx, digest_id, target_duration, slug, dry_run):
-    """Generate a narrated digest from a previous `thestill digest` run.
+    """Generate a narrated briefing from a previous `thestill digest` run.
 
-    Reads the episode list from the digest record, runs theme clustering
+    Reads the episode list from the briefing record, runs theme clustering
     + anchor-prose script generation (spec #33), and writes:
 
       data/narrations/YYYY-MM-DD-<slug>.json   (TTS-ready script)
       data/narrations/YYYY-MM-DD-<slug>.md     (read-through markdown)
 
     On validation failure the briefing falls back to the link-index
-    digest with a "narration unavailable" banner; the JSON script still
+    rendering with a "narration unavailable" banner; the JSON script still
     serialises with ``mode: "fallback"`` for diagnostics.
     """
     from .services.narration import NarrationRunnerError
@@ -2647,25 +2647,25 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
 
 @main.command("digest-status")
 @click.argument("digest_id", required=False)
-@click.option("--list", "-l", "list_all", is_flag=True, help="List all digests")
-@click.option("--limit", type=int, default=10, help="Maximum digests to list (default: 10)")
-@click.option("--finalize", "-f", is_flag=True, help="Finalize an async digest (generate output file)")
+@click.option("--list", "-l", "list_all", is_flag=True, help="List all briefings")
+@click.option("--limit", type=int, default=10, help="Maximum briefings to list (default: 10)")
+@click.option("--finalize", "-f", is_flag=True, help="Finalize an async briefing (generate output file)")
 @click.pass_context
 @require_config
 @log_command
 def digest_status(ctx, digest_id, list_all, limit, finalize):
-    """Check status of digest generation or list all digests.
+    """Check status of briefing generation or list all briefings.
 
-    Without arguments, shows the status of the most recent digest.
-    With DIGEST_ID, shows status of that specific digest.
-    With --list, shows all digests.
-    With --finalize, generates the digest file for a completed async digest.
+    Without arguments, shows the status of the most recent briefing.
+    With DIGEST_ID, shows status of that specific briefing.
+    With --list, shows all briefings.
+    With --finalize, generates the output file for a completed async briefing.
 
     Examples:
-      thestill digest-status                    # Show latest digest status
-      thestill digest-status abc123             # Show specific digest
-      thestill digest-status --list             # List all digests
-      thestill digest-status abc123 --finalize  # Generate file for async digest
+      thestill digest-status                    # Show latest briefing status
+      thestill digest-status abc123             # Show specific briefing
+      thestill digest-status --list             # List all briefings
+      thestill digest-status abc123 --finalize  # Generate file for async briefing
     """
     from .core.queue_manager import QueueManager, TaskStage, TaskStatus
 
@@ -2679,10 +2679,10 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         digests = digest_repository.get_all(limit=limit)
 
         if not digests:
-            click.echo("No digests found.")
+            click.echo("No briefings found.")
             ctx.exit(0)
 
-        click.echo(f"📋 Digests (showing {len(digests)}):\n")
+        click.echo(f"📋 Briefings (showing {len(digests)}):\n")
         for d in digests:
             status_icon = {
                 DigestStatus.PENDING: "⏳",
@@ -2705,12 +2705,12 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
     if digest_id:
         digest_model = digest_repository.get_by_id(digest_id)
         if not digest_model:
-            click.echo(f"❌ Digest not found: {digest_id}", err=True)
+            click.echo(f"❌ Briefing not found: {digest_id}", err=True)
             ctx.exit(2)
     else:
         digest_model = digest_repository.get_latest()
         if not digest_model:
-            click.echo("No digests found. Run 'thestill digest' to create one.")
+            click.echo("No briefings found. Run 'thestill digest' to create one.")
             ctx.exit(0)
 
     # Show digest status
@@ -2722,7 +2722,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         DigestStatus.FAILED: "❌",
     }.get(digest_model.status, "?")
 
-    click.echo(f"\n{status_icon} Digest: {digest_model.id}")
+    click.echo(f"\n{status_icon} Briefing: {digest_model.id}")
     click.echo(f"   Status: {digest_model.status.value}")
     click.echo(f"   Created: {digest_model.created_at.strftime('%Y-%m-%d %H:%M')}")
     click.echo(
@@ -2756,7 +2756,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         click.echo(f"   Pending: {pending}")
 
         if pending == 0:
-            click.echo("\n💡 All episodes processed. Run with --finalize to generate the digest file.")
+            click.echo("\n💡 All episodes processed. Run with --finalize to generate the briefing file.")
 
     elif digest_model.status in (DigestStatus.COMPLETED, DigestStatus.PARTIAL):
         click.echo(f"\n📊 Results:")
@@ -2773,15 +2773,15 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
     # Finalize mode: generate digest file for async digest
     if finalize:
         if digest_model.status == DigestStatus.COMPLETED and digest_model.file_path:
-            click.echo("\n✓ Digest already finalized.")
+            click.echo("\n✓ Briefing already finalized.")
             ctx.exit(0)
 
         if digest_model.status == DigestStatus.PENDING:
-            click.echo("\n❌ Cannot finalize: digest is still pending", err=True)
+            click.echo("\n❌ Cannot finalize: briefing is still pending", err=True)
             ctx.exit(1)
 
         # Collect episode results from queue
-        click.echo("\n📝 Generating digest file...")
+        click.echo("\n📝 Generating briefing file...")
         queue_manager = QueueManager(str(config.database_path))
 
         successful_episodes = []
@@ -2840,7 +2840,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         )
         digest_repository.save(digest_model)
 
-        click.echo(f"\n🎉 Digest finalized!")
+        click.echo(f"\n🎉 Briefing finalized!")
         click.echo(f"   Output: {output_path}")
         click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
         if missing_episode_ids:

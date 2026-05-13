@@ -108,7 +108,7 @@ function LinkIndexFallback({
       )}
       {digestStatus === 'failed' && (
         <p className="text-sm text-gray-400 mt-1">
-          Digest generation failed
+          Briefing generation failed
         </p>
       )}
     </div>
@@ -185,7 +185,7 @@ export default function DigestDetail() {
           <h2 className="text-red-700 font-medium mb-2">Error loading briefing</h2>
           <p className="text-red-600 text-sm">{digestError.message}</p>
           <Link to="/digests" className="mt-4 inline-block text-primary-600 hover:underline">
-            &larr; Back to digests
+            &larr; Back to briefings
           </Link>
         </div>
       </div>
@@ -289,7 +289,7 @@ export default function DigestDetail() {
                 onClick={() => setShowDeleteConfirm(true)}
                 className="px-3 py-1.5 text-sm font-medium rounded-lg text-red-600 hover:bg-red-50 transition-colors"
               >
-                Delete digest
+                Delete briefing
               </button>
             )}
           </div>

@@ -218,7 +218,7 @@ function CreateDigestModal({
         <div className="p-6 border-b border-gray-200">
           <h2 className="text-xl font-semibold text-gray-900">Create New Briefing</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Generate a digest from your processed podcast episodes
+            Generate a briefing from your processed podcast episodes
           </p>
         </div>
 
@@ -255,7 +255,7 @@ function CreateDigestModal({
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Limit digest to {maxEpisodes} episodes
+              Limit briefing to {maxEpisodes} episodes
             </p>
           </div>
 
@@ -283,7 +283,7 @@ function CreateDigestModal({
               className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
             />
             <label htmlFor="excludeDigested" className="text-sm text-gray-700">
-              Exclude episodes already in a digest
+              Exclude episodes already in a briefing
             </label>
           </div>
 
@@ -341,7 +341,7 @@ function CreateDigestModal({
               }
             `}
           >
-            {isCreating ? 'Creating...' : 'Create Digest'}
+            {isCreating ? 'Creating...' : 'Create Briefing'}
           </button>
         </div>
       </div>
@@ -379,7 +379,7 @@ export default function Digests() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading digests...</div>
+        <div className="text-gray-500">Loading briefings...</div>
       </div>
     )
   }
@@ -387,7 +387,7 @@ export default function Digests() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-red-500">Error loading digests: {error.message}</div>
+        <div className="text-red-500">Error loading briefings: {error.message}</div>
       </div>
     )
   }
@@ -419,7 +419,7 @@ export default function Digests() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-gray-900">{digests.length}</div>
-          <div className="text-sm text-gray-500">Total Digests</div>
+          <div className="text-sm text-gray-500">Total Briefings</div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="text-2xl font-bold text-green-600">
@@ -449,13 +449,13 @@ export default function Digests() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
           </div>
-          <p className="text-gray-500">No digests yet</p>
-          <p className="text-sm text-gray-400 mt-1">Create your first digest to get started</p>
+          <p className="text-gray-500">No briefings yet</p>
+          <p className="text-sm text-gray-400 mt-1">Create your first briefing to get started</p>
           <button
             onClick={() => setShowCreateModal(true)}
             className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-primary-600 text-white hover:bg-primary-700 transition-colors"
           >
-            Create Digest
+            Create Briefing
           </button>
         </div>
       ) : (
@@ -473,18 +473,18 @@ export default function Digests() {
 
       {/* Info box */}
       <div className="mt-8 p-4 bg-gray-50 rounded-lg">
-        <h3 className="font-medium text-gray-900 mb-2">About Digests</h3>
+        <h3 className="font-medium text-gray-900 mb-2">About Briefings</h3>
         <div className="text-sm text-gray-600 space-y-2">
           <p>
-            <span className="font-medium text-green-700">Completed</span> digests have
+            <span className="font-medium text-green-700">Completed</span> briefings have
             all episodes processed successfully.
           </p>
           <p>
-            <span className="font-medium text-orange-700">Partial</span> digests have
+            <span className="font-medium text-orange-700">Partial</span> briefings have
             some episodes that failed but still include available content.
           </p>
           <p>
-            <span className="font-medium text-red-700">Failed</span> digests could not
+            <span className="font-medium text-red-700">Failed</span> briefings could not
             be generated due to errors.
           </p>
         </div>
