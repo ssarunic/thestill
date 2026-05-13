@@ -1,10 +1,24 @@
 # Pluggable File Storage Backends
 
-> **Status:** 📝 Draft — S3-on-AWS targeted for v1
+> **Status:** ✅ Shipped (code migration); Phase 4 (presigned-URL streaming) deferred to spec #34, Phase 5 (AWS IaC) outside the code path
 > **Created:** 2026-05-08
 > **Updated:** 2026-05-13
 > **Author:** Engineering
-> **Related:** [#05 docker-deployment](05-docker-deployment.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md)
+> **Related:** [#05 docker-deployment](05-docker-deployment.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md), [#40 storage-routing-ephemeral-vs-persistent](40-storage-routing-ephemeral-vs-persistent.md)
+
+## Shipping log
+
+| PR | Scope | Status |
+|----|-------|--------|
+| [#93](https://github.com/ssarunic/thestill/pull/93) | `FileStorage` ABC + `LocalFileStorage` + `S3FileStorage` + `make_storage` factory; Phase 2.1 (digests), 2.2 (corpus pages), 2.3 (external transcripts); summary write migration; `[s3]` extra; `docs/storage-backends.md` | ✅ Merged |
+| [#94](https://github.com/ssarunic/thestill/pull/94) | Spec [#40](40-storage-routing-ephemeral-vs-persistent.md): pending transcription operations move from `data/pending_operations/*.json` to a SQLite table; backfill migration | ✅ Merged |
+| [#95](https://github.com/ssarunic/thestill/pull/95) | Phase 2.5: `podcast_service.py` read paths (summary, raw + clean transcripts, segmented sidecar) | ✅ Merged |
+| [#96](https://github.com/ssarunic/thestill/pull/96) | Phase 2.4 + 2.6: transcribers (dalston/elevenlabs/google) return Transcript only; `handle_download`/`handle_downsample`/`handle_transcribe`/`handle_clean`/`handle_summarize` route through `FileStorage` via `local_copy` + `upload_file` | 🚧 In review |
+
+**Deferred:**
+
+- **Phase 4 (presigned-URL audio streaming):** the codebase has no audio-serving endpoint today — episodes return the external podcast feed's `audio_url` directly. The presigned-URL win applies when spec [#34](34-briefing-audio-and-feeds.md) lands and we serve briefing audio from local storage. Picked up there.
+- **Phase 5 (AWS IaC):** `docs/storage-backends.md` documents the AWS-side resources (IAM policy, bucket configuration, lifecycle rules, VPC gateway endpoint). Terraform/CDK module fragment is a follow-up that lives outside this repo's code path.
 
 ---
 
@@ -31,7 +45,7 @@ The pipeline writes ~6 file artifact families per episode (original audio, downs
 2. **Docker / RPi5 deployment ([#05](05-docker-deployment.md)).** SD cards are slow and small; offloading audio + transcripts to S3 keeps the appliance lean. Spec #05 explicitly defers this and ships the slim image with local persistence — this spec is the natural follow-up. The same abstraction serves both the cloud deployment and the slim Docker target.
 3. **Pre-signed URLs for the web player.** Streaming audio to the browser today goes through FastAPI, which serves the file from local disk. With S3, a presigned URL hands streaming directly to S3 (and optionally CloudFront later) — cheaper, faster, and survives server restarts. No NAT bandwidth on the egress path.
 
-The point isn't to migrate everything off disk. The point is to make the storage layer *swappable* so each artifact family can live wherever makes sense (audio + transcripts in S3, SQLite stays local on EBS or migrates to RDS later, corpus pages stay local for Obsidian editing).
+The point isn't to migrate everything off disk. The point is to make the storage layer *swappable*: with `STORAGE_BACKEND=s3` set, every persistent artefact (audio, transcripts, summaries, corpus pages, digests) lands on S3, while SQLite stays local on EBS (or migrates to RDS later). Spec [#40](40-storage-routing-ephemeral-vs-persistent.md) handles the two narrow carve-outs (pending ops → SQLite; debug feeds keep direct `Path` I/O).
 
 ---
 
@@ -255,53 +269,52 @@ Install with `pip install thestill[s3]`. AWS deployment images should bake this 
 
 ## Migration phases
 
-The diff is large but mechanically rote. Phase it so each PR keeps the tree green.
+The diff is large but mechanically rote. Phase it so each PR keeps the tree green. Status as of 2026-05-13 — see [Shipping log](#shipping-log) above for PR mapping.
 
-### Phase 0 — abstraction lands, nothing uses it
+### Phase 0 — abstraction lands, nothing uses it ✅ Shipped (#93)
 
-- Add `thestill/utils/file_storage.py` with `FileStorage`, `FileMetadata`, `LocalFileStorage` only.
+- Add `thestill/utils/file_storage/` package with `FileStorage`, `FileMetadata`, `LocalFileStorage`.
 - Add unit tests against `LocalFileStorage` covering: read/write text + bytes, idempotent delete, `delete_batch`, `get_metadata`, `list_files` with prefix and pattern, `get_local_path` round-trip, escape-attempt rejection.
-- No production caller wired up yet. Pure addition; cannot break anything.
 
-### Phase 1 — wire factory into config + DI
+### Phase 1 — wire factory into config + DI ✅ Shipped (#93)
 
-- Add `make_storage` factory and `STORAGE_BACKEND=local` default.
-- Inject `FileStorage` instance into existing service-layer constructors. Default to `LocalFileStorage` so behaviour is unchanged.
-- Add `.relative` accessor (or equivalent) to `PathManager`.
+- `make_storage` factory and `STORAGE_BACKEND=local` default.
+- `FileStorage` constructed once in `Config.__init__` next to `path_manager` so CLI / web / MCP all share one instance.
+- `PathManager.to_relative(absolute)` bridges absolute paths into FileStorage keys; the spec sketched a `.relative` namespace but the simpler helper carried.
 
-### Phase 2 — migrate file I/O call sites family-by-family
+### Phase 2 — migrate file I/O call sites family-by-family ✅ Shipped
 
-One PR per artifact family so each is reviewable and revertable:
+| Sub-phase | Family | PR |
+|-----------|--------|----|
+| 2.1 | Digests (`services/digest_generator.py`) | #93 |
+| 2.2 | Corpus pages (`core/entity_page_writer.py`) | #93 |
+| 2.3 | External transcripts (`core/external_transcript_downloader.py`) | #93 |
+| 2.4 | Transcribers (dalston/elevenlabs/google) | #96 |
+| 2.5 | Read paths in `podcast_service.py` (summary, raw + clean transcripts, segmented sidecar) | #95 |
+| 2.6 | Audio (`handle_download`, `handle_downsample`, `handle_clean`, `handle_summarize`) | #96 |
 
-1. **Digests** — write-only, single producer (`services/digest_generator.py`), small files. Lowest risk.
-2. **Corpus pages** — write-only via `core/entity_page_writer.py`.
-3. **Transcripts (raw + clean + sidecars)** — written by transcribers, read by cleaning + summary + MCP layers. Many call sites.
-4. **Summaries + facts.**
-5. **External transcripts.**
-6. **Audio (original + downsampled).** Highest risk: pydub/ffmpeg/whisper need filesystem paths → forces every audio caller through `get_local_path`. Save for last.
+The audio migration's center of gravity ended up in `task_handlers.py` (the orchestration layer) rather than in `AudioDownloader` / `AudioPreprocessor` themselves — those stay backend-agnostic, operating on real filesystem paths. Handlers wrap inputs in `storage.local_copy(rel)`, write outputs to tempdirs, and upload via `storage.upload_file`. This keeps pydub/ffmpeg subprocess paths storage-naive and the dance contained to one file.
 
-Each PR: replace `Path.read_*`/`Path.write_*`/`open()` with `storage.read_*`/`storage.write_*`. For tools that need a real path, wrap with `get_local_path`. Add an integration test.
-
-### Phase 3 — implement S3 backend
+### Phase 3 — implement S3 backend ✅ Shipped (#93)
 
 - `S3FileStorage` module with the surface described in [Backends](#backends).
-- Contract-equivalence test suite: the same suite that already runs against `LocalFileStorage` (Phase 0) runs against `S3FileStorage` pointed at LocalStack in CI. This guarantees behavioural parity across backends.
+- Contract-equivalence test suite runs the same tests against `LocalFileStorage` and `S3FileStorage` (the latter via moto's in-process S3 mock — no Docker, no LocalStack in CI).
 - Optional dep group `thestill[s3]` in `pyproject.toml`.
-- Document AWS IAM policy template (see [AWS deployment concerns](#aws-deployment-concerns)) alongside the backend.
+- AWS IAM policy template documented in `docs/storage-backends.md` (also covers KMS, lifecycle rules, VPC gateway endpoint).
 - **GCS backend is deferred to a follow-up spec** — re-engage if a non-AWS hosting need surfaces. The abstraction stays GCS-shaped (idempotent delete, metadata in listings) so re-engaging is mechanical.
 
-### Phase 4 — presigned URLs for streaming
+### Phase 4 — presigned URLs for streaming ⏭ Deferred
 
-- `web/routes/api_episodes.py` audio endpoint returns `307` to `storage.get_public_url(...)` when backend supports it (S3); falls back to `FileResponse` from `get_local_path` for local backend.
-- Frontend audio player needs no changes.
-- Optional follow-up: front S3 with CloudFront for cached / lower-latency delivery. Not required for v1 — presigned S3 URLs alone are fine for the expected request volume.
+The codebase has no audio-serving endpoint today; episodes return the external podcast feed's `audio_url` field to clients, which play directly from the original CDN. The presigned-URL pattern (`get_public_url` + 307 redirect) is implemented and tested in the abstraction, but has no caller in the current web layer.
 
-### Phase 5 — AWS production deployment
+**Picks up with spec [#34](34-briefing-audio-and-feeds.md):** when briefing audio gets served from local storage, the briefing-audio endpoint is the natural place to wire `storage.get_public_url(...)` → `307` redirect. The pattern is documented and the implementation is ready; it just needs a real call site.
 
-- Document `STORAGE_BACKEND=s3` configuration in the Docker spec ([#05](05-docker-deployment.md)), including the AWS-side resources (bucket, IAM policy, instance profile / task role, optional KMS key, lifecycle rules, VPC gateway endpoint).
-- Provide a Terraform / CDK module fragment (or at least a reference set of `aws` CLI commands) that provisions the bucket + IAM + endpoint for a Thestill deployment.
-- Add a smoke-test compose file with LocalStack so contributors can validate cloud paths without an AWS account.
-- Update [#05](05-docker-deployment.md) to flag S3 as the recommended storage configuration for any non-RPi5 deployment.
+### Phase 5 — AWS production deployment 🟡 Partial
+
+- ✅ `docs/storage-backends.md` documents `STORAGE_BACKEND=s3` configuration including the AWS-side resources (bucket, IAM policy, instance profile / task role, optional KMS key, lifecycle rules, VPC gateway endpoint).
+- ⏭ Terraform / CDK module fragment that provisions bucket + IAM + endpoint for a Thestill deployment. Follow-up; lives outside this repo's code path.
+- ⏭ Smoke-test compose file with LocalStack. moto in tests covers the contract-equivalence story already; LocalStack is a manual-validation tool worth adding only if someone runs into a real-S3 quirk moto doesn't reproduce.
+- ⏭ Update [#05](05-docker-deployment.md) to flag S3 as the recommended storage configuration for any non-RPi5 deployment. Drive-by edit when #05 next moves.
 
 ---
 
@@ -417,9 +430,9 @@ Every `exists()` call is an S3 `HeadObject` request. The codebase has a habit of
 
 ## Open questions
 
-1. **Per-artifact backend routing.** Should `STORAGE_BACKEND` be global, or per-artifact (e.g., audio in S3, corpus on local for Obsidian editing)? The latter is more flexible; the former is simpler. Recommendation: start global, add per-artifact override env vars (`STORAGE_BACKEND_AUDIO`, `STORAGE_BACKEND_CORPUS`) only when there's demand.
+1. ~~**Per-artifact backend routing.**~~ ✅ **Resolved by spec [#40](40-storage-routing-ephemeral-vs-persistent.md).** Two narrow carve-outs instead of a per-artifact matrix: pending transcription ops moved to SQLite (#94), debug feeds keep direct `Path` I/O. Downsampled WAV stays on the main backend (Dalston/Google STT can stream from S3 directly). Corpus is no longer routed local-only — the "Obsidian editing" framing was a hypothetical, not a requirement.
 2. **Where do MCP and web servers cache cloud-pulled audio?** A long-running web server hitting `get_local_path` on every audio stream is wasteful. Recommendation: not the storage layer's problem — add an `LRUDiskCache` decorator if it bites in production.
-3. **Migration of existing local data.** When a deployment flips `STORAGE_BACKEND=local` → `s3`, existing files don't auto-upload. Provide a one-shot `thestill migrate-storage --from local --to s3 --dry-run` CLI? Probably yes, but it's a follow-up spec.
+3. **Migration of existing local data.** When a deployment flips `STORAGE_BACKEND=local` → `s3`, existing files don't auto-upload. Provide a one-shot `thestill migrate-storage --from local --to s3 --dry-run` CLI? Probably yes, but it's a follow-up spec. `docs/storage-backends.md` documents an `aws s3 sync` recipe in the meantime.
 4. **DB backups.** SQLite backups also benefit from S3. But that's `db_path`, not `FileStorage`. Out of scope here — flag for a separate spec.
 5. **Cost telemetry.** Cloud requests cost money. Should we instrument `S3FileStorage` with request counters (via `structlog`)? Recommendation: yes, low-cost, helps spot N+1 regressions.
 

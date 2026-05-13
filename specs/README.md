@@ -53,11 +53,9 @@ describing current phase and gates.
 | 32 | [episodes-as-first-class](32-episodes-as-first-class.md) | 📝 Draft | Lift `episodes.podcast_id NOT NULL` and add a many-to-many `collection_memberships` table; same content shared across cross-posts, user playlists, entity-pinned feeds; additive migration with a dual-write window |
 | 33 | [narrated-digest](33-narrated-digest.md) | 📝 Draft | Single-anchor news-style readout replacing the concatenated digest; theme-grouped segments with verbatim quote clips, capped by user-chosen spoken duration; markdown + TTS-ready JSON script |
 | 34 | [briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) | 📝 Draft | Render #33's script to MP3 with TTS anchor + spliced original-audio quote clips; deliver via private token-protected personal podcast RSS feed (Apple / Overcast / Pocket Casts), in-app player, and direct download |
-| 35 | [pluggable-file-storage](35-pluggable-file-storage.md) | 📝 Draft | Cloud-first `FileStorage` abstraction with `LocalFileStorage` / `S3FileStorage` / `GCSFileStorage` backends behind one ABC; preserves `PathManager` + spec #25 traversal guards; phased migration audio-last; presigned URLs unblock direct-from-bucket streaming |
 | 36 | [per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) | 📝 Draft | Wire the morning briefing to select from each user's inbox since their last briefing; replaces the global recent-episode window post-#29; unblocks per-user audio in #34 |
 | 37 | [substack-import-resolver](37-substack-import-resolver.md) | 📝 Draft | Add `SubstackResolver` so pasted Substack post URLs (open.substack.com, `*.substack.com`, custom domains) resolve to embedded podcast audio; reuses #31's canonical-id + auto-add-parent path |
 | 38 | [karaoke-word-highlighting](38-karaoke-word-highlighting.md) | 📝 Draft | Karaoke-style smooth-wipe word highlighting during playback; CSS gradient + rAF driver, opt-in toggle, graceful fallback when words missing; supersedes #24 |
-| 40 | [storage-routing-ephemeral-vs-persistent](40-storage-routing-ephemeral-vs-persistent.md) | 📝 Draft | Settle #35's per-artifact-routing open question with two narrow carve-outs: pending ops move to SQLite (DB-shaped data); debug feeds keep direct `Path` I/O. Downsampled WAV stays in main backend; corpus drops the Obsidian footnote |
 
 ## Completed
 
@@ -65,6 +63,8 @@ Shipped work. Kept for historical context and rollback reference.
 
 | ID | Spec | Completed | Summary |
 |---:|---|---|---|
+| 35 | [pluggable-file-storage](35-pluggable-file-storage.md) | 2026-05-13 | `FileStorage` abstraction + `S3FileStorage` backend (PR #93); per-artifact migrations: digests/corpus/external transcripts (#93), `podcast_service` reads (#95), transcribers + audio pipeline (#96). Phase 4 (presigned URLs) deferred to spec #34; Phase 5 (Terraform/CDK) lives outside the code path |
+| 40 | [storage-routing-ephemeral-vs-persistent](40-storage-routing-ephemeral-vs-persistent.md) | 2026-05-13 | Settles #35's per-artifact-routing question with two carve-outs: pending transcription ops move from JSON files to SQLite (PR #94); debug feeds keep direct `Path` I/O. Downsampled WAV stays in main backend |
 | 13 | [multi-user-shared-podcasts](13-multi-user-shared-podcasts.md) | 2026-01-21 | Phase 1 (follow/unfollow) shipped: shared processing across users |
 | 25 | [security-audit-and-hardening](25-security-audit-and-hardening.md) | 2026-04-27 | All 27 findings closed across phases 1–5 (XXE, SSRF, webhook auth, JWT, CORS, supply chain, race conditions, etc.) |
 | 27 | [add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) | 2026-04-27 | Search-or-paste Add Podcast modal filtering regional top-500 live; data path pre-shapes a future free-tier gate |
