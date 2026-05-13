@@ -56,6 +56,7 @@ describing current phase and gates.
 | 36 | [per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) | 📝 Draft | Wire the morning briefing to select from each user's inbox since their last briefing; replaces the global recent-episode window post-#29; unblocks per-user audio in #34 |
 | 37 | [substack-import-resolver](37-substack-import-resolver.md) | 📝 Draft | Add `SubstackResolver` so pasted Substack post URLs (open.substack.com, `*.substack.com`, custom domains) resolve to embedded podcast audio; reuses #31's canonical-id + auto-add-parent path |
 | 38 | [karaoke-word-highlighting](38-karaoke-word-highlighting.md) | 📝 Draft | Karaoke-style smooth-wipe word highlighting during playback; CSS gradient + rAF driver, opt-in toggle, graceful fallback when words missing; supersedes #24 |
+| 39 | [video-alternate-enclosure-player](39-video-alternate-enclosure-player.md) | 📝 Draft | Render `<podcast:alternateEnclosure>` video variants (YouTube embeds first, room for mp4/HLS later) on the Episode Detail page; audio pipeline unchanged |
 | 41 | [llm-prohibited-content-fallback](41-llm-prohibited-content-fallback.md) | 🚧 Active development | Per-batch pass-through when Gemini returns `PROHIBITED_CONTENT`; structured-output path now surfaces real `finish_reason`. Option A (per-batch model fallback to Claude / Mistral) still owed |
 
 ## Completed
