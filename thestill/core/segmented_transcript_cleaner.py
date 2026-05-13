@@ -48,6 +48,7 @@ from structlog import get_logger
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, SegmentKind
 from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
+from thestill.utils.exceptions import ProhibitedContentError
 from thestill.utils.language_config import resolve_language_spec
 
 logger = get_logger(__name__)
@@ -204,17 +205,37 @@ class SegmentedTranscriptCleaner:
                 target_chars=sum(len(s.text) for s in target),
             )
 
-            patch_batch = self.provider.generate_structured_cached(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_model=CleanupPatchBatch,
-                cache_system_message=True,
-                temperature=self.temperature,
-            )
-
-            patched = self._apply_patches(target, patch_batch.patches)
+            try:
+                patch_batch = self.provider.generate_structured_cached(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_model=CleanupPatchBatch,
+                    cache_system_message=True,
+                    temperature=self.temperature,
+                )
+                patched = self._apply_patches(target, patch_batch.patches)
+            except ProhibitedContentError as e:
+                # Provider refused this batch on content grounds (e.g. Gemini
+                # PROHIBITED_CONTENT). Retrying the same provider can't help.
+                # Fall back to source-as-is for this batch so one tripped
+                # batch doesn't doom the whole episode (spec #41 option B).
+                # Spec #41 option A — per-batch model fallback to Claude/etc
+                # — is the eventual fix; until then the batch keeps its raw
+                # ASR text, no speaker mapping, no ad tagging.
+                logger.warning(
+                    "segmented_cleanup_prohibited_content",
+                    episode_id=annotated.episode_id,
+                    batch_start=index,
+                    batch_end=batch_end,
+                    target_count=len(target),
+                    target_chars=sum(len(s.text) for s in target),
+                    provider=e.context.get("provider"),
+                    model=e.context.get("model"),
+                    finish_reason=e.context.get("finish_reason"),
+                )
+                patched = list(target)
             cleaned.extend(patched)
             index = batch_end
 

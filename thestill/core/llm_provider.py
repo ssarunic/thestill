@@ -2350,6 +2350,8 @@ class GeminiProvider(LLMProvider):
         Uses response_schema parameter for schema-validated JSON output.
         Gemini requires manual parsing of the JSON response.
         """
+        from thestill.utils.exceptions import ProhibitedContentError
+
         contents = self._convert_messages(messages)
 
         config = self._build_config(
@@ -2367,16 +2369,62 @@ class GeminiProvider(LLMProvider):
         if not response.candidates:
             raise RuntimeError("Gemini returned no candidates in response")
 
+        candidate = response.candidates[0]
+
+        # Inspect finish_reason BEFORE attempting text extraction so the
+        # caller gets a specific, actionable error. The non-structured chat
+        # path does this at lines ~2231-2274; this path used to swallow it
+        # all into a single "Gemini returned empty response" ValueError,
+        # which made content-level refusals (PROHIBITED_CONTENT) and
+        # truncation (MAX_TOKENS) indistinguishable from genuine empties.
+        finish_reason = candidate.finish_reason
+        finish_reason_str = str(finish_reason).upper() if finish_reason else ""
+
         response_text = None
         try:
             response_text = response.text
         except Exception:
-            candidate = response.candidates[0]
             if candidate.content and candidate.content.parts and len(candidate.content.parts) > 0:
-                response_text = candidate.content.parts[0].text
+                try:
+                    response_text = candidate.content.parts[0].text
+                except Exception:
+                    pass
+
+        if "PROHIBITED" in finish_reason_str:
+            # Non-bypassable model-side refusal. Distinct exception class so
+            # callers (cleaner, summariser) can switch providers or fall
+            # back to pass-through; mixing it with safety filters or empty
+            # responses would force a retry that always fails.
+            raise ProhibitedContentError(
+                "Gemini refused: PROHIBITED_CONTENT",
+                provider="gemini",
+                model=self.model,
+                finish_reason=str(finish_reason),
+            )
+        if "SAFETY" in finish_reason_str:
+            raise RuntimeError(
+                f"Gemini blocked response due to safety filters. "
+                f"Safety ratings: {getattr(candidate, 'safety_ratings', None)}"
+            )
+        if "RECITATION" in finish_reason_str:
+            if response_text:
+                logger.warning("Gemini flagged potential recitation but returned content")
+            else:
+                raise RuntimeError(
+                    "Gemini blocked response due to potential recitation (copyrighted content). "
+                    "Try adjusting the prompt or use a different model."
+                )
+        if "MAX_TOKENS" in finish_reason_str and not response_text:
+            raise RuntimeError(
+                f"Gemini truncated response at max_tokens={max_tokens or 'default'} "
+                "with no usable content. Increase max_tokens or reduce input size."
+            )
 
         if not response_text:
-            raise ValueError("Gemini returned empty response")
+            raise ValueError(
+                f"Gemini returned empty response (finish_reason={finish_reason!r}, "
+                f"prompt_feedback={getattr(response, 'prompt_feedback', None)!r})"
+            )
 
         data = json.loads(response_text)
         return response_model(**data)
