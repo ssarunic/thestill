@@ -40,6 +40,7 @@ from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_digest_repository import SqliteDigestRepository
 from .repositories.sqlite_inbox_repository import SqliteInboxRepository
+from .repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
@@ -89,6 +90,7 @@ class CLIContext:
         follower_repository: SqlitePodcastFollowerRepository,
         inbox_repository: SqliteInboxRepository,
         inbox_service: InboxService,
+        pending_ops_repository: Optional[SqlitePendingOperationsRepository] = None,
         entity_repository=None,
         search_backend=None,
         embedding_model=None,
@@ -119,6 +121,9 @@ class CLIContext:
         self.search_backend = search_backend
         self.embedding_model = embedding_model
         self.digest_repository = digest_repository
+        # Spec #40 — pending transcription operations now live in SQLite.
+        # Optional for tests; production CLI always passes one.
+        self.pending_ops_repository = pending_ops_repository
 
 
 def require_config(f):
@@ -200,6 +205,8 @@ def main(ctx, config, quiet):
 
         # Initialize digest repository for digest persistence
         digest_repository = SqliteDigestRepository(str(config_obj.database_path))
+        # Spec #40 — pending transcription operations live in SQLite, not files.
+        pending_ops_repository = SqlitePendingOperationsRepository(db_path=config_obj.database_path)
 
         # Per-user inbox plumbing: the backfill / follow-seed CLI paths
         # need both the repository and the service.
@@ -237,6 +244,7 @@ def main(ctx, config, quiet):
             follower_repository=follower_repository,
             inbox_repository=inbox_repository,
             inbox_service=inbox_service,
+            pending_ops_repository=pending_ops_repository,
             entity_repository=entity_repository,
             search_backend=search_backend,
             embedding_model=embedding_model,
@@ -1453,6 +1461,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         transcriber = create_transcriber(
             config,
             path_manager=config.path_manager,
+            pending_ops_repository=ctx.obj.pending_ops_repository,
             console=ctx.obj.console,
             elevenlabs_use_async=elevenlabs_use_async,
             elevenlabs_async_threshold_mb=config.elevenlabs_async_threshold_mb,

@@ -1198,6 +1198,132 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_episode_inbox CHECK extended")
 
+        # Spec #40 — pending transcription operations move from
+        # ``data/pending_operations/*.json`` files into a real SQLite table.
+        # They were always DB-shaped data (UUID PK, queried by status,
+        # minute-scale lifecycle); the file-on-disk implementation was a
+        # historical accident this spec corrects. Idempotent on the table
+        # existence check.
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_transcription_operations'"
+        )
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating pending_transcription_operations table (spec #40)")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS pending_transcription_operations (
+                    operation_id    TEXT PRIMARY KEY NOT NULL,
+                    provider        TEXT NOT NULL,
+                    episode_id      TEXT NOT NULL,
+                    payload_json    TEXT NOT NULL,
+                    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    CHECK (provider IN ('google','elevenlabs'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pending_ops_provider
+                    ON pending_transcription_operations(provider);
+                CREATE INDEX IF NOT EXISTS idx_pending_ops_episode
+                    ON pending_transcription_operations(episode_id);
+                """
+            )
+            # Backfill any in-flight JSON files from the old layout into the
+            # new table. Runs once (gated by the table-existence check above)
+            # and moves the source files to a sibling ``.migrated/`` directory
+            # as a belt-and-braces undo channel.
+            self._backfill_pending_operations_from_files(conn)
+            logger.info("Migration complete: pending_transcription_operations created (spec #40)")
+
+    # ------------------------------------------------------------------
+    # Spec #40 — file → DB backfill
+    # ------------------------------------------------------------------
+
+    def _backfill_pending_operations_from_files(self, conn: sqlite3.Connection) -> None:
+        """One-shot import of ``data/pending_operations/*.json`` rows.
+
+        Called only from the spec #40 migration block (above), once. The
+        guard there is the table-existence check, so re-running this is not
+        possible through the normal path.
+
+        Per-file failure logs and continues — a malformed legacy file should
+        not block startup, and the source file is left in place (not moved
+        to ``.migrated/``) so an operator can inspect it.
+        """
+        import json
+        import shutil
+
+        # The migration runs from inside ``SqlitePodcastRepository.__init__`` so
+        # ``self.db_path`` is set. The pending_operations directory sits next
+        # to ``podcasts.db`` in the same data root. If the directory doesn't
+        # exist (fresh install, no in-flight ops) the backfill is a no-op.
+        pending_dir = Path(self.db_path).resolve().parent / "pending_operations"
+        if not pending_dir.is_dir():
+            return
+
+        migrated_dir = pending_dir / ".migrated"
+        imported = 0
+        failed = 0
+
+        for op_file in sorted(pending_dir.glob("*.json")):
+            if op_file.parent.name == ".migrated":
+                continue  # Defensive: ignore anything that's already migrated.
+            try:
+                with op_file.open("r", encoding="utf-8") as f:
+                    payload = json.load(f)
+
+                # Provider: filename prefix is the discriminator. ElevenLabs
+                # files use ``elevenlabs_*.json``; Google files have no prefix.
+                provider = "elevenlabs" if op_file.stem.startswith("elevenlabs_") else "google"
+
+                # operation_id: filename stem (sans provider prefix).
+                operation_id = op_file.stem
+                if provider == "elevenlabs" and operation_id.startswith("elevenlabs_"):
+                    operation_id = operation_id[len("elevenlabs_") :]
+
+                # episode_id: both providers carry it inside the payload.
+                # Skip rows that lack one — they couldn't have been written by
+                # the current code (which guards), so they're either stale or
+                # malformed.
+                episode_id = payload.get("episode_id")
+                if not episode_id:
+                    logger.warning(
+                        "pending_operations_backfill_skipped_missing_episode_id",
+                        file=str(op_file),
+                    )
+                    failed += 1
+                    continue
+
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO pending_transcription_operations
+                        (operation_id, provider, episode_id, payload_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (operation_id, provider, episode_id, json.dumps(payload)),
+                )
+                imported += 1
+
+                # Move the source file out of the way. ``.migrated/`` is a
+                # recovery hatch — kept until a follow-up spec retires
+                # ``PathManager.pending_operations_dir()`` entirely.
+                migrated_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(op_file), str(migrated_dir / op_file.name))
+            except Exception as exc:
+                logger.warning(
+                    "pending_operations_backfill_failed_for_file",
+                    file=str(op_file),
+                    error=str(exc),
+                )
+                failed += 1
+
+        if imported or failed:
+            logger.info(
+                "pending_operations_backfill_complete",
+                imported=imported,
+                failed=failed,
+                migrated_dir=str(migrated_dir),
+            )
+
     # ------------------------------------------------------------------
     # Category helpers
     # ------------------------------------------------------------------

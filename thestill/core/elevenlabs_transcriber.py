@@ -27,7 +27,7 @@ import mimetypes
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -41,6 +41,9 @@ from thestill.utils.path_manager import PathManager
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -98,6 +101,7 @@ class ElevenLabsTranscriber(Transcriber):
         language: Optional[str] = None,
         tag_audio_events: bool = False,
         path_manager: Optional[PathManager] = None,
+        pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
         use_async: bool = True,
         async_threshold_mb: int = 0,
         wait_for_webhook: bool = False,
@@ -115,6 +119,10 @@ class ElevenLabsTranscriber(Transcriber):
             language: Language code (e.g., "en"). None = auto-detect
             tag_audio_events: Enable detection of audio events like laughter, applause
             path_manager: PathManager for storing pending operations (required for async mode)
+            pending_ops_repository: Spec #40 — DB-backed persistence for in-flight
+                async transcription jobs. When ``None`` (e.g. legacy CLI paths that
+                haven't been threaded yet), pending-op persistence is skipped, matching
+                the historical fallback when ``path_manager`` was None.
             use_async: Use async mode with polling (default: True). Falls back to sync for small files.
             async_threshold_mb: File size threshold for async mode (0 = always async when use_async=True)
             wait_for_webhook: If True, don't poll after submission - wait for webhook callback instead.
@@ -142,6 +150,11 @@ class ElevenLabsTranscriber(Transcriber):
         self.language = language
         self.tag_audio_events = tag_audio_events
         self.path_manager = path_manager
+        # Spec #40 — pending-op persistence routes through SQLite now. Held
+        # as a separate optional dependency so existing test fixtures that
+        # only mock ``path_manager`` keep working until the next migration
+        # spec drops PathManager's pending-ops helpers entirely.
+        self.pending_ops_repository = pending_ops_repository
         self.use_async = use_async
         self.async_threshold_mb = async_threshold_mb
         self.wait_for_webhook = wait_for_webhook
@@ -317,8 +330,11 @@ class ElevenLabsTranscriber(Transcriber):
 
         logger.info("Transcription submitted", transcription_id=transcription_id)
 
-        # Step 2: Save pending operation for resume capability
-        if self.path_manager and episode_id:
+        # Step 2: Save pending operation for resume capability. Spec #40 —
+        # the repo is the canonical store; the path_manager check stays in
+        # place only to keep tests that pre-date the repo (and inject a None
+        # repo) from blowing up.
+        if episode_id:
             self._save_pending_operation(
                 transcription_id=transcription_id,
                 audio_path=audio_path,
@@ -903,12 +919,11 @@ class ElevenLabsTranscriber(Transcriber):
     # =========================================================================
     # Pending Operation Persistence (for resume capability)
     # =========================================================================
-
-    def _get_pending_operation_path(self, transcription_id: str) -> Optional[Path]:
-        """Get path to pending operation file."""
-        if not self.path_manager:
-            return None
-        return self.path_manager.pending_operations_dir() / f"elevenlabs_{transcription_id}.json"
+    #
+    # Spec #40 — backed by SqlitePendingOperationsRepository (DB-shaped
+    # state always belonged in the DB). The legacy JSON-file paths under
+    # data/pending_operations/ are migrated into the table on first startup
+    # via SqlitePodcastRepository._backfill_pending_operations_from_files.
 
     def _save_pending_operation(
         self,
@@ -919,22 +934,16 @@ class ElevenLabsTranscriber(Transcriber):
         podcast_slug: Optional[str],
         episode_slug: Optional[str],
     ) -> None:
-        """
-        Save pending operation to disk for resume capability.
+        """Persist a freshly-submitted job's state for resume capability.
 
-        If the app crashes during transcription, this file allows resuming
-        by polling for the transcription_id.
+        The payload schema matches the legacy JSON file exactly so the
+        backfill migration can store both side-by-side without translation.
         """
-        import json
-
-        op_path = self._get_pending_operation_path(transcription_id)
-        if not op_path:
-            logger.debug("No path_manager, skipping operation persistence")
+        if not self.pending_ops_repository:
+            logger.debug("No pending_ops_repository, skipping operation persistence")
             return
 
-        op_path.parent.mkdir(parents=True, exist_ok=True)
-
-        operation_data = {
+        payload = {
             "provider": "elevenlabs",
             "transcription_id": transcription_id,
             "audio_path": audio_path,
@@ -945,104 +954,68 @@ class ElevenLabsTranscriber(Transcriber):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "state": "pending",
         }
-
-        with open(op_path, "w", encoding="utf-8") as f:
-            json.dump(operation_data, f, indent=2)
-
-        logger.debug("Saved pending operation", operation_path=str(op_path))
+        self.pending_ops_repository.create(
+            operation_id=transcription_id,
+            provider="elevenlabs",
+            episode_id=episode_id,
+            payload=payload,
+        )
+        logger.debug("Saved pending operation", transcription_id=transcription_id)
 
     def _remove_pending_operation(self, transcription_id: str) -> None:
-        """Remove pending operation file after successful completion."""
-        op_path = self._get_pending_operation_path(transcription_id)
-        if op_path and op_path.exists():
-            op_path.unlink()
-            logger.debug("Removed pending operation", operation_path=str(op_path))
+        """Idempotent — repo's delete swallows missing rows."""
+        if not self.pending_ops_repository:
+            return
+        self.pending_ops_repository.delete(transcription_id)
+        logger.debug("Removed pending operation", transcription_id=transcription_id)
 
     def resume_pending_operations(self) -> List[Dict[str, Any]]:
+        """Resume any in-flight ElevenLabs jobs by polling for completion.
+
+        Called on startup. Errors per-operation are logged and skipped so
+        one bad row doesn't block the rest of the queue.
         """
-        Find and resume any pending ElevenLabs transcription operations.
-
-        Call this on startup to check for operations that were interrupted.
-
-        Returns:
-            List of completed transcription results (as dicts with episode_id, transcript)
-        """
-        import json
-
-        if not self.path_manager:
+        if not self.pending_ops_repository:
             return []
 
-        pending_dir = self.path_manager.pending_operations_dir()
-        if not pending_dir.exists():
-            return []
-
-        results = []
-        for op_file in pending_dir.glob("elevenlabs_*.json"):
+        results: List[Dict[str, Any]] = []
+        for op in self.pending_ops_repository.list_by_provider("elevenlabs"):
             try:
-                with open(op_file, "r", encoding="utf-8") as f:
-                    op_data = json.load(f)
-
-                transcription_id = op_data.get("transcription_id")
-                if not transcription_id:
-                    continue
-
+                transcription_id = op.operation_id
                 logger.info("Found pending operation", transcription_id=transcription_id)
-
-                # Try to get the transcript
                 response_data = self._poll_for_transcript(transcription_id)
 
                 if response_data:
-                    # Format and return the transcript
                     transcript = self._format_response(
                         response_data,
-                        op_data.get("audio_path", ""),
-                        time.time(),  # We don't have original start time
-                        op_data.get("language"),
+                        op.payload.get("audio_path", ""),
+                        time.time(),  # original start time unrecoverable post-restart
+                        op.payload.get("language"),
                     )
-
                     results.append(
                         {
-                            "episode_id": op_data.get("episode_id"),
-                            "podcast_slug": op_data.get("podcast_slug"),
-                            "episode_slug": op_data.get("episode_slug"),
+                            "episode_id": op.episode_id,
+                            "podcast_slug": op.payload.get("podcast_slug"),
+                            "episode_slug": op.payload.get("episode_slug"),
                             "transcript": transcript,
                         }
                     )
-
-                    # Clean up the pending file
-                    op_file.unlink()
+                    self.pending_ops_repository.delete(transcription_id)
                     logger.info("Resumed and completed", transcription_id=transcription_id)
                 else:
                     logger.warning("Could not retrieve transcript", transcription_id=transcription_id)
-
             except Exception as e:
-                logger.error("Error resuming operation", operation_file=str(op_file), error=str(e))
+                logger.error("Error resuming operation", operation_id=op.operation_id, error=str(e))
 
         return results
 
     def list_pending_operations(self) -> List[Dict[str, Any]]:
+        """Pending ElevenLabs jobs as legacy-shaped dicts.
+
+        Returns each operation's full payload — same field set the file-based
+        version returned, so external callers (e.g. observability dashboards)
+        keep working unchanged.
         """
-        List all pending ElevenLabs transcription operations.
-
-        Returns:
-            List of pending operation metadata dicts
-        """
-        import json
-
-        if not self.path_manager:
+        if not self.pending_ops_repository:
             return []
-
-        pending_dir = self.path_manager.pending_operations_dir()
-        if not pending_dir.exists():
-            return []
-
-        operations = []
-        for op_file in pending_dir.glob("elevenlabs_*.json"):
-            try:
-                with open(op_file, "r", encoding="utf-8") as f:
-                    op_data = json.load(f)
-                operations.append(op_data)
-            except Exception as e:
-                logger.error("Error reading operation", operation_file=str(op_file), error=str(e))
-
-        return operations
+        return [op.payload for op in self.pending_ops_repository.list_by_provider("elevenlabs")]

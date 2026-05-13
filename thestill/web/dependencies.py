@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from ..repositories.inbox_repository import InboxRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
@@ -114,6 +115,10 @@ class AppState:
     # and most processes (web requests, CLI commands not touching the
     # entity branch) never need it.
     entity_repository: "SqliteEntityRepository"
+    # Spec #40 — pending transcription operations now live in SQLite.
+    # ``Optional`` only so legacy test fixtures that construct AppState by
+    # hand don't have to update yet; production paths always pass a repo.
+    pending_ops_repository: "Optional[SqlitePendingOperationsRepository]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the

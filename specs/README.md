@@ -57,6 +57,7 @@ describing current phase and gates.
 | 36 | [per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) | 📝 Draft | Wire the morning briefing to select from each user's inbox since their last briefing; replaces the global recent-episode window post-#29; unblocks per-user audio in #34 |
 | 37 | [substack-import-resolver](37-substack-import-resolver.md) | 📝 Draft | Add `SubstackResolver` so pasted Substack post URLs (open.substack.com, `*.substack.com`, custom domains) resolve to embedded podcast audio; reuses #31's canonical-id + auto-add-parent path |
 | 38 | [karaoke-word-highlighting](38-karaoke-word-highlighting.md) | 📝 Draft | Karaoke-style smooth-wipe word highlighting during playback; CSS gradient + rAF driver, opt-in toggle, graceful fallback when words missing; supersedes #24 |
+| 40 | [storage-routing-ephemeral-vs-persistent](40-storage-routing-ephemeral-vs-persistent.md) | 📝 Draft | Settle #35's per-artifact-routing open question with two narrow carve-outs: pending ops move to SQLite (DB-shaped data); debug feeds keep direct `Path` I/O. Downsampled WAV stays in main backend; corpus drops the Obsidian footnote |
 
 ## Completed
 
