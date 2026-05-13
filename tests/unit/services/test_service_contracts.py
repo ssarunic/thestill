@@ -47,6 +47,14 @@ def path_manager(temp_storage):
 
 
 @pytest.fixture
+def file_storage(temp_storage):
+    """Spec #35 — LocalFileStorage rooted at the test's tmp_path."""
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return LocalFileStorage(base_path=str(temp_storage))
+
+
+@pytest.fixture
 def repository(temp_storage):
     """Create SqlitePodcastRepository."""
     db_path = temp_storage / "test_podcasts.db"
@@ -54,9 +62,14 @@ def repository(temp_storage):
 
 
 @pytest.fixture
-def podcast_service(temp_storage, repository, path_manager):
+def podcast_service(temp_storage, repository, path_manager, file_storage):
     """Create PodcastService."""
-    return PodcastService(storage_path=temp_storage, podcast_repository=repository, path_manager=path_manager)
+    return PodcastService(
+        storage_path=temp_storage,
+        podcast_repository=repository,
+        path_manager=path_manager,
+        file_storage=file_storage,
+    )
 
 
 @pytest.fixture
@@ -74,19 +87,32 @@ def sample_podcast(repository):
 class TestPodcastServiceContract:
     """Contract tests for PodcastService public API."""
 
-    def test_constructor_accepts_required_parameters(self, temp_storage, repository, path_manager):
-        """Contract: Constructor accepts storage_path, podcast_repository, path_manager."""
+    def test_constructor_accepts_required_parameters(self, temp_storage, repository, path_manager, file_storage):
+        """Contract: Constructor accepts storage_path, podcast_repository, path_manager, file_storage."""
         # Should not raise
-        service = PodcastService(storage_path=temp_storage, podcast_repository=repository, path_manager=path_manager)
+        service = PodcastService(
+            storage_path=temp_storage,
+            podcast_repository=repository,
+            path_manager=path_manager,
+            file_storage=file_storage,
+        )
         assert service is not None
 
-    def test_constructor_accepts_str_or_path(self, repository, path_manager, temp_storage):
+    def test_constructor_accepts_str_or_path(self, repository, path_manager, temp_storage, file_storage):
         """Contract: storage_path can be str or Path."""
         # Both should work
         service1 = PodcastService(
-            storage_path=str(temp_storage), podcast_repository=repository, path_manager=path_manager
+            storage_path=str(temp_storage),
+            podcast_repository=repository,
+            path_manager=path_manager,
+            file_storage=file_storage,
         )
-        service2 = PodcastService(storage_path=temp_storage, podcast_repository=repository, path_manager=path_manager)
+        service2 = PodcastService(
+            storage_path=temp_storage,
+            podcast_repository=repository,
+            path_manager=path_manager,
+            file_storage=file_storage,
+        )
         assert service1 is not None
         assert service2 is not None
 

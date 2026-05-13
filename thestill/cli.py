@@ -179,7 +179,7 @@ def main(ctx, config, quiet):
         # so CLI / web / MCP all share one instance and respect STORAGE_BACKEND.
         file_storage = config_obj.file_storage
         repository = SqlitePodcastRepository(db_path=config_obj.database_path)
-        podcast_service = PodcastService(storage_path, repository, path_manager)
+        podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=file_storage)
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(
             repository,

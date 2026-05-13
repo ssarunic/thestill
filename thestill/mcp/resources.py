@@ -49,7 +49,7 @@ def setup_resources(server: Server, storage_path: str):
     # Initialize shared components
     path_manager = PathManager(storage_path)
     repository = SqlitePodcastRepository(db_path=config.database_path)
-    podcast_service = PodcastService(storage_path, repository, path_manager)
+    podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
 
     @server.list_resources()
     async def list_resources() -> list[Resource]:
