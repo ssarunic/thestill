@@ -21,7 +21,7 @@ once, not three times. Entry points layer their own UX (CLI echoes,
 webhook-server lifecycle, MCP JSON responses) on top of this factory.
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from structlog import get_logger
 
@@ -30,6 +30,9 @@ from thestill.utils.exceptions import ThestillError
 from ..utils.console import ConsoleOutput
 from .progress import ProgressCallback
 from .transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -125,6 +128,7 @@ def create_transcriber(
     config,
     path_manager=None,
     *,
+    pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
     progress_callback: Optional[ProgressCallback] = None,
     console: Optional[ConsoleOutput] = None,
     elevenlabs_use_async: bool = False,
@@ -185,6 +189,7 @@ def create_transcriber(
             parallel_chunks=config.max_workers,
             path_manager=effective_path_manager,
             console=effective_console,
+            pending_ops_repository=pending_ops_repository,
         )
 
     if provider == "elevenlabs":
@@ -197,6 +202,7 @@ def create_transcriber(
             enable_diarization=config.enable_diarization,
             num_speakers=config.max_speakers,
             path_manager=effective_path_manager,
+            pending_ops_repository=pending_ops_repository,
             use_async=elevenlabs_use_async,
             tag_audio_events=elevenlabs_tag_audio_events,
             wait_for_webhook=elevenlabs_wait_for_webhook,

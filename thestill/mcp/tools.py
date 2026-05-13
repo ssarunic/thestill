@@ -95,6 +95,10 @@ def setup_tools(server: Server, storage_path: str):
     path_manager = PathManager(storage_path)
     repository = SqlitePodcastRepository(db_path=config.database_path)
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
+    # Spec #40 — pending transcription operations live in SQLite.
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+
+    pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
     # Spec #28 §1.8 — entity-layer repository, surfaced via the
     # entity tools registered below.
     entity_repository = SqliteEntityRepository(db_path=config.database_path)
@@ -876,7 +880,7 @@ def setup_tools(server: Server, storage_path: str):
                 episodes_to_transcribe = episodes_to_transcribe[:max_episodes]
 
                 # Initialize transcriber based on config
-                transcriber = _get_transcriber(config)
+                transcriber = _get_transcriber(config, pending_ops_repository=pending_ops_repository)
                 if transcriber is None:
                     return [
                         TextContent(
@@ -1215,7 +1219,7 @@ def setup_tools(server: Server, storage_path: str):
                     # Step 3: Transcribe if needed
                     if not episode.raw_transcript_path:
                         current_step = "transcribe"
-                        transcriber = _get_transcriber(config)
+                        transcriber = _get_transcriber(config, pending_ops_repository=pending_ops_repository)
                         if transcriber is None:
                             return [
                                 TextContent(
@@ -1753,18 +1757,22 @@ def setup_tools(server: Server, storage_path: str):
             return [TextContent(type="text", text=json.dumps({"success": False, "error": str(e)}))]
 
 
-def _get_transcriber(config):
+def _get_transcriber(config, pending_ops_repository=None):
     """
     Initialize and return a transcriber based on config settings.
 
     Thin wrapper around the shared transcriber factory. MCP keeps the
     `None`-on-failure contract so tool handlers can return JSON error
     responses instead of crashing stdout (which carries JSON-RPC).
+
+    ``pending_ops_repository`` (spec #40) is optional only because
+    backfilled call paths in this module construct the transcriber
+    without it — once those are threaded, this can become required.
     """
     from ..core.transcriber_factory import create_transcriber
 
     try:
-        return create_transcriber(config)
+        return create_transcriber(config, pending_ops_repository=pending_ops_repository)
     except Exception as e:
         logger.error(f"Failed to initialize transcriber: {e}")
         return None

@@ -195,6 +195,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize digest repository
     digest_repository = SqliteDigestRepository(db_path=config.database_path)
 
+    # Spec #40 — pending transcription operations now live in SQLite.
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+
+    pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
+
     # Per-user briefings (spec #36). The renderer is wired in here so
     # production briefings get a script.md on disk; tests/CLIs that
     # only need the state machine can still pass renderer=None.
@@ -250,6 +255,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         digest_repository=digest_repository,
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
+        pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
         embedding_model=embedding_model,

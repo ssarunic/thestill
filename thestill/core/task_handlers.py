@@ -325,6 +325,7 @@ def handle_transcribe(
         transcriber = create_transcriber(
             config,
             config.path_manager,
+            pending_ops_repository=getattr(state, "pending_ops_repository", None),
             progress_callback=progress_callback,
         )
         logger.debug(f"Transcriber created: {type(transcriber).__name__}")

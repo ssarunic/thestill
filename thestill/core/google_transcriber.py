@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING  # noqa: E402 — type-only import, placed after stdlib to match repo style
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydub import AudioSegment
@@ -39,6 +40,9 @@ from thestill.utils.console import ConsoleOutput
 from thestill.utils.path_manager import PathManager
 
 from .transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -249,6 +253,7 @@ class GoogleCloudTranscriber(Transcriber):
         parallel_chunks: int = 1,
         path_manager: Optional[PathManager] = None,
         console: Optional[ConsoleOutput] = None,
+        pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
     ):
         """
         Initialize Google Cloud Speech V2 transcriber with Chirp 3.
@@ -264,6 +269,11 @@ class GoogleCloudTranscriber(Transcriber):
             parallel_chunks: Number of chunks to transcribe in parallel (1 = sequential)
             path_manager: PathManager instance for storing operation state files
             console: ConsoleOutput instance for user-facing messages (optional)
+            pending_ops_repository: Spec #40 — SQLite-backed pending operations
+                store. Replaces the JSON-file persistence under
+                ``data/pending_operations/``. Optional only so tests that pre-date
+                the spec can keep passing a bare transcriber; when ``None`` the
+                resume path becomes a no-op.
         """
         if not project_id:
             raise ValueError("project_id is required for Speech-to-Text V2 API")
@@ -278,6 +288,7 @@ class GoogleCloudTranscriber(Transcriber):
         self.parallel_chunks = max(1, parallel_chunks)  # At least 1
         self.path_manager = path_manager or PathManager()
         self.console = console or ConsoleOutput()
+        self.pending_ops_repository = pending_ops_repository
 
         self.speech_client = None
         self.storage_client = None
@@ -1624,84 +1635,67 @@ class GoogleCloudTranscriber(Transcriber):
     # =========================================================================
 
     def _save_operation(self, operation: TranscriptionOperation) -> None:
+        """Persist operation state via the spec #40 repository.
+
+        ``model_dump(mode="json")`` produces the same field set that the
+        legacy JSON-file path wrote, so the backfill migration moves
+        existing rows in losslessly.
         """
-        Save operation state to local JSON file.
-
-        This allows resuming pending operations if the app is restarted.
-
-        Args:
-            operation: TranscriptionOperation to persist
-        """
-        self.path_manager.pending_operations_dir().mkdir(parents=True, exist_ok=True)
-        operation_file = self.path_manager.pending_operation_file(operation.operation_id)
-
-        with open(operation_file, "w", encoding="utf-8") as f:
-            f.write(operation.model_dump_json(indent=2))
-
-        logger.debug("Saved operation state", operation_file=str(operation_file))
+        if not self.pending_ops_repository:
+            logger.debug("No pending_ops_repository, skipping operation persistence")
+            return
+        self.pending_ops_repository.create(
+            operation_id=operation.operation_id,
+            provider="google",
+            episode_id=operation.episode_id,
+            payload=operation.model_dump(mode="json"),
+        )
+        logger.debug("Saved operation state", operation_id=operation.operation_id)
 
     def _load_operation(self, operation_id: str) -> Optional[TranscriptionOperation]:
+        """Load operation by id, rehydrating into the Pydantic model.
+
+        Returns ``None`` for missing rows so callers' existence checks keep
+        working unchanged.
         """
-        Load operation state from local JSON file.
-
-        Args:
-            operation_id: Operation ID to load
-
-        Returns:
-            TranscriptionOperation if found, None otherwise
-        """
-        operation_file = self.path_manager.pending_operation_file(operation_id)
-
-        if not operation_file.exists():
+        if not self.pending_ops_repository:
             return None
-
+        op = self.pending_ops_repository.get(operation_id)
+        if op is None:
+            return None
         try:
-            with open(operation_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return TranscriptionOperation.model_validate(data)
+            return TranscriptionOperation.model_validate(op.payload)
         except Exception as e:
             logger.warning("Failed to load operation", operation_id=operation_id, error=str(e))
             return None
 
     def _delete_operation(self, operation_id: str) -> None:
-        """
-        Delete operation state file after successful completion.
-
-        Args:
-            operation_id: Operation ID to delete
-        """
-        operation_file = self.path_manager.pending_operation_file(operation_id)
-
+        """Idempotent — the repo's delete swallows missing rows."""
+        if not self.pending_ops_repository:
+            return
         try:
-            if operation_file.exists():
-                operation_file.unlink()
-                logger.debug("Deleted operation state", operation_file=str(operation_file))
+            self.pending_ops_repository.delete(operation_id)
+            logger.debug("Deleted operation state", operation_id=operation_id)
         except Exception as e:
-            logger.warning("Failed to delete operation file", operation_id=operation_id, error=str(e))
+            logger.warning("Failed to delete operation", operation_id=operation_id, error=str(e))
 
     def list_pending_operations(self) -> List[TranscriptionOperation]:
-        """
-        List all pending transcription operations.
+        """All Google rows currently in ``PENDING`` state.
 
-        Returns:
-            List of TranscriptionOperation objects in PENDING state
+        The PENDING filter survives the move because the state field stays
+        inside ``payload`` (the table doesn't break it out into its own
+        column — provider-specific lifecycle stays provider-shaped).
         """
-        operations = []
-        pending_dir = self.path_manager.pending_operations_dir()
-
-        if not pending_dir.exists():
+        operations: List[TranscriptionOperation] = []
+        if not self.pending_ops_repository:
             return operations
-
-        for op_file in pending_dir.glob("*.json"):
+        for row in self.pending_ops_repository.list_by_provider("google"):
             try:
-                with open(op_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                op = TranscriptionOperation.model_validate(data)
+                op = TranscriptionOperation.model_validate(row.payload)
                 if op.state == TranscriptionOperationState.PENDING:
                     operations.append(op)
             except Exception as e:
-                logger.warning("Failed to load operation from file", operation_file=str(op_file), error=str(e))
-
+                logger.warning("Failed to rehydrate operation", operation_id=row.operation_id, error=str(e))
         return operations
 
     def get_pending_operations_for_episode(self, episode_id: str) -> List[TranscriptionOperation]:
