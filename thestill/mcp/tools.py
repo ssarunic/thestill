@@ -125,7 +125,7 @@ def setup_tools(server: Server, storage_path: str):
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = SqliteUserRepository(db_path=config.database_path)
     auth_service = AuthService(config, user_repository)
-    digest_generator = DigestGenerator(path_manager)
+    digest_generator = DigestGenerator(path_manager, config.file_storage)
     digest_selector = DigestEpisodeSelector(repository, digest_repository)
 
     @server.list_tools()
@@ -1480,7 +1480,9 @@ def setup_tools(server: Server, storage_path: str):
                             podcast_title=podcast.title,
                         )
 
-                        summarizer.summarize(transcript_text, summary_path, metadata=metadata)
+                        summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+                        # Spec #35 — persist via the configured FileStorage backend
+                        config.file_storage.write_text(path_manager.to_relative(summary_path), summary_text)
 
                         # Update feed manager
                         feed_manager.mark_episode_processed(

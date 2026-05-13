@@ -16,6 +16,24 @@ cp .env.example .env
 | `STORAGE_PATH` | Base directory for all data | `./data` |
 | `DATABASE_PATH` | SQLite database location | `{STORAGE_PATH}/podcasts.db` |
 
+## File Storage Backend
+
+Spec #35 — selects where pipeline artefacts (audio, transcripts, summaries,
+corpus pages, digests) are stored. `local` keeps the historical on-disk
+layout under `STORAGE_PATH`; `s3` routes them to AWS S3.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STORAGE_BACKEND` | `local` or `s3` | `local` |
+| `S3_BUCKET` | Bucket name (required when `STORAGE_BACKEND=s3`) | - |
+| `S3_REGION` | AWS region; must match compute region | `us-east-1` |
+| `S3_PREFIX` | Optional key prefix (e.g. `prod/`) | - |
+| `S3_ENDPOINT_URL` | Override for LocalStack / MinIO / S3-compatible stores; leave empty for real AWS | - |
+| `S3_KMS_KEY_ID` | Customer-managed KMS key for SSE-KMS; empty = SSE-S3 (AES256) | - |
+
+For an end-to-end walkthrough of deploying with S3 on AWS, see
+[storage-backends.md](storage-backends.md).
+
 ## Transcription Provider
 
 | Variable | Description | Default |

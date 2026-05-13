@@ -12,6 +12,7 @@ import pytest
 
 from thestill.models.podcast import Episode, EpisodeState, Podcast
 from thestill.services.digest_generator import DigestContent, DigestEpisodeInfo, DigestGenerator, DigestStats
+from thestill.utils.file_storage import FileStorage
 from thestill.utils.path_manager import PathManager
 
 
@@ -20,7 +21,25 @@ def mock_path_manager():
     """Create mock path manager."""
     pm = Mock(spec=PathManager)
     pm.summary_file.return_value = Path("/data/summaries/test.md")
+    # Spec #35 — generator calls path_manager.to_relative on the absolute
+    # path before handing it to the FileStorage backend. The fake returns
+    # a stable relative-shaped string per absolute path.
+    pm.to_relative.side_effect = lambda absolute: str(absolute).lstrip("/")
     return pm
+
+
+@pytest.fixture
+def mock_file_storage():
+    """Spec #35 — Mock FileStorage that mimics 'file not found' by default.
+
+    Tests that exercise the summary-read path override ``read_text`` to
+    return content; tests that only call ``generate()`` without summaries
+    leave the default ``FileNotFoundError``, which the production code now
+    handles via try/except.
+    """
+    storage = Mock(spec=FileStorage)
+    storage.read_text.side_effect = FileNotFoundError
+    return storage
 
 
 @pytest.fixture
@@ -132,9 +151,9 @@ class TestDigestStats:
 class TestDigestGeneratorExtraction:
     """Tests for executive summary extraction."""
 
-    def test_extract_executive_summary_with_emoji(self, mock_path_manager):
+    def test_extract_executive_summary_with_emoji(self, mock_path_manager, mock_file_storage):
         """Extract summary from standard format with emoji."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY)
 
         assert result is not None
@@ -142,24 +161,24 @@ class TestDigestGeneratorExtraction:
         # The second sentence talks about consensus - verify it's extracted
         assert "This episode explores" in result or "temperature patterns" in result
 
-    def test_extract_executive_summary_without_emoji(self, mock_path_manager):
+    def test_extract_executive_summary_without_emoji(self, mock_path_manager, mock_file_storage):
         """Extract summary from format without emoji."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY_NO_EMOJI)
 
         assert result is not None
         assert "deep dive into machine learning" in result
 
-    def test_extract_executive_summary_no_match(self, mock_path_manager):
+    def test_extract_executive_summary_no_match(self, mock_path_manager, mock_file_storage):
         """Return None when no gist section found."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary("Random text without any sections")
 
         assert result is None
 
-    def test_extract_removes_timestamps(self, mock_path_manager):
+    def test_extract_removes_timestamps(self, mock_path_manager, mock_file_storage):
         """Timestamps should be removed from extracted text."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         result = generator._extract_executive_summary(SAMPLE_SUMMARY)
 
         assert "[00:01:00]" not in result
@@ -168,15 +187,15 @@ class TestDigestGeneratorExtraction:
 class TestDigestGeneratorGenerate:
     """Tests for digest generation."""
 
-    def test_generate_empty_list(self, mock_path_manager):
+    def test_generate_empty_list(self, mock_path_manager, mock_file_storage):
         """Generate digest with empty episode list."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate([])
 
         assert content.stats.total_episodes == 0
         assert "# Podcast Digest" in content.markdown
 
-    def test_generate_with_episodes(self, mock_path_manager, sample_podcast):
+    def test_generate_with_episodes(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Generate digest with episodes."""
         episode1 = make_episode("ep1", "Episode One", duration=1800)
         episode2 = make_episode("ep2", "Episode Two", duration=2400)
@@ -184,7 +203,7 @@ class TestDigestGeneratorGenerate:
         # Mock the summary file
         mock_path_manager.summary_file.return_value = Path("/nonexistent/path.md")
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             [
                 (sample_podcast, episode1),
@@ -199,12 +218,12 @@ class TestDigestGeneratorGenerate:
         assert "Episode Two" in content.markdown
         assert sample_podcast.title in content.markdown
 
-    def test_generate_groups_by_podcast(self, mock_path_manager, sample_podcast, sample_podcast_2):
+    def test_generate_groups_by_podcast(self, mock_path_manager, mock_file_storage, sample_podcast, sample_podcast_2):
         """Episodes should be grouped by podcast."""
         ep1 = make_episode("ep1", "Podcast 1 Episode", podcast_id="podcast-123")
         ep2 = make_episode("ep2", "Podcast 2 Episode", podcast_id="podcast-456")
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             [
                 (sample_podcast, ep1),
@@ -216,12 +235,12 @@ class TestDigestGeneratorGenerate:
         assert sample_podcast.title in content.markdown
         assert sample_podcast_2.title in content.markdown
 
-    def test_generate_with_failures(self, mock_path_manager, sample_podcast):
+    def test_generate_with_failures(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Generate digest with failed episodes."""
         episode = make_episode("ep1", "Successful Episode")
         failed_episode = make_episode("ep2", "Failed Episode")
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             episodes=[(sample_podcast, episode)],
             failures=[(sample_podcast, failed_episode, "Network timeout")],
@@ -233,11 +252,11 @@ class TestDigestGeneratorGenerate:
         assert "Failed Episodes" in content.markdown
         assert "Network timeout" in content.markdown
 
-    def test_generate_with_processing_time(self, mock_path_manager, sample_podcast):
+    def test_generate_with_processing_time(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Generate digest with processing time."""
         episode = make_episode("ep1", "Episode")
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         content = generator.generate(
             episodes=[(sample_podcast, episode)],
             processing_time_seconds=754.5,  # 12m 34s
@@ -246,7 +265,7 @@ class TestDigestGeneratorGenerate:
         assert "Processing time" in content.markdown
         assert "12m" in content.markdown
 
-    def test_generate_reads_summary_for_description(self, mock_path_manager, sample_podcast):
+    def test_generate_reads_summary_for_description(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Generator should read summary file to extract description."""
         episode = make_episode(
             "ep1",
@@ -254,27 +273,35 @@ class TestDigestGeneratorGenerate:
             summary_path="test-podcast/ep1_summary.md",
         )
 
-        # Create a mock file that exists
-        mock_file = Mock()
-        mock_file.exists.return_value = True
-        mock_path_manager.summary_file.return_value = mock_file
+        # Spec #35 — generator now reads via FileStorage.read_text rather
+        # than open(). Set the mock to return the sample summary text.
+        mock_path_manager.summary_file.return_value = Path("/data/summaries/test-podcast/ep1_summary.md")
+        mock_file_storage.read_text.side_effect = None
+        mock_file_storage.read_text.return_value = SAMPLE_SUMMARY
 
-        with patch("builtins.open", mock_open(read_data=SAMPLE_SUMMARY)):
-            generator = DigestGenerator(mock_path_manager)
-            content = generator.generate([(sample_podcast, episode)])
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
+        content = generator.generate([(sample_podcast, episode)])
 
         # Should have extracted description from summary
         assert "temperature patterns" in content.markdown or "Episode with Summary" in content.markdown
 
 
 class TestDigestGeneratorWrite:
-    """Tests for digest file writing."""
+    """Tests for digest file writing — uses a real LocalFileStorage rooted at
+    tmp_path so we exercise the actual write path end-to-end."""
 
-    def test_write_creates_directory(self, mock_path_manager, tmp_path):
+    def _build_generator(self, tmp_path):
+        from thestill.utils.file_storage import LocalFileStorage
+
+        pm = PathManager(storage_path=str(tmp_path))
+        storage = LocalFileStorage(base_path=str(tmp_path))
+        return DigestGenerator(pm, storage), pm
+
+    def test_write_creates_directory(self, tmp_path):
         """Write should create parent directory if needed."""
-        output_path = tmp_path / "subdir" / "digest.md"
+        generator, pm = self._build_generator(tmp_path)
+        output_path = pm.digests_dir() / "subdir" / "digest.md"
 
-        generator = DigestGenerator(mock_path_manager)
         content = DigestContent(
             markdown="# Test Digest",
             stats=DigestStats(),
@@ -286,11 +313,11 @@ class TestDigestGeneratorWrite:
         assert output_path.exists()
         assert output_path.read_text() == "# Test Digest"
 
-    def test_write_sets_output_path(self, mock_path_manager, tmp_path):
+    def test_write_sets_output_path(self, tmp_path):
         """Write should set output_path on content."""
-        output_path = tmp_path / "digest.md"
+        generator, pm = self._build_generator(tmp_path)
+        output_path = pm.digests_dir() / "digest.md"
 
-        generator = DigestGenerator(mock_path_manager)
         content = DigestContent(
             markdown="# Test",
             stats=DigestStats(),
@@ -304,22 +331,22 @@ class TestDigestGeneratorWrite:
 class TestDigestGeneratorFormatting:
     """Tests for formatting helpers."""
 
-    def test_format_duration_seconds(self, mock_path_manager):
+    def test_format_duration_seconds(self, mock_path_manager, mock_file_storage):
         """Format short durations in seconds."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(45) == "45s"
 
-    def test_format_duration_minutes(self, mock_path_manager):
+    def test_format_duration_minutes(self, mock_path_manager, mock_file_storage):
         """Format durations in minutes."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(754) == "12m 34s"
 
-    def test_format_duration_hours(self, mock_path_manager):
+    def test_format_duration_hours(self, mock_path_manager, mock_file_storage):
         """Format long durations in hours."""
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         assert generator._format_duration(3725) == "1h 2m"
 
-    def test_format_episode_with_all_metadata(self, mock_path_manager, sample_podcast):
+    def test_format_episode_with_all_metadata(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Format episode with all metadata."""
         episode = make_episode(
             "ep1",
@@ -329,7 +356,7 @@ class TestDigestGeneratorFormatting:
             pub_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         info = DigestEpisodeInfo(
             podcast=sample_podcast,
             episode=episode,
@@ -345,11 +372,11 @@ class TestDigestGeneratorFormatting:
         assert "45m" in result
         assert "great episode about testing" in result
 
-    def test_format_episode_minimal_metadata(self, mock_path_manager, sample_podcast):
+    def test_format_episode_minimal_metadata(self, mock_path_manager, mock_file_storage, sample_podcast):
         """Format episode with minimal metadata."""
         episode = make_episode("ep1", "Basic Episode")
 
-        generator = DigestGenerator(mock_path_manager)
+        generator = DigestGenerator(mock_path_manager, mock_file_storage)
         info = DigestEpisodeInfo(
             podcast=sample_podcast,
             episode=episode,

@@ -280,15 +280,20 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
     def summarize(
         self,
         transcript_text: str,
-        output_path: Optional[Path] = None,
         metadata: Optional[EpisodeMetadata] = None,
     ) -> str:
         """
         Summarize a transcript with comprehensive analysis.
 
+        Returns the markdown text — persisting the result is the caller's
+        responsibility, routed through ``FileStorage`` (spec #35) so the
+        summary lands on the configured backend (local or S3). Internal
+        file I/O was removed to avoid the half-migrated state where
+        summaries were written to local disk while ``DigestGenerator``
+        read them through ``FileStorage``.
+
         Args:
             transcript_text: The transcript text (from cleaned transcript markdown)
-            output_path: Optional path to save the summary markdown
             metadata: Optional episode metadata (title, pub_date, duration) for accurate summary
 
         Returns:
@@ -322,13 +327,6 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
                 final_output = chunk_outputs[0]
             else:
                 final_output = "\n\n---\n\n".join(chunk_outputs)
-
-            # Save if output path provided
-            if output_path:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(final_output)
-                self.console.success(f"Summary saved to {output_path}")
 
             self.console.success("Summarization completed successfully")
             return final_output

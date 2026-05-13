@@ -1,8 +1,8 @@
 # Pluggable File Storage Backends
 
-> **Status:** 📝 Draft
+> **Status:** 📝 Draft — S3-on-AWS targeted for v1
 > **Created:** 2026-05-08
-> **Updated:** 2026-05-08
+> **Updated:** 2026-05-13
 > **Author:** Engineering
 > **Related:** [#05 docker-deployment](05-docker-deployment.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md)
 
@@ -19,17 +19,19 @@ The original branch's commits (for archival reference, all by `Claude <noreply@a
 - `d2547eb feat: add boto3 as optional dependency for S3 storage`
 - `fc7805c refactor: cloud-first FileStorage API design`
 
+**2026-05-13 revision.** The likely production hosting environment is AWS, so this spec now commits to **S3 as the v1 cloud backend**. The `FileStorage` abstraction remains backend-agnostic — GCS is preserved as a design-equivalent future backend, but is explicitly deferred and not part of the initial cloud rollout. Sections below have been re-shaped to lead with S3 and AWS-specific operational concerns (IAM roles, KMS, lifecycle policies, VPC endpoints, region pinning).
+
 ---
 
 ## Motivation
 
-The pipeline writes ~6 file artifact families per episode (original audio, downsampled WAV, raw transcript JSON, cleaned Markdown + JSON sidecar, summary, facts) plus corpus pages and digests. Today every byte lives on local disk under `data/`. Three forces push toward a storage abstraction:
+The pipeline writes ~6 file artifact families per episode (original audio, downsampled WAV, raw transcript JSON, cleaned Markdown + JSON sidecar, summary, facts) plus corpus pages and digests. Today every byte lives on local disk under `data/`. Three forces push toward a storage abstraction, all of them now sharpened by an assumed **AWS production deployment target**:
 
-1. **Docker / RPi5 deployment ([#05](05-docker-deployment.md)).** SD cards are slow and small; offloading audio + transcripts to S3 / GCS keeps the appliance lean. Spec #05 explicitly defers this and ships the slim image with local persistence — this spec is the natural follow-up.
-2. **Multi-host hosting.** Any future managed offering needs shared, durable, ACL-protected storage that isn't tied to one container's filesystem.
-3. **Pre-signed URLs for the web player.** Streaming audio to the browser today goes through FastAPI, which serves the file from local disk. With cloud storage, a presigned URL hands streaming directly to S3/GCS — cheaper, faster, and survives server restarts.
+1. **AWS production hosting.** When Thestill is deployed to AWS (EC2 / ECS / App Runner — to be decided in [#05](05-docker-deployment.md) follow-up), local-disk persistence is a liability: instances are ephemeral, EBS volumes are single-AZ and don't share across tasks, and ECS task storage caps make audio-heavy workloads impractical. S3 is the natural primary store — durable, regionally-redundant, IAM-gated, and decouples storage lifetime from compute.
+2. **Docker / RPi5 deployment ([#05](05-docker-deployment.md)).** SD cards are slow and small; offloading audio + transcripts to S3 keeps the appliance lean. Spec #05 explicitly defers this and ships the slim image with local persistence — this spec is the natural follow-up. The same abstraction serves both the cloud deployment and the slim Docker target.
+3. **Pre-signed URLs for the web player.** Streaming audio to the browser today goes through FastAPI, which serves the file from local disk. With S3, a presigned URL hands streaming directly to S3 (and optionally CloudFront later) — cheaper, faster, and survives server restarts. No NAT bandwidth on the egress path.
 
-The point isn't to migrate everything off disk. The point is to make the storage layer *swappable* so each artifact family can live wherever makes sense (audio in S3, SQLite stays local, corpus pages stay local for Obsidian editing).
+The point isn't to migrate everything off disk. The point is to make the storage layer *swappable* so each artifact family can live wherever makes sense (audio + transcripts in S3, SQLite stays local on EBS or migrates to RDS later, corpus pages stay local for Obsidian editing).
 
 ---
 
@@ -41,9 +43,10 @@ The point isn't to migrate everything off disk. The point is to make the storage
 4. [Integration with PathManager](#integration-with-pathmanager)
 5. [Configuration](#configuration)
 6. [Migration phases](#migration-phases)
-7. [Cross-cutting concerns](#cross-cutting-concerns)
-8. [Open questions](#open-questions)
-9. [Non-goals](#non-goals)
+7. [AWS deployment concerns](#aws-deployment-concerns)
+8. [Cross-cutting concerns](#cross-cutting-concerns)
+9. [Open questions](#open-questions)
+10. [Non-goals](#non-goals)
 
 ---
 
@@ -118,6 +121,8 @@ class FileMetadata:
 
 ## Backends
 
+Two backends ship in v1: `LocalFileStorage` (existing behaviour) and `S3FileStorage` (new, AWS production target). `GCSFileStorage` is deferred — design preserved below so the abstraction stays cloud-neutral, but it is **not** part of the initial cloud rollout.
+
 ### `LocalFileStorage`
 
 - `base_path: str` — anchored at the resolved data root.
@@ -128,9 +133,9 @@ class FileMetadata:
 
 ⚠️ **Overlap with `PathManager._assert_inside_root`.** Both perform escape-resolution checks. The implementation must pick one of: (a) `LocalFileStorage` trusts `PathManager`-shaped inputs and skips its own check, or (b) the two checks coexist as defence-in-depth. Recommend (b) — cheap, and protects against someone constructing a `LocalFileStorage` directly without going through `PathManager`.
 
-### `S3FileStorage`
+### `S3FileStorage` (primary cloud backend)
 
-- Constructor: `bucket`, `region="us-east-1"`, `prefix=""`, `endpoint_url=None`, `access_key_id`/`secret_access_key` optional (falls back to AWS chain — env, IAM role, profile).
+- Constructor: `bucket`, `region="us-east-1"`, `prefix=""`, `endpoint_url=None`, `access_key_id`/`secret_access_key` optional (falls back to AWS chain — env, IAM role, profile). **In production on AWS, explicit keys should never be set** — rely on the EC2 instance profile or ECS task role. See [AWS deployment concerns](#aws-deployment-concerns).
 - `endpoint_url` enables LocalStack / MinIO for tests and self-hosted S3-compatible deployments.
 - Lazy-imports `boto3` so the dep is optional. Surfaces a clear `ImportError` with install hint.
 - `read_bytes` → `get_object`; maps `NoSuchKey` to `FileNotFoundError`.
@@ -138,11 +143,14 @@ class FileMetadata:
 - `delete_batch` → `delete_objects` chunked at 1000.
 - `get_metadata` → `head_object`.
 - `list_files` → `list_objects_v2` paginator; pattern filtering uses `fnmatch` on the relative key (and on the basename, to support both `**/*.json` and `*.json`).
-- `get_public_url` → `generate_presigned_url("get_object", ExpiresIn=...)`.
+- `get_public_url` → `generate_presigned_url("get_object", ExpiresIn=...)`. Used by the web player audio endpoint.
 - `get_local_path` → `tempfile.NamedTemporaryFile(delete=False, suffix=Path(path).suffix, prefix="thestill_s3_")`.
 - Extra (not in ABC): `upload_file(local, remote)` and `download_file(remote, local)` use boto3's high-level transfer manager → automatic multipart for files > 8MB. Important for original audio (often 50–200 MB).
+- **Server-side encryption.** `put_object` and `upload_file` calls pass `ServerSideEncryption="AES256"` by default; if `S3_KMS_KEY_ID` is set, switch to `"aws:kms"` with that key. Bucket default encryption belt-and-braces this at the AWS side.
 
-### `GCSFileStorage`
+### `GCSFileStorage` (deferred)
+
+> Not shipping in v1. Notes preserved so the abstraction stays portable. Re-engage if a non-AWS hosting need surfaces.
 
 - Constructor: `bucket`, `project=None`, `prefix=""`, `credentials_path=None` (falls back to ADC — env var, gcloud auth, GCE metadata).
 - Lazy-imports `google.cloud.storage`. Already a transitive dep of Google Cloud Speech-to-Text in current `pyproject.toml`, so no new top-level dep needed for GCS support.
@@ -187,24 +195,19 @@ Driven by env vars; surfaces in [`utils/config.py`](../thestill/utils/config.py)
 
 ```bash
 # Backend selection
-STORAGE_BACKEND=local     # local | s3 | gcs (default: local)
+STORAGE_BACKEND=local     # local | s3 (default: local). "gcs" reserved for future.
 
 # Local (existing)
 STORAGE_PATH=./data       # already exists
 
-# S3
+# S3 — primary cloud backend, used on AWS deployments
 S3_BUCKET=thestill-data
-S3_REGION=eu-west-1
-S3_PREFIX=prod/           # optional, lets one bucket host multiple deployments
-S3_ENDPOINT_URL=          # optional — set for LocalStack / MinIO / DigitalOcean Spaces
-# AWS credentials follow standard boto3 chain; explicit
-# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY also honoured.
-
-# GCS
-GCS_BUCKET=thestill-data
-GCS_PROJECT=my-project
-GCS_PREFIX=prod/
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json   # standard ADC
+S3_REGION=eu-west-1               # MUST match the EC2/ECS region to avoid cross-region transfer charges
+S3_PREFIX=prod/                   # optional, lets one bucket host multiple deployments (prod/, staging/, dev-$user/)
+S3_ENDPOINT_URL=                  # optional — set for LocalStack / MinIO in tests; LEAVE EMPTY in AWS
+S3_KMS_KEY_ID=                    # optional — set to switch SSE from AES256 to aws:kms with this CMK
+# AWS credentials: in production rely on the EC2 instance profile / ECS task role.
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are honoured for local dev only.
 ```
 
 Backend selection happens once at startup via a factory:
@@ -215,23 +218,38 @@ def make_storage(config: Config) -> FileStorage:
     if backend == "local":
         return LocalFileStorage(base_path=config.storage_path)
     if backend == "s3":
-        return S3FileStorage(bucket=config.s3_bucket, region=config.s3_region, prefix=config.s3_prefix, endpoint_url=config.s3_endpoint_url)
-    if backend == "gcs":
-        return GCSFileStorage(bucket=config.gcs_bucket, project=config.gcs_project, prefix=config.gcs_prefix)
+        return S3FileStorage(
+            bucket=config.s3_bucket,
+            region=config.s3_region,
+            prefix=config.s3_prefix,
+            endpoint_url=config.s3_endpoint_url,
+            kms_key_id=config.s3_kms_key_id,
+        )
     raise ValueError(f"unknown STORAGE_BACKEND={backend!r}")
 ```
 
 Validates required keys at construction; **fails fast** on missing config (no silent fallback to local).
+
+### Future: GCS configuration (deferred)
+
+Reserved for the deferred GCS backend. Not parsed by the v1 factory.
+
+```bash
+# GCS_BUCKET=thestill-data
+# GCS_PROJECT=my-project
+# GCS_PREFIX=prod/
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json   # standard ADC
+```
 
 ### Optional dependencies
 
 ```toml
 [project.optional-dependencies]
 s3 = ["boto3>=1.34", "mypy-boto3-s3>=1.34"]   # mypy-boto3-s3 is types-only
-# gcs already covered by google-cloud-storage as a top-level dep
+# gcs would reuse google-cloud-storage (already a transitive dep) when re-engaged
 ```
 
-Install with `pip install thestill[s3]`.
+Install with `pip install thestill[s3]`. AWS deployment images should bake this in.
 
 ---
 
@@ -264,21 +282,105 @@ One PR per artifact family so each is reviewable and revertable:
 
 Each PR: replace `Path.read_*`/`Path.write_*`/`open()` with `storage.read_*`/`storage.write_*`. For tools that need a real path, wrap with `get_local_path`. Add an integration test.
 
-### Phase 3 — implement cloud backends
+### Phase 3 — implement S3 backend
 
-- `S3FileStorage` + `GCSFileStorage` modules.
-- Tests: contract-equivalence suite (same tests run against `LocalFileStorage`, `S3FileStorage` against LocalStack, `GCSFileStorage` against fake-gcs-server).
-- Optional dep groups in `pyproject.toml`.
+- `S3FileStorage` module with the surface described in [Backends](#backends).
+- Contract-equivalence test suite: the same suite that already runs against `LocalFileStorage` (Phase 0) runs against `S3FileStorage` pointed at LocalStack in CI. This guarantees behavioural parity across backends.
+- Optional dep group `thestill[s3]` in `pyproject.toml`.
+- Document AWS IAM policy template (see [AWS deployment concerns](#aws-deployment-concerns)) alongside the backend.
+- **GCS backend is deferred to a follow-up spec** — re-engage if a non-AWS hosting need surfaces. The abstraction stays GCS-shaped (idempotent delete, metadata in listings) so re-engaging is mechanical.
 
 ### Phase 4 — presigned URLs for streaming
 
-- `web/routes/api_episodes.py` audio endpoint returns `307` to `storage.get_public_url(...)` when backend supports it (cloud); falls back to `FileResponse` from `get_local_path` for local backend.
+- `web/routes/api_episodes.py` audio endpoint returns `307` to `storage.get_public_url(...)` when backend supports it (S3); falls back to `FileResponse` from `get_local_path` for local backend.
 - Frontend audio player needs no changes.
+- Optional follow-up: front S3 with CloudFront for cached / lower-latency delivery. Not required for v1 — presigned S3 URLs alone are fine for the expected request volume.
 
-### Phase 5 — opt-in cloud deployment in `:slim` Docker target
+### Phase 5 — AWS production deployment
 
-- Document `STORAGE_BACKEND=s3` configuration in the Docker spec.
+- Document `STORAGE_BACKEND=s3` configuration in the Docker spec ([#05](05-docker-deployment.md)), including the AWS-side resources (bucket, IAM policy, instance profile / task role, optional KMS key, lifecycle rules, VPC gateway endpoint).
+- Provide a Terraform / CDK module fragment (or at least a reference set of `aws` CLI commands) that provisions the bucket + IAM + endpoint for a Thestill deployment.
 - Add a smoke-test compose file with LocalStack so contributors can validate cloud paths without an AWS account.
+- Update [#05](05-docker-deployment.md) to flag S3 as the recommended storage configuration for any non-RPi5 deployment.
+
+---
+
+## AWS deployment concerns
+
+These items are specific to running Thestill on AWS with `STORAGE_BACKEND=s3`. They don't change the abstraction's shape, but they're load-bearing for the production rollout and need to be designed alongside the code.
+
+### IAM: instance profile / task role, not access keys
+
+- Production deployments **must** authenticate via the EC2 instance profile (or ECS task role / EKS service account / App Runner instance role). Never bake `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` into env files or container images.
+- The `S3FileStorage` constructor already defers to the boto3 credential chain; the AWS deployment just needs the right IAM role attached to compute. Document the minimum policy:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "ThestillObjectIO",
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ],
+        "Resource": "arn:aws:s3:::thestill-data/prod/*"
+      },
+      {
+        "Sid": "ThestillListing",
+        "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::thestill-data",
+        "Condition": { "StringLike": { "s3:prefix": ["prod/*"] } }
+      }
+    ]
+  }
+  ```
+
+- If `S3_KMS_KEY_ID` is set, add `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` on the specific CMK ARN.
+- Local dev: developers use a named profile (`AWS_PROFILE=thestill-dev`) with a separate prefix (`STORAGE_PREFIX=dev-$USER/`) on the same bucket, or a separate dev bucket entirely.
+
+### Bucket configuration
+
+- **Block Public Access:** enabled on the bucket. Presigned URLs work regardless — they sign the request, not the object.
+- **Default server-side encryption:** SSE-S3 (AES256) on the bucket, with `S3FileStorage` also passing SSE on writes as belt-and-braces. Switch to SSE-KMS only if compliance requires customer-managed keys.
+- **Versioning:** off by default. Thestill artifacts are deterministically re-derivable from upstream feeds, so versioning is wasted storage. Reconsider only for `corpus/` if Obsidian editing moves to S3.
+- **Bucket policy:** denies non-TLS access (`aws:SecureTransport`); denies any principal that isn't the Thestill role.
+
+### Lifecycle policies
+
+Audio files are large and rarely re-read after summarisation. Configure S3 lifecycle rules per artifact family — these run at the AWS side and require no application changes.
+
+| Prefix | Suggested transition |
+|---|---|
+| `prod/original_audio/` | `STANDARD` → `STANDARD_IA` after 30 days → `GLACIER_IR` after 90 days |
+| `prod/downsampled_audio/` | Expire after 30 days (cheap to re-derive from the original) |
+| `prod/raw_transcripts/`, `prod/clean_transcripts/`, `prod/summaries/`, `prod/facts/`, `prod/digests/`, `prod/corpus/` | Stay in `STANDARD` (small, frequently read) |
+
+Re-reading audio from Glacier IR for an unusual re-process is cheap and bounded; default storage costs without a lifecycle rule are not.
+
+### VPC gateway endpoint for S3
+
+- Provision a **VPC gateway endpoint** for S3 in the deployment's VPC. Gateway endpoints are free and route S3 traffic over the AWS backbone instead of through a NAT gateway.
+- Without this, every `GetObject` / `PutObject` from a private-subnet instance bills NAT egress at $0.045/GB. For original audio (50–200 MB per episode, hundreds of episodes/week), this is the largest avoidable AWS cost.
+- The endpoint is region-scoped; it works automatically once attached to the VPC route tables.
+
+### Region pinning
+
+- Set `S3_REGION` to match the compute region. Cross-region transfer is $0.02/GB and adds latency.
+- For multi-region resilience: out of scope for v1. If it becomes a requirement, use S3 Cross-Region Replication at the bucket level — no application changes.
+
+### Key layout and request rate
+
+- Current `PathManager` layout already disperses object keys (episode IDs are GUID-like, podcast slugs vary), so we get S3 partition spread for free at expected scale.
+- No need for the legacy hex-prefix sharding trick — S3 auto-partitions and the read/write rates are far below the 3500 PUT / 5500 GET per prefix-per-second ceiling.
+
+### Cost telemetry
+
+- Tag the bucket with `Project=thestill`, `Environment=prod`, etc. Cost Explorer + Cost Allocation Tags surface monthly spend per artifact family if prefixes are stable.
+- Pair with the request-counter instrumentation in [Open questions](#open-questions) item 5 so application-side and AWS-side numbers can be reconciled.
 
 ---
 
@@ -325,9 +427,11 @@ Every `exists()` call is an S3 `HeadObject` request. The codebase has a habit of
 
 ## Non-goals
 
-- Postgres migration. Database state is not file state. ([#05](05-docker-deployment.md) defers this; this spec inherits the deferral.)
+- **GCS backend in v1.** The abstraction stays cloud-neutral, but the initial cloud rollout targets AWS / S3 only. Re-engage GCS only if a concrete non-AWS hosting need surfaces.
+- Postgres migration / RDS. Database state is not file state. ([#05](05-docker-deployment.md) defers this; this spec inherits the deferral.)
 - Replacing `PathManager`. The path-shape and security-guard logic stay exactly where they are.
 - Background sync between backends. No bidirectional replication, no "use S3 but mirror to local."
 - Generic key-value store abstraction. `FileStorage` is for files; redis/memcached/etc. are not in scope.
 - Per-tenant bucket isolation. Multi-user hosting is its own design problem ([#07](07-multi-user-web-app.md)).
-- CDN integration. Presigned URLs are sufficient for v1; CloudFront / Cloud CDN can layer on top later without code changes.
+- CloudFront / CDN integration in v1. Presigned S3 URLs are sufficient for the expected request volume; CloudFront can layer on top later without code changes (Phase 4 note).
+- Multi-region replication. Single-region S3 with versioning-off is the v1 footprint; CRR is an AWS-side bucket setting if it ever becomes a requirement.

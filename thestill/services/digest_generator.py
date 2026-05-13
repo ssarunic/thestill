@@ -20,6 +20,7 @@ grouping them by podcast with brief descriptions extracted from summaries.
 """
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 from structlog import get_logger
 
 from ..models.podcast import Episode, Podcast
+from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
 from ..utils.url_generator import UrlGenerator
 
@@ -132,20 +134,27 @@ class DigestGenerator:
     - Failure section if any episodes failed
 
     Usage:
-        generator = DigestGenerator(path_manager)
+        generator = DigestGenerator(path_manager, file_storage)
         content = generator.generate(episodes, stats)
         generator.write(content, output_path)
     """
 
-    def __init__(self, path_manager: PathManager, url_generator: UrlGenerator | None = None):
+    def __init__(
+        self,
+        path_manager: PathManager,
+        file_storage: FileStorage,
+        url_generator: UrlGenerator | None = None,
+    ):
         """
         Initialize digest generator.
 
         Args:
-            path_manager: PathManager for resolving file paths
-            url_generator: UrlGenerator for creating web URLs (optional, creates default if not provided)
+            path_manager: PathManager for resolving file paths.
+            file_storage: Spec #35 backend for digest writes + summary reads.
+            url_generator: UrlGenerator for creating web URLs (optional, creates default if not provided).
         """
         self.path_manager = path_manager
+        self.file_storage = file_storage
         self.url_generator = url_generator or UrlGenerator()
 
     def generate(
@@ -167,11 +176,12 @@ class DigestGenerator:
         """
         failures = failures or []
 
-        # Build episode info with descriptions
-        episode_infos = []
-        for podcast, episode in episodes:
-            info = self._build_episode_info(podcast, episode)
-            episode_infos.append(info)
+        # Build episode info with descriptions. Spec #35 — each
+        # ``_build_episode_info`` issues one ``read_text`` against the
+        # summary file. On S3 that is one network round-trip per episode;
+        # fan-out via a thread pool turns N serial reads into ~one round-trip
+        # of latency (boto3 clients are thread-safe).
+        episode_infos = self._build_episode_infos_parallel(episodes)
 
         # Add failures
         for podcast, episode, reason in failures:
@@ -211,41 +221,54 @@ class DigestGenerator:
 
         Args:
             content: DigestContent to write
-            output_path: Path to write to
+            output_path: Path to write to (absolute; converted to a
+                storage-relative key via PathManager.to_relative).
 
         Returns:
             The output path
         """
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(content.markdown)
+        relative = self.path_manager.to_relative(output_path)
+        self.file_storage.write_text(relative, content.markdown)
 
         content.output_path = output_path
 
-        logger.info("Digest written", path=str(output_path))
+        logger.info("Digest written", path=str(output_path), backend_key=relative)
 
         return output_path
+
+    # Cap parallel summary reads to keep the S3 connection pool happy without
+    # over-subscribing — 8 in flight is enough to amortize latency on a
+    # 50-episode digest, well under botocore's default 10-connection pool.
+    _SUMMARY_READ_PARALLELISM = 8
+
+    def _build_episode_infos_parallel(self, episodes: List[Tuple[Podcast, Episode]]) -> List[DigestEpisodeInfo]:
+        if not episodes:
+            return []
+        # Skip the thread pool overhead for the single-episode case.
+        if len(episodes) == 1:
+            podcast, episode = episodes[0]
+            return [self._build_episode_info(podcast, episode)]
+        max_workers = min(self._SUMMARY_READ_PARALLELISM, len(episodes))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(pool.map(lambda pe: self._build_episode_info(*pe), episodes))
 
     def _build_episode_info(self, podcast: Podcast, episode: Episode) -> DigestEpisodeInfo:
         """Build episode info with description extracted from summary."""
         info = DigestEpisodeInfo(podcast=podcast, episode=episode)
 
-        # Try to read and extract description from summary
+        # Try to read and extract description from summary. Spec #35 — go
+        # via FileStorage so the backend (local or S3) is transparent.
+        # ``StorageError`` (a ``TransientError``) propagates so the retry
+        # layer can act; only genuine missing-summary cases return None.
         if episode.summary_path:
             summary_file = self.path_manager.summary_file(episode.summary_path)
-            if summary_file.exists():
-                try:
-                    with open(summary_file, "r", encoding="utf-8") as f:
-                        summary_text = f.read()
-                    info.brief_description = self._extract_executive_summary(summary_text)
-                    info.summary_link = episode.summary_path
-                except Exception as e:
-                    logger.warning(
-                        "Failed to read summary",
-                        episode_id=episode.external_id,
-                        error=str(e),
-                    )
+            try:
+                summary_text = self.file_storage.read_text(self.path_manager.to_relative(summary_file))
+            except FileNotFoundError:
+                summary_text = None
+            if summary_text is not None:
+                info.brief_description = self._extract_executive_summary(summary_text)
+                info.summary_link = episode.summary_path
 
         return info
 

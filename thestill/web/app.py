@@ -125,7 +125,11 @@ def _build_narration_runner(
     except Exception as exc:  # noqa: BLE001 — surface the gate, don't crash the server
         logger.warning("narration.runner_disabled", reason=str(exc))
         return None
-    generator = NarrationGenerator(path_manager=path_manager, llm_provider=llm_provider)
+    generator = NarrationGenerator(
+        path_manager=path_manager,
+        file_storage=config.file_storage,
+        llm_provider=llm_provider,
+    )
     return NarrationRunner(
         generator=generator,
         digest_repository=digest_repository,
@@ -196,7 +200,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # only need the state machine can still pass renderer=None.
     briefing_repository = SqliteBriefingRepository(db_path=config.database_path)
     briefing_renderer = BriefingRenderer(
-        DigestGenerator(path_manager),
+        DigestGenerator(path_manager, config.file_storage),
         repository,
         path_manager,
     )

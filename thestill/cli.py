@@ -175,6 +175,9 @@ def main(ctx, config, quiet):
         # Initialize all shared services once (dependency injection)
         storage_path = config_obj.storage_path  # Path object
         path_manager = PathManager(str(storage_path))
+        # Spec #35 — re-use the FileStorage backend constructed inside Config
+        # so CLI / web / MCP all share one instance and respect STORAGE_BACKEND.
+        file_storage = config_obj.file_storage
         repository = SqlitePodcastRepository(db_path=config_obj.database_path)
         podcast_service = PodcastService(storage_path, repository, path_manager)
         stats_service = StatsService(storage_path, repository, path_manager)
@@ -189,7 +192,7 @@ def main(ctx, config, quiet):
             max_bytes=config_obj.max_audio_bytes,
         )
         audio_preprocessor = AudioPreprocessor(console=console)
-        external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager)
+        external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager, file_storage)
 
         # Initialize auth service for default user support
         user_repository = SqliteUserRepository(db_path=config_obj.database_path)
@@ -1965,7 +1968,10 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 
         click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
         try:
-            summarizer.summarize(transcript_text, output_path, metadata=metadata)
+            summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+            # Spec #35 — persist via FileStorage so STORAGE_BACKEND=s3
+            # routes the artefact to the right destination.
+            ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
             click.echo("Summarization complete!")
             click.echo(f"Output saved to: {output_path}")
         except Exception as e:
@@ -2059,7 +2065,8 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
             )
 
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
-            summarizer.summarize(transcript_text, output_path, metadata=metadata)
+            summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+            ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
 
             # Update feed manager
             feed_manager.mark_episode_processed(
@@ -2396,7 +2403,7 @@ def digest(
             if reason == "already summarized":
                 successful_episodes.append((podcast, episode))
 
-    generator = DigestGenerator(path_manager)
+    generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
     digest_content = generator.generate(
         episodes=successful_episodes,
         processing_time_seconds=processing_time,
@@ -2490,6 +2497,7 @@ def _build_narration_runner(ctx, *, llm_provider):
 
     generator = NarrationGenerator(
         path_manager=ctx.obj.path_manager,
+        file_storage=ctx.obj.config.file_storage,
         llm_provider=llm_provider,
     )
     return NarrationRunner(
@@ -2798,7 +2806,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
             ctx.exit(1)
 
         # Generate digest
-        generator = DigestGenerator(path_manager)
+        generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
         digest_content = generator.generate(
             episodes=successful_episodes,
             processing_time_seconds=None,
@@ -4609,6 +4617,7 @@ def rebuild_entity_pages(ctx, entity_type):
     writer = EntityPageWriter(
         path_manager=ctx.obj.path_manager,
         entity_repository=ctx.obj.entity_repository,
+        file_storage=ctx.obj.config.file_storage,
     )
     et = EntityType(entity_type) if entity_type else None
     result = writer.write_all(entity_type=et)

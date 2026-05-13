@@ -21,6 +21,7 @@ import requests
 
 from thestill.core.external_transcript_downloader import ExternalTranscriptDownloader
 from thestill.models.podcast import Episode, Podcast, TranscriptLink
+from thestill.utils.file_storage import LocalFileStorage
 from thestill.utils.path_manager import PathManager
 
 
@@ -31,17 +32,24 @@ def path_manager(tmp_path):
 
 
 @pytest.fixture
+def file_storage(tmp_path):
+    """Spec #35 — LocalFileStorage rooted at the same tmp_path as path_manager."""
+    return LocalFileStorage(base_path=str(tmp_path))
+
+
+@pytest.fixture
 def mock_repository():
     """Create a mock repository."""
     return MagicMock()
 
 
 @pytest.fixture
-def downloader(mock_repository, path_manager):
+def downloader(mock_repository, path_manager, file_storage):
     """Create an ExternalTranscriptDownloader instance."""
     return ExternalTranscriptDownloader(
         repository=mock_repository,
         path_manager=path_manager,
+        file_storage=file_storage,
     )
 
 

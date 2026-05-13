@@ -69,14 +69,24 @@ def path_manager(tmp_path):
 
 
 @pytest.fixture
+def file_storage(tmp_path):
+    """Spec #35 — real LocalFileStorage rooted at the same tmp_path used
+    by path_manager, so the renderer can actually write the briefing's
+    script.md to disk."""
+    from thestill.utils.file_storage import LocalFileStorage
+
+    return LocalFileStorage(base_path=str(tmp_path))
+
+
+@pytest.fixture
 def podcast_repo(db_path):
     return SqlitePodcastRepository(db_path)
 
 
 @pytest.fixture
-def renderer(path_manager, podcast_repo):
+def renderer(path_manager, file_storage, podcast_repo):
     return BriefingRenderer(
-        DigestGenerator(path_manager),
+        DigestGenerator(path_manager, file_storage),
         podcast_repo,
         path_manager,
     )

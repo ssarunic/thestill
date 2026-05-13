@@ -28,11 +28,11 @@ from structlog import get_logger
 
 from ...models.digest import Digest, DigestStatus
 from ...models.user import User
+from ...services.digest_generator import DigestGenerator
+from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
 from ...services.narration import NarrationRunnerError, read_narration_header
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
-from ...services.digest_generator import DigestGenerator
-from ...services.digest_selector import DigestEpisodeSelector, DigestSelectionCriteria
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found, paginated_response
 
@@ -161,7 +161,7 @@ def _list_narrations_for_digest(narrations_dir: Path, digest_id: str) -> List[di
         stem = json_path.stem
         if not stem.startswith(prefix):
             continue
-        slug = stem[len(prefix):]
+        slug = stem[len(prefix) :]
         if not slug:
             continue
         payload = read_narration_header(json_path)
@@ -398,7 +398,7 @@ async def create_morning_briefing(
     # Generate digest immediately from summarized episodes
     start_time = time.time()
 
-    generator = DigestGenerator(state.path_manager)
+    generator = DigestGenerator(state.path_manager, state.config.file_storage)
     content = generator.generate(
         episodes=result.episodes,
         processing_time_seconds=0,
@@ -754,7 +754,7 @@ async def create_digest(
         # Generate digest immediately from summarized episodes
         start_time = time.time()
 
-        generator = DigestGenerator(state.path_manager)
+        generator = DigestGenerator(state.path_manager, state.config.file_storage)
         content = generator.generate(
             episodes=result.episodes,
             processing_time_seconds=0,  # Will be updated
