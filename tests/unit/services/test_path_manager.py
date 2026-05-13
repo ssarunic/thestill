@@ -568,3 +568,29 @@ class TestResolveGuard:
             pm.external_transcript_file("../bad", "ok-episode", "srt")
         with pytest.raises(ValueError, match="invalid episode_slug"):
             pm.external_transcript_file("ok-podcast", "../bad", "srt")
+
+
+class TestToRelative:
+    """Spec #35 — bridge between PathManager (absolute) and FileStorage
+    (relative forward-slash strings)."""
+
+    def test_to_relative_strips_storage_root(self, tmp_path):
+        pm = PathManager(storage_path=str(tmp_path))
+        absolute = pm.original_audio_file("ep.mp3")
+        assert pm.to_relative(absolute) == "original_audio/ep.mp3"
+
+    def test_to_relative_for_nested_path(self, tmp_path):
+        pm = PathManager(storage_path=str(tmp_path))
+        absolute = pm.clean_transcript_file_with_podcast("rest-is-money", "ep_cleaned.md")
+        assert pm.to_relative(absolute) == "clean_transcripts/rest-is-money/ep_cleaned.md"
+
+    def test_to_relative_for_corpus_entity(self, tmp_path):
+        pm = PathManager(storage_path=str(tmp_path))
+        absolute = pm.corpus_entity_file("person", "elon-musk")
+        assert pm.to_relative(absolute) == "corpus/persons/elon-musk.md"
+
+    def test_to_relative_rejects_path_outside_root(self, tmp_path):
+        pm = PathManager(storage_path=str(tmp_path / "data"))
+        outside = tmp_path / "elsewhere" / "x.txt"
+        with pytest.raises(ValueError, match="not under storage root"):
+            pm.to_relative(outside)

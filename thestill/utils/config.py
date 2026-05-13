@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic.config import ConfigDict
 
+from .file_storage import FileStorage, make_storage
 from .path_manager import PathManager
 
 logger = structlog.get_logger(__name__)
@@ -57,9 +58,24 @@ class Config(BaseModel):
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
 
+    # Spec #35 — pluggable file storage. ``local`` keeps the historical
+    # on-disk behaviour; ``s3`` routes audio/transcript/summary artefacts
+    # to AWS S3 in production. The factory fails fast at construction if
+    # the selected backend's required fields are missing.
+    storage_backend: str = "local"  # local | s3
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_prefix: str = ""  # optional, lets one bucket host multiple deployments
+    s3_endpoint_url: str = ""  # leave empty for real AWS; set for LocalStack / MinIO in tests
+    s3_kms_key_id: str = ""  # empty = SSE-S3 (AES256); set to switch to SSE-KMS with this CMK
+
     # Path Manager (initialized after model creation)
     # All path operations should use path_manager methods instead of direct path attributes
     path_manager: Optional[PathManager] = Field(default=None, exclude=True)
+
+    # File Storage backend (initialized after PathManager). Inject this into
+    # services instead of using ``Path.read_*`` / ``Path.write_*`` directly.
+    file_storage: Optional[FileStorage] = Field(default=None, exclude=True)
 
     # Processing Configuration
     max_workers: int = 3
@@ -210,6 +226,12 @@ class Config(BaseModel):
 
         self._ensure_directories()
 
+        # Spec #35 — construct the FileStorage backend once here so CLI /
+        # web / MCP bootstraps all share the same instance (the pattern the
+        # PathManager already follows). The factory fails fast on missing
+        # required config (e.g. STORAGE_BACKEND=s3 without S3_BUCKET).
+        self.file_storage = make_storage(self)
+
     def _ensure_directories(self):
         """Create necessary directories if they don't exist"""
         # Use PathManager to ensure all directories exist
@@ -343,6 +365,12 @@ def load_config(env_file: Optional[str] = None) -> Config:
     storage_path = Path(os.getenv("STORAGE_PATH", "./data"))
     database_path = os.getenv("DATABASE_PATH", "")  # Empty string = use default
 
+    # Spec #35 — file storage backend selection. Defaulting to ``local``
+    # preserves the historical behaviour; switching to ``s3`` is what an
+    # AWS-hosted deployment does. ``S3_BUCKET`` becomes required in that
+    # case — the factory raises with a clear message at construction time.
+    storage_backend = os.getenv("STORAGE_BACKEND", "local").lower()
+
     config_data = {
         "openai_api_key": openai_api_key,
         "gemini_api_key": gemini_api_key,
@@ -367,6 +395,13 @@ def load_config(env_file: Optional[str] = None) -> Config:
         # Note: Path operations should use config.path_manager methods
         # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
         # clean_transcripts_path, summaries_path, evaluations_path
+        # Spec #35 — file storage backend configuration
+        "storage_backend": storage_backend,
+        "s3_bucket": os.getenv("S3_BUCKET", ""),
+        "s3_region": os.getenv("S3_REGION", "us-east-1"),
+        "s3_prefix": os.getenv("S3_PREFIX", ""),
+        "s3_endpoint_url": os.getenv("S3_ENDPOINT_URL", ""),
+        "s3_kms_key_id": os.getenv("S3_KMS_KEY_ID", ""),
         "max_workers": int(os.getenv("MAX_WORKERS", "3")),
         "parallel_jobs": int(os.getenv("PARALLEL_JOBS", "1")),
         **{

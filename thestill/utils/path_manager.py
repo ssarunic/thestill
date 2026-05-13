@@ -661,6 +661,37 @@ class PathManager:
 
         return file_map[directory_type](filename)
 
+    def to_relative(self, absolute: Path) -> str:
+        """Convert an absolute path produced by this PathManager into a
+        storage-root-relative forward-slash string.
+
+        Spec #35 — the bridge between PathManager (absolute paths) and
+        ``FileStorage`` (relative forward-slash keys). Hot path: digest
+        generation calls this once per episode. The fast path skips
+        ``Path.resolve()`` (one ``stat`` per call) when the un-resolved
+        path is already relative to the cached resolved root — which is
+        the case for every path PathManager itself produced. We fall back
+        to a resolve-and-retry only when the fast match fails, so symlinks
+        and ``..`` segments still work.
+
+        Args:
+            absolute: A path that must be under ``self.storage_path``.
+
+        Returns:
+            Relative forward-slash string (e.g. ``"original_audio/ep.mp3"``).
+
+        Raises:
+            ValueError: If ``absolute`` is not under ``storage_path``.
+        """
+        try:
+            return absolute.relative_to(self._storage_root_resolved).as_posix()
+        except ValueError:
+            pass
+        try:
+            return absolute.resolve().relative_to(self._storage_root_resolved).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"path {absolute!r} is not under storage root {self.storage_path!r}") from exc
+
     def require_file_exists(self, file_path: Path, error_message: str) -> Path:
         """
         Check if file exists and raise FileNotFoundError if not.
