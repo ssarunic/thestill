@@ -287,7 +287,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         from ..core.queue_manager import TaskStage
 
         excluded_stages = []
-        if config.transcription_provider.lower() in ("google", "elevenlabs"):
+        if config.transcription_provider.lower() in ("google", "elevenlabs", "dalston"):
             excluded_stages.append(TaskStage.TRANSCRIBE)
             logger.info(
                 "cloud_transcription_provider",
@@ -298,6 +298,21 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         recovered = queue_manager.recover_interrupted_tasks(excluded_stages=excluded_stages)
         if recovered > 0:
             logger.info("recovered_interrupted_tasks", count=recovered)
+
+        # Dalston jobs run server-side and survive a thestill restart. The
+        # ``DalstonTranscriber`` resume path checks ``pending_ops_repository``
+        # for an existing job_id keyed by episode and re-polls instead of
+        # submitting a duplicate. Flip the transcribe rows that ``recover_interrupted_tasks``
+        # just preserved (excluded from the failed-state recovery) back to
+        # ``pending`` so the worker re-claims them immediately instead of
+        # waiting out the stale-task sweep.
+        if config.transcription_provider.lower() == "dalston":
+            requeued = queue_manager.reset_stale_tasks(
+                timeout_minutes=0,
+                stages=[TaskStage.TRANSCRIBE],
+            )
+            if requeued > 0:
+                logger.info("dalston_transcribe_tasks_requeued_for_resume", count=requeued)
 
         # Store state in app for access in routes
         app.state.app_state = app_state

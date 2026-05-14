@@ -45,7 +45,7 @@ def _transcript_to_json(transcript: Transcript) -> str:
     Used by ``handle_transcribe`` and the equivalent CLI / MCP paths so the
     on-disk shape stays identical across entry points.
     """
-    return json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2)
+    return json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2, default=str)
 
 
 from ..models.podcast import Episode, Podcast

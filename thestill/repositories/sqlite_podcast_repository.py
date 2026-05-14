@@ -1248,7 +1248,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     payload_json    TEXT NOT NULL,
                     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
                     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
-                    CHECK (provider IN ('google','elevenlabs'))
+                    CHECK (provider IN ('google','elevenlabs','dalston'))
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_pending_ops_provider
@@ -1263,6 +1263,45 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # as a belt-and-braces undo channel.
             self._backfill_pending_operations_from_files(conn)
             logger.info("Migration complete: pending_transcription_operations created (spec #40)")
+
+        # Extend the provider CHECK to include ``dalston`` on databases that
+        # were created before Dalston gained restart-resume support. Same
+        # ALTER-CHECK-via-rebuild dance as user_episode_inbox above; SQLite
+        # has no DROP CONSTRAINT.
+        cursor = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='pending_transcription_operations'"
+        )
+        row = cursor.fetchone()
+        if row is not None and "'dalston'" not in (row["sql"] or ""):
+            logger.info("Migrating database: extending pending_transcription_operations.provider CHECK for dalston")
+            conn.executescript(
+                """
+                CREATE TABLE pending_transcription_operations_new (
+                    operation_id    TEXT PRIMARY KEY NOT NULL,
+                    provider        TEXT NOT NULL,
+                    episode_id      TEXT NOT NULL,
+                    payload_json    TEXT NOT NULL,
+                    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    CHECK (provider IN ('google','elevenlabs','dalston'))
+                );
+
+                INSERT INTO pending_transcription_operations_new
+                    (operation_id, provider, episode_id, payload_json, created_at, updated_at)
+                SELECT operation_id, provider, episode_id, payload_json, created_at, updated_at
+                  FROM pending_transcription_operations;
+
+                DROP TABLE pending_transcription_operations;
+                ALTER TABLE pending_transcription_operations_new
+                    RENAME TO pending_transcription_operations;
+
+                CREATE INDEX IF NOT EXISTS idx_pending_ops_provider
+                    ON pending_transcription_operations(provider);
+                CREATE INDEX IF NOT EXISTS idx_pending_ops_episode
+                    ON pending_transcription_operations(episode_id);
+                """
+            )
+            logger.info("Migration complete: pending_transcription_operations.provider CHECK extended")
 
     # ------------------------------------------------------------------
     # Spec #40 — file → DB backfill

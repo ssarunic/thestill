@@ -25,10 +25,11 @@ Features:
 - Local/self-hosted deployment
 """
 
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from structlog import get_logger
 
@@ -38,6 +39,9 @@ from thestill.utils.path_manager import PathManager
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -73,6 +77,7 @@ class DalstonTranscriber(Transcriber):
         num_speakers: Optional[int] = None,
         language: Optional[str] = None,
         path_manager: Optional[PathManager] = None,
+        pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
     ):
         """
         Initialize Dalston transcriber.
@@ -86,6 +91,10 @@ class DalstonTranscriber(Transcriber):
             num_speakers: Expected number of speakers (None = auto-detect).
             language: Language code (e.g., "en"). None = auto-detect.
             path_manager: PathManager for storing pending operations.
+            pending_ops_repository: DB-backed persistence for in-flight Dalston jobs.
+                When set, ``transcribe_audio`` records the submitted ``job_id``
+                keyed by ``episode_id`` so a process restart can resume polling
+                the existing job instead of submitting a duplicate.
         """
         import os
 
@@ -97,6 +106,7 @@ class DalstonTranscriber(Transcriber):
         self.num_speakers = num_speakers
         self.language = language
         self.path_manager = path_manager
+        self.pending_ops_repository = pending_ops_repository
 
         self._client = None
 
@@ -190,36 +200,71 @@ class DalstonTranscriber(Transcriber):
         effective_language = self.language or options.language or "auto"
 
         try:
-            # Build transcribe kwargs
-            transcribe_kwargs = {
-                "language": effective_language,
-                "speaker_detection": speaker_detection,
-                "num_speakers": self.num_speakers,
-                "timestamps_granularity": "word",
-            }
-            if self.model:
-                transcribe_kwargs["model"] = self.model
-
-            # Submit transcription job via URL or file upload
-            if use_url:
-                transcribe_kwargs["audio_url"] = options.audio_url
-                job = self._client.transcribe(**transcribe_kwargs)
-            else:
-                with open(audio_path, "rb") as f:
-                    transcribe_kwargs["file"] = f
-                    job = self._client.transcribe(**transcribe_kwargs)
-
-            logger.info("Transcription job submitted", job_id=job.id)
-
-            # Report transcription in progress
-            if options.progress_callback:
-                options.progress_callback(
-                    ProgressUpdate(
-                        stage=TranscriptionStage.TRANSCRIBING,
-                        progress_pct=0,
-                        message="Waiting for Dalston to transcribe...",
-                    )
+            # Resume: if a previous run already submitted a Dalston job for
+            # this episode and we were interrupted before polling completed,
+            # the job is still running on the Dalston server. Re-poll it
+            # instead of submitting a duplicate that the original watcher
+            # left behind.
+            existing_job_id = self._find_pending_job_id(options.episode_id)
+            if existing_job_id:
+                logger.info(
+                    "Resuming in-flight Dalston job",
+                    job_id=existing_job_id,
+                    episode_id=options.episode_id,
                 )
+                if options.progress_callback:
+                    options.progress_callback(
+                        ProgressUpdate(
+                            stage=TranscriptionStage.TRANSCRIBING,
+                            progress_pct=0,
+                            message="Resuming Dalston transcription...",
+                        )
+                    )
+                job_id = existing_job_id
+            else:
+                # Build transcribe kwargs
+                transcribe_kwargs = {
+                    "language": effective_language,
+                    "speaker_detection": speaker_detection,
+                    "num_speakers": self.num_speakers,
+                    "timestamps_granularity": "word",
+                }
+                if self.model:
+                    transcribe_kwargs["model"] = self.model
+
+                # Submit transcription job via URL or file upload
+                if use_url:
+                    transcribe_kwargs["audio_url"] = options.audio_url
+                    job = self._client.transcribe(**transcribe_kwargs)
+                else:
+                    with open(audio_path, "rb") as f:
+                        transcribe_kwargs["file"] = f
+                        job = self._client.transcribe(**transcribe_kwargs)
+
+                job_id = str(job.id)
+                logger.info("Transcription job submitted", job_id=job_id)
+
+                # Persist immediately so a restart between submit and
+                # wait_for_completion still finds the job_id on next attempt.
+                self._save_pending_operation(
+                    job_id=job_id,
+                    audio_path=audio_path,
+                    language=effective_language,
+                    episode_id=options.episode_id,
+                    podcast_slug=options.podcast_slug,
+                    episode_slug=options.episode_slug,
+                    audio_url=options.audio_url,
+                )
+
+                # Report transcription in progress
+                if options.progress_callback:
+                    options.progress_callback(
+                        ProgressUpdate(
+                            stage=TranscriptionStage.TRANSCRIBING,
+                            progress_pct=0,
+                            message="Waiting for Dalston to transcribe...",
+                        )
+                    )
 
             # Wait for completion with progress callback
             def on_progress(status: str, progress: Optional[float] = None):
@@ -233,7 +278,7 @@ class DalstonTranscriber(Transcriber):
                     )
 
             completed_job = self._client.wait_for_completion(
-                job.id,
+                job_id,
                 poll_interval=POLL_INTERVAL,
                 on_progress=on_progress,
             )
@@ -243,12 +288,20 @@ class DalstonTranscriber(Transcriber):
             # Transcript directly and skip the legacy disk write. The
             # ``output_path`` argument is retained on the signature for
             # back-compat with the abstract base class but ignored here.
-            return self._format_response(
+            transcript = self._format_response(
                 completed_job,
                 audio_path,
                 start_time,
                 effective_language,
             )
+
+            # Job is complete and the transcript is in memory; the caller
+            # will persist it. Drop the pending row so a future task for
+            # the same episode submits a fresh job instead of resuming a
+            # stale one.
+            self._remove_pending_operation(job_id)
+
+            return transcript
 
         except Exception as e:
             logger.error(
@@ -311,7 +364,7 @@ class DalstonTranscriber(Transcriber):
             speakers_detected=speakers_detected if speakers_detected > 0 else None,
             provider_metadata={
                 "provider": "dalston",
-                "job_id": job.id,
+                "job_id": str(job.id),
                 "base_url": self.base_url,
             },
         )
@@ -497,3 +550,106 @@ class DalstonTranscriber(Transcriber):
             json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False, default=str)
 
         logger.info("Transcript saved", output_path=output_path)
+
+    # =========================================================================
+    # Pending Operation Persistence (for restart resume)
+    # =========================================================================
+    #
+    # Dalston jobs run server-side and are durable across thestill restarts:
+    # once ``self._client.transcribe(...)`` returns a job id, the job will
+    # finish regardless of whether the original caller is still polling.
+    # Persisting the job id lets the next transcribe attempt for the same
+    # episode re-poll the existing job instead of submitting a duplicate
+    # (the bug that produced 3-5 orphan jobs every server restart).
+
+    def _save_pending_operation(
+        self,
+        *,
+        job_id: str,
+        audio_path: str,
+        language: Optional[str],
+        episode_id: Optional[str],
+        podcast_slug: Optional[str],
+        episode_slug: Optional[str],
+        audio_url: Optional[str],
+    ) -> None:
+        if not self.pending_ops_repository or not episode_id:
+            return
+
+        payload = {
+            "provider": "dalston",
+            "job_id": job_id,
+            "audio_path": audio_path,
+            "audio_url": audio_url,
+            "language": language,
+            "episode_id": episode_id,
+            "podcast_slug": podcast_slug,
+            "episode_slug": episode_slug,
+            "base_url": self.base_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "state": "pending",
+        }
+        try:
+            self.pending_ops_repository.create(
+                operation_id=job_id,
+                provider="dalston",
+                episode_id=episode_id,
+                payload=payload,
+            )
+            logger.debug("Saved Dalston pending operation", job_id=job_id, episode_id=episode_id)
+        except sqlite3.IntegrityError as e:
+            # ``operation_id`` collision means a previous submit already
+            # persisted this job_id — a caller-side bug we want visible at
+            # ERROR level rather than silently swallowed.
+            logger.error(
+                "Dalston pending operation already exists",
+                job_id=job_id,
+                episode_id=episode_id,
+                error=str(e),
+            )
+        except sqlite3.DatabaseError as e:
+            # Transient DB error: persistence is best-effort. We lose
+            # resume-on-restart for this job, but the live polling loop
+            # still completes normally.
+            logger.warning(
+                "Failed to persist Dalston pending operation",
+                job_id=job_id,
+                episode_id=episode_id,
+                error=str(e),
+            )
+
+    def _remove_pending_operation(self, job_id: str) -> None:
+        if not self.pending_ops_repository:
+            return
+        try:
+            self.pending_ops_repository.delete(job_id)
+        except Exception as e:
+            logger.warning("Failed to delete Dalston pending operation", job_id=job_id, error=str(e))
+
+    def _find_pending_job_id(self, episode_id: Optional[str]) -> Optional[str]:
+        """Return the most recent persisted Dalston job_id for an episode.
+
+        Returns None when persistence is unwired, no episode_id was passed
+        in (CLI/test paths that don't set ``options.episode_id``), or no
+        pending row exists.
+        """
+        if not self.pending_ops_repository or not episode_id:
+            return None
+        try:
+            ops = self.pending_ops_repository.list_by_episode(episode_id)
+        except Exception as e:
+            logger.warning("Failed to look up Dalston pending operation", episode_id=episode_id, error=str(e))
+            return None
+        # ``list_by_episode`` orders oldest-first; multiple rows would only
+        # occur if a prior bug submitted duplicate jobs — take the newest so
+        # we resume the one most likely still running.
+        dalston_ops = [op for op in ops if op.provider == "dalston"]
+        if not dalston_ops:
+            return None
+        return dalston_ops[-1].operation_id
+
+    def list_pending_operations(self) -> List[Dict[str, Any]]:
+        """All persisted Dalston job payloads. Mirrors the ElevenLabs/Google API."""
+        if not self.pending_ops_repository:
+            return []
+        return [op.payload for op in self.pending_ops_repository.list_by_provider("dalston")]

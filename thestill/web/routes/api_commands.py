@@ -539,6 +539,9 @@ class QueuedTaskWithContext(BaseModel):
     # Retry info
     retry_count: int = 0
     next_retry_at: Optional[str] = None
+    # Provider job correlation — populated for transcribe-stage tasks while a
+    # Dalston job is in flight (cleared once the transcript is persisted).
+    dalston_job_id: Optional[str] = None
 
 
 class StageWorkerStatus(BaseModel):
@@ -1085,6 +1088,19 @@ async def get_queue_tasks(
     # Get all active tasks
     tasks_by_status = state.queue_manager.get_active_tasks(include_completed=completed_limit)
 
+    # Batch-load Dalston in-flight job IDs once, keyed by episode_id. The
+    # pending row is deleted after the transcript is persisted, so this map
+    # only covers jobs that are still running on the Dalston server.
+    dalston_job_by_episode: dict[str, str] = {}
+    if state.pending_ops_repository is not None:
+        try:
+            for op in state.pending_ops_repository.list_by_provider("dalston"):
+                # ``list_by_provider`` is ordered oldest-first; the last write
+                # wins so the newest job for an episode is what we surface.
+                dalston_job_by_episode[op.episode_id] = op.operation_id
+        except Exception:
+            logger.warning("Failed to load Dalston pending operations for queue view", exc_info=True)
+
     def format_duration(seconds: Optional[int]) -> Optional[str]:
         """Format duration in seconds to human-readable string."""
         if seconds is None:
@@ -1143,6 +1159,8 @@ async def get_queue_tasks(
             duration_seconds = episode.duration
             duration_formatted = format_duration(duration_seconds)
 
+        dalston_job_id = dalston_job_by_episode.get(task.episode_id) if task.stage == TaskStage.TRANSCRIBE else None
+
         return QueuedTaskWithContext(
             task_id=task.id,
             episode_id=task.episode_id,
@@ -1163,6 +1181,7 @@ async def get_queue_tasks(
             duration_formatted=duration_formatted,
             retry_count=task.retry_count,
             next_retry_at=task.next_retry_at.isoformat() if task.next_retry_at else None,
+            dalston_job_id=dalston_job_id,
         )
 
     # Enrich all tasks

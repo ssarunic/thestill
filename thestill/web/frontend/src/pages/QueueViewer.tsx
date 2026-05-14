@@ -144,6 +144,15 @@ function TaskCard({
               </span>
             )}
           </div>
+
+          {task.dalston_job_id && (
+            <div className={`text-gray-500 ${compact ? 'mt-1 text-xs' : 'mt-2 text-xs'}`}>
+              <span className="text-gray-400">Dalston job</span>{' '}
+              <span className="font-mono text-gray-700" title={task.dalston_job_id}>
+                {task.dalston_job_id}
+              </span>
+            </div>
+          )}
         </div>
 
         {(showBumpButton || showCancelButton) && (

@@ -221,6 +221,7 @@ def create_transcriber(
             enable_diarization=config.enable_diarization,
             num_speakers=config.max_speakers,
             path_manager=effective_path_manager,
+            pending_ops_repository=pending_ops_repository,
         )
 
     if provider == "parakeet":

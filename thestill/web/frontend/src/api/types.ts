@@ -633,6 +633,10 @@ export interface QueuedTaskWithContext {
   // Retry info
   retry_count: number
   next_retry_at: string | null
+  // Dalston transcription job correlation — set while the job is in flight,
+  // cleared once the transcript is persisted. Only populated for the
+  // transcribe stage and when Dalston is the active provider.
+  dalston_job_id: string | null
 }
 
 export interface StageWorkerStatus {

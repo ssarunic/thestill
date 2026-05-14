@@ -970,7 +970,11 @@ class QueueManager:
 
             return deleted
 
-    def reset_stale_tasks(self, timeout_minutes: int = 30) -> int:
+    def reset_stale_tasks(
+        self,
+        timeout_minutes: int = 30,
+        stages: Optional[List[TaskStage]] = None,
+    ) -> int:
         """
         Reset tasks that have been processing for too long back to pending.
 
@@ -978,23 +982,28 @@ class QueueManager:
 
         Args:
             timeout_minutes: Consider tasks stale after this many minutes
+            stages: When provided, restrict the reset to these stages. Use to
+                requeue a specific stage's interrupted rows (e.g. Dalston
+                transcribe on startup) without churning unrelated stages.
 
         Returns:
             Number of tasks reset
         """
         now = datetime.utcnow().isoformat()
+        sql = """
+            UPDATE tasks
+            SET status = 'pending', started_at = NULL, updated_at = ?
+            WHERE status = 'processing'
+            AND started_at < datetime('now', '-' || ? || ' minutes')
+        """
+        params: List[Any] = [now, timeout_minutes]
+        if stages:
+            placeholders = ",".join("?" * len(stages))
+            sql += f" AND stage IN ({placeholders})"
+            params.extend(s.value for s in stages)
 
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE tasks
-                SET status = 'pending', started_at = NULL, updated_at = ?
-                WHERE status = 'processing'
-                AND started_at < datetime('now', '-' || ? || ' minutes')
-            """,
-                (now, timeout_minutes),
-            )
-
+            cursor = conn.execute(sql, params)
             reset = cursor.rowcount
             if reset > 0:
                 logger.warning(f"Reset {reset} stale tasks back to pending")

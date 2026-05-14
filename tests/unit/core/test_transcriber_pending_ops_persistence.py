@@ -179,3 +179,216 @@ class TestGooglePersistence:
         assert t._load_operation("x") is None
         t._delete_operation("x")
         assert t.list_pending_operations() == []
+
+
+# --- Dalston ------------------------------------------------------------------
+
+
+class TestDalstonPersistence:
+    """Restart-resume support — see ``DalstonTranscriber._save_pending_operation``.
+
+    Dalston jobs survive a thestill restart because they run on the Dalston
+    server. Persisting the ``job_id`` lets a follow-up transcribe attempt
+    for the same episode re-poll the existing job instead of submitting a
+    duplicate that the original watcher abandoned.
+    """
+
+    def _transcriber(self, repo):
+        from thestill.core.dalston_transcriber import DalstonTranscriber
+
+        # Avoid the SDK import in ``load_model`` — only state methods run.
+        t = DalstonTranscriber.__new__(DalstonTranscriber)
+        t.pending_ops_repository = repo
+        t.base_url = "http://localhost:8000"
+        return t
+
+    @staticmethod
+    def _save(t, job_id: str, episode_id: str | None = "ep-1") -> None:
+        t._save_pending_operation(
+            job_id=job_id,
+            audio_path=f"/{job_id}.wav",
+            language="en",
+            episode_id=episode_id,
+            podcast_slug="p",
+            episode_slug="e",
+            audio_url=None,
+        )
+
+    def test_save_creates_row_with_job_id_keyed_by_episode(self, repo):
+        t = self._transcriber(repo)
+        t._save_pending_operation(
+            job_id="dal-job-1",
+            audio_path="downsampled_audio/foo/ep.wav",
+            language="en",
+            episode_id="ep-1",
+            podcast_slug="foo",
+            episode_slug="ep-one",
+            audio_url=None,
+        )
+        op = repo.get("dal-job-1")
+        assert op is not None
+        assert op.provider == "dalston"
+        assert op.episode_id == "ep-1"
+        assert op.payload["job_id"] == "dal-job-1"
+        assert op.payload["base_url"] == "http://localhost:8000"
+
+    def test_remove_deletes_row(self, repo):
+        t = self._transcriber(repo)
+        self._save(t, "dal-1")
+        t._remove_pending_operation("dal-1")
+        assert repo.get("dal-1") is None
+
+    def test_find_pending_job_id_returns_most_recent(self, repo):
+        t = self._transcriber(repo)
+        self._save(t, "dal-old")
+        self._save(t, "dal-new")
+        # ``list_by_episode`` orders oldest-first; resume picks the newest
+        # so we don't latch onto a job that may already have been cleaned up.
+        assert t._find_pending_job_id("ep-1") == "dal-new"
+
+    def test_find_pending_job_id_returns_none_when_no_pending(self, repo):
+        t = self._transcriber(repo)
+        assert t._find_pending_job_id("ep-unknown") is None
+
+    def test_find_pending_job_id_returns_none_without_episode_id(self, repo):
+        # CLI / test paths that don't thread an episode_id through.
+        t = self._transcriber(repo)
+        self._save(t, "dal-x")
+        assert t._find_pending_job_id(None) is None
+
+    def test_find_pending_job_id_ignores_other_providers(self, repo):
+        t = self._transcriber(repo)
+        # A foreign-provider row keyed to the same episode must not be
+        # returned as a Dalston resume candidate.
+        repo.create(
+            operation_id="el-x",
+            provider="elevenlabs",
+            episode_id="ep-mixed",
+            payload={"transcription_id": "el-x"},
+        )
+        assert t._find_pending_job_id("ep-mixed") is None
+
+    def test_list_pending_operations_returns_payloads(self, repo):
+        t = self._transcriber(repo)
+        self._save(t, "a", episode_id="ep-a")
+        self._save(t, "b", episode_id="ep-b")
+        ops = t.list_pending_operations()
+        assert sorted(o["job_id"] for o in ops) == ["a", "b"]
+        assert ops[0]["provider"] == "dalston"
+
+    def test_no_repository_means_silent_no_op(self):
+        from thestill.core.dalston_transcriber import DalstonTranscriber
+
+        t = DalstonTranscriber.__new__(DalstonTranscriber)
+        t.pending_ops_repository = None
+        t.base_url = "http://localhost:8000"
+        # Save + remove + find + list must all be no-ops; legacy callers
+        # that haven't been threaded yet keep working unchanged.
+        self._save(t, "x", episode_id="ep")
+        t._remove_pending_operation("x")
+        assert t._find_pending_job_id("ep") is None
+        assert t.list_pending_operations() == []
+
+    def test_save_skipped_when_episode_id_missing(self, repo):
+        # Without an episode_id we couldn't find the row again at resume
+        # time, so persistence is a no-op rather than orphaning a row.
+        t = self._transcriber(repo)
+        self._save(t, "dal-no-ep", episode_id=None)
+        assert repo.get("dal-no-ep") is None
+
+    def test_save_swallows_duplicate_operation_id(self, repo):
+        # Duplicate operation_id is a caller bug (see
+        # ``SqlitePendingOperationsRepository.create`` docstring). The handler
+        # branches on IntegrityError to log at ERROR rather than propagate,
+        # so the live polling loop continues even when persistence collides.
+        from unittest.mock import patch
+
+        t = self._transcriber(repo)
+        self._save(t, "dal-dup")
+        with patch("thestill.core.dalston_transcriber.logger") as mock_logger:
+            self._save(t, "dal-dup")  # must not raise
+            mock_logger.error.assert_called_once()
+            assert "already exists" in mock_logger.error.call_args.args[0]
+
+
+class TestDalstonResumeBranch:
+    """Verify ``transcribe_audio`` resumes an existing job instead of resubmitting.
+
+    The bug this guards against: pre-fix, a server restart while 3-5 Dalston
+    jobs were in flight produced an equal number of duplicate jobs on the
+    next pipeline trigger. The originals would finish unwatched and their
+    transcripts would be discarded.
+    """
+
+    def test_resumes_existing_job_when_pending_op_present(self, repo, tmp_path):
+        from unittest.mock import MagicMock
+
+        from thestill.core.dalston_transcriber import DalstonTranscriber
+        from thestill.models.transcription import TranscribeOptions
+
+        # Pre-populate a pending op as if a previous run had submitted but
+        # not yet polled to completion.
+        pre_existing_job_id = "dal-resume-job"
+        episode_id = "ep-resume"
+        repo.create(
+            operation_id=pre_existing_job_id,
+            provider="dalston",
+            episode_id=episode_id,
+            payload={
+                "provider": "dalston",
+                "job_id": pre_existing_job_id,
+                "audio_path": "downsampled/ep.wav",
+                "language": "en",
+                "episode_id": episode_id,
+                "podcast_slug": "p",
+                "episode_slug": "e",
+                "audio_url": "https://example.com/audio.mp3",
+                "base_url": "http://localhost:8000",
+            },
+        )
+
+        t = DalstonTranscriber.__new__(DalstonTranscriber)
+        t.pending_ops_repository = repo
+        t.base_url = "http://localhost:8000"
+        t.api_key = None
+        t.model = None
+        t.timeout = 120.0
+        t.enable_diarization = True
+        t.num_speakers = None
+        t.language = None
+        t.path_manager = None
+
+        # Mocked Dalston client: ``transcribe`` MUST NOT be called when an
+        # in-flight job already exists for this episode. ``wait_for_completion``
+        # is called with the pre-existing job id.
+        mock_client = MagicMock()
+        mock_client.transcribe.side_effect = AssertionError(
+            "transcribe() was called despite a pending op for this episode"
+        )
+        completed_job = MagicMock()
+        completed_job.id = pre_existing_job_id
+        completed_job.transcript.text = "hello world"
+        completed_job.transcript.language = "en"
+        completed_job.transcript.segments = []
+        mock_client.wait_for_completion.return_value = completed_job
+        t._client = mock_client
+
+        # ``load_model`` would try to import the real SDK; stub it.
+        t.load_model = lambda: None  # type: ignore[assignment]
+
+        options = TranscribeOptions(
+            language="en",
+            episode_id=episode_id,
+            podcast_slug="p",
+            episode_slug="e",
+            audio_url="https://example.com/audio.mp3",
+        )
+
+        result = t.transcribe_audio(audio_path="downsampled/ep.wav", options=options)
+        assert result is not None
+        # The resume path polled the pre-existing job id, not a fresh one.
+        mock_client.wait_for_completion.assert_called_once()
+        assert mock_client.wait_for_completion.call_args.args[0] == pre_existing_job_id
+        mock_client.transcribe.assert_not_called()
+        # On success the pending row is cleared so the next attempt submits fresh.
+        assert repo.get(pre_existing_job_id) is None
