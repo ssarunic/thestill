@@ -27,7 +27,7 @@ from structlog import get_logger
 
 from ...services.narration import read_narration_header
 from ...utils.duration import format_duration
-from ..dependencies import AppState, get_app_state
+from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, paginated_response
 
 logger = get_logger(__name__)
@@ -154,7 +154,10 @@ async def get_recent_activity(
 
 
 @router.get("/narration")
-async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
+async def get_narration_dashboard(
+    state: AppState = Depends(get_app_state),
+    user=Depends(require_auth),
+) -> dict:
     """Aggregate narration runs for the dashboard tile (spec #33 Phase 5).
 
     Filesystem-driven so no schema migration: the runner writes one

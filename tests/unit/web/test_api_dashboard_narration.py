@@ -47,6 +47,7 @@ def client(mock_app_state):
     app = FastAPI()
     app.include_router(api_dashboard.router, prefix="/api/dashboard")
     app.dependency_overrides[api_dashboard.get_app_state] = lambda: mock_app_state
+    app.dependency_overrides[api_dashboard.require_auth] = lambda: MagicMock()
     return TestClient(app)
 
 
