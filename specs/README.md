@@ -58,6 +58,7 @@ describing current phase and gates.
 | 38 | [karaoke-word-highlighting](38-karaoke-word-highlighting.md) | 📝 Draft | Karaoke-style smooth-wipe word highlighting during playback; CSS gradient + rAF driver, opt-in toggle, graceful fallback when words missing; supersedes #24 |
 | 39 | [video-alternate-enclosure-player](39-video-alternate-enclosure-player.md) | 📝 Draft | Render `<podcast:alternateEnclosure>` video variants (YouTube embeds first, room for mp4/HLS later) on the Episode Detail page; audio pipeline unchanged |
 | 41 | [llm-prohibited-content-fallback](41-llm-prohibited-content-fallback.md) | 🚧 Active development | Per-batch pass-through when Gemini returns `PROHIBITED_CONTENT`; structured-output path now surfaces real `finish_reason`. Option A (per-batch model fallback to Claude / Mistral) still owed |
+| 42 | [robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md) | 📝 Draft (2026-05-21) | Post-mortem of the silent tz-naive/aware refresh outage → six named failure modes (errors-as-empty-results, checkpoint-before-durability, mixed-tz, silent fleet degradation, consistent-mock tests, parallel-path drift), enforcement plan, and PR review checklist. Phase 1 = gate ETag on success + narrow excepts + tz-aware Pydantic boundary |
 
 ## Completed
 

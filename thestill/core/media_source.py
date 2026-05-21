@@ -30,7 +30,7 @@ Benefits:
 import json
 import urllib.request
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -421,6 +421,14 @@ class RSSMediaSource(MediaSource):
             else:
                 seen_ids = {ep.external_id for ep in existing_episodes}
                 known_count = len(existing_episodes)
+
+            # episode_date from _parse_date is always tz-aware UTC, but older
+            # rows persisted a tz-naive last_processed. Coerce to UTC so the
+            # ``episode_date > last_processed`` compare below never raises
+            # TypeError — which the outer except would swallow, silently
+            # dropping every new episode in the feed.
+            if last_processed is not None and last_processed.tzinfo is None:
+                last_processed = last_processed.replace(tzinfo=timezone.utc)
 
             episodes = []
             for entry in parsed_feed.entries:
@@ -961,20 +969,26 @@ class RSSMediaSource(MediaSource):
 
     def _parse_date(self, date_tuple: Any) -> datetime:
         """
-        Parse feedparser date tuple to datetime.
+        Parse feedparser date tuple to a timezone-aware UTC datetime.
+
+        feedparser normalises ``published_parsed`` to GMT, so the struct_time
+        is always UTC. We attach ``tzinfo=utc`` rather than returning a naive
+        value: ``last_processed`` and ``pub_date`` are stored tz-aware
+        elsewhere, and a naive return here makes ``episode_date > last_processed``
+        raise ``TypeError`` mid-refresh, silently dropping every new episode.
 
         Args:
             date_tuple: Feedparser date tuple (time.struct_time or None)
 
         Returns:
-            Parsed datetime or current datetime if parsing fails
+            Parsed UTC datetime, or current UTC time if parsing fails
         """
         if date_tuple:
             try:
-                return datetime(*date_tuple[:6])
+                return datetime(*date_tuple[:6], tzinfo=timezone.utc)
             except (TypeError, ValueError):
                 pass
-        return datetime.now()
+        return datetime.now(timezone.utc)
 
     def _extract_audio_url(self, entry: Any) -> Optional[str]:
         """
