@@ -6,7 +6,7 @@ and URL validation.
 """
 
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from time import struct_time
 from unittest.mock import MagicMock, Mock, patch
@@ -215,6 +215,50 @@ class TestRSSMediaSource:
         # Should be empty since episode is already processed
         assert len(episodes) == 0
 
+    @pytest.mark.parametrize(
+        "last_processed",
+        [
+            datetime(2026, 5, 18, 7, 7, 0, tzinfo=timezone.utc),  # tz-aware (post-fbdcb29)
+            datetime(2026, 5, 18, 7, 7, 0),  # tz-naive (older rows / stale podcasts)
+        ],
+        ids=["aware", "naive"],
+    )
+    def test_fetch_episodes_mixed_tz_last_processed(self, last_processed):
+        """Regression: last_processed of either tz-awareness must not drop episodes.
+
+        feedparser yields naive struct_times, now parsed to tz-aware UTC. If
+        last_processed has the opposite awareness, ``episode_date > last_processed``
+        raised TypeError, the outer except swallowed it, and fetch_episodes
+        returned [] for the whole feed while the ETag was already advanced —
+        silently dropping every new episode (e.g. the 20VC Karpathy episode).
+        """
+        source = RSSMediaSource()
+
+        mock_entry = {
+            "title": "Brand New Episode",
+            "description": "Fresh",
+            "guid": "new-ep",
+            "published_parsed": struct_time((2026, 5, 21, 7, 7, 0, 0, 0, 0)),
+            "links": [{"type": "audio/mpeg", "href": "https://example.com/new.mp3"}],
+        }
+
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [mock_entry]
+
+        episodes = source.fetch_episodes(
+            url="https://example.com/feed.xml",
+            existing_episodes=[],
+            last_processed=last_processed,
+            max_episodes=None,
+            parsed_feed=mock_feed,
+            # >=3 known ids so the "tracking broken" fallback can't mask the bug
+            known_external_ids={"a", "b", "c"},
+        )
+
+        assert len(episodes) == 1
+        assert episodes[0].external_id == "new-ep"
+
     def test_fetch_episodes_respects_max_limit(self):
         """Test that max_episodes limit is respected."""
         source = RSSMediaSource()
@@ -306,6 +350,9 @@ class TestRSSMediaSource:
         assert parsed.hour == 12
         assert parsed.minute == 30
         assert parsed.second == 45
+        # feedparser publishes GMT; must be tz-aware UTC so comparisons with
+        # the tz-aware last_processed don't raise mid-refresh.
+        assert parsed.tzinfo == timezone.utc
 
     def test_parse_date_none(self):
         """Test date parsing with None input."""
@@ -313,9 +360,10 @@ class TestRSSMediaSource:
 
         parsed = source._parse_date(None)
 
-        # Should return current datetime
+        # Should return current UTC datetime (tz-aware)
         assert isinstance(parsed, datetime)
-        assert (datetime.now() - parsed).total_seconds() < 1
+        assert parsed.tzinfo == timezone.utc
+        assert (datetime.now(timezone.utc) - parsed).total_seconds() < 1
 
     def test_extract_audio_url_from_links(self):
         """Test audio URL extraction from entry links."""
