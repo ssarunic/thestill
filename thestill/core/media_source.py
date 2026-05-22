@@ -37,11 +37,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 import defusedxml.ElementTree as ET  # Hardened against XXE / billion-laughs attacks in untrusted RSS feeds.
 import feedparser
 import requests
+from pydantic import ValidationError
 from requests.adapters import HTTPAdapter
 from structlog import get_logger
 from urllib3.util.retry import Retry
 
 from ..models.podcast import Episode, TranscriptLink
+from ..utils.datetime_utils import ensure_utc, parse_struct_time_utc
 from ..utils.duration import parse_duration
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
@@ -401,37 +403,42 @@ class RSSMediaSource(MediaSource):
         Returns:
             List of new Episode objects from the feed
         """
-        try:
+        if parsed_feed is None:
+            # Fetch raw RSS content and optionally save for debugging
+            fetch_result = self.fetch_rss_content(url, podcast_slug)
+            rss_content = fetch_result.content
+            if rss_content is None:
+                logger.warning("Failed to fetch RSS feed", url=url)
+                return []
+
+            parsed_feed = self.parse_rss(rss_content, url)
             if parsed_feed is None:
-                # Fetch raw RSS content and optionally save for debugging
-                fetch_result = self.fetch_rss_content(url, podcast_slug)
-                rss_content = fetch_result.content
-                if rss_content is None:
-                    logger.warning(f"Failed to fetch RSS feed: {url}")
-                    return []
+                logger.warning("Invalid RSS feed during episode fetch", url=url)
+                return []
 
-                parsed_feed = self.parse_rss(rss_content, url)
-                if parsed_feed is None:
-                    logger.warning(f"Invalid RSS feed during episode fetch: {url}")
-                    return []
+        if known_external_ids is not None:
+            seen_ids = known_external_ids
+            known_count = len(known_external_ids)
+        else:
+            seen_ids = {ep.external_id for ep in existing_episodes}
+            known_count = len(existing_episodes)
 
-            if known_external_ids is not None:
-                seen_ids = known_external_ids
-                known_count = len(known_external_ids)
-            else:
-                seen_ids = {ep.external_id for ep in existing_episodes}
-                known_count = len(existing_episodes)
+        # episode_date from _parse_date is always tz-aware UTC, but older
+        # rows persisted a tz-naive last_processed. Coerce to UTC so the
+        # ``episode_date > last_processed`` compare below never raises
+        # TypeError — the bug that, swallowed by a broad except, silently
+        # dropped every new episode in the feed (spec #42, FM-3).
+        last_processed = ensure_utc(last_processed)
 
-            # episode_date from _parse_date is always tz-aware UTC, but older
-            # rows persisted a tz-naive last_processed. Coerce to UTC so the
-            # ``episode_date > last_processed`` compare below never raises
-            # TypeError — which the outer except would swallow, silently
-            # dropping every new episode in the feed.
-            if last_processed is not None and last_processed.tzinfo is None:
-                last_processed = last_processed.replace(tzinfo=timezone.utc)
-
-            episodes = []
-            for entry in parsed_feed.entries:
+        # FM-1: this loop no longer hides behind a broad ``except Exception:
+        # return []``. A malformed *entry* is skipped + counted (one bad item
+        # must not blank the whole feed); a *programming* error
+        # (TypeError/AttributeError/KeyError) propagates so the refresh marks
+        # the podcast errored instead of laundering a crash into "0 new".
+        episodes = []
+        entries_skipped = 0
+        for entry in parsed_feed.entries:
+            try:
                 episode_date = self._parse_date(entry.get("published_parsed"))
                 episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
@@ -446,59 +453,77 @@ class RSSMediaSource(MediaSource):
                     last_processed is None or episode_date > last_processed or known_count < 3
                 )  # Assume most feeds have >3 episodes
 
-                if should_include:
-                    audio_url, audio_file_size, audio_mime_type = self._extract_enclosure_info(entry)
-                    if audio_url:
-                        description, description_html = self._extract_descriptions(entry)
+                if not should_include:
+                    continue
 
-                        # THES-143: Extract explicit flag
-                        explicit = self._parse_explicit_flag(getattr(entry, "itunes_explicit", None))
+                audio_url, audio_file_size, audio_mime_type = self._extract_enclosure_info(entry)
+                if not audio_url:
+                    continue
 
-                        # THES-143: Extract episode type (full, trailer, bonus)
-                        episode_type = None
-                        itunes_episode_type = getattr(entry, "itunes_episodetype", None)
-                        if itunes_episode_type and itunes_episode_type.lower() in ("full", "trailer", "bonus"):
-                            episode_type = itunes_episode_type.lower()
+                description, description_html = self._extract_descriptions(entry)
 
-                        # THES-144: Extract episode and season numbers
-                        episode_number = self._parse_int_field(getattr(entry, "itunes_episode", None))
-                        season_number = self._parse_int_field(getattr(entry, "itunes_season", None))
+                # THES-143: Extract explicit flag
+                explicit = self._parse_explicit_flag(getattr(entry, "itunes_explicit", None))
 
-                        # THES-144: Extract episode website URL
-                        website_url = entry.get("link")
+                # THES-143: Extract episode type (full, trailer, bonus)
+                episode_type = None
+                itunes_episode_type = getattr(entry, "itunes_episodetype", None)
+                if itunes_episode_type and itunes_episode_type.lower() in ("full", "trailer", "bonus"):
+                    episode_type = itunes_episode_type.lower()
 
-                        episode = Episode(
-                            title=entry.get("title", "Unknown Episode"),
-                            description=description,
-                            description_html=description_html,
-                            pub_date=episode_date,
-                            audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
-                            duration=parse_duration(entry.get("itunes_duration")),
-                            external_id=episode_external_id,
-                            image_url=self._extract_episode_image(entry),
-                            # THES-143: Essential metadata
-                            explicit=explicit,
-                            episode_type=episode_type,
-                            # THES-144: Episode organization
-                            episode_number=episode_number,
-                            season_number=season_number,
-                            website_url=website_url,
-                            # THES-145: Enclosure metadata
-                            audio_file_size=audio_file_size,
-                            audio_mime_type=audio_mime_type,
-                        )
-                        episodes.append(episode)
+                # THES-144: Extract episode and season numbers
+                episode_number = self._parse_int_field(getattr(entry, "itunes_episode", None))
+                season_number = self._parse_int_field(getattr(entry, "itunes_season", None))
 
-            # Apply max_episodes limit if set
-            if episodes and max_episodes:
-                episodes.sort(key=lambda e: e.pub_date or datetime.min, reverse=True)
-                episodes = episodes[:max_episodes]
+                # THES-144: Extract episode website URL
+                website_url = entry.get("link")
 
-            return episodes
+                episode = Episode(
+                    title=entry.get("title", "Unknown Episode"),
+                    description=description,
+                    description_html=description_html,
+                    pub_date=episode_date,
+                    audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
+                    duration=parse_duration(entry.get("itunes_duration")),
+                    external_id=episode_external_id,
+                    image_url=self._extract_episode_image(entry),
+                    # THES-143: Essential metadata
+                    explicit=explicit,
+                    episode_type=episode_type,
+                    # THES-144: Episode organization
+                    episode_number=episode_number,
+                    season_number=season_number,
+                    website_url=website_url,
+                    # THES-145: Enclosure metadata
+                    audio_file_size=audio_file_size,
+                    audio_mime_type=audio_mime_type,
+                )
+                episodes.append(episode)
+            except (ValidationError, ValueError) as entry_error:
+                entries_skipped += 1
+                logger.warning(
+                    "Skipping malformed feed entry",
+                    url=url,
+                    entry_id=entry.get("guid", entry.get("id", "unknown")),
+                    error=str(entry_error),
+                )
+                continue
 
-        except Exception as e:
-            logger.error(f"Error fetching episodes from RSS feed {url}: {e}")
-            return []
+        if entries_skipped:
+            logger.warning(
+                "Feed entries skipped during fetch",
+                url=url,
+                entries_skipped=entries_skipped,
+            )
+
+        # Apply max_episodes limit if set. pub_date is tz-aware (Episode
+        # validator); keep the None-fallback tz-aware too so the sort never
+        # mixes naive/aware datetimes.
+        if episodes and max_episodes:
+            episodes.sort(key=lambda e: e.pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            episodes = episodes[:max_episodes]
+
+        return episodes
 
     def download_episode(self, episode: Episode, podcast_title: str, storage_path: str) -> Optional[str]:
         """
@@ -968,27 +993,8 @@ class RSSMediaSource(MediaSource):
             return None
 
     def _parse_date(self, date_tuple: Any) -> datetime:
-        """
-        Parse feedparser date tuple to a timezone-aware UTC datetime.
-
-        feedparser normalises ``published_parsed`` to GMT, so the struct_time
-        is always UTC. We attach ``tzinfo=utc`` rather than returning a naive
-        value: ``last_processed`` and ``pub_date`` are stored tz-aware
-        elsewhere, and a naive return here makes ``episode_date > last_processed``
-        raise ``TypeError`` mid-refresh, silently dropping every new episode.
-
-        Args:
-            date_tuple: Feedparser date tuple (time.struct_time or None)
-
-        Returns:
-            Parsed UTC datetime, or current UTC time if parsing fails
-        """
-        if date_tuple:
-            try:
-                return datetime(*date_tuple[:6], tzinfo=timezone.utc)
-            except (TypeError, ValueError):
-                pass
-        return datetime.now(timezone.utc)
+        """Parse a feedparser date tuple to tz-aware UTC (see ``parse_struct_time_utc``)."""
+        return parse_struct_time_utc(date_tuple)
 
     def _extract_audio_url(self, entry: Any) -> Optional[str]:
         """

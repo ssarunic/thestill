@@ -51,6 +51,8 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from structlog import get_logger
 
+from ..utils.datetime_utils import now_utc
+
 logger = get_logger(__name__)
 
 
@@ -600,7 +602,7 @@ class QueueManager:
             The created Task object
         """
         task_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
         metadata = metadata or {}
         max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
         metadata_json = json.dumps(metadata) if metadata else None
@@ -651,7 +653,7 @@ class QueueManager:
             Task if one is available, None otherwise
         """
         with self._get_connection() as conn:
-            now = datetime.utcnow().isoformat()
+            now = now_utc().isoformat()
 
             # SQLite doesn't have UPDATE...RETURNING, so we use a transaction
             # with immediate locking to prevent race conditions
@@ -736,7 +738,7 @@ class QueueManager:
         Args:
             task_id: ID of the task to complete
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         def _write() -> None:
             with self._get_connection() as conn:
@@ -772,7 +774,7 @@ class QueueManager:
         in_branch = _stages_at_or_before(completed_stage)
         if not in_branch:
             return 0
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
         placeholders = ",".join("?" * len(in_branch))
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -803,7 +805,7 @@ class QueueManager:
             task_id: ID of the task that failed
             error_message: Error description
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             conn.execute(
@@ -907,7 +909,7 @@ class QueueManager:
         peer workers actively running the same handler, and ``retry_scheduled``
         rows are waiting on backoff and may yet succeed on their own.
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
@@ -982,7 +984,7 @@ class QueueManager:
         Returns:
             Number of tasks reset
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -1020,7 +1022,7 @@ class QueueManager:
         Returns:
             Number of tasks marked as failed
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
         excluded_stages = excluded_stages or []
 
         with self._get_connection() as conn:
@@ -1073,7 +1075,7 @@ class QueueManager:
         Returns:
             Updated Task object, or None if task not found
         """
-        now = datetime.utcnow()
+        now = now_utc()
         now_iso = now.isoformat()
 
         def _write() -> None:
@@ -1150,7 +1152,7 @@ class QueueManager:
         Returns:
             Updated Task object, or None if task not found
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -1215,7 +1217,7 @@ class QueueManager:
         Returns:
             Updated Task object, or None if task not found or not in terminal state
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -1255,7 +1257,7 @@ class QueueManager:
         Returns:
             Updated Task object, or None if task not found or not in retry_scheduled status
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -1287,7 +1289,7 @@ class QueueManager:
         Returns:
             True if the task was bumped, False if not found or not pending
         """
-        now = datetime.utcnow().isoformat()
+        now = now_utc().isoformat()
 
         with self._get_connection() as conn:
             # Get max current priority among pending tasks

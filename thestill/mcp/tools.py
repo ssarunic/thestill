@@ -47,6 +47,7 @@ from ..services import (
 )
 from ..services.auth_service import AuthService
 from ..utils.config import load_config
+from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
@@ -1600,7 +1601,7 @@ def setup_tools(server: Server, storage_path: str):
                 processing_time = time.time() - start_time
 
                 # Write digest file (store just filename since it's in default digests directory)
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                timestamp = now_utc().strftime("%Y-%m-%d_%H%M%S")
                 digest_filename = f"digest_{timestamp}.md"
                 output_path = path_manager.digest_file(digest_filename)
                 digest_generator.write(digest_content, output_path)

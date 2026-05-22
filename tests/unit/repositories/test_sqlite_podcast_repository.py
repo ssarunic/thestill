@@ -18,7 +18,8 @@ Unit tests for SQLite podcast repository.
 Tests the same contract as JsonPodcastRepository to ensure compatibility.
 """
 
-from datetime import datetime
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,48 @@ def test_save_and_find_podcast(temp_db, sample_podcast):
     assert found.id == "550e8400-e29b-41d4-a716-446655440000"
     assert found.title == "Test Podcast"
     assert found.description == "Test description"
+
+
+def test_last_processed_round_trips_tz_aware(temp_db, sample_podcast):
+    """FM-3/FM-5: last_processed survives a repository round-trip tz-aware."""
+    sample_podcast.last_processed = datetime(2026, 5, 18, 7, 7, 0, tzinfo=timezone.utc)
+    temp_db.save(sample_podcast)
+
+    found = temp_db.get_by_url("https://example.com/feed.xml")
+
+    assert found.last_processed is not None
+    assert found.last_processed.tzinfo is not None
+    assert found.last_processed == datetime(2026, 5, 18, 7, 7, 0, tzinfo=timezone.utc)
+
+
+def test_legacy_naive_last_processed_normalised_on_load(temp_db, sample_podcast):
+    """FM-5: a naive timestamp written by pre-fix code is normalised on read.
+
+    This is the production shape the unit-test mocks missed: the DB held a
+    tz-naive ``last_processed`` string. Reading it back must yield a tz-aware
+    value so the next refresh's ``episode_date > last_processed`` compare
+    cannot raise the TypeError that silently stopped discovery.
+    """
+    temp_db.save(sample_podcast)
+
+    # Simulate a pre-fix naive value already persisted (no +00:00 offset).
+    # Use the repository's own db path so this can't drift from the fixture.
+    conn = sqlite3.connect(str(temp_db.db_path))
+    try:
+        conn.execute(
+            "UPDATE podcasts SET last_processed = ? WHERE rss_url = ?",
+            ("2026-05-18T07:07:00", "https://example.com/feed.xml"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    found = temp_db.get_by_url("https://example.com/feed.xml")
+
+    assert found.last_processed is not None
+    assert found.last_processed.tzinfo is not None
+    # A tz-aware episode date can now be compared without raising.
+    assert datetime(2026, 5, 21, tzinfo=timezone.utc) > found.last_processed
 
 
 def test_save_upsert_updates_existing(temp_db, sample_podcast):

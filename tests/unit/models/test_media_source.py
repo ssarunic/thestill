@@ -259,6 +259,73 @@ class TestRSSMediaSource:
         assert len(episodes) == 1
         assert episodes[0].external_id == "new-ep"
 
+    def test_fetch_episodes_programming_error_propagates(self):
+        """FM-1: a programming error must propagate, not become an empty list.
+
+        The incident's root cause was a ``TypeError`` swallowed by a broad
+        ``except Exception: return []`` — a crash laundered into "0 new
+        episodes". A programming error must now escape ``fetch_episodes`` so
+        the refresh marks the podcast errored (and skips advancing its cache
+        headers) instead of certifying a silent success.
+        """
+        source = RSSMediaSource()
+
+        mock_entry = {
+            "title": "Episode",
+            "guid": "ep-1",
+            "published_parsed": struct_time((2026, 5, 21, 7, 7, 0, 0, 0, 0)),
+            "links": [{"type": "audio/mpeg", "href": "https://example.com/ep.mp3"}],
+        }
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [mock_entry]
+
+        with patch.object(source, "_extract_enclosure_info", side_effect=TypeError("boom")):
+            with pytest.raises(TypeError):
+                source.fetch_episodes(
+                    url="https://example.com/feed.xml",
+                    existing_episodes=[],
+                    last_processed=None,
+                    parsed_feed=mock_feed,
+                    known_external_ids={"a", "b", "c"},
+                )
+
+    def test_fetch_episodes_skips_malformed_entry(self):
+        """FM-1: one bad entry is skipped, not allowed to blank the feed.
+
+        A per-entry failure (here an invalid enclosure URL that fails
+        ``Episode`` validation) must skip+count that entry while the rest of
+        the feed is still discovered — the opposite of the old all-or-nothing
+        behaviour.
+        """
+        source = RSSMediaSource()
+
+        good_entry = {
+            "title": "Good Episode",
+            "guid": "good",
+            "published_parsed": struct_time((2026, 5, 21, 7, 7, 0, 0, 0, 0)),
+            "links": [{"type": "audio/mpeg", "href": "https://example.com/good.mp3"}],
+        }
+        bad_entry = {
+            "title": "Bad Episode",
+            "guid": "bad",
+            "published_parsed": struct_time((2026, 5, 20, 7, 7, 0, 0, 0, 0)),
+            "links": [{"type": "audio/mpeg", "href": "not-a-valid-url"}],
+        }
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [good_entry, bad_entry]
+
+        episodes = source.fetch_episodes(
+            url="https://example.com/feed.xml",
+            existing_episodes=[],
+            last_processed=None,
+            parsed_feed=mock_feed,
+            known_external_ids={"a", "b", "c"},
+        )
+
+        assert [e.external_id for e in episodes] == ["good"]
+
     def test_fetch_episodes_respects_max_limit(self):
         """Test that max_episodes limit is respected."""
         source = RSSMediaSource()

@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ..repositories.podcast_repository import PodcastRepository
+from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
@@ -178,7 +179,7 @@ class StatsService:
             embedding_model=embedding_model,
             episodes_skipped_legacy=episodes_skipped_legacy,
             storage_path=str(self.storage_path),
-            last_updated=datetime.now(),
+            last_updated=now_utc(),
         )
 
         logger.info(
