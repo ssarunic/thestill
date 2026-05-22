@@ -790,6 +790,48 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: resolution_blacklist created")
 
+        # spec #45 — entity_enrichment: Tier-0 display data (photo/logo,
+        # vital stats, Wikipedia lead, cross-links) fetched from Wikidata
+        # + Wikipedia, keyed 1:1 by entity_id. Kept in its own table (not
+        # on ``entities``) so it survives an entity reindex — the reindex
+        # only wipes per-episode mentions, never this. Per-source status +
+        # ``retry_after`` keep a transient outage from being cached as
+        # "no data" (spec #42 FM-1).
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entity_enrichment'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating entity_enrichment table")
+            conn.executescript(
+                """
+                CREATE TABLE entity_enrichment (
+                    entity_id            TEXT PRIMARY KEY NOT NULL
+                                         REFERENCES entities(id) ON DELETE CASCADE,
+                    image_url            TEXT NULL,
+                    image_attribution    TEXT NULL,
+                    image_license        TEXT NULL,
+                    headline             TEXT NULL,
+                    wikipedia_extract    TEXT NULL,
+                    wikipedia_url        TEXT NULL,
+                    facts_json           TEXT NOT NULL DEFAULT '[]',
+                    affiliations_json    TEXT NOT NULL DEFAULT '[]',
+                    wikidata_status      TEXT NOT NULL DEFAULT 'pending',
+                    wikidata_fetched_at  TIMESTAMP NULL,
+                    wikipedia_status     TEXT NOT NULL DEFAULT 'pending',
+                    wikipedia_fetched_at TIMESTAMP NULL,
+                    retry_after          TIMESTAMP NULL,
+                    schema_version       INTEGER NOT NULL DEFAULT 1,
+                    created_at           TIMESTAMP NOT NULL
+                                         DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    updated_at           TIMESTAMP NOT NULL
+                                         DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    CHECK (wikidata_status IN ('pending','ok','empty','failed')),
+                    CHECK (wikipedia_status IN ('pending','ok','empty','failed'))
+                );
+                CREATE INDEX idx_enrichment_status
+                    ON entity_enrichment(wikidata_status, wikipedia_status);
+                """
+            )
+            logger.info("Migration complete: entity_enrichment created")
+
         # spec #28 §2.10 — chunks + chunks_vec + chunks_fts enable
         # corpus semantic + lexical search via sqlite-vec virtual tables.
         # The guard checks ``chunks_vec`` (the last and extension-

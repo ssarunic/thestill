@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
+from ...models.enrichment import EntityAffiliation, EntityFact
 from ..dependencies import AppState, get_app_state
 
 logger = get_logger(__name__)
@@ -205,6 +206,37 @@ class GuestEpisodeRef(BaseModel):
     published_at: Optional[str] = None
 
 
+class EntityEnrichmentWire(BaseModel):
+    """Spec #45 Tier 0 — Wikidata/Wikipedia display data for the entity page.
+
+    A projection of the domain :class:`EntityEnrichment` that drops the
+    provenance fields (status/timestamps/retry_after) the frontend doesn't
+    need. ``facts`` / ``affiliations`` reuse the domain models verbatim —
+    they carry no server-only fields, so a separate wire type would just be
+    a maintenance hazard. Omitted (``enrichment: null``) when the entity has
+    no QID or hasn't been enriched yet; the frontend degrades to the base
+    layout.
+    """
+
+    image_url: Optional[str] = None
+    image_attribution: Optional[str] = None
+    image_license: Optional[str] = None
+    headline: Optional[str] = None
+    wikipedia_extract: Optional[str] = None
+    wikipedia_url: Optional[str] = None
+    facts: List[EntityFact] = []
+    affiliations: List[EntityAffiliation] = []
+
+
+class MostDiscussedRef(BaseModel):
+    """Spec #45 — a podcast ranked by how often it mentions this entity."""
+
+    podcast_id: str
+    podcast_slug: Optional[str] = None
+    podcast_title: str
+    mention_count: int
+
+
 class EntitySummaryResponse(BaseModel):
     entity: EntityRef
     aliases: List[str]
@@ -218,6 +250,10 @@ class EntitySummaryResponse(BaseModel):
     hosts_podcasts: List[HostedPodcastRef] = []
     recurring_podcasts: List[HostedPodcastRef] = []
     guest_episodes: List[GuestEpisodeRef] = []
+    # Spec #45 — Tier-0 enrichment + "most discussed on". Both optional so
+    # the page renders unchanged for un-enriched entities.
+    most_discussed_on: List[MostDiscussedRef] = []
+    enrichment: Optional[EntityEnrichmentWire] = None
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +516,33 @@ def get_entity_summary(
         for row in summary.get("guest_episodes", [])
     ]
 
+    most_discussed_on = [
+        MostDiscussedRef(
+            podcast_id=row["podcast_id"],
+            podcast_slug=row.get("podcast_slug"),
+            podcast_title=row["podcast_title"],
+            mention_count=row["mention_count"],
+        )
+        for row in summary.get("most_discussed_on", [])
+    ]
+
+    # Spec #45 — surface Tier-0 enrichment only when it has something to
+    # show. ``has_content`` keeps a row that exists purely as a "failed"/
+    # "empty" provenance marker from rendering an empty hero.
+    enrichment_obj = summary.get("enrichment")
+    enrichment_wire: Optional[EntityEnrichmentWire] = None
+    if enrichment_obj is not None and enrichment_obj.has_content():
+        enrichment_wire = EntityEnrichmentWire(
+            image_url=enrichment_obj.image_url,
+            image_attribution=enrichment_obj.image_attribution,
+            image_license=enrichment_obj.image_license,
+            headline=enrichment_obj.headline,
+            wikipedia_extract=enrichment_obj.wikipedia_extract,
+            wikipedia_url=enrichment_obj.wikipedia_url,
+            facts=enrichment_obj.facts,
+            affiliations=enrichment_obj.affiliations,
+        )
+
     return EntitySummaryResponse(
         entity=entity_ref,
         aliases=entity_record.aliases,
@@ -490,4 +553,6 @@ def get_entity_summary(
         hosts_podcasts=hosts_podcasts,
         recurring_podcasts=recurring_podcasts,
         guest_episodes=guest_episodes,
+        most_discussed_on=most_discussed_on,
+        enrichment=enrichment_wire,
     )

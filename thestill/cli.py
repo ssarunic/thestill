@@ -3480,6 +3480,134 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, dry_run):
     )
 
 
+def _upsert_enrichment_with_retry(repo, enrichment, *, attempts: int = 4, base_delay: float = 0.5) -> None:
+    """Persist enrichment, retrying briefly on a transient SQLite write lock.
+
+    A bulk ``enrich-entities`` run competes with the live web server for
+    SQLite's single writer; ``busy_timeout`` covers short waits, but a
+    longer hold surfaces as ``database is locked``. Back off and retry a
+    few times so one lock doesn't drop the entity. If it still can't write,
+    the exception propagates to the per-entity guard (skip + retry next run).
+    """
+    for attempt in range(attempts):
+        try:
+            repo.upsert_enrichment(enrichment)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(base_delay * (2**attempt))
+
+
+@main.command("enrich-entities")
+@click.option("--entity-id", help="Enrich a single entity by id (e.g. person:elon-musk)")
+@click.option("--episode-id", help="Scope to entities mentioned in this episode")
+@click.option("--podcast-id", help="Scope to entities mentioned in this podcast (index, slug, or RSS URL)")
+@click.option("--max-entities", "-m", "max_entities", type=int, help="Cap the number of entities to process")
+@click.option("--force", is_flag=True, help="Re-fetch even fresh entities (ignore staleness gating)")
+@click.option("--dry-run", "-d", is_flag=True, help="List what would be enriched without fetching or writing")
+@click.pass_context
+@require_config
+@log_command
+def enrich_entities(ctx, entity_id, episode_id, podcast_id, max_entities, force, dry_run):
+    """Spec #45 Tier 0 — fetch Wikidata + Wikipedia facts for resolved entities.
+
+    Walks resolved entities carrying a ``wikidata_qid`` and populates the
+    entity page's hero photo/logo, headline, vital stats, Wikipedia lead,
+    and founder/CEO cross-links. Additive and best-effort: a source that
+    fails is recorded and retried on a later run, never cached as "no
+    data". Scope with ``--episode-id`` / ``--podcast-id`` to test on a
+    slice before running corpus-wide; ``--force`` re-fetches everything.
+    """
+    from .core.entity_enricher import ENRICHMENT_SCHEMA_VERSION, EntityEnricher
+    from .core.wikidata_client import WikidataClient
+    from .core.wikipedia_client import WikipediaClient
+    from .models.enrichment import EnrichmentStatus
+
+    config = ctx.obj.config
+    repo = ctx.obj.entity_repository
+
+    resolved_podcast_id = None
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        resolved_podcast_id = podcast.id
+
+    entity_ids = repo.entity_ids_needing_enrichment(
+        entity_id=entity_id,
+        episode_id=episode_id,
+        podcast_id=resolved_podcast_id,
+        limit=max_entities,
+        max_age_days=config.enrichment_max_age_days,
+        schema_version=ENRICHMENT_SCHEMA_VERSION,
+        force=force,
+    )
+    if not entity_ids:
+        click.echo("No resolved entities with QIDs need enrichment.")
+        return
+
+    if dry_run:
+        click.echo(f"Would enrich {len(entity_ids)} entit(y/ies):")
+        for eid in entity_ids:
+            ent = repo.get_entity(eid)
+            if ent:
+                click.echo(f"  {ent.id}  (QID={ent.wikidata_qid})")
+        return
+
+    click.echo(f"Enriching {len(entity_ids)} entit(y/ies) from Wikidata + Wikipedia…")
+    wikidata = WikidataClient(user_agent=config.enrichment_user_agent)
+    wikipedia = WikipediaClient(user_agent=config.enrichment_user_agent)
+    enricher = EntityEnricher(
+        wikidata_client=wikidata,
+        wikipedia_client=wikipedia,
+        find_entity_by_qid=repo.find_entity_by_qid,
+        language=config.enrichment_wikipedia_lang,
+    )
+
+    enriched = 0
+    empty = 0
+    failed = 0
+    errored = 0
+    for eid in entity_ids:
+        entity = repo.get_entity(eid)
+        if entity is None or not entity.wikidata_qid:
+            continue
+        try:
+            enrichment = enricher.enrich(entity)
+            _upsert_enrichment_with_retry(repo, enrichment)
+        except Exception as exc:  # noqa: BLE001
+            # Spec #42 FM-1: a single entity's error (a transient SQLite
+            # write lock under a live server, an unexpected payload) must
+            # NOT abort a multi-thousand-entity batch. Skip + count + carry
+            # on; the entity stays un-enriched so the next run retries it.
+            errored += 1
+            click.echo(f"  ✗ {eid}  ({exc})", err=True)
+            continue
+        if EnrichmentStatus.FAILED in (enrichment.wikidata_status, enrichment.wikipedia_status):
+            failed += 1
+            marker = "⚠"
+        elif enrichment.has_content():
+            enriched += 1
+            marker = "✓"
+        else:
+            empty += 1
+            marker = "·"
+        click.echo(f"  {marker} {entity.id}")
+        if config.enrichment_request_delay_sec > 0:
+            time.sleep(config.enrichment_request_delay_sec)
+
+    click.echo(
+        f"\n🎉 enrich-entities: {enriched} enriched, {empty} with no data, "
+        f"{failed} source-failed, {errored} errored (all retry on the next run)."
+    )
+    # Spec #42 FM-4: source failures / per-entity errors must be visible —
+    # exit non-zero so a scheduled run surfaces them.
+    if failed > 0 or errored > 0:
+        ctx.exit(1)
+
+
 @main.command("merge-aliases")
 @click.option(
     "--levenshtein-threshold",

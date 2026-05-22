@@ -1146,6 +1146,39 @@ export interface GuestEpisodeRef {
   published_at: string | null
 }
 
+// Spec #45 Tier 0 — Wikidata/Wikipedia enrichment surfaced on the entity page.
+export interface EntityFact {
+  label: string
+  value: string
+  url?: string | null
+}
+
+export interface EntityAffiliation {
+  qid?: string | null
+  label: string
+  relation: string
+  entity_id?: string | null
+  entity_type?: EntityType | null
+}
+
+export interface EntityEnrichment {
+  image_url?: string | null
+  image_attribution?: string | null
+  image_license?: string | null
+  headline?: string | null
+  wikipedia_extract?: string | null
+  wikipedia_url?: string | null
+  facts: EntityFact[]
+  affiliations: EntityAffiliation[]
+}
+
+export interface MostDiscussedRef {
+  podcast_id: string
+  podcast_slug: string | null
+  podcast_title: string
+  mention_count: number
+}
+
 export interface EntitySummaryResponse {
   entity: EntityRef
   aliases: string[]
@@ -1156,6 +1189,9 @@ export interface EntitySummaryResponse {
   hosts_podcasts: HostedPodcastRef[]
   recurring_podcasts: HostedPodcastRef[]
   guest_episodes: GuestEpisodeRef[]
+  // Spec #45 — optional; older responses / un-enriched entities omit these.
+  most_discussed_on?: MostDiscussedRef[]
+  enrichment?: EntityEnrichment | null
 }
 
 // ============================================================================
