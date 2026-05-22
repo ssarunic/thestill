@@ -48,6 +48,8 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
+from ..utils.datetime_utils import now_utc
+
 logger = get_logger(__name__)
 
 
@@ -135,7 +137,7 @@ class TaskManager:
             task = Task(
                 task_type=task_type,
                 status=TaskStatus.RUNNING,
-                started_at=datetime.utcnow(),
+                started_at=now_utc(),
                 message=message or f"Starting {task_type.value}...",
             )
             self._tasks[task_type] = task
@@ -172,7 +174,7 @@ class TaskManager:
             task = self._tasks.get(task_type)
             if task:
                 task.status = TaskStatus.COMPLETED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = now_utc()
                 task.progress = 100
                 task.result = result
                 task.message = message or f"{task_type.value} completed successfully"
@@ -190,7 +192,7 @@ class TaskManager:
             task = self._tasks.get(task_type)
             if task:
                 task.status = TaskStatus.FAILED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = now_utc()
                 task.error = error
                 task.message = f"{task_type.value} failed: {error}"
                 logger.error(f"Failed task: {task_type.value} - {error}")

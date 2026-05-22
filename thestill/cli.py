@@ -16,7 +16,7 @@ import functools
 import json
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -32,7 +32,7 @@ from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_e
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
-from .core.llm_provider import create_llm_provider, create_llm_provider_from_config
+from .core.llm_provider import create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .logging import configure_structlog
 from .models.digest import Digest, DigestStatus
@@ -59,6 +59,7 @@ from .utils.cli_formatter import CLIFormatter
 from .utils.cli_logging import log_command
 from .utils.config import load_config
 from .utils.console import ConsoleOutput
+from .utils.datetime_utils import ensure_utc, now_utc
 from .utils.duration import (
     format_duration,
     format_speed_stats,
@@ -331,22 +332,32 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
             click.echo(f"✓ No new episodes found for podcast: {result.podcast_filter_applied}")
         else:
             click.echo("✓ No new episodes found")
-        return
+    else:
+        click.echo(f"📡 Found {result.total_episodes} new episode(s)")
 
-    click.echo(f"📡 Found {result.total_episodes} new episode(s)")
+        # Display episode names grouped by podcast
+        for podcast, episodes in result.episodes_by_podcast:
+            click.echo(f"\n📻 {podcast.title}")
+            for episode in episodes:
+                click.echo(f"  • {episode.title}")
 
-    # Display episode names grouped by podcast
-    for podcast, episodes in result.episodes_by_podcast:
-        click.echo(f"\n📻 {podcast.title}")
-        for episode in episodes:
-            click.echo(f"  • {episode.title}")
+        if dry_run:
+            click.echo("\n(Run without --dry-run to update feeds.json)")
+        else:
+            click.echo(f"\n✅ Refresh complete! Discovered {result.total_episodes} new episode(s)")
+            click.echo("💡 Next step: Run 'thestill download' to download audio files")
 
-    if dry_run:
-        click.echo("\n(Run without --dry-run to update feeds.json)")
-        return
-
-    click.echo(f"\n✅ Refresh complete! Discovered {result.total_episodes} new episode(s)")
-    click.echo("💡 Next step: Run 'thestill download' to download audio files")
+    # FM-4: a feed that errored is a silent-fleet signal. "0 new episodes"
+    # used to be indistinguishable from "every feed crashed". Make it loud
+    # and exit non-zero so cron/CI treats feeds going quiet as a failure.
+    if result.podcasts_with_errors:
+        click.echo(
+            f"\n⚠️  {result.podcasts_with_errors} feed(s) errored during refresh — see logs "
+            "(event=feed_refresh_summary, had_error=true). Their cache headers were not "
+            "advanced, so the next refresh retries them.",
+            err=True,
+        )
+        ctx.exit(1)
 
 
 @main.command()
@@ -994,7 +1005,6 @@ def facts_extract(ctx, podcast_id, episode_id, force):
 
     from .core.facts_extractor import FactsExtractor
     from .core.facts_manager import FactsManager
-    from .core.llm_provider import create_llm_provider
     from .utils.slug import generate_slug
 
     config = ctx.obj.config
@@ -1234,7 +1244,7 @@ def status(ctx):
             if pending_ops:
                 click.echo("\n⏳ Pending Transcription Operations:")
                 for op in pending_ops:
-                    age_hours = (datetime.now() - op.created_at).total_seconds() / 3600
+                    age_hours = (now_utc() - ensure_utc(op.created_at)).total_seconds() / 3600
                     click.echo(f"   • {op.podcast_slug}/{op.episode_slug}")
                     click.echo(f"     Started: {age_hours:.1f} hours ago")
                     click.echo(f"     Operation: {op.operation_id[:16]}...")
@@ -2216,6 +2226,15 @@ def digest(
                 click.echo(f"📡 Discovered {result.total_episodes} new episode(s)")
             else:
                 click.echo("✓ No new episodes discovered")
+            # FM-4: surface feeds that errored so a silent-fleet event is
+            # visible in the briefing run (digest still proceeds on existing
+            # episodes — it does not abort like `thestill refresh`).
+            if result.podcasts_with_errors:
+                click.echo(
+                    f"⚠️  {result.podcasts_with_errors} feed(s) errored during refresh — see logs "
+                    "(event=feed_refresh_summary, had_error=true).",
+                    err=True,
+                )
         except Exception as e:
             click.echo(f"⚠️  Feed refresh failed: {e}", err=True)
             # Continue anyway - we can still process existing episodes
@@ -2324,7 +2343,7 @@ def digest(
             digest_model = Digest(
                 user_id=default_user.id,
                 period_start=criteria.date_from,
-                period_end=datetime.now(timezone.utc),
+                period_end=now_utc(),
                 episode_ids=[ep.id for _, ep in selection.episodes],
                 episodes_total=len(selection.episodes),
                 status=DigestStatus.PENDING,
@@ -2424,7 +2443,7 @@ def digest(
 
     # Determine output path and stored file_path
     # Always store just the filename for consistency and API compatibility
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    timestamp = now_utc().strftime("%Y-%m-%d_%H%M%S")
     digest_filename = f"digest_{timestamp}.md"
 
     if output:
@@ -2445,7 +2464,7 @@ def digest(
     digest_model = Digest(
         user_id=default_user.id,
         period_start=criteria.date_from,
-        period_end=datetime.now(timezone.utc),
+        period_end=now_utc(),
         episode_ids=[ep.id for _, ep in successful_episodes],
         episodes_total=digest_content.stats.total_episodes,
     )
@@ -2826,7 +2845,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
         )
 
         # Write output (store just filename since it's in default digests directory)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        timestamp = now_utc().strftime("%Y-%m-%d_%H%M%S")
         digest_filename = f"digest_{timestamp}.md"
         output_path = path_manager.digest_file(digest_filename)
         generator.write(digest_content, output_path)
@@ -3366,7 +3385,7 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, dry_run):
     from .core.entity_resolver import _build_entity_id
     from .core.entity_type_rules import classify_entity_type
     from .core.wikidata_client import WikidataClient
-    from .models.entities import EntityRecord, EntityType
+    from .models.entities import EntityRecord
 
     repo = ctx.obj.entity_repository
 
@@ -3702,11 +3721,9 @@ def rebuild_entities(ctx, podcast_id, since, max_episodes, dry_run, yes):
                 pd = ep.pub_date
                 if pd is None:
                     continue
-                # Episode pub_date may be tz-naive (older rows persisted
-                # without tz) or tz-aware. ``_date_range_from_since`` is
-                # always tz-aware UTC; assume the same for naive rows.
-                if pd.tzinfo is None:
-                    pd = pd.replace(tzinfo=timezone.utc)
+                # ``_date_range_from_since`` is tz-aware UTC; coerce pub_date
+                # (older rows persisted naive) so the compare can't raise.
+                pd = ensure_utc(pd)
                 if not (date_range[0] <= pd <= date_range[1]):
                     continue
             eligible.append((p, ep))
@@ -3768,7 +3785,7 @@ def _date_range_from_since(since: Optional[str]):
     if since is None:
         return None
     days = parse_time_window(since)
-    end = datetime.now(timezone.utc)
+    end = now_utc()
     start = end - timedelta(days=days)
     return (start, end)
 
@@ -3923,7 +3940,7 @@ def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
     QUERY supports the same operator syntax as the MCP tool — quoted
     phrases, ``-term`` exclusion, ``speaker:foo`` for diarised filters.
     """
-    from .models.entities import CitationRow, MatchType
+    from .models.entities import CitationRow
     from .search.base import SearchFilters, SearchMode
 
     backend = ctx.obj.search_backend
@@ -3943,7 +3960,7 @@ def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
     date_from = None
     if since:
         days = parse_time_window(since)
-        date_from = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        date_from = (now_utc() - timedelta(days=days)).isoformat()
 
     filters = SearchFilters(
         podcast_id=resolved_podcast_id,

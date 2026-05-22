@@ -43,6 +43,7 @@ from mcp.types import TextContent, Tool
 
 from ..repositories.sqlite_entity_repository import MentionContext, SqliteEntityRepository
 from ..search.citation import build_citation_rows
+from ..utils.datetime_utils import now_utc
 
 # Names of the tools this module owns — used by the dispatcher in
 # ``tools.py`` to decide whether to delegate.
@@ -430,7 +431,7 @@ def _parse_date_range(args: dict):
         # Spec wants a closed interval; if only one bound is given,
         # synthesise the other to "epoch / now".
         a = a or "1970-01-01T00:00:00"
-        b = b or datetime.utcnow().isoformat()
+        b = b or now_utc().isoformat()
     return (datetime.fromisoformat(a), datetime.fromisoformat(b))
 
 

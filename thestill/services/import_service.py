@@ -229,7 +229,9 @@ def _yt_pub_date(raw: Any) -> Optional[datetime]:
     text = str(raw)
     if len(text) == 8 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d")
+            # tz-aware UTC so this never mixes with feedparser-sourced
+            # tz-aware pub_dates at sort/compare time (spec #42, FM-6).
+            return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
         except ValueError:
             return None
     return None

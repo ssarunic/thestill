@@ -286,6 +286,93 @@ class TestGetNewEpisodes:
         assert len(episodes) == 1
         assert episodes[0].title == "YT Video"
 
+    def test_refresh_feeds_reports_zero_errors_on_success(self, feed_manager, mock_repository):
+        """FM-4: a clean refresh reports zero errored feeds."""
+        podcast = Podcast(title="OK", description="", rss_url="https://example.com/ok.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+
+        mock_source = Mock()
+        mock_source.fetch_episodes.return_value = [
+            Episode(
+                title="New",
+                audio_url="https://example.com/new.mp3",
+                external_id="new-1",
+                pub_date=datetime(2026, 5, 21),
+                description="d",
+            )
+        ]
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
+
+        outcome = feed_manager.refresh_feeds()
+
+        assert outcome.podcasts_with_errors == 0
+        assert outcome.total_podcasts == 1
+        assert len(outcome.episodes_by_podcast) == 1
+
+    def test_errored_feed_not_persisted(self, feed_manager, mock_repository):
+        """FM-2: a feed that errors is not written to the batch.
+
+        Its etag / last_modified / last_processed were advanced in-memory
+        during fetching; persisting them would make the next refresh 304-skip
+        a feed we never read (the self-perpetuating silent stall). Leaving the
+        errored podcast out of the batch keeps the stored headers stale so the
+        next run retries. ``refresh_feeds`` still reports the error so it is
+        not silent.
+        """
+        podcast = Podcast(title="Boom", description="", rss_url="https://example.com/boom.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+
+        mock_source = Mock()
+        # The class of bug from the incident: a comparison TypeError.
+        mock_source.fetch_episodes.side_effect = TypeError("can't compare offset-naive and offset-aware datetimes")
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
+
+        outcome = feed_manager.refresh_feeds()
+
+        assert outcome.podcasts_with_errors == 1
+        assert outcome.episodes_by_podcast == []
+        # The errored podcast must never reach the durable batch write.
+        assert not mock_repository.save_refresh_batch.called
+
+    @pytest.mark.parametrize(
+        "stored_etag,response_etag,expect_persist",
+        [
+            ("old-etag", "new-etag", True),  # server rotated the validator → persist it
+            ("same-etag", "same-etag", False),  # unchanged → skip the batch (spec #19)
+        ],
+        ids=["rotated", "unchanged"],
+    )
+    def test_304_persists_only_when_headers_rotate(
+        self, feed_manager, mock_repository, stored_etag, response_etag, expect_persist
+    ):
+        """A 304 must persist a *rotated* ETag but skip the batch otherwise.
+
+        RFC 7232 lets a server refresh ETag / Last-Modified on a 304. Dropping
+        a rotated validator means the next refresh sends a stale one, the
+        server returns a full 200, and the conditional-GET saving is lost; an
+        unchanged 304 must still skip the write to keep that saving (spec #19).
+        """
+        from thestill.core.media_source import RSSMediaSource
+
+        podcast = Podcast(title="P", description="", rss_url="https://example.com/p.xml", episodes=[], etag=stored_etag)
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+
+        rss = RSSMediaSource()
+        result = Mock()
+        result.not_modified = True
+        result.etag = response_etag
+        result.last_modified = None
+        rss.fetch_and_parse = Mock(return_value=result)
+        feed_manager.media_source_factory.detect_source.return_value = rss
+
+        outcome = feed_manager.refresh_feeds()
+
+        assert outcome.conditional_get_hits == 1
+        assert mock_repository.save_refresh_batch.called is expect_persist
+        if expect_persist:
+            changed, _rows = mock_repository.save_refresh_batch.call_args[0]
+            assert podcast in changed
+
 
 class TestEpisodeMarking:
     """Test episode marking methods - use repository.update_episode API."""

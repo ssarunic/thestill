@@ -1,6 +1,6 @@
 # Robustness & Failure-Mode Hardening
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 In Progress — Phases 1, 2 & 4 implemented; Phase 3 (liveness/canary + DB schema) deferred to a follow-up
 > **Created:** 2026-05-21
 > **Updated:** 2026-05-21
 > **Author:** Engineering (incident retro)
@@ -247,32 +247,45 @@ so they can be cited in review ("this is FM-1") and recalled during development.
 Ordered by robustness-per-effort. Phase 1 is the high-leverage, low-cost set —
 do it first; it would have prevented *and* surfaced this class of bug.
 
-### Phase 1 — Highest leverage, do first (the "top 3")
+### Phase 1 — Highest leverage, do first (the "top 3") ✅ done
 
-| # | Change | Failure mode | Est. size |
+| # | Change | Failure mode | Status |
 |---|---|---|---|
-| 1 | Gate ETag / `Last-Modified` / `last_processed` persistence on `had_error == False` in `feed_manager` (don't certify state on a failed refresh). | FM-2 | ~10 lines |
-| 2 | Narrow `RSSMediaSource.fetch_episodes`' `except`: expected errors (network/parse) → log + mark errored; programming errors propagate; per-entry errors skip+count, never abort the feed. | FM-1 | small |
-| 3 | Pydantic validator coercing `Episode.pub_date` / `last_processed` to tz-aware UTC at the model boundary; the `fetch_episodes` coercion guard becomes belt-and-suspenders. | FM-3 | small |
+| 1 | Gate ETag / `Last-Modified` / `last_processed` persistence on `had_error == False` in `feed_manager` (don't certify state on a failed refresh). | FM-2 | ✅ `_record_outcome` returns early on `had_error`, excluding the podcast from `changed_podcasts`. |
+| 2 | Narrow `RSSMediaSource.fetch_episodes`' `except`: expected errors (network/parse) → log + mark errored; programming errors propagate; per-entry errors skip+count, never abort the feed. | FM-1 | ✅ broad `except → []` removed; per-entry `(ValidationError, ValueError)` skip+count; programming errors propagate to the worker's `had_error`. |
+| 3 | Pydantic validator coercing `Episode.pub_date` / `last_processed` to tz-aware UTC at the model boundary; the `fetch_episodes` coercion guard becomes belt-and-suspenders. | FM-3 | ✅ `Episode.ensure_pub_date_aware` (pre-existing) + new `Podcast.ensure_last_processed_aware`, both via `ensure_utc`. |
 
-### Phase 2 — Loud signals
+### Phase 2 — Loud signals ✅ done (with one carve-out)
 
-- Surface `podcasts_with_errors` from refresh into `thestill status` and the
-  briefing summary; non-zero error count is visible, not just logged. (FM-4)
-- CI lint rule: ban `datetime.utcnow()` and `datetime.now()` without `tz`; fix
-  the existing `queue_manager` offender. (FM-3)
+- ✅ Surface `podcasts_with_errors` from refresh: `refresh_feeds` returns a
+  `RefreshOutcome`, `RefreshResult.podcasts_with_errors` threads it to the CLI,
+  `thestill refresh` prints it **and exits non-zero**, and the `digest` briefing
+  prints it. (FM-4)
+  - **Carve-out:** surfacing the count in `thestill status` needs a *persisted*
+    per-podcast error field (status reads the DB, it doesn't refresh). That
+    requires a schema change, so it moves to Phase 3 alongside the liveness
+    signal.
+- ✅ CI lint rule: ruff `DTZ001/003/004/005/006` ban tz-naive datetime
+  construction (`pyproject.toml`), gated in CI (`uv run ruff check thestill/`);
+  all ~30 live offenders (queue_manager, task_manager, feed_manager,
+  import/youtube date parsing, etc.) fixed. (FM-3)
 
-### Phase 3 — Liveness & realism
+### Phase 3 — Liveness & realism ⏳ deferred (follow-up PR)
 
 - Per-podcast `last_new_episode_at` + a "gone quiet" flag for
-  actively-publishing shows; optional nightly canary. (FM-4)
-- Repository round-trip + real-feed-fixture tests for discovery; audit other
-  mock-heavy parse/persist suites for the FM-5 pattern. (FM-5)
+  actively-publishing shows; optional nightly canary. (FM-4) — *needs a DB
+  schema change; deferred.* Also carries the `thestill status` error-count line.
+- ✅ (partial) Repository round-trip tests for discovery landed now
+  (`test_last_processed_round_trips_tz_aware`,
+  `test_legacy_naive_last_processed_normalised_on_load`). Real-feed-fixture
+  tests + a wider FM-5 audit of mock-heavy suites remain. (FM-5)
 
-### Phase 4 — De-duplicate paths
+### Phase 4 — De-duplicate paths ✅ done
 
-- Single canonical datetime-normalization helper (and `last_processed`
-  advancement helper) used by both the importer and feedparser paths. (FM-6)
+- ✅ Single canonical datetime helper `thestill/utils/datetime_utils.py`
+  (`now_utc`, `ensure_utc`, `parse_struct_time_utc`); the feed manager's naive
+  duplicate `_parse_date` now delegates to it, and the importer / feedparser
+  paths share the same normalization. (FM-6)
 
 ---
 
@@ -340,12 +353,21 @@ Items.
 
 - [ ] Decide whether to amend [00-constitution.md](00-constitution.md) with the
       FM-2 principle and the #5/#7 clarifications (separate PR).
-- [ ] Choose the lint mechanism for the datetime ban (ruff rule vs. a small
-      grep-based CI test) consistent with existing tooling.
-- [ ] Scope the FM-4 liveness signal: minimal (`thestill status` surfaces error
-      count) vs. full (`last_new_episode_at` + cadence + canary).
-- [ ] Audit `core/` and `services/` for other FM-1 (`except → neutral`) and FM-2
-      (premature checkpoint) instances; list them here before Phase 1.
+- [x] **Lint mechanism (decided):** ruff `DTZ` rules
+      (`DTZ001/003/004/005/006`) over a grep-based check — it understands
+      aliased imports and rides the existing `make lint` / CI `ruff` invocation.
+      `DTZ007` (strptime `%z`) was left off to avoid `# noqa` churn on
+      fixed-format `%Y%m%d` parses; those two sites were fixed by hand.
+- [ ] **FM-4 liveness scope (partially decided):** the *minimal* signal shipped
+      (refresh error count surfaced + non-zero exit). The `thestill status`
+      line and the *full* signal (`last_new_episode_at` + cadence + canary) need
+      a persisted per-podcast error/health field and are deferred to Phase 3.
+- [x] **FM-1/FM-2 audit (this PR):** the two live instances named in the
+      catalogue were the only ones fixed under Phase 1 —
+      `RSSMediaSource.fetch_episodes`' broad `except → []` (FM-1) and
+      `feed_manager._record_outcome`'s unconditional `changed_podcasts.append`
+      (FM-2). A broader sweep of every `except → neutral` in `core/`/`services/`
+      remains a standing follow-up (tracked, not blocking).
 
 ## Cross-References
 

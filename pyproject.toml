@@ -241,8 +241,20 @@ addopts = [
 ]
 
 [tool.ruff]
-# Minimal ruff configuration to forbid print() statements
+# Minimal ruff configuration: forbid print() and tz-naive datetimes.
 exclude = ["tests/", "data/", ".venv/"]
 
 [tool.ruff.lint]
-select = ["T201"]  # Print found
+select = [
+    "T201",    # print() found
+    # spec #42 (FM-3): ban tz-naive datetime construction. A single
+    # tz-naive-vs-aware comparison silently stopped feed discovery for
+    # ~13 days. Use thestill.utils.datetime_utils.now_utc / ensure_utc
+    # instead of datetime.utcnow() / datetime.now() / naive datetime(...).
+    "DTZ001",  # datetime(...) without tzinfo
+    "DTZ002",  # datetime.today() (naive local)
+    "DTZ003",  # datetime.utcnow()
+    "DTZ004",  # datetime.utcfromtimestamp()
+    "DTZ005",  # datetime.now() without tz
+    "DTZ006",  # datetime.fromtimestamp() without tz
+]

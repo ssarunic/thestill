@@ -19,6 +19,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field, model_validator
 
+from ..utils.datetime_utils import ensure_utc
+
 
 class EpisodeState(str, Enum):
     """
@@ -188,8 +190,7 @@ class Episode(BaseModel):
         every read site — sort, filter, ``last_processed`` rollups —
         sees a homogeneous set without each call having to normalise.
         """
-        if self.pub_date is not None and self.pub_date.tzinfo is None:
-            self.pub_date = self.pub_date.replace(tzinfo=timezone.utc)
+        self.pub_date = ensure_utc(self.pub_date)
         return self
 
     @computed_field  # type: ignore[misc]
@@ -351,6 +352,21 @@ class Podcast(BaseModel):
             from thestill.utils.slug import generate_slug
 
             self.slug = generate_slug(self.title)
+        return self
+
+    @model_validator(mode="after")
+    def ensure_last_processed_aware(self) -> "Podcast":
+        """Normalize ``last_processed`` to tz-aware UTC (spec #42, FM-3).
+
+        ``last_processed`` is the refresh checkpoint compared against each
+        feed entry's tz-aware ``pub_date``. Older rows persisted a naive
+        value; reading one back and comparing it raised ``TypeError``
+        mid-refresh, which a broad ``except`` swallowed into "0 new
+        episodes" — the silent-discovery incident. Coercing at the model
+        boundary makes a naive ``last_processed`` impossible to *hold*, so
+        no downstream comparison can mix awareness.
+        """
+        self.last_processed = ensure_utc(self.last_processed)
         return self
 
     @property

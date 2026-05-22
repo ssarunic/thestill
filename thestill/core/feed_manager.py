@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 from urllib.parse import urlparse
 
 import feedparser
@@ -26,6 +26,7 @@ from structlog import get_logger
 
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
+from ..utils.datetime_utils import ensure_utc, now_utc, parse_struct_time_utc
 from ..utils.duration import parse_duration
 from ..utils.path_manager import PathManager
 from ..utils.timing import log_phase_timing
@@ -33,6 +34,23 @@ from ..utils.url_guard import UnsafeURLError, guarded_get
 from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = get_logger(__name__)
+
+
+class RefreshOutcome(NamedTuple):
+    """Result of a feed-refresh batch (spec #42, FM-4).
+
+    Refresh historically returned only ``episodes_by_podcast`` and the
+    error count lived solely in a log line — so a fleet that went quiet
+    because its feeds were *erroring* looked identical to a fleet with
+    genuinely nothing new. This carries the liveness signal back to the
+    caller so the CLI/briefing can surface it (and exit non-zero) instead
+    of reporting a silent success.
+    """
+
+    episodes_by_podcast: List[Tuple[Podcast, List[Episode]]]
+    podcasts_with_errors: int
+    total_podcasts: int
+    conditional_get_hits: int
 
 
 class PodcastFeedManager:
@@ -229,27 +247,32 @@ class PodcastFeedManager:
         podcast: Podcast,
         max_episodes_per_podcast: Optional[int],
         known_external_ids: Optional[set] = None,
-    ) -> Tuple[Podcast, List[Episode], bool, bool, Any]:
+    ) -> Tuple[Podcast, List[Episode], bool, bool, Any, bool]:
         """
         Refresh a single podcast. Safe to call from a worker thread.
 
         Mutates podcast metadata + caching headers in-memory but does
         NOT write to the database. The batch writer at the end of
-        :meth:`get_new_episodes` persists every changed podcast and all
+        :meth:`refresh_feeds` persists every changed podcast and all
         new episodes in a single transaction (spec #19).
 
         Returns:
-            (podcast, new_episodes, had_error, conditional_get_hit, source).
-            ``conditional_get_hit`` is True when the server returned 304
-            and no parse/extract work ran. ``source`` is the detected
-            media source instance, returned so the caller can reuse it
-            for transcript-link extraction without re-detecting.
+            (podcast, new_episodes, had_error, conditional_get_hit, source,
+            headers_rotated). ``conditional_get_hit`` is True when the server
+            returned 304 and no parse/extract work ran. ``headers_rotated`` is
+            True when a 304 response carried a *new* ETag / Last-Modified that
+            we must still persist (RFC 7232) — otherwise the rotated header is
+            silently dropped and the next refresh sends a stale validator,
+            losing the cache hit. ``source`` is the detected media source
+            instance, returned so the caller can reuse it for transcript-link
+            extraction without re-detecting.
         """
         podcast_start = time.perf_counter()
         had_error = False
         new_eps: List[Episode] = []
         source: Any = None
         conditional_get_hit = False
+        headers_rotated = False
         try:
             rss_url_str = str(podcast.rss_url)
             source = self.media_source_factory.detect_source(rss_url_str)
@@ -275,12 +298,16 @@ class PodcastFeedManager:
                     # Preserve any server-sent header rotation — RFC 7232
                     # allows servers to refresh ETag / Last-Modified on a
                     # 304 and a next-refresh hit depends on us keeping up.
+                    # Flag the rotation so the batch writer actually persists
+                    # it; otherwise the in-memory update is dropped here.
                     conditional_get_hit = True
                     if result.etag and result.etag != podcast.etag:
                         podcast.etag = result.etag
+                        headers_rotated = True
                     if result.last_modified and result.last_modified != podcast.last_modified:
                         podcast.last_modified = result.last_modified
-                    return podcast, [], False, True, source
+                        headers_rotated = True
+                    return podcast, [], False, True, source, headers_rotated
 
                 rss_content = result.content
                 parsed_feed = result.parsed_feed
@@ -327,16 +354,13 @@ class PodcastFeedManager:
             if episodes:
                 new_eps = episodes
                 if podcast.episodes:
-                    # Mixed-tz guard: ``insert_imported_episode`` writes
-                    # tz-aware pub_dates while the feedparser path here
-                    # produces naive ones. ``max`` over the unioned set
-                    # raises TypeError; normalise to UTC for the compare
-                    # without mutating the stored values.
-                    candidates = [
-                        (ep.pub_date if ep.pub_date.tzinfo else ep.pub_date.replace(tzinfo=timezone.utc))
-                        for ep in podcast.episodes
-                        if ep.pub_date
-                    ]
+                    # Belt-and-suspenders: the ``Episode`` validator already
+                    # coerces ``pub_date`` to tz-aware UTC, so this set is
+                    # homogeneous in normal flow. ``ensure_utc`` still defends
+                    # the ``max`` against any raw-constructed / legacy-loaded
+                    # episode that bypassed the model, where a mixed-awareness
+                    # ``max`` would raise TypeError.
+                    candidates = [ensure_utc(ep.pub_date) for ep in podcast.episodes if ep.pub_date]
                     most_recent_date = max(candidates, default=None)
                     if most_recent_date:
                         podcast.last_processed = most_recent_date
@@ -362,7 +386,9 @@ class PodcastFeedManager:
                 had_error=had_error,
                 conditional_get_hit=conditional_get_hit,
             )
-        return podcast, new_eps, had_error, conditional_get_hit, source
+        # headers_rotated only governs the 304 path (which returns above); a
+        # 200 response routes the podcast through changed_podcasts regardless.
+        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated
 
     def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
         """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
@@ -410,14 +436,17 @@ class PodcastFeedManager:
 
         return changed
 
-    def get_new_episodes(
+    def refresh_feeds(
         self,
         max_episodes_per_podcast: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         podcast_id: Optional[str] = None,
-    ) -> List[Tuple[Podcast, List[Episode]]]:
+    ) -> RefreshOutcome:
         """
-        Check feeds for new episodes.
+        Check feeds for new episodes and report batch-level health.
+
+        This is the full entry point; :meth:`get_new_episodes` is a thin
+        backward-compatible wrapper that returns only the episode pairs.
 
         Args:
             max_episodes_per_podcast: Optional limit on episodes to discover per podcast.
@@ -428,7 +457,8 @@ class PodcastFeedManager:
                        this podcast's feed will be checked.
 
         Returns:
-            List of tuples containing (Podcast, List[Episode]) for podcasts with new episodes
+            A :class:`RefreshOutcome` with the (Podcast, List[Episode]) pairs
+            that gained episodes plus the batch error / liveness counters.
         """
         new_episodes = []
         batch_start = time.perf_counter()
@@ -444,7 +474,12 @@ class PodcastFeedManager:
                 podcast = self.repository.get_by_id(podcast_id)
             if not podcast:
                 logger.warning("Podcast not found for refresh", podcast_id=podcast_id)
-                return []
+                return RefreshOutcome(
+                    episodes_by_podcast=[],
+                    podcasts_with_errors=0,
+                    total_podcasts=0,
+                    conditional_get_hits=0,
+                )
             podcasts = [podcast]
             known_external_ids_by_podcast[podcast.id] = {ep.external_id for ep in podcast.episodes if ep.external_id}
         else:
@@ -466,16 +501,30 @@ class PodcastFeedManager:
             had_error: bool,
             hit: bool,
             source: Any,
+            headers_rotated: bool,
         ) -> None:
             nonlocal podcasts_with_errors, conditional_get_hits
             if had_error:
+                # FM-2: never certify a checkpoint on a failed refresh. The
+                # podcast's etag / last_modified / last_processed were already
+                # advanced in-memory before and during fetching; persisting
+                # them would make the next refresh receive a 304 and skip a
+                # feed we never actually read — turning a one-time error into
+                # a permanent, self-hiding stall (the 20VC incident). Leaving
+                # the errored podcast out of ``changed_podcasts`` keeps the
+                # stored cache headers stale, so the next run re-fetches and
+                # retries instead.
                 podcasts_with_errors += 1
+                return
             if hit:
-                # 304 hits still persist rotated cache headers, which
-                # ``_refresh_single_podcast`` already captured in-memory.
-                # Worth the extra UPDATE only if something actually
-                # changed; plain 304s skip the batch entirely.
                 conditional_get_hits += 1
+                # A plain 304 (nothing changed) skips the batch entirely. But
+                # if the server *rotated* its ETag / Last-Modified on the 304,
+                # persist the podcast so the next refresh sends the fresh
+                # validator — otherwise the rotated header is dropped and we
+                # lose the conditional-GET hit on the following run.
+                if headers_rotated:
+                    changed_podcasts.append(podcast)
                 return
             changed_podcasts.append(podcast)
             if eps:
@@ -488,7 +537,7 @@ class PodcastFeedManager:
         if use_pool:
             # Preserve input ordering in the returned list so callers see a
             # deterministic shape regardless of completion order.
-            results: Dict[int, Tuple[Podcast, List[Episode], bool, bool, Any]] = {}
+            results: Dict[int, Tuple[Podcast, List[Episode], bool, bool, Any, bool]] = {}
             with ThreadPoolExecutor(
                 max_workers=min(self.max_workers, total_podcasts),
                 thread_name_prefix="thestill-refresh",
@@ -516,7 +565,7 @@ class PodcastFeedManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        results[idx] = (podcast, [], True, False, None)
+                        results[idx] = (podcast, [], True, False, None, False)
                     if progress_callback:
                         returned_podcast = results[idx][0]
                         progress_callback(completed, total_podcasts, returned_podcast.title)
@@ -569,7 +618,31 @@ class PodcastFeedManager:
             conditional_get_hits=conditional_get_hits,
             max_workers=self.max_workers,
         )
-        return new_episodes
+        return RefreshOutcome(
+            episodes_by_podcast=new_episodes,
+            podcasts_with_errors=podcasts_with_errors,
+            total_podcasts=total_podcasts,
+            conditional_get_hits=conditional_get_hits,
+        )
+
+    def get_new_episodes(
+        self,
+        max_episodes_per_podcast: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        podcast_id: Optional[str] = None,
+    ) -> List[Tuple[Podcast, List[Episode]]]:
+        """Backward-compatible wrapper over :meth:`refresh_feeds`.
+
+        Returns only the ``(Podcast, List[Episode])`` pairs that gained
+        episodes. Callers that need the batch error / liveness counters
+        (FM-4) should call :meth:`refresh_feeds` and read
+        :attr:`RefreshOutcome.podcasts_with_errors`.
+        """
+        return self.refresh_feeds(
+            max_episodes_per_podcast=max_episodes_per_podcast,
+            progress_callback=progress_callback,
+            podcast_id=podcast_id,
+        ).episodes_by_podcast
 
     def _save_transcript_links_for_episodes(
         self,
@@ -835,7 +908,7 @@ class PodcastFeedManager:
                             )
                         if summary_path is not None:
                             episode.summary_path = summary_path if summary_path else None
-                        podcast.last_processed = datetime.now()
+                        podcast.last_processed = now_utc()
                         logger.info(
                             "Marked episode as processed (in transaction)", episode_external_id=episode_external_id
                         )
@@ -913,7 +986,7 @@ class PodcastFeedManager:
                                 )
                                 # Use targeted save methods instead of full save()
                                 self.repository.save_episode(episode)
-                                podcast.last_processed = datetime.now()
+                                podcast.last_processed = now_utc()
                                 self.repository.save_podcast(podcast)
                                 logger.info("Added and marked new episode as processed", episode_title=episode.title)
                                 return
@@ -930,7 +1003,7 @@ class PodcastFeedManager:
             # Use save_podcast() to avoid touching episode updated_at timestamps
             podcast = self.repository.get_by_url(podcast_rss_url)
             if podcast:
-                podcast.last_processed = datetime.now()
+                podcast.last_processed = now_utc()
                 self.repository.save_podcast(podcast)
                 logger.info("Marked episode as processed", episode_external_id=episode_external_id)
 
@@ -972,7 +1045,9 @@ class PodcastFeedManager:
                     episodes_to_transcribe.append((podcast, episode))
 
         # Sort by publication date (newest first) for cross-podcast prioritization
-        episodes_to_transcribe.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
+        episodes_to_transcribe.sort(
+            key=lambda x: x[1].pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True
+        )
 
         return episodes_to_transcribe
 
@@ -1081,7 +1156,9 @@ class PodcastFeedManager:
                 episodes_with_transcripts.append((podcast, episode))
 
         # Sort by publication date (newest first) for cross-podcast prioritization
-        episodes_with_transcripts.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
+        episodes_with_transcripts.sort(
+            key=lambda x: x[1].pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True
+        )
 
         return episodes_with_transcripts
 
@@ -1114,7 +1191,7 @@ class PodcastFeedManager:
                 episodes_with_clean.append((podcast, episode))
 
         # Sort by publication date (newest first) for cross-podcast prioritization
-        episodes_with_clean.sort(key=lambda x: x[1].pub_date or datetime.min, reverse=True)
+        episodes_with_clean.sort(key=lambda x: x[1].pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
         return episodes_with_clean
 
@@ -1123,21 +1200,8 @@ class PodcastFeedManager:
         return self.repository.get_all()
 
     def _parse_date(self, date_tuple: Any) -> datetime:
-        """
-        Parse feedparser date tuple to datetime.
-
-        Args:
-            date_tuple: Feedparser date tuple (time.struct_time or None)
-
-        Returns:
-            Parsed datetime or current datetime if parsing fails
-        """
-        if date_tuple:
-            try:
-                return datetime(*date_tuple[:6])
-            except (TypeError, ValueError):
-                pass
-        return datetime.now()
+        """Parse a feedparser date tuple to tz-aware UTC (see ``parse_struct_time_utc``)."""
+        return parse_struct_time_utc(date_tuple)
 
     def _extract_audio_url(self, entry: Any) -> Optional[str]:
         """

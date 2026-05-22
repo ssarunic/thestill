@@ -105,7 +105,7 @@ class YouTubeDownloader:
             List of Episode objects parsed from YouTube videos
         """
         try:
-            from datetime import datetime
+            from datetime import datetime, timezone
 
             logger.info(f"Fetching YouTube episodes from: {url}")
 
@@ -154,10 +154,13 @@ class YouTubeDownloader:
                     upload_date = entry.get("upload_date") or entry.get("timestamp")
                     if upload_date:
                         try:
+                            # tz-aware UTC: a naive pub_date here crashes any
+                            # later sort/compare against tz-aware feed dates
+                            # (spec #42, FM-3).
                             if isinstance(upload_date, str):
-                                pub_date = datetime.strptime(upload_date, "%Y%m%d")
+                                pub_date = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
                             elif isinstance(upload_date, (int, float)):
-                                pub_date = datetime.fromtimestamp(upload_date)
+                                pub_date = datetime.fromtimestamp(upload_date, tz=timezone.utc)
                         except (ValueError, OSError):
                             pass
 

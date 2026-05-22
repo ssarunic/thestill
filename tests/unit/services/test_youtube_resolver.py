@@ -19,7 +19,7 @@ offline. The download stage's existing yt-dlp integration is what fetches
 audio at runtime; we only need to verify the metadata mapping here.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -72,7 +72,10 @@ def test_resolve_maps_yt_dlp_fields_to_canonical_source(fake_youtube_video_info)
     assert src.title == "Never Gonna Give You Up"
     assert src.description == "Music video"
     assert src.duration_seconds == 213
-    assert src.pub_date == datetime(2009, 10, 25)
+    # pub_date is normalized to tz-aware UTC (spec #42, FM-3/FM-6): the
+    # yt-dlp YYYYMMDD upload_date used to map to a naive datetime, which
+    # crashed comparisons against tz-aware feed dates.
+    assert src.pub_date == datetime(2009, 10, 25, tzinfo=timezone.utc)
     # The largest thumbnail (last in the list) is preferred.
     assert src.image_url == "https://i.ytimg.com/hi.jpg"
     assert src.source_handle == "Rick Astley"

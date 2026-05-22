@@ -37,6 +37,7 @@ from thestill.models.podcast import TranscriptionOperation, TranscriptionOperati
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.models.transcription import TranscribeOptions
 from thestill.utils.console import ConsoleOutput
+from thestill.utils.datetime_utils import now_utc
 from thestill.utils.path_manager import PathManager
 
 from .transcriber import Transcriber
@@ -1391,7 +1392,7 @@ class GoogleCloudTranscriber(Transcriber):
             # Fallback to timestamp-based naming for standalone files
             sanitized_title = self._sanitize_filename(podcast_title) if podcast_title else ""
             prefix = f"{sanitized_title}_" if sanitized_title else ""
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            timestamp = now_utc().strftime("%Y%m%d-%H%M%S")
             audio_filename = Path(audio_path).stem
 
             audio_blob_name = f"temp-audio/{prefix}{timestamp}-{Path(audio_path).name}"

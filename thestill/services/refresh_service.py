@@ -34,6 +34,10 @@ class RefreshResult(BaseModel):
     total_episodes: int
     episodes_by_podcast: List[Tuple[Podcast, List[Episode]]]
     podcast_filter_applied: Optional[str] = None
+    # Number of feeds that errored during this refresh (spec #42, FM-4).
+    # Surfaced to the CLI so a silent-fleet event is visible (and exits
+    # non-zero) instead of looking like a clean "0 new episodes".
+    podcasts_with_errors: int = 0
 
 
 class RefreshService:
@@ -90,12 +94,15 @@ class RefreshService:
         logger.info("Starting feed refresh...")
 
         # Get new episodes - pass podcast_id to filter BEFORE fetching feeds
-        # This avoids fetching all podcasts when only one is needed
-        new_episodes = self.feed_manager.get_new_episodes(
+        # This avoids fetching all podcasts when only one is needed.
+        # ``refresh_feeds`` (vs ``get_new_episodes``) also returns the batch
+        # error count so we can surface a silent-fleet event (FM-4).
+        outcome = self.feed_manager.refresh_feeds(
             max_episodes_per_podcast=max_episodes_per_podcast,
             progress_callback=progress_callback,
             podcast_id=str(podcast_id) if podcast_id else None,
         )
+        new_episodes = outcome.episodes_by_podcast
 
         # Determine podcast filter name for response
         podcast_filter_name = None
@@ -110,6 +117,7 @@ class RefreshService:
                 total_episodes=0,
                 episodes_by_podcast=[],
                 podcast_filter_applied=podcast_filter_name,
+                podcasts_with_errors=outcome.podcasts_with_errors,
             )
 
         # Apply max_episodes limit per podcast
@@ -125,10 +133,11 @@ class RefreshService:
         # Persist changes if not dry-run
         if not dry_run:
             # Changes are already persisted by feed_manager.get_new_episodes()
-            logger.info(f"Refresh complete! Discovered {total_episodes} new episode(s)")
+            logger.info("Refresh complete", total_episodes=total_episodes)
 
         return RefreshResult(
             total_episodes=total_episodes,
             episodes_by_podcast=episodes_to_add,
             podcast_filter_applied=podcast_filter_name,
+            podcasts_with_errors=outcome.podcasts_with_errors,
         )

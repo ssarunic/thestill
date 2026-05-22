@@ -35,6 +35,13 @@ jobs:
       - name: Install (frozen) with dev extras
         run: uv sync --frozen --extra dev
 
+      # spec #42 (FM-3): gate the tz-naive-datetime ban (ruff DTZ rules) +
+      # the existing print() ban. A tz-naive datetime slipping back in is
+      # what silently stopped feed discovery; keep it a build error, not a
+      # lint-locally-if-you-remember nicety.
+      - name: Lint (ruff — print + tz-naive datetime ban)
+        run: uv run ruff check thestill/
+
       - name: pytest
         # Skip tests/perf/: a separate ``latency`` job runs them so noise on
         # the latency budget doesn't block unrelated unit-test work.
