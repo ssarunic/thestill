@@ -79,7 +79,10 @@ class Transcriber(ABC):
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False)
+                # default=str matches the Dalston/ElevenLabs overrides: coerce any
+                # non-JSON-native value (e.g. UUID job ids, datetimes) to a string
+                # so a successful transcription can't die on serialization.
+                json.dump(transcript.model_dump(), f, indent=2, ensure_ascii=False, default=str)
             # Use console if available on instance, otherwise create one
             console = getattr(self, "console", None) or ConsoleOutput()
             console.success(f"Transcript saved to: {output_path}")

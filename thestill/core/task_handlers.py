@@ -44,8 +44,13 @@ def _transcript_to_json(transcript: Transcript) -> str:
 
     Used by ``handle_transcribe`` and the equivalent CLI / MCP paths so the
     on-disk shape stays identical across entry points.
+
+    ``mode="json"`` coerces non-JSON-native values (e.g. ``UUID`` job ids that
+    Dalston stores in ``provider_metadata``, datetimes) to strings, so the
+    subsequent ``json.dumps`` cannot raise "Object of type UUID is not JSON
+    serializable" and silently fail a transcription that actually succeeded.
     """
-    return json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2)
+    return json.dumps(transcript.model_dump(mode="json"), ensure_ascii=False, indent=2)
 
 
 from ..models.podcast import Episode, Podcast
