@@ -197,3 +197,70 @@ describe('Entities page — FloatingPlayer wiring (spec #28 §5.1)', () => {
     )
   })
 })
+
+// Spec #45 Tier 0 — the entity page renders Wikidata/Wikipedia enrichment
+// (hero photo + headline, vital-stats sidebar, About, affiliations,
+// "most discussed on") when present, and degrades to the base layout when
+// the `enrichment` field is absent.
+describe('Entities page — Tier 0 enrichment (spec #45)', () => {
+  beforeEach(() => {
+    mockGetEntitySummary.mockReset()
+    isCurrentTrack = false
+    isPlayingNow = false
+  })
+
+  function enrichedSummary(): EntitySummaryResponse {
+    return summary({
+      entity: { id: 'person:elon-musk', type: 'person', canonical_name: 'Elon Musk', wikidata_qid: 'Q317521' },
+      most_discussed_on: [
+        { podcast_id: 'pod-1', podcast_slug: 'all-in', podcast_title: 'All-In', mention_count: 12 },
+      ],
+      enrichment: {
+        image_url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Musk.jpg?width=400',
+        image_attribution: 'Wikimedia Commons',
+        headline: 'business magnate',
+        wikipedia_extract: 'Elon Musk is a businessman.',
+        wikipedia_url: 'https://en.wikipedia.org/wiki/Elon_Musk',
+        facts: [
+          { label: 'Born', value: 'June 28, 1971', url: null },
+          { label: 'Website', value: 'x.com', url: 'https://x.com' },
+        ],
+        affiliations: [
+          { qid: 'Q478214', label: 'Tesla', relation: 'Works at', entity_id: 'company:tesla', entity_type: 'company' },
+        ],
+      },
+    })
+  }
+
+  it('renders hero image, headline, vital stats, about and affiliation cross-link', async () => {
+    mockGetEntitySummary.mockResolvedValue(enrichedSummary())
+    renderPage('/entities/person/elon-musk')
+
+    const hero = await screen.findByRole('img', { name: 'Elon Musk' })
+    expect(hero).toHaveAttribute('src', expect.stringContaining('Special:FilePath/Musk.jpg'))
+
+    expect(screen.getByText('business magnate')).toBeInTheDocument()
+    expect(screen.getByText('Vital stats')).toBeInTheDocument()
+    expect(screen.getByText('June 28, 1971')).toBeInTheDocument()
+    expect(screen.getByText('Elon Musk is a businessman.')).toBeInTheDocument()
+
+    // Affiliation chip cross-links to the company's own entity page.
+    const teslaLink = screen.getByRole('link', { name: /Tesla/ })
+    expect(teslaLink).toHaveAttribute('href', '/entities/company/tesla')
+
+    // "Most discussed on" surfaces the per-podcast mention count.
+    expect(screen.getByText('Most discussed on')).toBeInTheDocument()
+    expect(screen.getByText('12 mentions')).toBeInTheDocument()
+  })
+
+  it('degrades to the base layout when enrichment is absent', async () => {
+    mockGetEntitySummary.mockResolvedValue(summary())
+    renderPage()
+
+    // Name still renders; enrichment-only sections do not.
+    expect(await screen.findByRole('heading', { name: 'Cliff Weitzman' })).toBeInTheDocument()
+    expect(screen.queryByText('Vital stats')).toBeNull()
+    expect(screen.queryByText('About')).toBeNull()
+    expect(screen.queryByRole('img', { name: 'Cliff Weitzman' })).toBeNull()
+  })
+})

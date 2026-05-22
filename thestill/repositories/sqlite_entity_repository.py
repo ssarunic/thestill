@@ -29,12 +29,13 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
+from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 
 logger = get_logger(__name__)
@@ -535,11 +536,14 @@ class SqliteEntityRepository:
         *,
         cooccurring_limit: int = 20,
         recent_mentions_limit: int = 10,
+        most_discussed_limit: int = 10,
     ) -> Optional[dict]:
         """Return entity + mention_count + cooccurring + recent_mentions.
 
         Mirrors the spec's ``get_entity`` MCP tool output shape. Returns
-        ``None`` if the entity doesn't exist.
+        ``None`` if the entity doesn't exist. Spec #45 adds ``enrichment``
+        (Wikidata/Wikipedia Tier-0 data, ``None`` when not yet fetched)
+        and ``most_discussed_on`` (per-podcast mention counts).
         """
         entity = self.get_entity(entity_id)
         if entity is None:
@@ -565,6 +569,31 @@ class SqliteEntityRepository:
                 """,
                 (entity_id, entity_id, entity_id, cooccurring_limit),
             ).fetchall()
+            # Spec #45 — "most discussed on": which podcasts talk about this
+            # entity most, by resolved-mention count. Count-based only (no
+            # sentiment).
+            most_discussed_rows = conn.execute(
+                """
+                SELECT p.id      AS podcast_id,
+                       p.slug    AS podcast_slug,
+                       p.title   AS podcast_title,
+                       COUNT(*)  AS mention_count
+                FROM entity_mentions m
+                JOIN episodes e ON e.id = m.episode_id
+                JOIN podcasts p ON p.id = e.podcast_id
+                WHERE m.entity_id = ? AND m.resolution_status = 'resolved'
+                GROUP BY p.id
+                ORDER BY mention_count DESC, p.title
+                LIMIT ?
+                """,
+                (entity_id, most_discussed_limit),
+            ).fetchall()
+            # Spec #45 — read enrichment on the connection already open here
+            # rather than via get_enrichment() (which would open another).
+            enrichment_row = conn.execute(
+                "SELECT * FROM entity_enrichment WHERE entity_id = ?",
+                (entity_id,),
+            ).fetchone()
         cooccurring = []
         for row in cooccur_rows:
             other = self.get_entity(row["other_id"])
@@ -587,6 +616,8 @@ class SqliteEntityRepository:
             "hosts_podcasts": roles["hosts_podcasts"],
             "recurring_podcasts": roles["recurring_podcasts"],
             "guest_episodes": roles["guest_episodes"],
+            "most_discussed_on": [dict(r) for r in most_discussed_rows],
+            "enrichment": _row_to_enrichment(enrichment_row) if enrichment_row else None,
         }
 
     def get_entity_roles(
@@ -659,6 +690,179 @@ class SqliteEntityRepository:
             "recurring_podcasts": [dict(r) for r in recurring_rows],
             "guest_episodes": [dict(r) for r in guest_rows],
         }
+
+    # ------------------------------------------------------------------
+    # Enrichment (spec #45 Tier 0)
+    # ------------------------------------------------------------------
+
+    def upsert_enrichment(self, enrichment: EntityEnrichment) -> None:
+        """Persist (insert or replace) a Tier-0 enrichment row.
+
+        ``created_at`` is preserved on update — only the content +
+        provenance + ``updated_at`` are refreshed.
+        """
+        facts_json = json.dumps([f.model_dump() for f in enrichment.facts])
+        affiliations_json = json.dumps([a.model_dump() for a in enrichment.affiliations])
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO entity_enrichment (
+                    entity_id, image_url, image_attribution, image_license,
+                    headline, wikipedia_extract, wikipedia_url,
+                    facts_json, affiliations_json,
+                    wikidata_status, wikidata_fetched_at,
+                    wikipedia_status, wikipedia_fetched_at,
+                    retry_after, schema_version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_id) DO UPDATE SET
+                    -- Spec #42 FM-1: when a source FAILED on this run, keep
+                    -- the content a previous run committed rather than wiping
+                    -- it with the freshly-built (NULL) values. Status /
+                    -- timestamps / retry_after always advance so the row
+                    -- records that the retry happened.
+                    -- The image can come from Wikidata (P18/P154) OR, as a
+                    -- fallback, Wikipedia. Preserve the prior image (and its
+                    -- attribution/license, in lockstep) when this run produced
+                    -- none AND either source FAILED — otherwise a transient
+                    -- Wikipedia outage on a Wikidata-image-less entity would
+                    -- wipe a previously cached Wikipedia photo (spec #42 FM-1).
+                    image_url            = CASE WHEN excluded.image_url IS NULL
+                                                  AND (excluded.wikidata_status = 'failed'
+                                                       OR excluded.wikipedia_status = 'failed')
+                                                THEN entity_enrichment.image_url
+                                                ELSE excluded.image_url END,
+                    image_attribution    = CASE WHEN excluded.image_url IS NULL
+                                                  AND (excluded.wikidata_status = 'failed'
+                                                       OR excluded.wikipedia_status = 'failed')
+                                                THEN entity_enrichment.image_attribution
+                                                ELSE excluded.image_attribution END,
+                    image_license        = CASE WHEN excluded.image_url IS NULL
+                                                  AND (excluded.wikidata_status = 'failed'
+                                                       OR excluded.wikipedia_status = 'failed')
+                                                THEN entity_enrichment.image_license
+                                                ELSE excluded.image_license END,
+                    headline             = CASE WHEN excluded.wikidata_status = 'failed'
+                                                THEN entity_enrichment.headline
+                                                ELSE excluded.headline END,
+                    facts_json           = CASE WHEN excluded.wikidata_status = 'failed'
+                                                THEN entity_enrichment.facts_json
+                                                ELSE excluded.facts_json END,
+                    affiliations_json    = CASE WHEN excluded.wikidata_status = 'failed'
+                                                THEN entity_enrichment.affiliations_json
+                                                ELSE excluded.affiliations_json END,
+                    wikipedia_extract    = CASE WHEN excluded.wikipedia_status = 'failed'
+                                                THEN entity_enrichment.wikipedia_extract
+                                                ELSE excluded.wikipedia_extract END,
+                    wikipedia_url        = CASE WHEN excluded.wikipedia_status = 'failed'
+                                                THEN entity_enrichment.wikipedia_url
+                                                ELSE excluded.wikipedia_url END,
+                    wikidata_status      = excluded.wikidata_status,
+                    wikidata_fetched_at  = excluded.wikidata_fetched_at,
+                    wikipedia_status     = excluded.wikipedia_status,
+                    wikipedia_fetched_at = excluded.wikipedia_fetched_at,
+                    retry_after          = excluded.retry_after,
+                    schema_version       = excluded.schema_version,
+                    updated_at           = excluded.updated_at
+                """,
+                (
+                    enrichment.entity_id,
+                    enrichment.image_url,
+                    enrichment.image_attribution,
+                    enrichment.image_license,
+                    enrichment.headline,
+                    enrichment.wikipedia_extract,
+                    enrichment.wikipedia_url,
+                    facts_json,
+                    affiliations_json,
+                    enrichment.wikidata_status.value,
+                    _iso_or_none(enrichment.wikidata_fetched_at),
+                    enrichment.wikipedia_status.value,
+                    _iso_or_none(enrichment.wikipedia_fetched_at),
+                    _iso_or_none(enrichment.retry_after),
+                    enrichment.schema_version,
+                    enrichment.created_at.isoformat(),
+                    now_iso,
+                ),
+            )
+
+    def get_enrichment(self, entity_id: str) -> Optional[EntityEnrichment]:
+        """Return the stored enrichment for an entity, or ``None``."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM entity_enrichment WHERE entity_id = ?",
+                (entity_id,),
+            ).fetchone()
+        return _row_to_enrichment(row) if row else None
+
+    def entity_ids_needing_enrichment(
+        self,
+        *,
+        entity_id: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        max_age_days: Optional[int] = None,
+        schema_version: int = 1,
+        force: bool = False,
+    ) -> List[str]:
+        """Resolved entities with a QID that should be (re)enriched.
+
+        An entity qualifies when it has never been enriched, was enriched
+        under an older ``schema_version``, has a ``failed`` source whose
+        ``retry_after`` has elapsed, or (when ``max_age_days`` is given)
+        is older than that. ``force`` ignores all staleness gating and
+        returns every QID-bearing entity in scope. ``entity_id`` scopes to
+        a single entity (targeted repair/backfill).
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        where = ["ent.wikidata_qid IS NOT NULL"]
+        scope_params: list = []
+        if entity_id:
+            where.append("ent.id = ?")
+            scope_params.append(entity_id)
+        if episode_id:
+            where.append(
+                "ent.id IN (SELECT entity_id FROM entity_mentions " "WHERE episode_id = ? AND entity_id IS NOT NULL)"
+            )
+            scope_params.append(episode_id)
+        if podcast_id:
+            where.append(
+                "ent.id IN (SELECT entity_id FROM entity_mentions "
+                "WHERE entity_id IS NOT NULL AND episode_id IN "
+                "(SELECT id FROM episodes WHERE podcast_id = ?))"
+            )
+            scope_params.append(podcast_id)
+
+        stale_params: list = []
+        if force:
+            stale_sql = "1=1"
+        else:
+            clauses = [
+                "en.entity_id IS NULL",
+                "en.schema_version < ?",
+                "(en.wikidata_status = 'failed' AND (en.retry_after IS NULL OR en.retry_after <= ?))",
+                "(en.wikipedia_status = 'failed' AND (en.retry_after IS NULL OR en.retry_after <= ?))",
+            ]
+            stale_params = [schema_version, now_iso, now_iso]
+            if max_age_days is not None:
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+                clauses.append("en.updated_at < ?")
+                stale_params.append(cutoff)
+            stale_sql = " OR ".join(clauses)
+
+        sql = (
+            "SELECT ent.id FROM entities ent "
+            "LEFT JOIN entity_enrichment en ON en.entity_id = ent.id "
+            f"WHERE {' AND '.join(where)} AND ({stale_sql}) "
+            "ORDER BY ent.id"
+        )
+        params = scope_params + stale_params
+        if limit:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        with self._get_connection() as conn:
+            return [row[0] for row in conn.execute(sql, params).fetchall()]
 
     def find_entity_by_name(self, name: str, *, entity_type: Optional[str] = None) -> Optional[EntityRecord]:
         """Resolve a free-form name (canonical name OR alias OR id)
@@ -1326,6 +1530,39 @@ def _row_get(row: sqlite3.Row, key: str):
         return row[key]
     except (IndexError, KeyError):
         return None
+
+
+def _iso_or_none(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(value) if value else None
+
+
+def _row_to_enrichment(row: sqlite3.Row) -> EntityEnrichment:
+    facts = [EntityFact(**f) for f in json.loads(_row_get(row, "facts_json") or "[]")]
+    affiliations = [EntityAffiliation(**a) for a in json.loads(_row_get(row, "affiliations_json") or "[]")]
+    now = datetime.now(timezone.utc)
+    return EntityEnrichment(
+        entity_id=row["entity_id"],
+        image_url=_row_get(row, "image_url"),
+        image_attribution=_row_get(row, "image_attribution"),
+        image_license=_row_get(row, "image_license"),
+        headline=_row_get(row, "headline"),
+        wikipedia_extract=_row_get(row, "wikipedia_extract"),
+        wikipedia_url=_row_get(row, "wikipedia_url"),
+        facts=facts,
+        affiliations=affiliations,
+        wikidata_status=EnrichmentStatus(_row_get(row, "wikidata_status") or "pending"),
+        wikidata_fetched_at=_parse_dt(_row_get(row, "wikidata_fetched_at")),
+        wikipedia_status=EnrichmentStatus(_row_get(row, "wikipedia_status") or "pending"),
+        wikipedia_fetched_at=_parse_dt(_row_get(row, "wikipedia_fetched_at")),
+        retry_after=_parse_dt(_row_get(row, "retry_after")),
+        schema_version=_row_get(row, "schema_version") or 1,
+        created_at=_parse_dt(_row_get(row, "created_at")) or now,
+        updated_at=_parse_dt(_row_get(row, "updated_at")) or now,
+    )
 
 
 @dataclass(frozen=True)

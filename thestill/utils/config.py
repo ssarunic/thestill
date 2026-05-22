@@ -215,6 +215,12 @@ class Config(BaseModel):
     # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
     max_webhook_body_bytes: int = 1 * 1024 * 1024
 
+    # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
+    enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
+    enrichment_wikipedia_lang: str = "en"  # language edition for sitelinks + summaries
+    enrichment_max_age_days: int = 30  # re-check enrichment older than this
+    enrichment_user_agent: str = "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize PathManager for centralized path management
@@ -483,6 +489,14 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
+        # Entity enrichment (spec #45 Tier 0)
+        "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
+        "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
+        "enrichment_max_age_days": int(os.getenv("ENRICHMENT_MAX_AGE_DAYS", "30")),
+        "enrichment_user_agent": os.getenv(
+            "ENRICHMENT_USER_AGENT",
+            "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)",
+        ),
     }
 
     # Production must not emit
