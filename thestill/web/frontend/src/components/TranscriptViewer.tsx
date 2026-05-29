@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TranscriptType } from '../api/types'
-import { getSpeakerColor } from '../utils/speakerColors'
+import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
 
 interface TranscriptViewerProps {
   content: string
@@ -119,6 +119,12 @@ function getTranscriptStatus(state?: string): { title: string; description: stri
 
 export default function TranscriptViewer({ content, isLoading, available, episodeState, transcriptType }: TranscriptViewerProps) {
   const segments = useMemo(() => parseTranscript(content), [content])
+  // Colour speakers by order of appearance so each distinct speaker gets a
+  // stable, well-separated colour (shared with the segmented view's logic).
+  const speakerColorMap = useMemo(
+    () => buildSpeakerColorMap(segments.map((s) => s.speaker)),
+    [segments],
+  )
 
   if (isLoading) {
     return (
@@ -180,7 +186,10 @@ export default function TranscriptViewer({ content, isLoading, available, episod
                 {segment.timestamp && (
                   <span className="font-mono text-xs text-gray-400">[{segment.timestamp}]</span>
                 )}
-                <span className={`font-sans font-semibold ${getSpeakerColor(segment.speaker || '')}`}>
+                <span
+                  className="font-sans font-semibold"
+                  style={{ color: resolveSpeakerColor(segment.speaker, speakerColorMap) }}
+                >
                   {segment.speaker}:
                 </span>
               </div>

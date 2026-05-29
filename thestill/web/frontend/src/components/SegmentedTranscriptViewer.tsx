@@ -24,7 +24,7 @@ import {
   usePersistedBoolean,
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
-import { getSpeakerBorderColor, getSpeakerColor } from '../utils/speakerColors'
+import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
 import KaraokeWord from './KaraokeWord'
@@ -352,6 +352,9 @@ interface ContentSegmentProps {
   segment: AnnotatedSegment
   offset: number
   isActive: boolean
+  // Resolved speaker colour (assigned by order of appearance upstream), used
+  // for both the label text and the active-segment left-accent border.
+  speakerColor: string
   onSeek?: (seconds: number) => void
   registerRef?: (el: HTMLElement | null) => void
   onCopyTimestamp: (seconds: number) => void
@@ -379,6 +382,7 @@ const ContentSegment = memo(function ContentSegment({
   segment,
   offset,
   isActive,
+  speakerColor,
   onSeek,
   registerRef,
   onCopyTimestamp,
@@ -405,10 +409,7 @@ const ContentSegment = memo(function ContentSegment({
     )
   const speaker = segment.speaker ?? 'Unknown'
   const absoluteSeconds = segment.start + offset
-  const speakerText = getSpeakerColor(speaker)
-  const speakerBorder = getSpeakerBorderColor(speaker)
   const containerActive = isActive ? 'bg-primary-50/70' : 'hover:bg-gray-50/70'
-  const paragraphBorder = isActive ? speakerBorder : 'border-gray-200'
   const paragraphAccent = 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   const dimClass = dimmed ? 'opacity-70' : ''
@@ -431,14 +432,18 @@ const ContentSegment = memo(function ContentSegment({
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <p
-        className={`${bodyClass} pl-4 ${paragraphAccent} ${paragraphBorder} text-base leading-[1.7] !mb-0`}
+        className={`${bodyClass} pl-4 ${paragraphAccent} border-gray-200 text-base leading-[1.7] !mb-0`}
+        style={{ borderLeftColor: isActive ? speakerColor : undefined }}
       >
         <TimestampLink
           seconds={absoluteSeconds}
           onCopy={onCopyTimestamp}
           className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${timestampColor}`}
         />
-        <span className={`font-sans font-semibold tracking-tight ${speakerText}`}>
+        <span
+          className="font-sans font-semibold tracking-tight"
+          style={{ color: speakerColor }}
+        >
           {speaker}
           {isFiller && (
             <span className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wider text-gray-400">
@@ -535,6 +540,13 @@ export default function SegmentedTranscriptViewer({
   onKaraokeToggle,
 }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
+  // Assign speaker colours by order of appearance across the whole
+  // transcript so each distinct (resolved) speaker gets a stable, maximally
+  // separated colour. Merged diarisation labels share one entry → one colour.
+  const speakerColorMap = useMemo(
+    () => buildSpeakerColorMap(transcript.segments.map((s) => s.speaker)),
+    [transcript.segments],
+  )
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
   const [showFiller, setShowFiller] = usePersistedBoolean(SHOW_FILLER_STORAGE_KEY, false)
   const [hiddenKinds, setHiddenKinds] = useState<Set<TogglableKind>>(loadHiddenKinds)
@@ -1001,6 +1013,7 @@ export default function SegmentedTranscriptViewer({
                   segment={segment}
                   offset={offset}
                   isActive={isActive}
+                  speakerColor={resolveSpeakerColor(segment.speaker, speakerColorMap)}
                   onSeek={onSeekRequest}
                   registerRef={follow.registerRef(segment.id)}
                   onCopyTimestamp={handleCopyTimestamp}
