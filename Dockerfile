@@ -18,7 +18,7 @@ ARG THESTILL_GID=1000
 # upload would land in our image without warning. Dependabot's docker
 # ecosystem watches these digests and opens a PR weekly when a new
 # version is published.
-FROM node:26-slim@sha256:424cafd2a035ed2b2d74acc3142b68b426fb62a47742c80a75e7117db02d6b30 AS frontend-builder
+FROM node:26-slim@sha256:1e738cb88890a15c71880323fbc35a739b7bbc703d72e8bfd1613128f8182f78 AS frontend-builder
 WORKDIR /src/thestill/web/frontend
 COPY thestill/web/frontend/package.json thestill/web/frontend/package-lock.json ./
 RUN npm ci
