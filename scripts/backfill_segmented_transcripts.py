@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 
 from thestill.core.feed_manager import PodcastFeedManager
 from thestill.core.llm_provider import create_llm_provider_from_config
+from thestill.core.queue_manager import QueueManager, TaskStage
 from thestill.core.transcript_cleaning_processor import TranscriptCleaningProcessor
 from thestill.logging import configure_structlog
 from thestill.models.podcast import Episode, Podcast
@@ -123,6 +124,19 @@ def main() -> None:
             "so a bare --apply would re-spend LLM tokens and overwrite them)."
         ),
     )
+    parser.add_argument(
+        "--no-enqueue",
+        action="store_true",
+        help=(
+            "Don't enqueue the entity branch after writing a sidecar. By "
+            "default each backfilled episode gets an extract-entities task so "
+            "a running worker chains extract → resolve → reindex and the "
+            "episode's entity sidebar/search index populate. Writing the "
+            "sidecar alone does NOT trigger entity extraction (the pipeline "
+            "only chains it forward from summarize), so without enqueueing the "
+            "episode stays entity-less until a manual `thestill reindex`."
+        ),
+    )
     args = parser.parse_args()
 
     episode_ids = args.episode_ids or DEFAULT_EPISODE_IDS
@@ -168,8 +182,17 @@ def main() -> None:
     print(f"\n✓ Using {config.llm_provider.upper()} provider: {llm_provider.get_model_name()}")
     cleaning_processor = TranscriptCleaningProcessor(llm_provider)
 
+    # Writing a sidecar doesn't trigger entity extraction — the pipeline only
+    # chains the entity branch forward from `summarize`, so an episode cleaned
+    # out-of-band never gets entities on its own. Enqueue an extract-entities
+    # task per backfilled episode (unless --no-enqueue); a running worker
+    # (the `thestill server` in-process worker, or `thestill worker`) chains
+    # extract → resolve → reindex from there. Same DB the worker polls.
+    queue_manager = None if args.no_enqueue else QueueManager(db_path=config.database_path)
+
     succeeded = 0
     skipped = 0
+    enqueued = 0
     failed: List[str] = []
     start = time.time()
 
@@ -240,6 +263,16 @@ def main() -> None:
             print(f"  ✅ sidecar written: {clean_transcript_json_db_path}")
             print(f"  👥 speakers: {len(result['episode_facts'].speaker_mapping)}")
 
+            # Kick off the entity branch so the sidebar / search index populate.
+            # Idempotent: skip if a worker already has one queued for this stage.
+            if queue_manager is not None:
+                if queue_manager.has_pending_task(episode.id, TaskStage.EXTRACT_ENTITIES):
+                    print("  ↻ extract-entities already queued; not re-adding")
+                else:
+                    queue_manager.add_task(episode.id, TaskStage.EXTRACT_ENTITIES)
+                    enqueued += 1
+                    print("  ↻ enqueued extract-entities (worker chains resolve → reindex)")
+
         except Exception as exc:  # noqa: BLE001 — surface any failure per-episode
             import traceback
 
@@ -253,6 +286,12 @@ def main() -> None:
     print(f"🎉 Done: {succeeded}/{len(targets)} backfilled in {elapsed:.1f}s")
     if skipped:
         print(f"⏭️  Skipped (already had a sidecar; --force to re-clean): {skipped}")
+    if enqueued:
+        print(
+            f"↻  Enqueued extract-entities for {enqueued} episode(s). "
+            "A worker must be running to process them ("
+            "`thestill server` or `thestill worker`); otherwise they wait pending."
+        )
     if failed:
         print(f"⚠️  Failed: {', '.join(failed)}")
 
