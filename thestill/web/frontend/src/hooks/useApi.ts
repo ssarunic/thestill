@@ -54,6 +54,7 @@ import {
   quickSearch,
   corpusSearch,
   getEpisodeEntities,
+  getRelatedEpisodes,
   getEntitySummary,
   getInbox,
   type GetInboxOptions,
@@ -725,6 +726,18 @@ export function useEpisodeEntities(episodeId: string | null | undefined, minConf
     queryFn: () => getEpisodeEntities(episodeId!, minConfidence),
     enabled: !!episodeId,
     staleTime: 60_000,
+  })
+}
+
+// Spec #28 §5.2 — "Related episodes" rail. Results are stable once the
+// corpus is indexed, so a 5-minute staleTime keeps the rail snappy on
+// back-navigation without re-querying the centroid each visit.
+export function useRelatedEpisodes(episodeId: string | null | undefined, limit = 5) {
+  return useQuery({
+    queryKey: ['episodes', episodeId, 'related', limit],
+    queryFn: () => getRelatedEpisodes(episodeId!, limit),
+    enabled: !!episodeId,
+    staleTime: 5 * 60_000,
   })
 }
 

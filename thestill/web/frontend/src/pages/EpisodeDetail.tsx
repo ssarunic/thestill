@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useEpisodeTranscriptWords } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
@@ -91,6 +91,12 @@ export default function EpisodeDetail() {
   // rail, inline highlights, filter bar, and timeline.
   const { data: entitiesData } = useEpisodeEntities(episode?.id ?? null)
   const entities = entitiesData?.entities ?? []
+
+  // Spec #28 §5.2 — "Related episodes" rail. Independent fetch (the
+  // backend computes a centroid over chunk embeddings) so the rail can
+  // surface related episodes even when no entities were extracted.
+  const { data: relatedData, isLoading: relatedLoading } = useRelatedEpisodes(episode?.id ?? null)
+  const relatedEpisodes = relatedData?.episodes ?? []
 
   const [hiddenEntityTypes, setHiddenEntityTypes] = useState<Set<EntityType>>(() => new Set())
   const [filterEntityIds, setFilterEntityIds] = useState<Set<string>>(() => new Set())
@@ -501,14 +507,18 @@ export default function EpisodeDetail() {
         </div>
 
         {/* Right rail — only on lg+; collapses below the breakpoint
-            (the strip carries the gist on mobile). */}
-        {entities.length > 0 && (
+            (the strip carries the gist on mobile). Shown when there are
+            entities OR related episodes so the rail surfaces even on
+            episodes without entity extraction. */}
+        {(entities.length > 0 || relatedEpisodes.length > 0 || relatedLoading) && (
           <div className="hidden lg:block">
             <div className="sticky top-4 space-y-4 rounded-lg border border-gray-200 bg-white p-4">
               <EntityRail
                 entities={entities}
                 onSeek={handleSegmentSeek}
                 onFocusEntity={setFocusedEntityId}
+                relatedEpisodes={relatedEpisodes}
+                relatedLoading={relatedLoading}
               />
             </div>
           </div>

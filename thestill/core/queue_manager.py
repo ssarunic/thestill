@@ -75,6 +75,10 @@ class TaskStage(str, Enum):
     RESOLVE_ENTITIES = "resolve-entities"
     REINDEX = "reindex"
     REBUILD_COOCCURRENCES = "rebuild-cooccurrences"
+    # Spec #46 — terminal entity-branch stage; refreshes the precomputed
+    # "Related episodes" rail for the just-indexed episodes (+ their
+    # neighbours). Coalesced + corpus-global like REBUILD_COOCCURRENCES.
+    COMPUTE_RELATED = "compute-related"
 
 
 # Spec #28 §6 — the entity branch is a separate failure domain. A
@@ -88,6 +92,7 @@ _NON_USER_FAILING_STAGES = frozenset(
         TaskStage.RESOLVE_ENTITIES,
         TaskStage.REINDEX,
         TaskStage.REBUILD_COOCCURRENCES,
+        TaskStage.COMPUTE_RELATED,
     }
 )
 
@@ -126,7 +131,8 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.EXTRACT_ENTITIES: [TaskStage.RESOLVE_ENTITIES],
     TaskStage.RESOLVE_ENTITIES: [TaskStage.REINDEX],
     TaskStage.REINDEX: [TaskStage.REBUILD_COOCCURRENCES],
-    TaskStage.REBUILD_COOCCURRENCES: [],
+    TaskStage.REBUILD_COOCCURRENCES: [TaskStage.COMPUTE_RELATED],
+    TaskStage.COMPUTE_RELATED: [],
 }
 
 
@@ -157,6 +163,7 @@ _ENTITY_BRANCH_ORDER: List[TaskStage] = [
     TaskStage.RESOLVE_ENTITIES,
     TaskStage.REINDEX,
     TaskStage.REBUILD_COOCCURRENCES,
+    TaskStage.COMPUTE_RELATED,
 ]
 
 

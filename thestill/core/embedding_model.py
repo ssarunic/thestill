@@ -32,13 +32,35 @@ from __future__ import annotations
 
 import struct
 import threading
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from structlog import get_logger
 
 from ..search.base import DEFAULT_EMBEDDING_MODEL, embedding_dim_for
 
 logger = get_logger(__name__)
+
+
+def centroid_blob(embeddings: Sequence[bytes], dim: int) -> Optional[bytes]:
+    """Mean of packed-float32 embeddings, L2-normalised and repacked.
+
+    ``embeddings`` are the per-chunk blobs in the ``chunks.embedding``
+    layout (little-endian float32, length ``dim``). Returns the episode
+    centroid in the same layout, or ``None`` if there are no embeddings
+    or the mean is a zero vector (can't be normalised). Spec #46 Tier 0
+    materialises this once per episode so the related-episodes builder
+    never reloads per-chunk vectors.
+    """
+    import numpy as np
+
+    if not embeddings:
+        return None
+    arr = np.frombuffer(b"".join(embeddings), dtype=np.float32).reshape(len(embeddings), dim)
+    mean = arr.mean(axis=0, dtype=np.float64)  # accumulate in float64 to avoid drift
+    norm = float(np.linalg.norm(mean))
+    if norm == 0.0:
+        return None
+    return (mean / norm).astype(np.float32).tobytes()
 
 
 class EmbeddingModel:

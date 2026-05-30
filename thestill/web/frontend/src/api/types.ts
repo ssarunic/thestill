@@ -967,6 +967,28 @@ export interface CorpusSearchOptions {
   has_entity?: string[]
 }
 
+// Spec #28 §5.2 — "Related episodes" rail. The backend averages the
+// source episode's chunk embeddings into a centroid and returns the
+// nearest distinct episodes (source excluded). Slugs are always
+// present (rows without them are dropped server-side), so cards are
+// always deep-linkable.
+export interface RelatedEpisode {
+  episode_id: string
+  podcast_id: string
+  podcast_slug: string
+  episode_slug: string
+  podcast_title: string
+  episode_title: string
+  published_at: string | null
+  image_url: string | null
+  score: number
+}
+
+export interface RelatedEpisodesResponse {
+  episode_id: string
+  episodes: RelatedEpisode[]
+}
+
 // Quick search (⌘K typeahead) — pinned to lexical server-side, never
 // silently upgraded. Items are discriminated by `kind` so the
 // CommandBar can render mixed groups uniformly.

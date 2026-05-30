@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import EntityRail from './EntityRail'
-import type { EntityType, EpisodeEntity, SpeakerKind } from '../../api/types'
+import type { EntityType, EpisodeEntity, RelatedEpisode, SpeakerKind } from '../../api/types'
 
 function entity(
   id: string,
@@ -22,10 +22,34 @@ function entity(
   }
 }
 
-function renderRail(entities: EpisodeEntity[], onSeek?: (s: number) => void) {
+function relatedEpisode(overrides: Partial<RelatedEpisode> = {}): RelatedEpisode {
+  return {
+    episode_id: 'e2',
+    podcast_id: 'p1',
+    podcast_slug: 'prof-g-markets',
+    episode_slug: 'ai-capex-cliff',
+    podcast_title: 'Prof G Markets',
+    episode_title: 'AI Capex Cliff',
+    published_at: '2026-03-14T00:00:00',
+    image_url: null,
+    score: 0.2,
+    ...overrides,
+  }
+}
+
+function renderRail(
+  entities: EpisodeEntity[],
+  onSeek?: (s: number) => void,
+  opts: { relatedEpisodes?: RelatedEpisode[]; relatedLoading?: boolean } = {},
+) {
   return render(
     <MemoryRouter>
-      <EntityRail entities={entities} onSeek={onSeek} />
+      <EntityRail
+        entities={entities}
+        onSeek={onSeek}
+        relatedEpisodes={opts.relatedEpisodes}
+        relatedLoading={opts.relatedLoading}
+      />
     </MemoryRouter>,
   )
 }
@@ -71,9 +95,32 @@ describe('EntityRail', () => {
     expect(onSeek).toHaveBeenCalledWith(12.5)
   })
 
-  it('always shows the Related episodes section as a placeholder', () => {
+  it('omits the Related episodes section when none are found and not loading', () => {
     renderRail([entity('person:a', 'Alice', 'person', 1)])
+    expect(screen.queryByText('Related episodes')).toBeNull()
+  })
+
+  it('shows a loading note while related episodes are being fetched', () => {
+    renderRail([entity('person:a', 'Alice', 'person', 1)], undefined, { relatedLoading: true })
     expect(screen.getByText('Related episodes')).toBeInTheDocument()
+    expect(screen.getByText(/Finding related episodes/)).toBeInTheDocument()
+  })
+
+  it('renders related episode cards linking to the episode page', () => {
+    renderRail([entity('person:a', 'Alice', 'person', 1)], undefined, {
+      relatedEpisodes: [relatedEpisode()],
+    })
+    expect(screen.getByText('Related episodes')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /AI Capex Cliff/ })
+    expect(link.getAttribute('href')).toBe('/podcasts/prof-g-markets/episodes/ai-capex-cliff')
+  })
+
+  it('surfaces related episodes even when no entities were extracted', () => {
+    renderRail([], undefined, { relatedEpisodes: [relatedEpisode()] })
+    // No entity buckets, but the related section still renders and the
+    // "no entities" note is suppressed.
+    expect(screen.getByText('Related episodes')).toBeInTheDocument()
+    expect(screen.queryByText(/No entities extracted/)).toBeNull()
   })
 
   it('caps a section at 8 visible entries by default and reveals the rest on expand', () => {

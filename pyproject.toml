@@ -141,6 +141,12 @@ entities = [
     # virtual table type for k-NN over float32 blobs.
     "sentence-transformers>=3.0.0",
     "sqlite-vec>=0.1.6",
+    # Spec #28 §5.2 — "Related episodes" relevance. Dense vectors encode
+    # conversational register more than topic, so the rail blends in a
+    # TF-IDF topical signal (``search.related_builder``). scikit-learn
+    # provides TfidfVectorizer; it's also pulled transitively by
+    # sentence-transformers, but we depend on it explicitly here.
+    "scikit-learn>=1.3.0",
 ]
 
 [tool.uv]

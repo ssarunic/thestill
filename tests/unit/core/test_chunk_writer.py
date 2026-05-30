@@ -10,7 +10,6 @@ from __future__ import annotations
 import sqlite3
 import struct
 import uuid
-from datetime import datetime
 
 import pytest
 
@@ -65,7 +64,7 @@ def _seed_db(tmp_path) -> tuple[str, str]:
                 "ext-1",
                 "Sample Episode",
                 "https://example.com/ep1.mp3",
-                datetime(2026, 4, 28).isoformat(),
+                "2026-04-28T00:00:00",
             ),
         )
         conn.commit()
@@ -179,3 +178,65 @@ class TestChunkWriter:
             fts_count = conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
         assert vec_count == 1
         assert fts_count == 1
+
+
+class _BasisStub(EmbeddingModel):
+    """Returns the first basis vector e0 — a non-zero unit vector so the
+    centroid is well-defined (the zero-vector stub yields a None centroid)."""
+
+    def __init__(self, model_name: str = DEFAULT_EMBEDDING_MODEL):
+        self.model_name = model_name
+        self.dim = embedding_dim_for(model_name)
+
+    def encode_one(self, text: str) -> bytes:  # type: ignore[override]
+        v = [0.0] * self.dim
+        v[0] = 1.0
+        return struct.pack(f"<{self.dim}f", *v)
+
+    def encode_batch(self, texts, *, batch_size: int = 64):  # type: ignore[override]
+        return [self.encode_one(t) for t in texts]
+
+
+class TestEpisodeCentroid:
+    """Spec #46 Tier 0 — ChunkWriter materialises the episode centroid."""
+
+    def test_writes_centroid_row_with_chunk_count(self, tmp_path):
+        db_path, episode_id = _seed_db(tmp_path)
+        writer = ChunkWriter(db_path=db_path, embedding_model=_BasisStub())
+        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "a", "H"), (1, 5.0, 9.0, "b", "H")))
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT chunk_count, centroid FROM episode_vectors WHERE episode_id = ?",
+                (episode_id,),
+            ).fetchone()
+        assert row is not None
+        chunk_count, centroid = row
+        assert chunk_count == 2
+        # Mean of two e0 unit vectors, normalised, is e0 again.
+        dim = embedding_dim_for(DEFAULT_EMBEDDING_MODEL)
+        vec = struct.unpack(f"<{dim}f", centroid)
+        assert vec[0] == pytest.approx(1.0, abs=1e-5)
+        assert all(abs(x) < 1e-5 for x in vec[1:])
+
+    def test_force_reembed_updates_centroid_count(self, tmp_path):
+        db_path, episode_id = _seed_db(tmp_path)
+        writer = ChunkWriter(db_path=db_path, embedding_model=_BasisStub())
+        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "a", "H"), (1, 5.0, 9.0, "b", "H")))
+        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "only one", "H")), force=True)
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute(
+                "SELECT chunk_count FROM episode_vectors WHERE episode_id = ?", (episode_id,)
+            ).fetchone()[0]
+        assert count == 1  # row replaced, not duplicated
+
+    def test_zero_vector_writes_no_centroid_row(self, tmp_path):
+        # The all-zero stub yields a zero mean → unnormalisable → no row,
+        # and the chunk write must still succeed.
+        db_path, episode_id = _seed_db(tmp_path)
+        writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        assert writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "x", "H"))) == 1
+        with sqlite3.connect(db_path) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM episode_vectors WHERE episode_id = ?", (episode_id,)).fetchone()[0]
+        assert n == 0

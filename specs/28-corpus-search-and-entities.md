@@ -1315,7 +1315,7 @@ is validated.
 | Item | Status | Notes |
 |---|---|---|
 | 5.1 entity page route + minimal page | ⏳ Partial | Route + page live at [Entities.tsx](../thestill/web/frontend/src/pages/Entities.tsx) but flagged as "minimal" in source. Still owed: `<MentionTimeline/>` sparkline, `<NotableQuotes/>` (distinct from the recent-mentions list), paginated `<MentionFeed/>` with inline FloatingPlayer scrub |
-| 5.2 episode-page entity UX | 🚧 In progress | All six core components shipped: `EntityHighlight`, `EntityHoverCard`, `EntityRail`, `KeyEntitiesStrip`, `MentionDensityTimeline`, `EntityFilterBar`. P31 bucket gating, salience-sort, top-8 cap landed (PR a4ac46c). Right-rail "Related episodes" still a placeholder. Reader affordance status: see table below |
+| 5.2 episode-page entity UX | 🚧 In progress | All six core components shipped: `EntityHighlight`, `EntityHoverCard`, `EntityRail`, `KeyEntitiesStrip`, `MentionDensityTimeline`, `EntityFilterBar`. P31 bucket gating, salience-sort, top-8 cap landed (PR a4ac46c). Right-rail "Related episodes" shipped: `GET /api/search/related` reads a precomputed `episode_related` table built by `thestill related build` ([related_builder.py](../thestill/search/related_builder.py)). Relevance is a TF-IDF-gated blend (0.55·TF-IDF + 0.30·dense-vector + 0.15·entity-overlap, cap 5). Dense vectors alone ranked badly — they encode conversational _register_ over topic (a fitness episode returned a product-management podcast); TF-IDF on distinctive vocabulary is the discriminator. A `bge-small` model swap was tested and did **not** help. Reader affordance status: see table below |
 | 5.3 empty states reviewed by Sasa | 📝 Not started | Components have inline empty branches (no entities → no strip, etc.) but no formal review pass |
 | 5.4 README + status flip to ✅ Complete | 📝 Not started | [specs/README.md](README.md) row #28 is also stale ("Phase 4 next" — Phase 4 is in fact done) |
 
@@ -1382,7 +1382,13 @@ Score: **7 of 20** affordances landed.
     play-▷ affordance on hover that seeks `<FloatingPlayer/>` to the
     first mention's `start_ms`.
   - Companies section uses the same pattern, salience-sorted.
-  - Related episodes pulls from qmd vector similarity; cap at 5.
+  - Related episodes: precomputed corpus-global relevance, cap at 5.
+    Pure dense-vector similarity (qmd/sqlite-vec) was tried first and
+    ranked poorly — the embedding model encodes conversational register
+    over topic, so unrelated long-form interviews all sit ~0.6 cosine.
+    Shipped instead as a TF-IDF-gated blend (0.55·TF-IDF + 0.30·vector +
+    0.15·entity-overlap) computed by `thestill related build` into
+    `episode_related`; `GET /api/search/related` reads it. ✅ implemented.
 
   **Bucket gating via Wikidata P31 (post-1.5 correctness layer):**
   - The base resolver assigns `EntityType` from GLiNER's
