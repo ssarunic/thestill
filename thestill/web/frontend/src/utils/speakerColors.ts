@@ -1,7 +1,8 @@
-// Shared speaker-colour logic used by both transcript viewers. Keeping it
-// in one place means a given speaker stays the same colour across the
-// "Legacy blended" and "Segmented" tabs — the visual anchor matters more
-// than the specific palette, so the two views must agree.
+// Shared speaker-colour logic used by both transcript viewers (the
+// segmented viewer and the raw/fallback markdown viewer). Keeping it in
+// one place means a given speaker stays the same colour across both —
+// the visual anchor matters more than the specific palette, so the two
+// views must agree.
 //
 // Palette — an Okabe–Ito-derived qualitative palette. Okabe–Ito is the
 // de-facto colour-blind-safe categorical palette (distinguishable under

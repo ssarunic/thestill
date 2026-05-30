@@ -261,11 +261,6 @@ export interface AnnotatedTranscriptDump {
   transcript_source_duration_s: number | null
 }
 
-export interface ShadowTranscript {
-  pipeline: 'segmented' | 'legacy'
-  content: string
-}
-
 // ---------------------------------------------------------------------------
 // Spec #38 — karaoke wipe word-level timestamps
 // ---------------------------------------------------------------------------
@@ -315,10 +310,6 @@ export interface ContentResponse {
   // episode. Absence means "no segmented output to render" — the
   // frontend falls back to the classic ``content`` Markdown.
   segments?: AnnotatedTranscriptDump
-  // Present iff a dual-pipeline shadow debug file exists. Its
-  // ``pipeline`` names which pipeline was the shadow (the primary
-  // is reflected in ``content`` / ``transcript_type`` above).
-  shadow?: ShadowTranscript
 }
 
 // Commands API Types
