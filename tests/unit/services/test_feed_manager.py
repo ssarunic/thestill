@@ -8,11 +8,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from time import struct_time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, create_autospec, patch
 
 import pytest
 
 from thestill.core.feed_manager import PodcastFeedManager
+from thestill.core.media_source import YouTubeMediaSource
 from thestill.models.podcast import Episode, Podcast
 from thestill.repositories.podcast_repository import PodcastRepository
 from thestill.utils.path_manager import PathManager
@@ -384,7 +385,14 @@ class TestFirstRefreshCapGate:
     """
 
     def _mock_source(self, feed_manager, episodes=None):
-        source = Mock()
+        # ``create_autospec`` (unlike a bare ``Mock()`` or even ``Mock(spec=...)``)
+        # enforces the REAL ``fetch_episodes`` signature, so an RSS-only kwarg
+        # leaking into a non-RSS call raises here instead of passing silently —
+        # the "consistent-mock" gap that hid the known_external_ids crash
+        # (issue #112, spec #42). ``YouTubeMediaSource`` carries the base
+        # signature only, so it also stands in for the non-RSS path
+        # (``isinstance(..., RSSMediaSource)`` is False).
+        source = create_autospec(YouTubeMediaSource, instance=True)
         source.fetch_episodes.return_value = episodes or []
         feed_manager.media_source_factory.detect_source.return_value = source
         return source
@@ -426,16 +434,50 @@ class TestFirstRefreshCapGate:
         assert source.fetch_episodes.call_args.kwargs["max_episodes"] is None
 
     def test_non_rss_source_not_passed_rss_only_kwargs(self, feed_manager, mock_repository):
-        """``known_external_ids`` is RSS-only; the YouTube source's signature
-        rejects it, so it must not leak into the non-RSS fetch call."""
+        """``known_external_ids`` / ``podcast_slug`` are RSS-only; the YouTube
+        source's signature rejects them, so they must not leak into the non-RSS
+        fetch call. The autospec source enforces that contract, so a leak would
+        raise (surfacing as a refresh error) instead of passing silently as it
+        did with a bare ``Mock()`` (issue #112)."""
         podcast = Podcast(title="YT", description="", rss_url="https://youtube.com/@x", episodes=[])
         mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {podcast.id: {"vid-1"}})
         source = self._mock_source(feed_manager)
 
-        feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+        outcome = feed_manager.refresh_feeds(max_episodes_per_podcast=5)
 
-        assert "known_external_ids" not in source.fetch_episodes.call_args.kwargs
-        assert "podcast_slug" not in source.fetch_episodes.call_args.kwargs
+        # The call went through the real YouTube signature without raising.
+        assert outcome.podcasts_with_errors == 0
+        called = source.fetch_episodes.call_args.kwargs
+        assert set(called) <= {"url", "existing_episodes", "last_processed", "max_episodes"}
+
+    def test_youtube_refresh_surfaces_episodes_through_real_signature(self, feed_manager, mock_repository):
+        """End-to-end: a YouTube refresh against the real ``fetch_episodes``
+        signature surfaces episodes. If an RSS-only kwarg leaked into the call,
+        the autospec source would raise, the broad ``except`` would swallow it,
+        and zero episodes would surface — so this regresses loudly."""
+        podcast = Podcast(title="YT", description="", rss_url="https://youtube.com/@x", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {podcast.id: {"old"}})
+        episode = Episode(
+            title="YT Video",
+            audio_url="https://youtube.com/watch?v=abc",
+            external_id="yt-abc",
+            pub_date=datetime(2026, 1, 20),
+            description="v",
+        )
+        self._mock_source(feed_manager, episodes=[episode])
+
+        outcome = feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+
+        assert outcome.podcasts_with_errors == 0
+        assert len(outcome.episodes_by_podcast) == 1
+
+    def test_autospec_source_rejects_rss_only_kwarg(self):
+        """Guard-the-guard: the spec'd source mock must itself reject an
+        RSS-only kwarg. A bare ``Mock()`` would accept it silently — proving
+        the fixture now enforces the real contract (the root cause in #112)."""
+        source = create_autospec(YouTubeMediaSource, instance=True)
+        with pytest.raises(TypeError):
+            source.fetch_episodes(url="u", existing_episodes=[], known_external_ids={"x"})
 
 
 class TestEpisodeMarking:
