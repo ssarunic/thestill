@@ -540,11 +540,23 @@ export default function SegmentedTranscriptViewer({
   onKaraokeToggle,
 }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
-  // Assign speaker colours by order of appearance across the whole
-  // transcript so each distinct (resolved) speaker gets a stable, maximally
-  // separated colour. Merged diarisation labels share one entry → one colour.
+  // Assign speaker colours by order of appearance so each distinct (resolved)
+  // speaker gets a stable, maximally separated colour. Merged diarisation
+  // labels share one entry → one colour.
+  //
+  // Only `content`/`filler` segments render with a speaker colour (everything
+  // else is a BlockSegment, below). Restrict the map to those kinds so a
+  // speaker preserved on an `ad_break`/`intro`/etc. row can't consume a
+  // palette slot — that would shift every later speaker's colour and make the
+  // same person read differently here vs the "Legacy blended" tab, which only
+  // ever sees content rows from the parsed markdown.
   const speakerColorMap = useMemo(
-    () => buildSpeakerColorMap(transcript.segments.map((s) => s.speaker)),
+    () =>
+      buildSpeakerColorMap(
+        transcript.segments
+          .filter((s) => s.kind === 'content' || s.kind === 'filler')
+          .map((s) => s.speaker),
+      ),
     [transcript.segments],
   )
   const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
