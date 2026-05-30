@@ -79,6 +79,13 @@ class TaskStage(str, Enum):
     # "Related episodes" rail for the just-indexed episodes (+ their
     # neighbours). Coalesced + corpus-global like REBUILD_COOCCURRENCES.
     COMPUTE_RELATED = "compute-related"
+    # Spec #47 — terminal entity-branch stage; fetches Wikidata/Wikipedia
+    # display data (photo, headline, bio, vital stats) for entities
+    # mentioned in the just-processed episodes. Network-bound and coalesced
+    # like the corpus stages, but iterates per-entity. Runs LAST so its
+    # latency never delays REINDEX/COMPUTE_RELATED (search + related rail).
+    # The scheduled ``enrich-entities`` batch still owns retries + staleness.
+    ENRICH_ENTITIES = "enrich-entities"
 
 
 # Spec #28 §6 — the entity branch is a separate failure domain. A
@@ -93,6 +100,7 @@ _NON_USER_FAILING_STAGES = frozenset(
         TaskStage.REINDEX,
         TaskStage.REBUILD_COOCCURRENCES,
         TaskStage.COMPUTE_RELATED,
+        TaskStage.ENRICH_ENTITIES,
     }
 )
 
@@ -132,7 +140,8 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.RESOLVE_ENTITIES: [TaskStage.REINDEX],
     TaskStage.REINDEX: [TaskStage.REBUILD_COOCCURRENCES],
     TaskStage.REBUILD_COOCCURRENCES: [TaskStage.COMPUTE_RELATED],
-    TaskStage.COMPUTE_RELATED: [],
+    TaskStage.COMPUTE_RELATED: [TaskStage.ENRICH_ENTITIES],
+    TaskStage.ENRICH_ENTITIES: [],
 }
 
 
@@ -164,6 +173,7 @@ _ENTITY_BRANCH_ORDER: List[TaskStage] = [
     TaskStage.REINDEX,
     TaskStage.REBUILD_COOCCURRENCES,
     TaskStage.COMPUTE_RELATED,
+    TaskStage.ENRICH_ENTITIES,
 ]
 
 

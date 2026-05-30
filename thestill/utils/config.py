@@ -220,6 +220,10 @@ class Config(BaseModel):
     enrichment_wikipedia_lang: str = "en"  # language edition for sitelinks + summaries
     enrichment_max_age_days: int = 30  # re-check enrichment older than this
     enrichment_user_agent: str = "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)"
+    # Spec #47 — cap entities enriched per ENRICH_ENTITIES task so one
+    # coalesced batch can't burst thousands of Wikimedia requests inline.
+    # Overflow is picked up by the scheduled ``enrich-entities`` sweep.
+    enrichment_max_per_task: int = 200
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -497,6 +501,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "ENRICHMENT_USER_AGENT",
             "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)",
         ),
+        "enrichment_max_per_task": int(os.getenv("ENRICHMENT_MAX_PER_TASK", "200")),
     }
 
     # Production must not emit

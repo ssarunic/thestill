@@ -29,6 +29,7 @@ Usage:
 import json
 import tempfile
 import threading
+import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
@@ -811,6 +812,99 @@ def handle_compute_related(task: Task, state: "AppState") -> None:
         )
 
 
+def handle_enrich_entities(task: Task, state: "AppState") -> None:
+    """Spec #47 — fetch Wikidata/Wikipedia display data for the batch's entities.
+
+    Terminal entity-branch stage, modelled on ``handle_compute_related``:
+    coalesces sibling pending rows under ``_enrichment_lock`` and resolves the
+    union of episode_ids to the entities that need (re)enriching via the
+    repo's scoped ``entity_ids_needing_enrichment`` query. Each entity is then
+    enriched sequentially — the network fetch happens OUTSIDE any DB
+    transaction and each ``upsert_enrichment`` is its own short write, so the
+    SQLite writer lock is never held across a 5s Wikimedia timeout.
+
+    Why a stage at all (vs. inlining into resolve): enrichment is the only
+    network-bound step in the branch and is pure display data. Running it LAST
+    means REINDEX (search) and COMPUTE_RELATED (related rail) — the things
+    users consume — finish first, and a Wikidata outage never delays them.
+
+    Per-entity failures are swallowed (spec #42 FM-1) and left for retry: the
+    enricher records ``FAILED`` + a ``retry_after``, and the scheduled
+    ``thestill enrich-entities`` sweep re-selects them. This stage fires only
+    for freshly-processed episodes, so the batch command remains the owner of
+    transient-failure retries, 30-day staleness, and post-QID-correction
+    re-enrichment — it is supplemented here, not replaced.
+
+    Failure isolation: a hard error flips ``entity_extraction_status`` (via
+    ``_NON_USER_FAILING_STAGES``), never ``failed_at_stage`` — the rail is a
+    derived cache and the user-visible pipeline is long done by this point.
+    """
+    from ..models.enrichment import EnrichmentStatus
+    from .entity_enricher import ENRICHMENT_SCHEMA_VERSION
+
+    repo = state.entity_repository
+    cfg = state.config
+
+    with _handler_error_context(f"enriching entities for episode {task.episode_id}"):
+        with _enrichment_lock:
+            coalesced = state.queue_manager.claim_pending_for_coalescing(TaskStage.ENRICH_ENTITIES)
+            episode_ids = sorted({task.episode_id, *coalesced})
+
+            # Union the per-episode scoped selections. Each call already
+            # applies the staleness gating (never-enriched / older schema /
+            # failed-past-retry / >max_age), so we only touch entities that
+            # genuinely need work.
+            entity_ids: set[str] = set()
+            for eid in episode_ids:
+                entity_ids.update(
+                    repo.entity_ids_needing_enrichment(
+                        episode_id=eid,
+                        schema_version=ENRICHMENT_SCHEMA_VERSION,
+                        max_age_days=cfg.enrichment_max_age_days,
+                    )
+                )
+
+            # Cap the burst; overflow is the scheduled sweep's job. Sorted so
+            # the cap is deterministic across coalesced runs.
+            ordered = sorted(entity_ids)
+            capped = ordered[: cfg.enrichment_max_per_task]
+
+            enricher = _get_or_create_entity_enricher(state)
+            enriched = empty = failed = errored = 0
+            for entity_id in capped:
+                entity = repo.get_entity(entity_id)
+                if entity is None or not entity.wikidata_qid:
+                    continue
+                try:
+                    enrichment = enricher.enrich(entity)
+                    repo.upsert_enrichment(enrichment)
+                except Exception as exc:  # noqa: BLE001 — FM-1: one entity must not abort the batch
+                    errored += 1
+                    logger.warning("enrich_entity_failed", entity_id=entity_id, error=str(exc))
+                    continue
+                if EnrichmentStatus.FAILED in (enrichment.wikidata_status, enrichment.wikipedia_status):
+                    failed += 1
+                elif enrichment.has_content():
+                    enriched += 1
+                else:
+                    empty += 1
+                if cfg.enrichment_request_delay_sec > 0:
+                    time.sleep(cfg.enrichment_request_delay_sec)
+
+        logger.info(
+            "entity_enrichment_completed",
+            episode_id=task.episode_id,
+            coalesced_episode_count=len(coalesced),
+            candidates=len(entity_ids),
+            attempted=len(capped),
+            enriched=enriched,
+            empty=empty,
+            source_failed=failed,
+            errored=errored,
+            deferred_to_sweep=max(0, len(entity_ids) - len(capped)),
+        )
+
+
 def handle_extract_entities(task: Task, state: "AppState") -> None:
     """Spec #28 §1.2 — run GLiNER over the cleaned-transcript JSON sidecar.
 
@@ -924,6 +1018,13 @@ _cooccurrence_rebuild_lock = threading.Lock()
 # Spec #46 Tier 3 — serialises the corpus-touching related-episodes update
 # (and its coalescing claim) the same way, for the same reason.
 _related_compute_lock = threading.Lock()
+
+# Spec #47 — serialises the coalescing claim AND the Wikimedia request
+# loop for the ENRICH_ENTITIES stage. Unlike the corpus locks above this
+# is held mainly for politeness: it guarantees only one worker hits
+# Wikidata/Wikipedia at a time, so the per-request delay actually paces
+# total outbound traffic instead of N workers bursting in parallel.
+_enrichment_lock = threading.Lock()
 
 
 def handle_resolve_entities(task: Task, state: "AppState") -> None:
@@ -1165,6 +1266,30 @@ def _get_or_create_entity_resolver(state: "AppState"):
     return state.entity_resolver
 
 
+def _get_or_create_entity_enricher(state: "AppState"):
+    """Lazy-init the process-scope ``EntityEnricher``.
+
+    Unlike the resolver, the enricher is cheap to build (two HTTP clients +
+    in-process LRU/label caches). We still cache it on ``AppState`` so the
+    label cache survives across coalesced ENRICH_ENTITIES tasks rather than
+    being thrown away each run. Built under ``_enrichment_lock`` (already
+    held by the only caller) so two workers can't double-init.
+    """
+    if state.entity_enricher is None:
+        from .entity_enricher import EntityEnricher
+        from .wikidata_client import WikidataClient
+        from .wikipedia_client import WikipediaClient
+
+        cfg = state.config
+        state.entity_enricher = EntityEnricher(
+            wikidata_client=WikidataClient(user_agent=cfg.enrichment_user_agent),
+            wikipedia_client=WikipediaClient(user_agent=cfg.enrichment_user_agent),
+            find_entity_by_qid=state.entity_repository.find_entity_by_qid,
+            language=cfg.enrichment_wikipedia_lang,
+        )
+    return state.entity_enricher
+
+
 def create_task_handlers(
     state: "AppState",
 ) -> Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]]:
@@ -1189,4 +1314,5 @@ def create_task_handlers(
         TaskStage.REINDEX: lambda task, cb=None: handle_reindex(task, state),
         TaskStage.REBUILD_COOCCURRENCES: lambda task, cb=None: handle_rebuild_cooccurrences(task, state),
         TaskStage.COMPUTE_RELATED: lambda task, cb=None: handle_compute_related(task, state),
+        TaskStage.ENRICH_ENTITIES: lambda task, cb=None: handle_enrich_entities(task, state),
     }

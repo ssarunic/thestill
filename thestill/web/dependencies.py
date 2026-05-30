@@ -34,6 +34,7 @@ from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..core.embedding_model import EmbeddingModel
+    from ..core.entity_enricher import EntityEnricher
     from ..core.entity_extractor import EntityExtractor
     from ..core.entity_resolver import EntityResolver
     from ..core.feed_manager import PodcastFeedManager
@@ -124,6 +125,10 @@ class AppState:
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the
     # cost on processes that never run resolve-entities tasks.
     entity_resolver: "Optional[EntityResolver]" = None
+    # Spec #47 — lazy-init enricher for the ENRICH_ENTITIES stage. Cheap to
+    # build (two HTTP clients), so unlike the resolver this is only cached
+    # to avoid rebuilding clients/label-caches on every coalesced task.
+    entity_enricher: "Optional[EntityEnricher]" = None
     # Spec #28 §2.10 — sqlite-vec corpus search. Both fields are
     # constructed eagerly at startup; the heavy sentence-transformers
     # weights only load when EmbeddingModel.encode_one() runs (first
