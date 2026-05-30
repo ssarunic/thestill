@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { EpisodeEntity, EntityType } from '../../api/types'
+import type { EpisodeEntity, EntityType, RelatedEpisode } from '../../api/types'
 import { entityHref, entityStyle } from '../../utils/entityColors'
 
 // Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
@@ -10,9 +10,9 @@ import { entityHref, entityStyle } from '../../utils/entityColors'
 // first mention timestamp; play-▷ on hover seeks to it.
 //
 // Related episodes pulls from vector similarity (qmd was the original
-// backend; spec §2.10 swapped to sqlite-vec). The endpoint isn't wired
-// yet — render a placeholder so the rail's geometry is stable when it
-// lands later, rather than thrashing the layout when it appears.
+// backend; spec §2.10 swapped to sqlite-vec). The backend averages this
+// episode's chunk embeddings into a centroid and returns the nearest
+// distinct episodes, capped at 5.
 
 // Per-section visible cap. The full bucket is always sent over the
 // wire so the spec's "complete index" intent is preserved; we just
@@ -26,6 +26,15 @@ export interface EntityRailProps {
   entities: EpisodeEntity[]
   onSeek?: (seconds: number) => void
   onFocusEntity?: (entityId: string) => void
+  relatedEpisodes?: RelatedEpisode[]
+  relatedLoading?: boolean
+}
+
+function formatPubDate(iso: string | null): string | null {
+  if (!iso) return null
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 function formatTimestamp(ms: number): string {
@@ -91,7 +100,13 @@ function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps)
   )
 }
 
-export default function EntityRail({ entities, onSeek, onFocusEntity }: EntityRailProps) {
+export default function EntityRail({
+  entities,
+  onSeek,
+  onFocusEntity,
+  relatedEpisodes = [],
+  relatedLoading = false,
+}: EntityRailProps) {
   // Group by type for the section labels. The payload is already
   // sorted host/guest/recurring/unknown then count desc within each
   // bucket, so we just need to bucket by type while preserving order.
@@ -126,23 +141,56 @@ export default function EntityRail({ entities, onSeek, onFocusEntity }: EntityRa
         <RailSection title="Topics" entities={buckets.topic} onSeek={onSeek} onFocusEntity={onFocusEntity} />
       )}
 
-      {/* Spec §5.2 right rail: "Related episodes pulls from qmd vector
-          similarity; cap at 5." Endpoint isn't wired in this PR — render
-          a placeholder so the rail height stays stable when the data
-          eventually lands. */}
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Related episodes</h2>
-        <p className="mt-1 px-2 text-xs italic text-gray-400">
-          Coming soon — vector similarity from the corpus index.
-        </p>
-      </section>
+      {/* Spec §5.2 right rail — "Related episodes pulls from vector
+          similarity; cap at 5." Rendered whenever a fetch is in flight
+          or returned hits, so the section keeps a stable slot. */}
+      <RelatedEpisodesSection episodes={relatedEpisodes} loading={relatedLoading} />
 
-      {!hasAny && (
+      {!hasAny && relatedEpisodes.length === 0 && !relatedLoading && (
         <p className="px-2 text-xs italic text-gray-400">
           No entities extracted for this episode yet.
         </p>
       )}
     </aside>
+  )
+}
+
+interface RelatedEpisodesSectionProps {
+  episodes: RelatedEpisode[]
+  loading: boolean
+}
+
+function RelatedEpisodesSection({ episodes, loading }: RelatedEpisodesSectionProps) {
+  // Nothing in flight and nothing found — omit the section entirely so
+  // we don't render a bare header with no body.
+  if (!loading && episodes.length === 0) return null
+  return (
+    <section>
+      <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Related episodes</h2>
+      {loading ? (
+        <p className="px-2 text-xs italic text-gray-400">Finding related episodes…</p>
+      ) : (
+        <ul className="space-y-0.5">
+          {episodes.map((ep) => {
+            const pubDate = formatPubDate(ep.published_at)
+            return (
+              <li key={ep.episode_id} className="rounded-md px-2 py-1 text-sm hover:bg-gray-50">
+                <Link
+                  to={`/podcasts/${ep.podcast_slug}/episodes/${ep.episode_slug}`}
+                  className="block min-w-0 font-medium text-gray-800 hover:text-primary-700"
+                >
+                  <span className="block truncate">{ep.episode_title}</span>
+                  <span className="block truncate text-xs font-normal text-gray-500">
+                    {ep.podcast_title}
+                    {pubDate ? ` · ${pubDate}` : ''}
+                  </span>
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
   )
 }
 

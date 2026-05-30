@@ -54,6 +54,7 @@ import type {
   QuickSearchOptions,
   QuickSearchResponse,
   SearchResponse,
+  RelatedEpisodesResponse,
   EpisodeEntitiesResponse,
   EntitySummaryResponse,
   EntityType,
@@ -732,6 +733,17 @@ export async function getEpisodeEntities(
   return fetchApi<EpisodeEntitiesResponse>(
     `/episodes/${episodeId}/entities${qs ? `?${qs}` : ''}`,
   )
+}
+
+// Spec #28 §5.2 — "Related episodes" rail. Embedding-only on the
+// backend (centroid of the episode's chunk vectors); returns the
+// nearest distinct episodes with the source excluded.
+export async function getRelatedEpisodes(
+  episodeId: string,
+  limit = 5,
+): Promise<RelatedEpisodesResponse> {
+  const params = new URLSearchParams({ episode_id: episodeId, limit: String(limit) })
+  return fetchApi<RelatedEpisodesResponse>(`/search/related?${params.toString()}`)
 }
 
 export async function getEntitySummary(

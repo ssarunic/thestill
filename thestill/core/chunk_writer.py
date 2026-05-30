@@ -36,7 +36,7 @@ from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedTranscript
 from ..utils.sqlite_ext import load_vec_extension
-from .embedding_model import EmbeddingModel
+from .embedding_model import EmbeddingModel, centroid_blob
 
 logger = get_logger(__name__)
 
@@ -148,6 +148,19 @@ class ChunkWriter:
                 rows,
             )
             inserted = cur.rowcount if cur.rowcount is not None else 0
+            # Spec #46 Tier 0 — materialise the episode centroid in the same
+            # transaction as the chunks (embeddings are already in hand, so
+            # it's free). Wrapped defensively: the centroid is a derived
+            # cache for the related-episodes rail, so a problem here must
+            # never fail the chunk write itself.
+            try:
+                self._write_centroid(conn, episode_id, model_name, embeddings)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "episode_centroid_write_failed",
+                    episode_id=episode_id,
+                    error=str(exc),
+                )
 
         logger.info(
             "chunk_write_completed",
@@ -158,6 +171,23 @@ class ChunkWriter:
             forced=force,
         )
         return inserted
+
+    def _write_centroid(self, conn: sqlite3.Connection, episode_id: str, model_name: str, embeddings: list) -> None:
+        """Upsert the L2-normalised centroid for this episode (spec #46)."""
+        centroid = centroid_blob(embeddings, self.embedding_model.dim)
+        if centroid is None:
+            return
+        conn.execute(
+            """
+            INSERT INTO episode_vectors (episode_id, embedding_model, chunk_count, centroid, computed_at)
+            VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+            ON CONFLICT(episode_id, embedding_model)
+            DO UPDATE SET chunk_count = excluded.chunk_count,
+                          centroid    = excluded.centroid,
+                          computed_at = excluded.computed_at
+            """,
+            (episode_id, model_name, len(embeddings), centroid),
+        )
 
 
 def _segment_text(speaker: Optional[str], text: str) -> str:

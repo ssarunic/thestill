@@ -4754,6 +4754,60 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
 
     click.echo(f"✓ chunks backfill complete: {inserted_total} inserted, {skipped_total} skipped")
 
+    # Related-episodes relevance is corpus-global, so it only makes sense
+    # to recompute after a full backfill (not a single-podcast/-m slice,
+    # which would rank against a partial corpus). Refresh it here so the
+    # rail stays current without a separate manual step.
+    if inserted_total and not podcast_id and not max_episodes:
+        from .search.related_builder import build_related_episodes
+
+        click.echo("Rebuilding related-episodes index…")
+        result = build_related_episodes(
+            str(config.database_path),
+            embedding_model_name=ctx.obj.embedding_model.model_name,
+        )
+        click.echo(f"  ✓ related: {result['pairs']} pairs across {result['episodes']} episodes")
+
+
+@main.group("related")
+def related_group():
+    """Manage the precomputed "Related episodes" rail (spec #28 §5.2)."""
+
+
+@related_group.command("build")
+@click.option("--top-n", default=5, show_default=True, type=int, help="Max related episodes stored per source.")
+@click.option(
+    "--tfidf-floor",
+    default=None,
+    type=float,
+    help="Min TF-IDF cosine for a candidate to be eligible (default from related_builder).",
+)
+@click.pass_context
+@require_config
+@log_command
+def related_build(ctx, top_n, tfidf_floor):
+    """Recompute the episode_related table for the whole corpus.
+
+    Blends TF-IDF topical similarity, dense vector similarity, and
+    entity overlap (see ``search.related_builder``). Corpus-global, so
+    run it after ``chunks backfill`` / ``reindex`` whenever the index
+    changes. Cheap — no embedding model load; reuses stored vectors.
+    """
+    from .search.related_builder import DEFAULT_TFIDF_FLOOR, build_related_episodes
+
+    config = ctx.obj.config
+    floor = tfidf_floor if tfidf_floor is not None else DEFAULT_TFIDF_FLOOR
+    result = build_related_episodes(
+        str(config.database_path),
+        embedding_model_name=ctx.obj.embedding_model.model_name,
+        top_n=top_n,
+        tfidf_floor=floor,
+    )
+    click.echo(
+        f"✓ related build complete: {result['pairs']} pairs across "
+        f"{result['episodes']} episodes (top_n={top_n}, tfidf_floor={floor})"
+    )
+
 
 @main.command("rebuild-entity-pages")
 @click.option(

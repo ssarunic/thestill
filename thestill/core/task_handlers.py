@@ -779,6 +779,38 @@ def handle_rebuild_cooccurrences(task: Task, state: "AppState") -> None:
         )
 
 
+def handle_compute_related(task: Task, state: "AppState") -> None:
+    """Spec #46 Tier 3 — refresh the "Related episodes" rail for the batch.
+
+    Terminal entity-branch stage, modelled on ``handle_rebuild_cooccurrences``:
+    coalesces sibling pending rows into one scoped update over the union of
+    episode_ids, held under ``_related_compute_lock`` so two parallel workers
+    don't both run the corpus-touching update. The rail is a derived cache,
+    so a failure here is non-user-failing and never blocks the episode.
+
+    The update reuses the persisted IDF (no corpus refit) and bounds work to
+    the affected episodes plus their neighbours; below the candidate cap it
+    is effectively a full rebuild (exact), above it a true incremental.
+    """
+    from ..search.related_builder import update_related_for_episodes
+
+    with _handler_error_context(f"computing related episodes for episode {task.episode_id}"):
+        with _related_compute_lock:
+            coalesced = state.queue_manager.claim_pending_for_coalescing(TaskStage.COMPUTE_RELATED)
+            episode_ids = sorted({task.episode_id, *coalesced})
+            result = update_related_for_episodes(
+                str(state.config.database_path),
+                embedding_model_name=state.embedding_model.model_name,
+                episode_ids=episode_ids,
+            )
+        logger.info(
+            "related_compute_completed",
+            episode_id=task.episode_id,
+            coalesced_episode_count=len(coalesced),
+            pairs=result["pairs"],
+        )
+
+
 def handle_extract_entities(task: Task, state: "AppState") -> None:
     """Spec #28 §1.2 — run GLiNER over the cleaned-transcript JSON sidecar.
 
@@ -888,6 +920,10 @@ _qid_merge_lock = threading.Lock()
 # safely coalesce pending sibling tasks via
 # ``QueueManager.claim_pending_for_coalescing``.
 _cooccurrence_rebuild_lock = threading.Lock()
+
+# Spec #46 Tier 3 — serialises the corpus-touching related-episodes update
+# (and its coalescing claim) the same way, for the same reason.
+_related_compute_lock = threading.Lock()
 
 
 def handle_resolve_entities(task: Task, state: "AppState") -> None:
@@ -1152,4 +1188,5 @@ def create_task_handlers(
         TaskStage.RESOLVE_ENTITIES: lambda task, cb=None: handle_resolve_entities(task, state),
         TaskStage.REINDEX: lambda task, cb=None: handle_reindex(task, state),
         TaskStage.REBUILD_COOCCURRENCES: lambda task, cb=None: handle_rebuild_cooccurrences(task, state),
+        TaskStage.COMPUTE_RELATED: lambda task, cb=None: handle_compute_related(task, state),
     }

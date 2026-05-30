@@ -62,6 +62,29 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
 
 
+class RelatedEpisode(BaseModel):
+    """One episode-card row for the episode-page "Related episodes" rail."""
+
+    episode_id: str
+    podcast_id: str
+    podcast_slug: str
+    episode_slug: str
+    podcast_title: str
+    episode_title: str
+    published_at: Optional[str] = None
+    image_url: Optional[str] = None
+    # Blended relevance score (higher = closer), min-max normalised per
+    # source episode by the builder — so it ranks within one rail but
+    # isn't comparable across episodes. Surfaced for transparency; the
+    # rail doesn't render it.
+    score: float
+
+
+class RelatedEpisodesResponse(BaseModel):
+    episode_id: str
+    episodes: List[RelatedEpisode]
+
+
 # ---------------------------------------------------------------------------
 # Quick-search response models — discriminated by ``kind`` so the React
 # client can render heterogeneous group items uniformly.
@@ -192,6 +215,79 @@ def search_corpus(
         total=len(results),
         results=results,
     )
+
+
+@router.get("/related", response_model=RelatedEpisodesResponse)
+def search_related(
+    episode_id: str = Query(..., min_length=1, description="Source episode id."),
+    limit: int = Query(5, ge=1, le=20),
+    state: AppState = Depends(get_app_state),
+):
+    """Spec #28 §5.2 — "Related episodes" for the episode-page right rail.
+
+    Reads the precomputed ``episode_related`` table (built by
+    ``thestill related build`` from a TF-IDF + dense-vector + entity
+    blend; see ``search.related_builder``). A plain indexed read — no
+    embedding model, no vector scan on the request path. Episodes with
+    no precomputed neighbours (corpus too small, not yet built, or no
+    topically-related episodes) return ``[]``.
+    """
+    rows = _read_related(
+        db_path=str(state.repository.db_path),
+        episode_id=episode_id,
+        limit=limit,
+    )
+    return RelatedEpisodesResponse(episode_id=episode_id, episodes=rows)
+
+
+def _read_related(*, db_path: str, episode_id: str, limit: int) -> List[RelatedEpisode]:
+    """Join ``episode_related`` to episodes/podcasts for deep-linkable cards.
+
+    Rows whose related episode lacks slugs are skipped (not linkable),
+    mirroring ``_resolve_episode_payloads``. Ordered by precomputed rank.
+    """
+    sql = """
+        SELECT r.related_episode_id AS episode_id,
+               r.score             AS score,
+               e.title             AS episode_title,
+               e.slug              AS episode_slug,
+               e.pub_date          AS published_at,
+               e.image_url         AS image_url,
+               p.id                AS podcast_id,
+               p.title             AS podcast_title,
+               p.slug              AS podcast_slug,
+               p.image_url         AS podcast_image_url
+        FROM episode_related r
+        JOIN episodes e ON e.id = r.related_episode_id
+        JOIN podcasts p ON p.id = e.podcast_id
+        WHERE r.episode_id = ?
+        ORDER BY r.rank
+        LIMIT ?
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(sql, (episode_id, limit)).fetchall()
+    finally:
+        conn.close()
+    out: List[RelatedEpisode] = []
+    for row in rows:
+        if not row["podcast_slug"] or not row["episode_slug"]:
+            continue  # legacy row without slugs — not deep-linkable
+        out.append(
+            RelatedEpisode(
+                episode_id=row["episode_id"],
+                podcast_id=row["podcast_id"],
+                podcast_slug=row["podcast_slug"],
+                episode_slug=row["episode_slug"],
+                podcast_title=row["podcast_title"],
+                episode_title=row["episode_title"],
+                published_at=row["published_at"],
+                image_url=row["image_url"] or row["podcast_image_url"] or None,
+                score=row["score"],
+            )
+        )
+    return out
 
 
 # Order is the contract — the frontend renders groups in this order

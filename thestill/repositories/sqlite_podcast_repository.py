@@ -1096,6 +1096,118 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: episodes.published_at added and backfilled")
 
+        # Spec #28 §5.2 — precomputed "Related episodes" for the reader
+        # rail. Relevance is a corpus-global blend (TF-IDF topical
+        # similarity + dense vector + entity overlap) that's too expensive
+        # to compute per request, so the batch ``thestill related build``
+        # (run after reindex/backfill) writes the top-N neighbours here and
+        # the API reads them straight back. Plain table — no vec extension
+        # needed, so it migrates even on the slim image.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episode_related'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating spec #28 §5.2 episode_related")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS episode_related (
+                    episode_id         TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    related_episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    rank               INTEGER NOT NULL,
+                    score              REAL NOT NULL,
+                    computed_at        TIMESTAMP NOT NULL
+                                       DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    PRIMARY KEY (episode_id, related_episode_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_episode_related_src
+                    ON episode_related(episode_id, rank);
+                """
+            )
+            logger.info("Migration complete: episode_related created")
+
+        # Spec #46 Tier 0 — materialised per-episode centroid vectors. The
+        # related-episodes builder used to reload every chunk embedding
+        # (O(total chunks)) on each run; this caches one L2-normalised
+        # centroid per (episode, model) so the builder reads O(episodes)
+        # rows instead. Written by ``ChunkWriter`` at chunk-write time and
+        # self-healed by the builder for pre-existing episodes.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episode_vectors'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating spec #46 episode_vectors")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS episode_vectors (
+                    episode_id      TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                    embedding_model TEXT NOT NULL,
+                    chunk_count     INTEGER NOT NULL,
+                    centroid        BLOB NOT NULL,
+                    computed_at     TIMESTAMP NOT NULL
+                                    DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    PRIMARY KEY (episode_id, embedding_model)
+                );
+                """
+            )
+            logger.info("Migration complete: episode_vectors created")
+
+        # Spec #46 Tier 2 — persisted IDF model (vocabulary + idf weight per
+        # term). The related-episodes builder fits TF-IDF over the whole
+        # corpus once per full build and stores it here so incremental
+        # updates can transform a new episode's text without refitting.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='related_idf'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating spec #46 related_idf")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS related_idf (
+                    term TEXT PRIMARY KEY,
+                    idf  REAL NOT NULL
+                );
+                """
+            )
+            logger.info("Migration complete: related_idf created")
+
+        # Spec #46 Tier 2 — ANN index over episode centroids for candidate
+        # generation (find episodes near a source without an O(N²) scan).
+        # Mirrors the chunks_vec pattern: a vec0 virtual table kept in sync
+        # with episode_vectors by triggers, keyed on episode_vectors.rowid.
+        # Guarded on the sqlite-vec extension like the chunks migration.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episode_vec'")
+        if cursor.fetchone() is None:
+            from ..search.base import DEFAULT_EMBEDDING_MODEL, embedding_dim_for
+            from ..utils.sqlite_ext import SqliteVecNotInstalledError, load_vec_extension
+
+            try:
+                load_vec_extension(conn)
+            except SqliteVecNotInstalledError:
+                logger.warning("sqlite_vec_unavailable_skipping_episode_vec_migration")
+            else:
+                vec_dim = embedding_dim_for(DEFAULT_EMBEDDING_MODEL)
+                logger.info("Migrating database: creating spec #46 episode_vec ANN index", vec_dim=vec_dim)
+                conn.executescript(
+                    f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS episode_vec USING vec0(
+                        embedding float[{vec_dim}]
+                    );
+
+                    CREATE TRIGGER IF NOT EXISTS episode_vectors_ai
+                        AFTER INSERT ON episode_vectors BEGIN
+                        INSERT INTO episode_vec(rowid, embedding) VALUES (new.rowid, new.centroid);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS episode_vectors_ad
+                        AFTER DELETE ON episode_vectors BEGIN
+                        DELETE FROM episode_vec WHERE rowid = old.rowid;
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS episode_vectors_au
+                        AFTER UPDATE ON episode_vectors BEGIN
+                        DELETE FROM episode_vec WHERE rowid = old.rowid;
+                        INSERT INTO episode_vec(rowid, embedding) VALUES (new.rowid, new.centroid);
+                    END;
+
+                    -- Backfill the index from any centroids already present.
+                    INSERT INTO episode_vec(rowid, embedding)
+                        SELECT rowid, centroid FROM episode_vectors;
+                    """
+                )
+                logger.info("Migration complete: episode_vec created")
+
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_episode_inbox'")
         if cursor.fetchone() is None:
             logger.info("Migrating database: creating user_episode_inbox")
