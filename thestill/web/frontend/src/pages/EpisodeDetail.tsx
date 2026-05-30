@@ -24,7 +24,6 @@ import EntityBranchProgress from '../components/EntityBranchProgress'
 import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
-type TranscriptSubTab = 'segmented' | 'legacy' | 'shadow'
 
 const stateColors: Record<string, string> = {
   discovered: 'bg-gray-100 text-gray-600',
@@ -49,7 +48,6 @@ function formatDate(dateStr: string | null): string {
 export default function EpisodeDetail() {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [activeTab, setActiveTab] = useState<Tab>('summary')
-  const [transcriptSubTab, setTranscriptSubTab] = useState<TranscriptSubTab>('segmented')
   const queryClient = useQueryClient()
   const player = usePlayer()
 
@@ -478,8 +476,6 @@ export default function EpisodeDetail() {
                   episodeId={episode?.id ?? null}
                   audioUrl={episode?.audio_url ?? null}
                   onSegmentSeek={handleSegmentSeek}
-                  subTab={transcriptSubTab}
-                  onSubTabChange={setTranscriptSubTab}
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
                   visibleSegmentIds={visibleSegmentIds}
@@ -564,13 +560,10 @@ function PlayerScopedTimeline({ episodeId, entities, durationSeconds, onSeek }: 
 }
 
 /**
- * Transcript panel — renders the "Segmented / Legacy blended / Shadow"
- * sub-tab toggle (spec #18 Phase D) and the chosen viewer beneath it.
- *
- * The toggle is only shown when more than one variant is available.
- * "Segmented" is the default when present; otherwise "Legacy blended"
- * is the fallback. "Shadow" appears only when the cleanup processor
- * wrote a dual-pipeline debug file.
+ * Transcript panel — renders the segmented viewer (spec #18 Phase D)
+ * when a segmented sidecar exists. Episodes without one (mid-pipeline,
+ * or still loading) fall back to the plain TranscriptViewer, which also
+ * renders the loading / unavailable states.
  */
 interface TranscriptPanelProps {
   transcriptData: import('../api/types').ContentResponse | undefined
@@ -579,8 +572,6 @@ interface TranscriptPanelProps {
   episodeId: string | null
   audioUrl: string | null
   onSegmentSeek: (seconds: number) => void
-  subTab: TranscriptSubTab
-  onSubTabChange: (next: TranscriptSubTab) => void
   // Spec #28 §5.2 — episode-page entity UX. All optional so a viewer
   // mounted without entity data (legacy episodes, tests) keeps working.
   entitiesById?: Map<string, EpisodeEntity>
@@ -669,8 +660,6 @@ function TranscriptPanel({
   episodeId,
   audioUrl,
   onSegmentSeek,
-  subTab,
-  onSubTabChange,
   entitiesById,
   mentionsBySegmentId,
   visibleSegmentIds,
@@ -683,28 +672,11 @@ function TranscriptPanel({
   karaokeChipDisabled,
   onKaraokeToggle,
 }: TranscriptPanelProps) {
-  const hasSegments = !!transcriptData?.segments
-  const hasLegacy = !!transcriptData?.content && transcriptData.content.length > 0
-  const hasShadow = !!transcriptData?.shadow
   const liveAudioDuration = useAudioDuration(audioUrl)
   const drift = classifyDrift(
     transcriptData?.segments?.transcript_source_duration_s,
     liveAudioDuration,
   )
-
-  // Clamp the selected sub-tab to one that's actually available. Avoids
-  // flashing an empty panel when the user previously viewed a segmented
-  // transcript and then navigates to a Parakeet-fallback episode where
-  // only legacy exists.
-  const availableSubTabs: TranscriptSubTab[] = []
-  if (hasSegments) availableSubTabs.push('segmented')
-  if (hasLegacy) availableSubTabs.push('legacy')
-  if (hasShadow) availableSubTabs.push('shadow')
-  const effectiveSubTab: TranscriptSubTab = availableSubTabs.includes(subTab)
-    ? subTab
-    : availableSubTabs[0] ?? 'legacy'
-
-  const showToggle = availableSubTabs.length >= 2
 
   return (
     <div>
@@ -738,33 +710,7 @@ function TranscriptPanel({
           </div>
         </div>
       )}
-      {showToggle && (
-        <div className="flex gap-1 mb-4 p-1 bg-gray-100 rounded-lg w-fit">
-          {hasSegments && (
-            <SubTabButton
-              label="Segmented"
-              active={effectiveSubTab === 'segmented'}
-              onClick={() => onSubTabChange('segmented')}
-            />
-          )}
-          {hasLegacy && (
-            <SubTabButton
-              label="Legacy blended"
-              active={effectiveSubTab === 'legacy'}
-              onClick={() => onSubTabChange('legacy')}
-            />
-          )}
-          {hasShadow && (
-            <SubTabButton
-              label={`Shadow (${transcriptData!.shadow!.pipeline})`}
-              active={effectiveSubTab === 'shadow'}
-              onClick={() => onSubTabChange('shadow')}
-            />
-          )}
-        </div>
-      )}
-
-      {effectiveSubTab === 'segmented' && transcriptData?.segments ? (
+      {transcriptData?.segments ? (
         <>
           {entityFilterBar && <div className="mb-3">{entityFilterBar}</div>}
           <SegmentedTranscriptViewer
@@ -783,14 +729,6 @@ function TranscriptPanel({
             onKaraokeToggle={onKaraokeToggle}
           />
         </>
-      ) : effectiveSubTab === 'shadow' && transcriptData?.shadow ? (
-        <TranscriptViewer
-          content={transcriptData.shadow.content}
-          isLoading={false}
-          available
-          episodeState={episodeState}
-          transcriptType="cleaned"
-        />
       ) : (
         <TranscriptViewer
           content={transcriptData?.content ?? ''}
@@ -801,26 +739,5 @@ function TranscriptPanel({
         />
       )}
     </div>
-  )
-}
-
-interface SubTabButtonProps {
-  label: string
-  active: boolean
-  onClick: () => void
-}
-
-function SubTabButton({ label, active, onClick }: SubTabButtonProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-        active
-          ? 'bg-white text-primary-700 shadow-sm'
-          : 'text-gray-600 hover:text-gray-900'
-      }`}
-    >
-      {label}
-    </button>
   )
 }

@@ -548,8 +548,7 @@ export default function SegmentedTranscriptViewer({
   // else is a BlockSegment, below). Restrict the map to those kinds so a
   // speaker preserved on an `ad_break`/`intro`/etc. row can't consume a
   // palette slot — that would shift every later speaker's colour and make the
-  // same person read differently here vs the "Legacy blended" tab, which only
-  // ever sees content rows from the parsed markdown.
+  // same person read with a different colour from one episode to the next.
   const speakerColorMap = useMemo(
     () =>
       buildSpeakerColorMap(
