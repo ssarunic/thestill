@@ -34,8 +34,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
-from ...models.enrichment import EntityAffiliation, EntityFact
-from ..dependencies import AppState, get_app_state
+from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
+from ...core.wikidata_client import WikidataClient
+from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
+from ...models.user import User
+from ..dependencies import AppState, get_app_state, require_auth
+from ..responses import api_response
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -555,4 +559,123 @@ def get_entity_summary(
         guest_episodes=guest_episodes,
         most_discussed_on=most_discussed_on,
         enrichment=enrichment_wire,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin detection queue — find + correct likely-wrong resolutions
+# ---------------------------------------------------------------------------
+
+
+class ReviewFlagWire(BaseModel):
+    """One likely-wrong resolution surfaced for admin review."""
+
+    entity_id: str
+    type: str
+    canonical_name: str
+    wikidata_qid: Optional[str] = None
+    score: float
+    kinds: List[str]
+    evidence: dict
+    suggested_action: str  # "blacklist" | "review"
+    suggested_qid: Optional[str] = None
+
+
+class ReviewQueueResponse(BaseModel):
+    count: int
+    flags: List[ReviewFlagWire]
+
+
+class CorrectionRequest(BaseModel):
+    """Apply a correction to a wrong resolution and re-resolve its mentions.
+
+    ``force_entity`` takes either ``target_entity_id`` (an existing entity)
+    or ``target_qid`` (minted from Wikidata if absent). A ``wrong_qid`` may
+    accompany ``force_entity`` to also blacklist the bad QID (redirect).
+    """
+
+    action: Literal["blacklist", "force_entity", "drop", "force_unresolvable"]
+    surface_form: str
+    episode_id: Optional[str] = None
+    wrong_qid: Optional[str] = None
+    target_qid: Optional[str] = None
+    target_entity_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.get("/entities/review-queue", response_model=ReviewQueueResponse)
+def get_review_queue(
+    limit: int = Query(50, ge=1, le=200),
+    state: AppState = Depends(get_app_state),
+    _: User = Depends(require_auth),
+) -> ReviewQueueResponse:
+    """Ranked list of likely-wrong entity resolutions (admin review queue).
+
+    Read-only and network-free — see ``core.entity_review`` for the
+    heuristics and ranking. Highest score = most mentions poisoned.
+    """
+    flags = scan_entities_for_review(state.entity_repository, limit=limit)
+    return ReviewQueueResponse(
+        count=len(flags),
+        flags=[
+            ReviewFlagWire(
+                entity_id=f.entity_id,
+                type=f.type,
+                canonical_name=f.canonical_name,
+                wikidata_qid=f.qid,
+                score=f.score,
+                kinds=f.kinds,
+                evidence=f.evidence,
+                suggested_action=f.suggested_action,
+                suggested_qid=f.suggested_qid,
+            )
+            for f in flags
+        ],
+    )
+
+
+@router.post("/entities/corrections")
+def post_correction(
+    request: CorrectionRequest,
+    state: AppState = Depends(get_app_state),
+    _: User = Depends(require_auth),
+) -> dict:
+    """Apply an admin correction (blacklist / override) and re-resolve.
+
+    Reuses the same repo primitives as the ``mention`` / ``resolution-blacklist``
+    CLI commands, then resets the poisoned mentions to ``pending`` and
+    enqueues a ``resolve-entities`` task per affected episode so the fix
+    lands on existing data. Returns a paste-ready golden-eval snippet so the
+    correction can be locked in as a permanent regression guard.
+    """
+    try:
+        result = apply_correction(
+            repo=state.entity_repository,
+            queue_manager=state.queue_manager,
+            wikidata_client=WikidataClient(),
+            action=request.action,
+            surface_form=request.surface_form,
+            episode_id=request.episode_id,
+            wrong_qid=request.wrong_qid,
+            target_qid=request.target_qid,
+            target_entity_id=request.target_entity_id,
+            reason=request.reason,
+        )
+    except CorrectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EnrichmentUnavailable as exc:
+        raise HTTPException(status_code=502, detail=f"Wikidata unavailable: {exc}") from exc
+
+    return api_response(
+        {
+            "action": result.action,
+            "surface_form": result.surface_form,
+            "affected_mentions": result.affected_mentions,
+            "episodes_enqueued": result.episodes_enqueued,
+            "created_entity_id": result.created_entity_id,
+            "target_entity_id": result.target_entity_id,
+            "override_id": result.override_id,
+            "blacklist_id": result.blacklist_id,
+            "golden_snippet": result.golden_snippet,
+        }
     )

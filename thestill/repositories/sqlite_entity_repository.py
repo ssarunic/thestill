@@ -366,6 +366,70 @@ class SqliteEntityRepository:
             )
             return cursor.rowcount > 0
 
+    def find_mention_ids_by_surface(
+        self,
+        surface_form: str,
+        *,
+        episode_id: Optional[str] = None,
+        statuses: Tuple[str, ...] = ("resolved", "unresolvable", "ambiguous"),
+    ) -> List[Tuple[int, str]]:
+        """Return ``(mention_id, episode_id)`` for mentions of ``surface_form``.
+
+        Case-insensitive to match the override/blacklist lookup semantics
+        (``lookup_override`` / ``is_blacklisted`` both ``LOWER()`` the
+        surface). Drives the correction flow: these are the mentions a
+        correction poisons, so they get reset and re-resolved. By default
+        only terminal-but-revisable statuses are returned — ``pending`` is
+        already queued, and ``dropped`` is an intentional human action we
+        must not silently undo.
+        """
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        sql = (
+            "SELECT id, episode_id FROM entity_mentions "
+            f"WHERE LOWER(surface_form) = LOWER(?) AND resolution_status IN ({placeholders})"
+        )
+        params: list = [surface_form, *statuses]
+        if episode_id is not None:
+            sql += " AND episode_id = ?"
+            params.append(episode_id)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [(int(r["id"]), r["episode_id"]) for r in rows]
+
+    def reset_mentions_to_pending(self, mention_ids: List[int]) -> int:
+        """Flip the given mentions back to ``pending`` for re-resolution.
+
+        Clears ``entity_id`` / ``resolved_at`` / ``resolution_method`` /
+        ``candidate_entity_ids`` so ``handle_resolve_entities`` (which reads
+        ``list_pending_mentions``) re-resolves them from scratch — and
+        re-applies any overrides + the blacklist at the front of that pass.
+        ``resolve_mention`` refuses ``pending`` by design (it's a
+        terminal-status setter), so this is the dedicated re-open path.
+        Returns rowcount.
+        """
+        if not mention_ids:
+            return 0
+        placeholders = ",".join("?" for _ in mention_ids)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE entity_mentions
+                SET resolution_status = 'pending',
+                    entity_id = NULL,
+                    resolved_at = NULL,
+                    resolution_method = NULL,
+                    candidate_entity_ids = NULL
+                WHERE id IN ({placeholders})
+                """,
+                mention_ids,
+            )
+            count = cursor.rowcount
+        if count:
+            logger.info("entity_mentions_reset_to_pending", count=count)
+        return count
+
     def find_mentions(
         self,
         *,
@@ -794,6 +858,24 @@ class SqliteEntityRepository:
                 (entity_id,),
             ).fetchone()
         return _row_to_enrichment(row) if row else None
+
+    def delete_enrichment(self, entity_id: str) -> bool:
+        """Drop an entity's ``entity_enrichment`` row so it re-enriches.
+
+        After an admin correction changes an entity's ``wikidata_qid`` (or
+        mints a replacement entity), the stale enrichment must go: deleting
+        the row makes ``entity_ids_needing_enrichment`` re-pick the entity
+        via its ``en.entity_id IS NULL`` branch on the next
+        ``enrich-entities`` run. There is no in-place "mark stale" —
+        ``upsert_enrichment`` deliberately preserves columns — so deletion
+        is the clean reset. Returns True if a row was removed.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM entity_enrichment WHERE entity_id = ?",
+                (entity_id,),
+            )
+            return cursor.rowcount > 0
 
     def entity_ids_needing_enrichment(
         self,
@@ -1372,6 +1454,42 @@ class SqliteEntityRepository:
             rows = conn.execute(
                 "SELECT * FROM resolution_blacklist ORDER BY id DESC LIMIT ?",
                 (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Detection queue — review of likely-wrong resolutions
+    # ------------------------------------------------------------------
+
+    def fetch_resolution_review_rows(self) -> List[dict]:
+        """Per ``(resolved entity, surface_form)`` aggregate feeding the scan.
+
+        One grouped join over resolved, QID-bearing entities and their
+        mentions. The heuristics (surface-extends-canonical, P31 type
+        disagreement) and the impact ranking live in
+        ``thestill.core.entity_review`` — this method only supplies the raw
+        rows so all SQL stays in the repository layer.
+
+        Each row carries: ``entity_id, type, canonical_name, wikidata_qid,
+        wikidata_instance_of`` (JSON string), ``surface_form,
+        mention_count``.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.id                   AS entity_id,
+                       e.type                 AS type,
+                       e.canonical_name       AS canonical_name,
+                       e.wikidata_qid         AS wikidata_qid,
+                       e.wikidata_instance_of AS wikidata_instance_of,
+                       m.surface_form         AS surface_form,
+                       COUNT(*)               AS mention_count
+                FROM entities e
+                JOIN entity_mentions m ON m.entity_id = e.id
+                WHERE e.wikidata_qid IS NOT NULL
+                  AND m.resolution_status = 'resolved'
+                GROUP BY e.id, m.surface_form
+                """
             ).fetchall()
         return [dict(r) for r in rows]
 
