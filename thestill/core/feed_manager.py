@@ -35,6 +35,15 @@ from .media_source import MediaSourceFactory, RSSMediaSource
 
 logger = get_logger(__name__)
 
+# On an incremental refresh of an already-tracked podcast we never cap the
+# number of new episodes (capping + advancing ``last_processed`` past the
+# trimmed ones leaves permanent holes in the feed). This threshold is a pure
+# tripwire: a single refresh yielding more than this many new episodes is
+# almost certainly a feed re-publishing its back catalogue (rotated GUIDs,
+# misconfiguration) rather than genuine new content, so we log loudly — but
+# still ingest everything, because dropping would reintroduce the hole.
+INCREMENTAL_BATCH_WARN_THRESHOLD = 100
+
 
 class RefreshOutcome(NamedTuple):
     """Result of a feed-refresh batch (spec #42, FM-4).
@@ -326,16 +335,30 @@ class PodcastFeedManager:
                     if metadata:
                         self._apply_rss_metadata(podcast, metadata)
 
+            # Cap discovery only on a podcast's first-ever refresh — that's the
+            # legitimate "don't backfill a 600-episode catalogue when adding a
+            # feed" bound. On incremental refreshes the limit is dropped
+            # entirely: the per-fetch slice trims everything past the cap and
+            # then ``last_processed`` advances past the trimmed episodes, so the
+            # gap can never be re-discovered (a silent data-loss hole). A
+            # podcast is "first refresh" only when we know of no prior episodes
+            # AND have no processing checkpoint.
+            is_first_refresh = not known_external_ids and podcast.last_processed is None
+            effective_max = max_episodes_per_podcast if is_first_refresh else None
+
             fetch_kwargs: Dict[str, Any] = {
                 "url": rss_url_str,
                 "existing_episodes": podcast.episodes,
                 "last_processed": podcast.last_processed,
-                "max_episodes": max_episodes_per_podcast,
-                "known_external_ids": known_external_ids,
+                "max_episodes": effective_max,
             }
             if isinstance(source, RSSMediaSource):
                 fetch_kwargs["podcast_slug"] = podcast.slug
                 fetch_kwargs["parsed_feed"] = parsed_feed
+                # ``known_external_ids`` is an RSS-only fast-path kwarg — the
+                # YouTube source's signature doesn't accept it, so it must not
+                # leak into the non-RSS call below.
+                fetch_kwargs["known_external_ids"] = known_external_ids
                 # If fetch_and_parse already failed, skip the episode extraction
                 if parsed_feed is None:
                     episodes: List[Episode] = []
@@ -353,6 +376,15 @@ class PodcastFeedManager:
 
             if episodes:
                 new_eps = episodes
+                if not is_first_refresh and len(episodes) > INCREMENTAL_BATCH_WARN_THRESHOLD:
+                    logger.warning(
+                        "Unusually large incremental refresh batch — ingesting all "
+                        "(no cap on existing podcasts), but check the feed for "
+                        "rotated GUIDs or a re-published back catalogue",
+                        podcast_slug=podcast.slug,
+                        new_episodes=len(episodes),
+                        threshold=INCREMENTAL_BATCH_WARN_THRESHOLD,
+                    )
                 if podcast.episodes:
                     # Belt-and-suspenders: the ``Episode`` validator already
                     # coerces ``pub_date`` to tz-aware UTC, so this set is
