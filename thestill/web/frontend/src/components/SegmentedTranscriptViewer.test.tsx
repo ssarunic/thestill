@@ -312,4 +312,26 @@ describe('SegmentedTranscriptViewer', () => {
       expect(screen.getByText(/No segments available/i)).toBeInTheDocument()
     })
   })
+
+  describe('speaker colours', () => {
+    it('does not let an ad_break speaker consume a palette slot', () => {
+      // An ad_break can carry a real speaker preserved from cleanup, but it
+      // renders as a block, not a speaker row — so it must not shift the
+      // content speakers' colours (which would desync vs the Legacy tab).
+      renderViewer({
+        transcript: makeTranscript([
+          seg({ id: 1, kind: 'ad_break', speaker: 'AdVoice', text: 'sponsor copy' }),
+          seg({ id: 2, kind: 'content', speaker: 'Alice', text: 'hello there' }),
+        ]),
+      })
+      // Alice is the first *content* speaker → palette slot 0 (#0064A6).
+      // Had the ad_break's speaker taken slot 0, Alice would be slot 1.
+      // jsdom serialises the inline hex to rgb().
+      const speakerLabel = screen
+        .getByTestId('segment-content-2')
+        .querySelector('span.font-semibold') as HTMLElement
+      expect(speakerLabel.textContent).toContain('Alice')
+      expect(speakerLabel.style.color).toBe('rgb(0, 100, 166)')
+    })
+  })
 })
