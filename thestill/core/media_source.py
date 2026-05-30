@@ -135,6 +135,16 @@ class MediaSource(ABC):
         """
         Fetch new episodes from the source.
 
+        These four parameters are the **universal contract** every source
+        accepts. Subclasses MAY add source-specific keyword arguments
+        (``RSSMediaSource`` adds ``podcast_slug`` / ``parsed_feed`` /
+        ``known_external_ids``); ``YouTubeMediaSource`` adds none. Callers that
+        dispatch across source types (e.g. ``PodcastFeedManager._refresh_single_podcast``)
+        must therefore pass only these four unless they have narrowed the
+        concrete type — passing an RSS-only kwarg to a YouTube source raises
+        ``TypeError`` (see issue #112). Tests should mock sources with
+        ``create_autospec`` so that contract is enforced, not silently bypassed.
+
         Args:
             url: Source URL to fetch from
             existing_episodes: List of episodes already tracked
