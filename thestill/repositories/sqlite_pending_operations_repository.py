@@ -77,6 +77,14 @@ class SqlitePendingOperationsRepository:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Parallel transcription chunk workers (and the web server) all write
+        # pending-operation rows concurrently. SQLite serializes writers, and
+        # without a per-connection ``busy_timeout`` the loser of a write race
+        # fails fast with ``database is locked`` instead of waiting its turn.
+        # Match the podcast/entity repos so this repo participates in the same
+        # WAL + 5s-timeout concurrency story.
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
             conn.commit()
