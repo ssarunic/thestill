@@ -374,6 +374,70 @@ class TestGetNewEpisodes:
             assert podcast in changed
 
 
+class TestFirstRefreshCapGate:
+    """The max_episodes cap must apply ONLY on a podcast's first refresh.
+
+    Capping an incremental refresh trims new episodes and then advances
+    ``last_processed`` past them, leaving a permanent hole in the feed. The
+    gate keeps the cap as an initial-backfill bound for brand-new podcasts
+    while dropping it entirely once a podcast is tracked.
+    """
+
+    def _mock_source(self, feed_manager, episodes=None):
+        source = Mock()
+        source.fetch_episodes.return_value = episodes or []
+        feed_manager.media_source_factory.detect_source.return_value = source
+        return source
+
+    def test_first_refresh_applies_cap(self, feed_manager, mock_repository):
+        """No known episodes and no checkpoint => first refresh => cap passed."""
+        podcast = Podcast(title="New", description="", rss_url="https://example.com/new.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+        source = self._mock_source(feed_manager)
+
+        feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+
+        assert source.fetch_episodes.call_args.kwargs["max_episodes"] == 5
+
+    def test_incremental_drops_cap_when_episodes_known(self, feed_manager, mock_repository):
+        """Known external ids => already tracked => cap dropped (no hole)."""
+        podcast = Podcast(title="Tracked", description="", rss_url="https://example.com/t.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {podcast.id: {"existing-1"}})
+        source = self._mock_source(feed_manager)
+
+        feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+
+        assert source.fetch_episodes.call_args.kwargs["max_episodes"] is None
+
+    def test_incremental_drops_cap_when_checkpoint_set(self, feed_manager, mock_repository):
+        """A last_processed checkpoint alone marks the podcast as tracked."""
+        podcast = Podcast(
+            title="Checkpointed",
+            description="",
+            rss_url="https://example.com/c.xml",
+            episodes=[],
+            last_processed=datetime(2026, 5, 1),
+        )
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+        source = self._mock_source(feed_manager)
+
+        feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+
+        assert source.fetch_episodes.call_args.kwargs["max_episodes"] is None
+
+    def test_non_rss_source_not_passed_rss_only_kwargs(self, feed_manager, mock_repository):
+        """``known_external_ids`` is RSS-only; the YouTube source's signature
+        rejects it, so it must not leak into the non-RSS fetch call."""
+        podcast = Podcast(title="YT", description="", rss_url="https://youtube.com/@x", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {podcast.id: {"vid-1"}})
+        source = self._mock_source(feed_manager)
+
+        feed_manager.refresh_feeds(max_episodes_per_podcast=5)
+
+        assert "known_external_ids" not in source.fetch_episodes.call_args.kwargs
+        assert "podcast_slug" not in source.fetch_episodes.call_args.kwargs
+
+
 class TestEpisodeMarking:
     """Test episode marking methods - use repository.update_episode API."""
 
