@@ -126,7 +126,7 @@ entities = [
     # gliner caps ``transformers<5.2``; whisperx (in the
     # local-transcription extra) caps it below 5 too. Keep the upper
     # bound generous so future patch bumps stay in range.
-    "transformers>=4.30,<5.10",
+    "transformers>=4.30,<5.11",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
