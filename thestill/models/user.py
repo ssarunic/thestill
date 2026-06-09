@@ -42,6 +42,10 @@ class User(BaseModel):
         region_locked: True once the user has explicitly picked a region. While
             False, the server may overwrite ``region`` from an IP-based guess
             on each login; once True, automatic inference is suppressed.
+        is_admin: True if the user may view and control the processing pipeline
+            (task queue + dead-letter queue). In single-user mode the default
+            user is always an admin; in multi-user mode this is off by default
+            and flipped manually in the database.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -53,6 +57,7 @@ class User(BaseModel):
     last_login_at: Optional[datetime] = None
     region: Optional[str] = None
     region_locked: bool = False
+    is_admin: bool = False
 
 
 class TokenPayload(BaseModel):

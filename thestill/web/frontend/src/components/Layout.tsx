@@ -6,6 +6,7 @@ import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
 import CommandBar from './CommandBar'
 import { PlayerProvider, usePlayer } from '../contexts/PlayerContext'
+import { useAuth } from '../contexts/AuthContext'
 
 interface NavItemProps {
   to: string
@@ -65,6 +66,7 @@ function LayoutContent() {
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false)
   const screenSize = useScreenSize()
   const { track } = usePlayer()
+  const { isAdmin } = useAuth()
 
   // Close sidebar/drawer when screen size changes
   useEffect(() => {
@@ -275,18 +277,34 @@ function LayoutContent() {
                 label="Digests"
                 showLabel={showLabels}
               />
-              <NavItem
-                to="/failed"
-                icon={failedIcon}
-                label="Failed Tasks"
-                showLabel={showLabels}
-              />
-              <NavItem
-                to="/queue"
-                icon={queueIcon}
-                label="Task Queue"
-                showLabel={showLabels}
-              />
+              {/* Admin section — operator-only pipeline controls. Hidden for
+                  non-admins (multi-user mode); always shown for the local user
+                  in single-user mode. */}
+              {isAdmin && (
+                <>
+                  <div className="pt-4 pb-1" aria-hidden={!showLabels}>
+                    {showLabels ? (
+                      <span className="px-3 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                        Admin
+                      </span>
+                    ) : (
+                      <div className="mx-2 border-t border-gray-200" />
+                    )}
+                  </div>
+                  <NavItem
+                    to="/queue"
+                    icon={queueIcon}
+                    label="Task Queue"
+                    showLabel={showLabels}
+                  />
+                  <NavItem
+                    to="/failed"
+                    icon={failedIcon}
+                    label="Failed Tasks"
+                    showLabel={showLabels}
+                  />
+                </>
+              )}
               <NavItem
                 to="/settings"
                 icon={settingsIcon}

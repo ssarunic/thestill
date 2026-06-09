@@ -81,7 +81,7 @@ class SqliteUserRepository(UserRepository):
             cursor = conn.execute(
                 """
                 SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked
+                       region, region_locked, is_admin
                 FROM users
                 WHERE id = ?
                 """,
@@ -97,7 +97,7 @@ class SqliteUserRepository(UserRepository):
             cursor = conn.execute(
                 """
                 SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked
+                       region, region_locked, is_admin
                 FROM users
                 WHERE email = ?
                 """,
@@ -113,7 +113,7 @@ class SqliteUserRepository(UserRepository):
             cursor = conn.execute(
                 """
                 SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked
+                       region, region_locked, is_admin
                 FROM users
                 WHERE google_id = ?
                 """,
@@ -129,18 +129,19 @@ class SqliteUserRepository(UserRepository):
 
         Uses UPSERT (INSERT ... ON CONFLICT) for atomic create-or-update.
 
-        ``region`` / ``region_locked`` are intentionally NOT updated by this
-        path — preserving the user's stored region across logins. Use
-        ``update_region`` to mutate region state explicitly.
+        ``region`` / ``region_locked`` / ``is_admin`` are intentionally NOT
+        updated by this path — preserving the user's stored region and admin
+        grant across logins. Use ``update_region`` to mutate region state
+        explicitly; ``is_admin`` is set manually in the database.
         """
         with self._get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO users (
                     id, email, name, picture, google_id,
-                    created_at, last_login_at, region, region_locked
+                    created_at, last_login_at, region, region_locked, is_admin
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     name = excluded.name,
                     picture = excluded.picture,
@@ -157,6 +158,7 @@ class SqliteUserRepository(UserRepository):
                     user.last_login_at.isoformat() if user.last_login_at else None,
                     user.region,
                     1 if user.region_locked else 0,
+                    1 if user.is_admin else 0,
                 ),
             )
 
@@ -278,4 +280,5 @@ class SqliteUserRepository(UserRepository):
             last_login_at=datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None,
             region=row["region"],
             region_locked=bool(row["region_locked"]),
+            is_admin=bool(row["is_admin"]),
         )

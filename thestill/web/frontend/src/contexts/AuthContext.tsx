@@ -10,6 +10,7 @@ export interface User {
   last_login_at: string | null
   region: string | null
   region_locked: boolean
+  is_admin: boolean
 }
 
 // Auth status response from /auth/status
@@ -24,6 +25,7 @@ interface AuthContextType {
   isLoading: boolean
   isMultiUser: boolean
   isAuthenticated: boolean
+  isAdmin: boolean
   login: () => void
   logout: () => Promise<void>
   refreshAuth: () => Promise<void>
@@ -98,6 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isMultiUser])
 
   const isAuthenticated = user !== null
+  // Single-user mode: the local user is always the operator (admin), even if
+  // the stored flag is unset on a pre-existing database. In multi-user mode,
+  // admin is gated on the server-provided is_admin flag.
+  const isAdmin = isMultiUser ? user?.is_admin === true : true
 
   return (
     <AuthContext.Provider
@@ -106,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isMultiUser,
         isAuthenticated,
+        isAdmin,
         login,
         logout,
         refreshAuth,
