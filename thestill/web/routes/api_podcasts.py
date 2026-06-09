@@ -209,7 +209,11 @@ async def get_podcast(
                 "primary_subcategory": podcast.primary_subcategory,
                 "secondary_category": podcast.secondary_category,
                 "secondary_subcategory": podcast.secondary_subcategory,
+                # ``last_processed`` is the discovery watermark (newest episode
+                # pub_date); ``last_processed_at`` is the wall-clock processing
+                # time the UI's "last processed" indicator should use.
                 "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
+                "last_processed_at": podcast.last_processed_at.isoformat() if podcast.last_processed_at else None,
                 "episodes_count": len(podcast.episodes),
                 "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
                 "is_following": is_following,

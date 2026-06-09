@@ -168,7 +168,8 @@ class PodcastWithIndex(BaseModel):
     primary_subcategory: Optional[str] = None
     secondary_category: Optional[str] = None
     secondary_subcategory: Optional[str] = None
-    last_processed: Optional[datetime] = None
+    last_processed: Optional[datetime] = None  # discovery watermark (newest episode pub_date)
+    last_processed_at: Optional[datetime] = None  # wall-clock time an episode was last processed
     episodes_count: int = 0
     episodes_processed: int = 0
     # THES-146: New metadata fields
@@ -358,6 +359,7 @@ class PodcastService:
                     secondary_category=podcast.secondary_category,
                     secondary_subcategory=podcast.secondary_subcategory,
                     last_processed=podcast.last_processed,
+                    last_processed_at=podcast.last_processed_at,
                     episodes_count=len(podcast.episodes),
                     episodes_processed=episodes_processed,
                     # THES-146: New metadata fields

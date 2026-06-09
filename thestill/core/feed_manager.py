@@ -940,7 +940,10 @@ class PodcastFeedManager:
                             )
                         if summary_path is not None:
                             episode.summary_path = summary_path if summary_path else None
-                        podcast.last_processed = now_utc()
+                        # Record processing time only — NEVER the discovery
+                        # watermark (``last_processed``), which must stay a real
+                        # episode pub_date so refresh keeps finding new episodes.
+                        self.repository.touch_last_processed_at(podcast.id, now_utc())
                         logger.info(
                             "Marked episode as processed (in transaction)", episode_external_id=episode_external_id
                         )
@@ -1018,8 +1021,8 @@ class PodcastFeedManager:
                                 )
                                 # Use targeted save methods instead of full save()
                                 self.repository.save_episode(episode)
-                                podcast.last_processed = now_utc()
-                                self.repository.save_podcast(podcast)
+                                # Processing-time stamp only; watermark untouched.
+                                self.repository.touch_last_processed_at(podcast.id, now_utc())
                                 logger.info("Added and marked new episode as processed", episode_title=episode.title)
                                 return
                 except Exception as e:
@@ -1031,12 +1034,11 @@ class PodcastFeedManager:
                     )
                     return
 
-            # Episode update succeeded - just update podcast last_processed timestamp
-            # Use save_podcast() to avoid touching episode updated_at timestamps
+            # Episode update succeeded — stamp the podcast's processing time.
             podcast = self.repository.get_by_url(podcast_rss_url)
             if podcast:
-                podcast.last_processed = now_utc()
-                self.repository.save_podcast(podcast)
+                # Processing-time stamp only; watermark untouched.
+                self.repository.touch_last_processed_at(podcast.id, now_utc())
                 logger.info("Marked episode as processed", episode_external_id=episode_external_id)
 
     def get_downloaded_episodes(self, storage_path: str) -> List[Tuple[Podcast, Episode]]:

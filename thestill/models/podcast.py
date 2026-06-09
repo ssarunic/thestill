@@ -332,8 +332,18 @@ class Podcast(BaseModel):
     is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")
     copyright: Optional[str] = None  # Copyright notice (from channel <copyright>)
 
-    # Processing status
+    # Processing status.
+    #
+    # ``last_processed`` is the incremental-refresh **discovery watermark** —
+    # the newest episode ``pub_date`` refresh has seen. It is compared against
+    # each feed entry (``episode_date > last_processed``), so it MUST track a
+    # real episode pub_date, never a wall clock. Writing ``now()`` here pushed
+    # the watermark ahead of every real episode and silently hid newly-published
+    # ones whose pub_date fell before the wall-clock time (the EP-skip bug).
     last_processed: Optional[datetime] = None
+    # ``last_processed_at`` is the wall-clock time we last finished processing an
+    # episode for this podcast. Display/telemetry only — never used by discovery.
+    last_processed_at: Optional[datetime] = None
 
     # HTTP conditional-GET cache (spec #19). Stored verbatim from the
     # previous refresh's response headers and echoed back as
@@ -367,6 +377,7 @@ class Podcast(BaseModel):
         no downstream comparison can mix awareness.
         """
         self.last_processed = ensure_utc(self.last_processed)
+        self.last_processed_at = ensure_utc(self.last_processed_at)
         return self
 
     @property

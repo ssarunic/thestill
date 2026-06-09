@@ -51,8 +51,8 @@ class CLIFormatter:
             lang_suffix = f" ({podcast.language})" if podcast.language and podcast.language != "en" else ""
             lines.append(f"{podcast.index}. {podcast.title}{lang_suffix}")
             lines.append(f"   RSS: {podcast.rss_url}")
-            if podcast.last_processed:
-                lines.append(f"   Last processed: {podcast.last_processed.strftime('%Y-%m-%d %H:%M')}")
+            if podcast.last_processed_at:
+                lines.append(f"   Last processed: {podcast.last_processed_at.strftime('%Y-%m-%d %H:%M')}")
             lines.append(f"   Episodes: {podcast.episodes_processed}/{podcast.episodes_count} processed")
             lines.append("")
 
