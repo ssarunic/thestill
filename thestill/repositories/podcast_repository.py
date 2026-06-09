@@ -93,6 +93,16 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def touch_last_processed_at(self, podcast_id: str, when: datetime) -> None:
+        """Record the wall-clock time an episode was last processed.
+
+        Distinct from ``last_processed`` (the incremental-refresh discovery
+        watermark). Implementations must write ONLY the processing-time column
+        so the watermark is never moved to a wall clock.
+        """
+        pass
+
+    @abstractmethod
     def get_by_slug(self, slug: str) -> Optional[Podcast]:
         """
         Get podcast by URL-safe slug.

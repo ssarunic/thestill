@@ -136,6 +136,21 @@ def _normalize_artwork_url(url: Optional[str]) -> Optional[str]:
     return url
 
 
+def _row_opt_dt(row: sqlite3.Row, key: str) -> Optional[datetime]:
+    """Parse an optional ISO-datetime column, tolerating SELECTs that omit it.
+
+    ``_row_to_podcast_minimal`` and friends are fed by several different
+    SELECTs; not all project every column. ``sqlite3.Row[missing]`` raises
+    ``IndexError``, so guard the lookup and return ``None`` when the column
+    isn't present (or is NULL) rather than forcing every query to carry it.
+    """
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return None
+    return datetime.fromisoformat(value) if value else None
+
+
 class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     """
     SQLite-based podcast repository.
@@ -226,6 +241,41 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Migrating database: adding language column to podcasts table")
             conn.execute("ALTER TABLE podcasts ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
             logger.info("Migration complete: language column added to podcasts")
+
+        # Migration: split the overloaded ``last_processed`` field (idempotent).
+        #
+        # ``last_processed`` was written with two incompatible meanings: the
+        # incremental-refresh discovery watermark (newest episode pub_date) AND
+        # a wall-clock "we just processed an episode" timestamp (set by
+        # ``mark_episode_processed``). The wall-clock writes pushed the watermark
+        # ahead of every real episode, so the ``episode_date > last_processed``
+        # discovery gate silently skipped newly-published episodes whose pub_date
+        # fell before the processing time. Split them:
+        #   - ``last_processed``    -> discovery watermark only (repaired below)
+        #   - ``last_processed_at`` -> wall-clock processing time (new column)
+        if "last_processed_at" not in podcast_columns:
+            logger.info("Migrating database: splitting last_processed into watermark + last_processed_at")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_processed_at TIMESTAMP NULL")
+            # The repair only applies to real DBs that already carry the
+            # ``last_processed`` watermark (guard for legacy/minimal fixtures
+            # whose podcasts table predates it).
+            if "last_processed" in podcast_columns:
+                # Preserve the historical wall-clock value for display.
+                conn.execute("UPDATE podcasts SET last_processed_at = last_processed")
+                # Repair the watermark: reset to the newest real episode pub_date
+                # so any episode published before a past processing run is
+                # discoverable again. NULL for podcasts with no episodes.
+                conn.execute(
+                    "UPDATE podcasts SET last_processed = "
+                    "(SELECT MAX(e.pub_date) FROM episodes e WHERE e.podcast_id = podcasts.id)"
+                )
+            # Clear stale conditional-GET validators so the next refresh does a
+            # full 200 + parse and re-evaluates every feed against the repaired
+            # watermark, self-healing any episode missed while the bug was live.
+            if {"etag", "last_modified"} <= podcast_columns:
+                conn.execute("UPDATE podcasts SET etag = NULL, last_modified = NULL")
+            podcast_columns.add("last_processed_at")
+            logger.info("Migration complete: last_processed split; watermarks repaired; feed caches cleared")
 
         # Migration: Add description_html column to episodes (idempotent)
         if "description_html" not in episode_columns:
@@ -1829,7 +1879,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- THES-145: Feed management
                 is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
                 copyright TEXT NULL,
+                -- Incremental-refresh discovery watermark (newest episode
+                -- pub_date seen). Compared against feed entries — must track a
+                -- real pub_date, never a wall clock.
                 last_processed TIMESTAMP NULL,
+                -- Wall-clock time an episode was last processed (display only).
+                last_processed_at TIMESTAMP NULL,
                 -- spec #19: HTTP conditional-GET cache
                 etag TEXT NULL,
                 last_modified TEXT NULL,
@@ -2151,7 +2206,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
                        p.primary_category_id, p.secondary_category_id,
                        p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
-                       p.last_processed, p.etag, p.last_modified, p.updated_at
+                       p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at
                 FROM podcasts p
                 WHERE p.synthetic = 0
                   AND (p.auto_added = 0
@@ -2193,6 +2248,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
                     copyright=row["copyright"],
                     last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+                    last_processed_at=_row_opt_dt(row, "last_processed_at"),
                     etag=row["etag"],
                     last_modified=row["last_modified"],
                     episodes=[],
@@ -2285,7 +2341,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
             """
@@ -2306,7 +2362,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -2326,7 +2382,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
             """,
@@ -2346,7 +2402,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
             """,
@@ -2369,7 +2425,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
                 LIMIT 1 OFFSET ?
@@ -2393,7 +2449,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       last_processed, etag, last_modified, updated_at
+                       last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE slug = ?
             """,
@@ -2496,6 +2552,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
             logger.debug(f"Saved podcast: {podcast.title} ({len(podcast.episodes)} episodes)")
             return podcast
+
+    def touch_last_processed_at(self, podcast_id: str, when: datetime) -> None:
+        """Record the wall-clock time an episode was last processed.
+
+        Targeted single-column UPDATE so it can never clobber the discovery
+        watermark (``last_processed``) — keeping the two semantics fully
+        separate. Safe to call inside a feed-manager transaction: it's an
+        immediate write and the column is untouched by the deferred metadata
+        saves, so the value survives the later flush.
+        """
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET last_processed_at = ? WHERE id = ?",
+                (when.isoformat(), podcast_id),
+            )
 
     def save_podcast(self, podcast: Podcast) -> Podcast:
         """
@@ -3185,7 +3256,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
-                       p.last_processed, p.updated_at as p_updated_at, e.*
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE e.failed_at_stage IS NOT NULL
@@ -3235,7 +3306,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
-                       p.last_processed, p.updated_at as p_updated_at, e.*
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE e.id = ?
@@ -3283,7 +3354,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
-                       p.last_processed, p.updated_at as p_updated_at, e.*
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE p.slug = ? AND e.slug = ?
@@ -3330,7 +3401,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
-                       p.last_processed, p.updated_at as p_updated_at, e.*
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
@@ -3466,7 +3537,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.secondary_category_id as p_secondary_category_id,
                        p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
                        p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
-                       p.last_processed, p.updated_at as p_updated_at, e.*
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {where_clause}
@@ -3529,6 +3600,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+                last_processed_at=_row_opt_dt(row, "last_processed_at"),
                 etag=row["etag"],
                 last_modified=row["last_modified"],
                 episodes=episodes,
@@ -3568,6 +3640,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             is_complete=row["p_is_complete"] == 1 if row["p_is_complete"] is not None else False,
             copyright=row["p_copyright"],
             last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+            last_processed_at=_row_opt_dt(row, "last_processed_at"),
             episodes=[],  # Episodes not loaded
         )
 
