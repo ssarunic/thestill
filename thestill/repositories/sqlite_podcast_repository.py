@@ -501,6 +501,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute("ALTER TABLE users ADD COLUMN region_locked INTEGER NOT NULL DEFAULT 0")
                 logger.info("Migration complete: region columns added to users")
 
+            # Migration: Add is_admin column to users table (idempotent).
+            # Gates the operator-only pipeline views (task queue + DLQ). Off by
+            # default; flipped manually in multi-user mode. The single-user
+            # default user is granted admin at creation time (auth_service).
+            if "is_admin" not in user_columns:
+                logger.info("Migrating database: adding is_admin column to users table")
+                conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+                logger.info("Migration complete: is_admin column added to users")
+
         # THES-153 Migration: Create digests tables if they don't exist (idempotent)
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='digests'")
         if cursor.fetchone() is None:
@@ -2024,10 +2033,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 last_login_at TIMESTAMP NULL,
                 region TEXT NULL,
                 region_locked INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
                 CHECK (length(id) = 36),
                 CHECK (length(email) > 0),
                 CHECK (region IS NULL OR length(region) = 2),
-                CHECK (region_locked IN (0, 1))
+                CHECK (region_locked IN (0, 1)),
+                CHECK (is_admin IN (0, 1))
             );
 
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

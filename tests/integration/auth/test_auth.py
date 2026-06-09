@@ -219,7 +219,8 @@ class TestSqliteUserRepository:
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_login_at TIMESTAMP NULL,
                 region TEXT NULL,
-                region_locked INTEGER NOT NULL DEFAULT 0
+                region_locked INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS revoked_tokens (
                 jti TEXT PRIMARY KEY NOT NULL,
@@ -369,7 +370,8 @@ class TestAuthServiceSingleUser:
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_login_at TIMESTAMP NULL,
                 region TEXT NULL,
-                region_locked INTEGER NOT NULL DEFAULT 0
+                region_locked INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS revoked_tokens (
                 jti TEXT PRIMARY KEY NOT NULL,

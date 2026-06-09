@@ -127,6 +127,9 @@ class AuthService:
                 email=DEFAULT_USER_EMAIL,
                 name=DEFAULT_USER_NAME,
                 created_at=datetime.now(timezone.utc),
+                # Single-user mode: the local user is the operator, so it is
+                # always an admin (can view/control the processing pipeline).
+                is_admin=True,
             )
             user = self.user_repository.save(user)
             logger.info(f"Created default user: {user.email}")

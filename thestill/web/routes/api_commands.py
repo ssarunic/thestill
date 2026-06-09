@@ -34,7 +34,7 @@ from ...core.queue_manager import ENTITY_BRANCH_STAGES, QueueManager, Task, Task
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
 from ...models.podcast import EpisodeState
 from ...models.user import User
-from ..dependencies import AppState, get_app_state, require_auth
+from ..dependencies import AppState, get_app_state, require_admin, require_auth
 from ..task_manager import TaskStatus, TaskType
 
 logger = get_logger(__name__)
@@ -1043,6 +1043,7 @@ async def get_queued_task_status(
 @router.get("/queue/status", response_model=QueueStatusResponse)
 async def get_queue_status(
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> QueueStatusResponse:
     """
     Get the overall queue and worker status.
@@ -1064,6 +1065,7 @@ async def get_queue_status(
 async def get_queue_tasks(
     completed_limit: int = 10,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> QueueTasksResponse:
     """
     Get detailed queue tasks with episode and podcast context.
@@ -1208,6 +1210,7 @@ async def get_queue_tasks(
 async def bump_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> BumpTaskResponse:
     """
     Bump a pending task to the front of the queue.
@@ -1243,6 +1246,7 @@ async def bump_queue_task(
 async def cancel_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> CancelTaskResponse:
     """
     Cancel a pending task and remove it from the queue.
@@ -1488,6 +1492,7 @@ async def list_dlq_tasks(
     limit: int = 100,
     branch: str = "all",
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> DLQListResponse:
     """
     List tasks in the Dead Letter Queue (status='dead' or 'failed').
@@ -1583,6 +1588,7 @@ async def list_dlq_tasks(
 async def retry_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> DLQActionResponse:
     """
     Retry a task from the Dead Letter Queue.
@@ -1630,6 +1636,7 @@ async def retry_dlq_task(
 async def skip_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> DLQActionResponse:
     """
     Skip (resolve) a task from the Dead Letter Queue.
@@ -1676,6 +1683,7 @@ async def skip_dlq_task(
 async def retry_all_dlq_tasks(
     request: Optional[DLQBulkRetryRequest] = None,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> DLQBulkRetryResponse:
     """
     Retry multiple tasks from the Dead Letter Queue.

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
+import AdminRoute from './components/AdminRoute'
 
 // Lazy load pages for code splitting
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -96,15 +97,20 @@ function App() {
             <BriefingDetail />
           </Suspense>
         } />
+        {/* Admin-only: operator pipeline views (gated by require_admin server-side) */}
         <Route path="failed" element={
-          <Suspense fallback={<PageLoader />}>
-            <FailedTasks />
-          </Suspense>
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <FailedTasks />
+            </Suspense>
+          </AdminRoute>
         } />
         <Route path="queue" element={
-          <Suspense fallback={<PageLoader />}>
-            <QueueViewer />
-          </Suspense>
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <QueueViewer />
+            </Suspense>
+          </AdminRoute>
         } />
         <Route path="settings" element={
           <Suspense fallback={<PageLoader />}>

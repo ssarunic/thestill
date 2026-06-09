@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 
 interface NavItemProps {
   to: string
@@ -33,6 +34,8 @@ interface NavigationDrawerProps {
 }
 
 export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerProps) {
+  const { isAdmin } = useAuth()
+
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -149,8 +152,18 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
           <NavItem to="/top" icon={topIcon} label="Top" onClick={onClose} />
           <NavItem to="/episodes" icon={episodesIcon} label="Episodes" onClick={onClose} />
           <NavItem to="/digests" icon={digestsIcon} label="Digests" onClick={onClose} />
-          <NavItem to="/failed" icon={failedIcon} label="Failed Tasks" onClick={onClose} />
-          <NavItem to="/queue" icon={queueIcon} label="Task Queue" onClick={onClose} />
+          {/* Admin section — operator-only, hidden for non-admins (multi-user). */}
+          {isAdmin && (
+            <>
+              <div className="pt-4 pb-1 px-4">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                  Admin
+                </span>
+              </div>
+              <NavItem to="/queue" icon={queueIcon} label="Task Queue" onClick={onClose} />
+              <NavItem to="/failed" icon={failedIcon} label="Failed Tasks" onClick={onClose} />
+            </>
+          )}
           <NavItem to="/settings" icon={settingsIcon} label="Settings" onClick={onClose} />
         </nav>
 

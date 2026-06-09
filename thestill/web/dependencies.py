@@ -245,3 +245,48 @@ def require_auth(
         )
 
     return user
+
+
+def require_admin(
+    request: Request,
+    state: AppState = Depends(get_app_state),
+) -> "User":
+    """
+    FastAPI dependency that requires an admin user.
+
+    Gates the operator-only pipeline endpoints (task queue + dead-letter
+    queue). In single-user mode the local user is always the operator, so
+    this always passes — regardless of the stored ``is_admin`` flag, which
+    keeps pre-existing single-user databases working. In multi-user mode it
+    requires an authenticated user whose ``is_admin`` flag is set (flipped
+    manually in the database).
+
+    Args:
+        request: FastAPI request object
+        state: Application state
+
+    Returns:
+        Authenticated admin User
+
+    Raises:
+        HTTPException: 401 if not authenticated, 403 if authenticated but
+            not an admin (multi-user mode only).
+
+    Example:
+        @router.get("/queue/tasks")
+        async def list_queue(_: User = Depends(require_admin)):
+            ...
+    """
+    user = require_auth(request, state)
+
+    # Single-user mode: the local user is the operator and always an admin.
+    if not state.config.multi_user:
+        return user
+
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required",
+        )
+
+    return user
