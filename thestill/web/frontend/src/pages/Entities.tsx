@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useEntitySummary } from '../hooks/useApi'
 import type { EntityCitationRow, EntityType, HostedPodcastRef } from '../api/types'
@@ -22,6 +23,36 @@ function formatTimestamp(ms: number): string {
     return `${hh}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`
   }
   return `${mm}:${ss.toString().padStart(2, '0')}`
+}
+
+// Bold every case-insensitive occurrence of the mention's `surface_form`
+// inside its quote. We don't store character offsets, so — like the
+// transcript inline highlighter (applyHighlights.tsx) — we locate the
+// surface form by substring search. `surface_form` is the literal text as
+// it appeared in this quote (e.g. an alias), so it matches even when the
+// quote doesn't use the canonical name. Returns the plain string when the
+// surface form is empty or absent (e.g. a coref/pronoun mention).
+function boldSurfaceForm(quote: string, surfaceForm: string): ReactNode {
+  const needle = surfaceForm.trim().toLowerCase()
+  if (!needle) return quote
+  const hay = quote.toLowerCase()
+  let idx = hay.indexOf(needle)
+  if (idx === -1) return quote
+  const out: ReactNode[] = []
+  let cursor = 0
+  let key = 0
+  while (idx !== -1) {
+    if (idx > cursor) out.push(quote.slice(cursor, idx))
+    out.push(
+      <strong key={key++} className="font-semibold text-gray-900">
+        {quote.slice(idx, idx + needle.length)}
+      </strong>,
+    )
+    cursor = idx + needle.length
+    idx = hay.indexOf(needle, cursor)
+  }
+  if (cursor < quote.length) out.push(quote.slice(cursor))
+  return <>{out}</>
 }
 
 function formatDate(iso: string | null): string {
@@ -425,7 +456,9 @@ export default function Entities() {
                         {row.speaker && <span>{row.speaker}</span>}
                         <span className="ml-auto">{formatDate(row.published_at)}</span>
                       </div>
-                      <p className="mt-1 text-sm text-gray-800">"{row.quote}"</p>
+                      <p className="mt-1 text-sm text-gray-800">
+                        "{boldSurfaceForm(row.quote, row.surface_form)}"
+                      </p>
                       <div className="mt-1 text-xs text-gray-500">
                         {seekHref ? (
                           <Link to={seekHref} className="font-medium text-gray-700 hover:underline">
