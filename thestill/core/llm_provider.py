@@ -241,6 +241,31 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=True,
     ),
+    # Anthropic Claude Opus 4.8 (current flagship) - supports structured output
+    # Uses adaptive thinking + effort parameter; temperature/top_p/top_k are
+    # removed (sending them returns 400), so supports_temperature is False.
+    "claude-opus-4-8": ModelLimits(
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=False,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
+    ),
+    # Anthropic Claude Sonnet 4.6 (current balanced) - supports structured output
+    # Still accepts temperature (unlike the Opus 4.7+/Fable family).
+    "claude-sonnet-4-6": ModelLimits(
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=True,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
+    ),
     # Anthropic Claude Opus 4.5 (November 2025) - supports structured output (beta)
     # 200K input, 64K output tokens, uses effort parameter (low/medium/high)
     "claude-opus-4-5-20251101": ModelLimits(
@@ -275,15 +300,6 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         structured_output_beta="structured-outputs-2025-11-13",
     ),
     # Anthropic Claude 4.x models - no structured output (pre-beta)
-    "claude-sonnet-4-20250514": ModelLimits(
-        tpm=400000,
-        rpm=1000,
-        tpd=5000000,
-        context_window=200000,
-        max_output_tokens=8192,
-        supports_temperature=True,
-        supports_structured_output=False,
-    ),
     "claude-opus-4-20250514": ModelLimits(
         tpm=400000,
         rpm=1000,
@@ -540,8 +556,9 @@ _PROMPT_CACHING_MODELS = frozenset(
         # Anthropic — explicit cache_control markers.
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
-        "claude-sonnet-4-20250514",
         "claude-opus-4-20250514",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-opus-4-5-20251101",
         "claude-opus-4-1-20250925",
