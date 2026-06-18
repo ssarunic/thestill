@@ -316,10 +316,12 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
 
     # Spec #48 — queued path: enqueue REFRESH_FEED task(s) and return. The
     # running server's worker (reserved REFRESH_FEED lane) processes them and
-    # fans out DOWNLOAD per new episode. Gated by --queue or REFRESH_VIA_QUEUE.
-    from .utils.config import get_default_refresh_interval_seconds, is_refresh_via_queue_enabled
+    # fans out per new episode. Triggered by the explicit --queue flag only —
+    # NOT by REFRESH_VIA_QUEUE, so the default `thestill refresh` keeps its
+    # inline behaviour (and FM-4 non-zero exit on feed errors) regardless of env.
+    from .utils.config import get_default_refresh_interval_seconds
 
-    if (queue or is_refresh_via_queue_enabled()) and not dry_run:
+    if queue and not dry_run:
         from .core.queue_manager import QueueManager, TaskStage
 
         qm = QueueManager(str(config.database_path))

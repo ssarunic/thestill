@@ -1346,23 +1346,25 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     if changed or new_eps:
         repo.save_refresh_batch(changed, new_eps)
 
-    # 4. Reconcile inserted ids (INSERT OR IGNORE may keep a prior row) and
-    #    enqueue the first pipeline stage per resolved episode at fresh priority.
+    # 4. Enqueue the first pipeline stage for every DISCOVERED-but-unqueued
+    #    episode of this feed. Driving off DB state (not the in-memory new_eps)
+    #    does the reconcile (INSERT OR IGNORE may have kept a prior row) AND the
+    #    P1 recovery in one query: episodes persisted by a prior run that died
+    #    before enqueuing have no task and are repaired here, idempotently. On a
+    #    healthy run this is exactly the episodes just persisted.
+    #
     #    Mirror batch_processor: when the transcription provider is Dalston it
     #    fetches the audio directly from the URL, so a freshly-discovered episode
-    #    SKIPS local download/downsample and starts at TRANSCRIBE. Otherwise it
+    #    SKIPS local download/downsample and starts at TRANSCRIBE; otherwise it
     #    starts at DOWNLOAD.
     use_dalston_url = getattr(state.config, "transcription_provider", "") == "dalston"
     enqueued = 0
-    for ep in new_eps:
-        resolved = repo.get_episode_by_external_id(str(podcast.rss_url), ep.external_id)
-        target_id = resolved.id if resolved else ep.id
-        audio_url = (resolved.audio_url if resolved else None) or ep.audio_url
+    for episode_id, audio_url in repo.get_discovered_unqueued_episodes(podcast_id):
         initial_stage = TaskStage.TRANSCRIBE if (use_dalston_url and audio_url) else TaskStage.DOWNLOAD
-        if state.queue_manager.has_pending_task(target_id, initial_stage):
+        if state.queue_manager.has_pending_task(episode_id, initial_stage):
             continue
         state.queue_manager.add_task(
-            episode_id=target_id,
+            episode_id=episode_id,
             stage=initial_stage,
             priority=10,  # spec #48 freshness priority — newly published jumps backfill
             metadata={"run_full_pipeline": True, "initiated_by": "refresh-feed"},

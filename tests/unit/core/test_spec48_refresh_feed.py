@@ -360,3 +360,74 @@ def test_handler_starts_at_transcribe_for_dalston(db: str) -> None:
     assert tr is not None
     assert tr.episode_id == resolved.id
     assert tr.priority == 10
+
+
+def test_handler_repairs_orphaned_discovered_episode(db: str) -> None:
+    """P1 recovery: an episode persisted but never enqueued (no task) is
+    repaired on the next refresh even when the feed reports NO new episodes."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)  # ensure the tasks table exists for the orphan query
+    # Persist a discovered episode directly with NO task — simulates a prior
+    # run that died after save_refresh_batch but before add_task.
+    orphan = Episode(
+        id="44444444-4444-4444-4444-444444444444",
+        podcast_id=PODCAST_ID,
+        external_id="orphan-1",
+        title="Orphan",
+        description="",
+        pub_date=datetime(2026, 4, 1),
+        audio_url="https://example.com/orphan.mp3",
+        duration=60,
+    )
+    repo0.save_refresh_batch([], [orphan])
+    assert repo0.get_discovered_unqueued_episodes(PODCAST_ID)  # orphan detected
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    # 304 / no new episodes this run.
+    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False))
+    task = Task(id="f" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+
+    handle_refresh_feed(task, state)
+
+    dl = qm.get_next_task(stage=TaskStage.DOWNLOAD)
+    assert dl is not None and dl.episode_id == orphan.id  # repaired
+    assert not repo.get_discovered_unqueued_episodes(PODCAST_ID)  # no longer orphaned
+
+
+def test_due_query_excludes_unfollowed_auto_added(db: str) -> None:
+    """Scheduler must not poll auto-added feeds nobody follows (matches
+    get_podcasts_for_refresh eligibility)."""
+    import sqlite3 as _sq
+
+    repo = SqlitePodcastRepository(db)
+    con = _sq.connect(db)
+    con.execute("UPDATE podcasts SET auto_added = 1 WHERE id = ?", (PODCAST_ID,))
+    con.commit()
+    con.close()
+    repo.seed_unscheduled_feeds(3600)
+    _force_due(db)
+    # auto_added with no follower -> not eligible.
+    assert PODCAST_ID not in repo.get_due_podcasts()
+
+
+def test_recover_interrupted_resets_feed_task_to_pending(db: str) -> None:
+    """Interrupted REFRESH_FEED tasks reset to pending (re-runnable), not failed."""
+    import sqlite3 as _sq
+
+    qm = QueueManager(db)
+    qm.add_feed_task(PODCAST_ID)
+    # Simulate an interrupted (processing) feed task.
+    con = _sq.connect(db)
+    con.execute("UPDATE tasks SET status='processing' WHERE stage='refresh-feed'")
+    con.commit()
+    con.close()
+
+    qm.recover_interrupted_tasks()
+
+    con = _sq.connect(db)
+    status = con.execute("SELECT status FROM tasks WHERE stage='refresh-feed'").fetchone()[0]
+    con.close()
+    assert status == "pending"  # re-runnable, not 'failed'

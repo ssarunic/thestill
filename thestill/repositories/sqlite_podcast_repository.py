@@ -1482,7 +1482,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             default_interval = get_default_refresh_interval_seconds()
             now_dt = now_utc()
             rows = conn.execute(
-                "SELECT id FROM podcasts WHERE COALESCE(synthetic, 0) = 0 AND COALESCE(is_complete, 0) = 0"
+                "SELECT id FROM podcasts WHERE COALESCE(synthetic, 0) = 0 AND COALESCE(is_complete, 0) = 0 "
+                "AND (COALESCE(auto_added, 0) = 0 "
+                "OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))"
             ).fetchall()
             for row in rows:
                 pid = row["id"]
@@ -3012,12 +3014,58 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                   AND next_refresh_at <= ?
                   AND COALESCE(synthetic, 0) = 0
                   AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
                 ORDER BY next_refresh_at ASC
                 LIMIT ?
                 """,
                 (now_iso, limit),
             ).fetchall()
             return [row["id"] for row in rows]
+
+    def get_discovered_unqueued_episodes(
+        self, podcast_id: str, within_days: int = 2, limit: int = 25
+    ) -> List[Tuple[str, Optional[str]]]:
+        """Spec #48 P1 — RECENT episodes persisted but never enqueued (orphans).
+
+        ``handle_refresh_feed`` persists new episodes, then enqueues their first
+        task in a *separate* write. If the process dies (or ``add_task`` fails)
+        in between, the episodes are durable but have no task; the next refresh
+        reloads their external_ids as "known", so ``new_eps`` is empty and the
+        fan-out is never repaired. This query is the idempotent recovery: an
+        episode in DISCOVERED state (no artifact paths, not failed) with **no
+        task row at all** is an orphan. The handler enqueues these every run, so
+        a healthy run just re-finds the episodes it persisted this cycle, and a
+        crashed prior run is self-healed on the next tick.
+
+        Scoped to ``within_days`` (default 2): refresh runs at most every ~24h,
+        so a genuine crash-orphan is always recent. This deliberately EXCLUDES
+        the historical "discovered but never processed" backlog (pre-spec-48
+        episodes the user never queued for processing) — enqueuing those would
+        be a surprise flood, not a repair. Bounded by ``limit`` per call so even
+        a burst drains gradually. Returns ``(episode_id, audio_url)`` pairs.
+        """
+        cutoff = (now_utc() - timedelta(days=within_days)).isoformat()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.id, e.audio_url
+                FROM episodes e
+                WHERE e.podcast_id = ?
+                  AND e.created_at >= ?
+                  AND e.failed_at_stage IS NULL
+                  AND e.audio_path IS NULL
+                  AND e.downsampled_audio_path IS NULL
+                  AND e.raw_transcript_path IS NULL
+                  AND e.clean_transcript_path IS NULL
+                  AND e.summary_path IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
+                ORDER BY e.pub_date DESC
+                LIMIT ?
+                """,
+                (podcast_id, cutoff, limit),
+            ).fetchall()
+            return [(row["id"], row["audio_url"]) for row in rows]
 
     def seed_unscheduled_feeds(self, default_interval_seconds: int, now: Optional[datetime] = None) -> int:
         """Seed active feeds that have NEVER been scheduled or attempted.
@@ -3038,6 +3086,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                   AND last_refresh_error IS NULL
                   AND COALESCE(synthetic, 0) = 0
                   AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
                 """
             ).fetchall()
             for row in rows:

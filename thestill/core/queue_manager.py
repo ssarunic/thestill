@@ -1220,6 +1220,24 @@ class QueueManager:
         excluded_stages = excluded_stages or []
 
         with self._get_connection() as conn:
+            # Spec #48 — feed-scoped (REFRESH_FEED) tasks are idempotent and
+            # safe to re-run: reset interrupted ones to 'pending' so the worker
+            # resumes them, rather than 'failed'. Marking them failed would both
+            # leave a spurious DLQ row AND bypass the podcast-park path (the
+            # scheduler would then re-enqueue around a stale terminal row).
+            feed_stage_values = [s.value for s in _FEED_SCOPED_STAGES]
+            feed_placeholders = ",".join("?" * len(feed_stage_values))
+            conn.execute(
+                f"""
+                UPDATE tasks
+                SET status = 'pending', started_at = NULL, updated_at = ?
+                WHERE status = 'processing' AND stage IN ({feed_placeholders})
+                """,
+                (now, *feed_stage_values),
+            )
+            # Never let the failed-marking below touch feed stages.
+            excluded_stages = list(excluded_stages) + list(_FEED_SCOPED_STAGES)
+
             if excluded_stages:
                 # Build placeholders for excluded stages
                 placeholders = ",".join("?" * len(excluded_stages))
