@@ -1469,8 +1469,9 @@ class AnthropicProvider(LLMProvider):
             if system_message:
                 params["system"] = system_message
 
-            # Add temperature if specified
-            if temperature is not None:
+            # Add temperature only if specified AND the model accepts it
+            # (reasoning models reject it with a 400 — see supports_temperature).
+            if temperature is not None and self.supports_temperature():
                 params["temperature"] = temperature
 
             # Handle JSON response format
@@ -1648,7 +1649,20 @@ class AnthropicProvider(LLMProvider):
         return full_response
 
     def supports_temperature(self) -> bool:
-        """Anthropic always supports temperature"""
+        """Whether THIS model accepts a ``temperature`` parameter.
+
+        Reasoning models (e.g. Claude Opus 4.8) reject ``temperature`` /
+        ``top_p`` / ``top_k`` with a 400, so the model's ``MODEL_CONFIGS``
+        entry sets ``supports_temperature=False``. Mirror the exact-then-prefix
+        lookup used by ``supports_structured_output`` so date-suffixed ids
+        (``claude-opus-4-8-2026...``) resolve to their base config.
+        """
+        if self.model in MODEL_CONFIGS:
+            return MODEL_CONFIGS[self.model].supports_temperature
+        for model_name, limits in MODEL_CONFIGS.items():
+            if self.model.startswith(model_name.rsplit("-", 1)[0]):
+                return limits.supports_temperature
+        # Unknown model: keep the historical permissive default.
         return True
 
     def health_check(self) -> bool:
@@ -1813,7 +1827,7 @@ class AnthropicProvider(LLMProvider):
                 ]
             else:
                 params["system"] = system_message
-        if temperature is not None:
+        if temperature is not None and self.supports_temperature():
             params["temperature"] = temperature
 
         # Use beta API with structured output
@@ -1895,8 +1909,9 @@ class AnthropicProvider(LLMProvider):
         if system_message:
             params["system"] = system_message
 
-        # Add temperature if specified
-        if temperature is not None:
+        # Add temperature only if specified AND the model accepts it
+        # (reasoning models reject it with a 400 — see supports_temperature).
+        if temperature is not None and self.supports_temperature():
             params["temperature"] = temperature
 
         # Handle JSON response format
