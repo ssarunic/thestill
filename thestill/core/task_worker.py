@@ -53,7 +53,7 @@ import structlog
 from thestill.utils.exceptions import FatalError, TransientError
 
 from .progress import ProgressCallback, ProgressUpdate
-from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage
+from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage, is_feed_scoped_stage
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -180,11 +180,35 @@ class TaskWorker:
                     return next(iter(stage_active.values()))
         return None
 
+    @staticmethod
+    def _task_key(task: Task) -> str:
+        """Spec #48 — unique in-memory active-set key per task target.
+
+        Episode tasks key by ``episode_id``; podcast-scoped (REFRESH_FEED)
+        tasks key by ``podcast:<id>`` so multiple feed tasks (all with
+        ``episode_id is None``) don't collapse onto a single ``None`` slot.
+        """
+        if task.episode_id is not None:
+            return task.episode_id
+        return f"podcast:{task.podcast_id}"
+
     def _all_active_episode_ids_locked(self) -> set[str]:
         """Return episode IDs active in any stage. Caller must hold _active_lock."""
         ids: set[str] = set()
         for stage_active in self._active_by_stage.values():
-            ids.update(stage_active.keys())
+            for task in stage_active.values():
+                if task.episode_id is not None:
+                    ids.add(task.episode_id)
+        return ids
+
+    def _all_active_podcast_ids_locked(self) -> set[str]:
+        """Return podcast IDs active in any feed-scoped stage (per-podcast
+        mutex for REFRESH_FEED). Caller must hold _active_lock."""
+        ids: set[str] = set()
+        for stage_active in self._active_by_stage.values():
+            for task in stage_active.values():
+                if task.podcast_id is not None:
+                    ids.add(task.podcast_id)
         return ids
 
     def get_status(self) -> dict:
@@ -289,22 +313,30 @@ class TaskWorker:
             try:
                 with self._active_lock:
                     slots = capacity - len(active)
-                    exclude = self._all_active_episode_ids_locked() or None
+                    exclude_eps = self._all_active_episode_ids_locked() or None
+                    exclude_pods = self._all_active_podcast_ids_locked() or None
 
                 if slots > 0:
                     for _ in range(slots):
-                        task = self.queue_manager.get_next_task(stage=stage, exclude_episode_ids=exclude)
+                        task = self.queue_manager.get_next_task(
+                            stage=stage,
+                            exclude_episode_ids=exclude_eps,
+                            exclude_podcast_ids=exclude_pods,
+                        )
                         if task is None:
                             break
 
+                        key = self._task_key(task)
                         with self._active_lock:
                             # Recheck under lock: another stage may have claimed this
-                            # episode between the poll and now. Same-episode cross-stage
-                            # concurrency would race on transcript/summary artifacts.
-                            if any(task.episode_id in s for s in self._active_by_stage.values()):
+                            # target between the poll and now. Same-episode cross-stage
+                            # concurrency would race on transcript/summary artifacts;
+                            # same-podcast feed tasks would double-fetch.
+                            if any(key in s for s in self._active_by_stage.values()):
                                 continue
-                            active[task.episode_id] = task
-                            exclude = self._all_active_episode_ids_locked()
+                            active[key] = task
+                            exclude_eps = self._all_active_episode_ids_locked() or None
+                            exclude_pods = self._all_active_podcast_ids_locked() or None
 
                         asyncio.create_task(self._process_task_async(task, sem, stage))
 
@@ -328,7 +360,7 @@ class TaskWorker:
                 await asyncio.to_thread(self._process_task, task)
             finally:
                 with self._active_lock:
-                    self._active_by_stage[stage].pop(task.episode_id, None)
+                    self._active_by_stage[stage].pop(self._task_key(task), None)
 
     def _process_task(self, task: Task) -> None:
         """
@@ -382,15 +414,19 @@ class TaskWorker:
                 self.queue_manager.complete_task(task.id)
                 logger.info("task_completed_successfully")
 
-                # Auto-resolve any stale DLQ rows for this episode at the
-                # same stage or earlier in the same branch. After a user
-                # fixes (e.g.) a bad API key and reruns transcription,
-                # the old dead transcribe row is obsolete — keeping it
-                # around just trains users to ignore the queue.
-                self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
+                # Feed-scoped (REFRESH_FEED) tasks have no episode and do
+                # their own dynamic DOWNLOAD fan-out inside the handler;
+                # skip the episode-chain bookkeeping entirely.
+                if task.episode_id is not None:
+                    # Auto-resolve any stale DLQ rows for this episode at the
+                    # same stage or earlier in the same branch. After a user
+                    # fixes (e.g.) a bad API key and reruns transcription,
+                    # the old dead transcribe row is obsolete — keeping it
+                    # around just trains users to ignore the queue.
+                    self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
 
-                # Chain enqueue next stage if running full pipeline
-                self._maybe_enqueue_next_stage(task)
+                    # Chain enqueue next stage if running full pipeline
+                    self._maybe_enqueue_next_stage(task)
 
             except FatalError as e:
                 # Fatal error - move to DLQ, no retry
@@ -538,6 +574,26 @@ class TaskWorker:
             return
 
         try:
+            if is_feed_scoped_stage(task.stage):
+                # Spec #48 — feed-scoped failure domain. There is no episode
+                # to mark; write podcast-level failure state and PARK the feed
+                # (terminal here: this is only called once retries are
+                # exhausted / on a fatal error), so the scheduler stops
+                # re-enqueuing it. Operator retry re-arms it. Cache headers are
+                # untouched (FM-2 is enforced on the feed path).
+                self.repository.record_refresh_error(
+                    podcast_id=task.podcast_id,
+                    error=error_msg,
+                    terminal=True,
+                )
+                logger.info(
+                    "refresh_feed_failed_parked",
+                    stage=task.stage.value,
+                    failure_type=failure_type,
+                    podcast_id=task.podcast_id,
+                )
+                return
+
             if is_entity_branch_stage(task.stage):
                 # Entity-branch failures live in their own status column;
                 # ``failed_at_stage`` and the episode-card UX stay

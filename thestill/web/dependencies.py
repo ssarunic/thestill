@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from ..core.feed_manager import PodcastFeedManager
     from ..core.progress_store import ProgressStore
     from ..core.queue_manager import QueueManager
+    from ..core.refresh_scheduler import RefreshScheduler
     from ..core.task_worker import TaskWorker
     from ..models.user import User
     from ..repositories.briefing_repository import BriefingRepository
@@ -120,6 +121,8 @@ class AppState:
     # ``Optional`` only so legacy test fixtures that construct AppState by
     # hand don't have to update yet; production paths always pass a repo.
     pending_ops_repository: "Optional[SqlitePendingOperationsRepository]" = None
+    # Spec #48 — background refresh scheduler (set at startup when enabled).
+    refresh_scheduler: "Optional[RefreshScheduler]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the

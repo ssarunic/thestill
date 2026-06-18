@@ -87,6 +87,26 @@ class TaskStage(str, Enum):
     # The scheduled ``enrich-entities`` batch still owns retries + staleness.
     ENRICH_ENTITIES = "enrich-entities"
 
+    # Spec #48 — podcast-scoped root/producer stage. One task = one feed.
+    # Carries ``podcast_id`` (not ``episode_id``), fans out DOWNLOAD tasks for
+    # newly-discovered episodes, and is a separate (feed-scoped) failure
+    # domain — see ``_FEED_SCOPED_STAGES`` / ``is_feed_scoped_stage``.
+    REFRESH_FEED = "refresh-feed"
+
+
+# Spec #48 §"Failure isolation" — REFRESH_FEED is podcast-scoped: it has no
+# episode to mark failed. A failure writes podcast-level state
+# (``podcasts.last_refresh_error``) instead of ``episodes.failed_at_stage``,
+# and a terminal failure parks the feed (``next_refresh_at = NULL``).
+# ``task_worker._mark_episode_failed`` branches on this set.
+_FEED_SCOPED_STAGES = frozenset({TaskStage.REFRESH_FEED})
+
+
+def is_feed_scoped_stage(stage: TaskStage) -> bool:
+    """Return True if ``stage`` targets a podcast (``podcast_id``) rather than
+    an episode (``episode_id``) — currently only REFRESH_FEED (spec #48)."""
+    return stage in _FEED_SCOPED_STAGES
+
 
 # Spec #28 §6 — the entity branch is a separate failure domain. A
 # failure on any of these stages must not mark the episode as failed in
@@ -142,6 +162,12 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.REBUILD_COOCCURRENCES: [TaskStage.COMPUTE_RELATED],
     TaskStage.COMPUTE_RELATED: [TaskStage.ENRICH_ENTITIES],
     TaskStage.ENRICH_ENTITIES: [],
+    # Spec #48 — REFRESH_FEED is a root/producer with no STATIC successor: it
+    # fans out DOWNLOAD per newly-discovered episode dynamically inside the
+    # handler (data-driven, not one→one). Mapped to ``[]`` to satisfy the
+    # "every stage has an entry" invariant; the worker never auto-chains a
+    # feed task (it has no episode), so this empty list is the correct no-op.
+    TaskStage.REFRESH_FEED: [],
 }
 
 
@@ -218,9 +244,14 @@ class Task:
     """Represents a queued task."""
 
     id: str
-    episode_id: str
-    stage: TaskStage
-    status: TaskStatus
+    # Exactly one of ``episode_id`` / ``podcast_id`` is set (enforced by a
+    # table CHECK). Episode-scoped stages (DOWNLOAD…ENRICH_ENTITIES) carry
+    # ``episode_id``; the podcast-scoped REFRESH_FEED stage (spec #48) carries
+    # ``podcast_id`` and has no episode at enqueue time — it produces them.
+    episode_id: Optional[str] = None
+    podcast_id: Optional[str] = None
+    stage: TaskStage = TaskStage.DOWNLOAD
+    status: TaskStatus = TaskStatus.PENDING
     priority: int = 0
     error_message: Optional[str] = None  # Final error message (when failed/dead)
     created_at: Optional[datetime] = None
@@ -241,6 +272,7 @@ class Task:
         return {
             "id": self.id,
             "episode_id": self.episode_id,
+            "podcast_id": self.podcast_id,
             "stage": self.stage.value,
             "status": self.status.value,
             "priority": self.priority,
@@ -380,6 +412,11 @@ class QueueManager:
     # both the fresh-DB ``CREATE TABLE`` and the rebuild migration's DDL.
     _TASKS_STAGE_CHECK = "CHECK (stage IN ({values}))".format(values=", ".join(f"'{s.value}'" for s in TaskStage))
 
+    # Spec #48 — exactly one of (episode_id, podcast_id) is set. ``IS NOT NULL``
+    # yields 1/0; ``<>`` is XOR, so the row is valid iff precisely one target is
+    # present. Rejects rows with both set or neither set.
+    _TASKS_TARGET_CHECK = "CHECK ((episode_id IS NOT NULL) <> (podcast_id IS NOT NULL))"
+
     def _ensure_table(self):
         """Create tasks table if not exists and run migrations."""
         with self._get_connection() as conn:
@@ -388,7 +425,8 @@ class QueueManager:
                 f"""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY NOT NULL,
-                    episode_id TEXT NOT NULL,
+                    episode_id TEXT NULL,
+                    podcast_id TEXT NULL,
                     stage TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     priority INTEGER DEFAULT 0,
@@ -398,7 +436,9 @@ class QueueManager:
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
                     FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                    FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                     CHECK (length(id) = 36),
+                    {self._TASKS_TARGET_CHECK},
                     {self._TASKS_STAGE_CHECK}
                 )
             """
@@ -411,6 +451,12 @@ class QueueManager:
             self._migrate_add_column(conn, "tasks", "error_type", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "last_error", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "metadata", "TEXT NULL")
+            # Spec #48 — podcast-scoped target column. Added without the inline
+            # FK / CHECK (SQLite ALTER cannot add either); legacy DBs always
+            # trip the rebuild below — which installs ``episode_id`` nullable,
+            # the FK, and the exactly-one-target CHECK — because their stored
+            # DDL still carries ``episode_id TEXT NOT NULL``.
+            self._migrate_add_column(conn, "tasks", "podcast_id", "TEXT NULL")
 
             # Spec #28 §0.5 — rebuild the tasks table whenever the existing
             # CHECK constraint is missing any current ``TaskStage`` value.
@@ -435,15 +481,25 @@ class QueueManager:
             existing_ddl = row["sql"] if row else None
             if existing_ddl:
                 missing_stages = [s.value for s in TaskStage if f"'{s.value}'" not in existing_ddl]
-                if missing_stages:
+                # Spec #48 — legacy DBs carry ``episode_id TEXT NOT NULL`` and no
+                # exactly-one-target CHECK. Detecting either (the stored DDL
+                # normalises whitespace, so match the canonical token) forces the
+                # same rebuild dance: only a table rebuild can drop the NOT NULL
+                # and install the FK + target CHECK.
+                needs_target_migration = (
+                    "episode_id TEXT NOT NULL" in existing_ddl or "(episode_id IS NOT NULL)" not in existing_ddl
+                )
+                if missing_stages or needs_target_migration:
                     logger.info(
-                        "Migrating tasks table: widening stage CHECK constraint",
+                        "Migrating tasks table: rebuild (stage CHECK and/or podcast target)",
                         missing_stages=missing_stages,
+                        target_migration=needs_target_migration,
                     )
                     self._rebuild_tasks_with_extended_check(conn)
                     logger.info(
-                        "Migration complete: tasks table rebuilt with current TaskStage values",
+                        "Migration complete: tasks table rebuilt",
                         added_stages=missing_stages,
+                        target_migration=needs_target_migration,
                     )
 
             # Indexes for efficient querying
@@ -481,6 +537,15 @@ class QueueManager:
                 ON tasks(stage, status, priority DESC, created_at ASC)
             """
             )
+            # Spec #48 — feed-scoped lookups: the enqueue uniqueness guard
+            # (``has_pending_feed_task``) and the per-podcast active filter.
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tasks_podcast_stage
+                ON tasks(podcast_id, stage)
+                WHERE podcast_id IS NOT NULL
+            """
+            )
 
             logger.debug("Tasks table ensured")
 
@@ -509,7 +574,8 @@ class QueueManager:
             f"""
             CREATE TABLE tasks_new_spec28 (
                 id TEXT PRIMARY KEY NOT NULL,
-                episode_id TEXT NOT NULL,
+                episode_id TEXT NULL,
+                podcast_id TEXT NULL,
                 stage TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 priority INTEGER DEFAULT 0,
@@ -525,24 +591,29 @@ class QueueManager:
                 last_error TEXT NULL,
                 metadata TEXT NULL,
                 FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                 CHECK (length(id) = 36),
+                {self._TASKS_TARGET_CHECK},
                 {self._TASKS_STAGE_CHECK}
             )
             """
         )
         # Copy every column we explicitly enumerated in the new DDL —
         # listing them by name keeps the migration robust against future
-        # column additions on either side.
+        # column additions on either side. ``podcast_id`` is copied too: it
+        # was ALTER-added before this rebuild fired, so it exists on the
+        # source table (NULL for every legacy/episode-scoped row, which
+        # satisfies the exactly-one-target CHECK alongside their episode_id).
         conn.execute(
             """
             INSERT INTO tasks_new_spec28 (
-                id, episode_id, stage, status, priority, error_message,
+                id, episode_id, podcast_id, stage, status, priority, error_message,
                 created_at, updated_at, started_at, completed_at,
                 retry_count, max_retries, next_retry_at, error_type,
                 last_error, metadata
             )
             SELECT
-                id, episode_id, stage, status, priority, error_message,
+                id, episode_id, podcast_id, stage, status, priority, error_message,
                 created_at, updated_at, started_at, completed_at,
                 retry_count, max_retries, next_retry_at, error_type,
                 last_error, metadata
@@ -581,6 +652,7 @@ class QueueManager:
         return Task(
             id=row["id"],
             episode_id=row["episode_id"],
+            podcast_id=row["podcast_id"] if "podcast_id" in row.keys() else None,
             stage=TaskStage(row["stage"]),
             status=TaskStatus(row["status"]),
             priority=row["priority"],
@@ -650,10 +722,103 @@ class QueueManager:
             updated_at=datetime.fromisoformat(now),
         )
 
+    def add_feed_task(
+        self,
+        podcast_id: str,
+        stage: TaskStage = TaskStage.REFRESH_FEED,
+        priority: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+        max_retries: Optional[int] = None,
+    ) -> Optional[Task]:
+        """Enqueue a podcast-scoped task (spec #48), e.g. REFRESH_FEED.
+
+        Carries ``podcast_id`` with ``episode_id`` NULL. Applies the per-feed
+        coalescing **uniqueness guard**: if a non-terminal task for this
+        (podcast, stage) already exists, returns ``None`` instead of enqueuing
+        a duplicate — two concurrent refreshes of one feed would double-fetch
+        and race on the cache-header write.
+
+        Returns the created ``Task``, or ``None`` if coalesced.
+        """
+        if not is_feed_scoped_stage(stage):
+            raise ValueError(f"add_feed_task is for feed-scoped stages only, got {stage.value}")
+
+        task_id = str(uuid.uuid4())
+        now = now_utc().isoformat()
+        metadata = metadata or {}
+        max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        metadata_json = json.dumps(metadata) if metadata else None
+        created: list[bool] = [False]
+
+        def _write() -> None:
+            with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # Uniqueness guard inside the write txn so two schedulers
+                    # racing the same feed can't both insert.
+                    exists = conn.execute(
+                        """
+                        SELECT 1 FROM tasks
+                        WHERE podcast_id = ? AND stage = ?
+                          AND status IN ('pending', 'processing', 'retry_scheduled')
+                        LIMIT 1
+                        """,
+                        (podcast_id, stage.value),
+                    ).fetchone()
+                    if exists:
+                        conn.rollback()
+                        return
+                    conn.execute(
+                        """
+                        INSERT INTO tasks (id, episode_id, podcast_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+                        VALUES (?, NULL, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                        """,
+                        (task_id, podcast_id, stage.value, priority, max_retries, metadata_json, now, now),
+                    )
+                    created[0] = True
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+        self._exec_with_lock_retry("add_feed_task", _write)
+
+        if not created[0]:
+            logger.debug("feed_task_coalesced", podcast_id=podcast_id, stage=stage.value)
+            return None
+
+        logger.info(f"Feed task queued: {task_id} - {stage.value} for podcast {podcast_id}")
+        return Task(
+            id=task_id,
+            episode_id=None,
+            podcast_id=podcast_id,
+            stage=stage,
+            status=TaskStatus.PENDING,
+            priority=priority,
+            max_retries=max_retries,
+            metadata=metadata,
+            created_at=datetime.fromisoformat(now),
+            updated_at=datetime.fromisoformat(now),
+        )
+
+    def has_pending_feed_task(self, podcast_id: str, stage: TaskStage = TaskStage.REFRESH_FEED) -> bool:
+        """True if a non-terminal feed task exists for this (podcast, stage)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT 1 FROM tasks
+                WHERE podcast_id = ? AND stage = ? AND status IN ('pending', 'processing', 'retry_scheduled')
+                LIMIT 1
+                """,
+                (podcast_id, stage.value),
+            )
+            return cursor.fetchone() is not None
+
     def get_next_task(
         self,
         stage: Optional[TaskStage] = None,
         exclude_episode_ids: Optional[set[str]] = None,
+        exclude_podcast_ids: Optional[set[str]] = None,
     ) -> Optional[Task]:
         """
         Get the next pending or ready-to-retry task, atomically marking it as 'processing'.
@@ -665,6 +830,8 @@ class QueueManager:
         Args:
             stage: Optionally filter to a specific stage
             exclude_episode_ids: Episode IDs to skip (already being processed)
+            exclude_podcast_ids: Podcast IDs to skip — the per-podcast mutex for
+                feed-scoped (REFRESH_FEED) tasks (spec #48)
 
         Returns:
             Task if one is available, None otherwise
@@ -687,8 +854,18 @@ class QueueManager:
 
                 if exclude_episode_ids:
                     placeholders = ",".join("?" for _ in exclude_episode_ids)
-                    conditions.append(f"episode_id NOT IN ({placeholders})")
+                    # Spec #48 — guard the NULL: a feed task has episode_id NULL,
+                    # and ``NULL NOT IN (…)`` is NULL (not TRUE) in SQLite, which
+                    # would wrongly filter every REFRESH_FEED row out whenever any
+                    # episode task is active. The ``IS NULL`` arm keeps feed tasks
+                    # claimable through the episode-exclusion filter.
+                    conditions.append(f"(episode_id IS NULL OR episode_id NOT IN ({placeholders}))")
                     params.extend(exclude_episode_ids)
+
+                if exclude_podcast_ids:
+                    placeholders = ",".join("?" for _ in exclude_podcast_ids)
+                    conditions.append(f"(podcast_id IS NULL OR podcast_id NOT IN ({placeholders}))")
+                    params.extend(exclude_podcast_ids)
 
                 where = " AND ".join(conditions)
                 cursor = conn.execute(

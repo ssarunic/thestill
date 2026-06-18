@@ -299,13 +299,52 @@ def list(ctx):
 @click.option("--podcast-id", help="Refresh specific podcast (index or RSS URL)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to discover per podcast")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be discovered without updating feeds.json")
+@click.option(
+    "--queue",
+    "-q",
+    is_flag=True,
+    help="Spec #48: enqueue REFRESH_FEED tasks for the worker instead of refreshing inline "
+    "(also implied by REFRESH_VIA_QUEUE=true). With no --podcast-id, enqueues all due feeds.",
+)
 @click.pass_context
 @require_config
 @log_command
-def refresh(ctx, podcast_id, max_episodes, dry_run):
+def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
     """Refresh podcast feeds and discover new episodes (step 1)"""
     # Use shared services from context
     config = ctx.obj.config
+
+    # Spec #48 — queued path: enqueue REFRESH_FEED task(s) and return. The
+    # running server's worker (reserved REFRESH_FEED lane) processes them and
+    # fans out DOWNLOAD per new episode. Gated by --queue or REFRESH_VIA_QUEUE.
+    from .utils.config import get_default_refresh_interval_seconds, is_refresh_via_queue_enabled
+
+    if (queue or is_refresh_via_queue_enabled()) and not dry_run:
+        from .core.queue_manager import QueueManager, TaskStage
+
+        qm = QueueManager(str(config.database_path))
+        if podcast_id:
+            podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+            if not podcast:
+                click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+                ctx.exit(1)
+            task = qm.add_feed_task(str(podcast.id), TaskStage.REFRESH_FEED)
+            if task:
+                click.echo(f"📨 Enqueued REFRESH_FEED for: {podcast.title}")
+            else:
+                click.echo(f"↪️  Already queued (coalesced): {podcast.title}")
+        else:
+            repo = ctx.obj.repository
+            repo.seed_unscheduled_feeds(get_default_refresh_interval_seconds())
+            due = repo.get_due_podcasts()
+            enqueued = 0
+            for pid in due:
+                if qm.add_feed_task(str(pid), TaskStage.REFRESH_FEED) is not None:
+                    enqueued += 1
+            click.echo(f"📨 Enqueued {enqueued} due feed(s) ({len(due)} due). Worker will refresh them.")
+        click.echo("💡 Ensure the server/worker is running so tasks get processed.")
+        return
+
     refresh_service = RefreshService(ctx.obj.feed_manager, ctx.obj.podcast_service)
 
     # Use CLI option if provided, otherwise fall back to config

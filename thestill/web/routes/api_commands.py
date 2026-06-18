@@ -32,6 +32,7 @@ from structlog import get_logger
 
 from ...core.queue_manager import ENTITY_BRANCH_STAGES, QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
+from ...core.queue_manager import is_feed_scoped_stage
 from ...models.podcast import EpisodeState
 from ...models.user import User
 from ..dependencies import AppState, get_app_state, require_admin, require_auth
@@ -1135,19 +1136,28 @@ async def get_queue_tasks(
         duration_seconds = None
         duration_formatted = None
 
-        result = state.repository.get_episode(task.episode_id)
-        if result:
-            podcast, episode = result
-            episode_title = episode.title
-            episode_slug = episode.slug
-            podcast_title = podcast.title
-            podcast_slug = podcast.slug
-            duration_seconds = episode.duration
-            duration_formatted = format_duration(duration_seconds)
+        # Spec #48 — feed-scoped (REFRESH_FEED) tasks have no episode; render
+        # them by podcast title instead of dereferencing a null episode_id.
+        if task.podcast_id is not None:
+            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
+            if loaded:
+                podcast_title = loaded[0].title
+                podcast_slug = loaded[0].slug
+            episode_title = "[Feed refresh]"
+        else:
+            result = state.repository.get_episode(task.episode_id)
+            if result:
+                podcast, episode = result
+                episode_title = episode.title
+                episode_slug = episode.slug
+                podcast_title = podcast.title
+                podcast_slug = podcast.slug
+                duration_seconds = episode.duration
+                duration_formatted = format_duration(duration_seconds)
 
         return QueuedTaskWithContext(
             task_id=task.id,
-            episode_id=task.episode_id,
+            episode_id=task.episode_id or "",
             episode_title=episode_title,
             episode_slug=episode_slug,
             podcast_title=podcast_title,
@@ -1524,8 +1534,11 @@ async def list_dlq_tasks(
     """
     branch_stage_map: Dict[str, Optional[list]] = {
         "all": None,
-        "user": [s for s in TaskStage if s not in ENTITY_BRANCH_STAGES],
+        # Spec #48 — keep REFRESH_FEED out of the user episode branch; it gets
+        # its own ``feed`` branch so feed failures don't drown the critical path.
+        "user": [s for s in TaskStage if s not in ENTITY_BRANCH_STAGES and not is_feed_scoped_stage(s)],
         "entity": list(ENTITY_BRANCH_STAGES),
+        "feed": [s for s in TaskStage if is_feed_scoped_stage(s)],
     }
     if branch not in branch_stage_map:
         raise HTTPException(
@@ -1536,6 +1549,27 @@ async def list_dlq_tasks(
 
     tasks_with_info = []
     for task in dead_tasks:
+        # Spec #48 — feed-scoped tasks render by podcast, not episode.
+        if task.podcast_id is not None:
+            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
+            tasks_with_info.append(
+                DLQTaskResponse(
+                    task_id=task.id,
+                    episode_id="",
+                    episode_title="[Feed refresh]",
+                    episode_slug="",
+                    podcast_title=loaded[0].title if loaded else "[Unknown]",
+                    podcast_slug=loaded[0].slug if loaded else "",
+                    stage=task.stage.value,
+                    error_message=task.error_message,
+                    error_type=task.error_type.value if task.error_type else None,
+                    retry_count=task.retry_count,
+                    max_retries=task.max_retries,
+                    created_at=task.created_at.isoformat() if task.created_at else None,
+                    completed_at=task.completed_at.isoformat() if task.completed_at else None,
+                )
+            )
+            continue
         # Get episode and podcast info
         result = state.repository.get_episode(task.episode_id)
         if result:
@@ -1621,8 +1655,15 @@ async def retry_dlq_task(
     if not updated_task:
         raise HTTPException(status_code=500, detail="Failed to retry task")
 
-    # Clear episode failure state
-    state.repository.clear_episode_failure(task.episode_id)
+    # Clear failure state on the right target. Spec #48 — feed-scoped tasks
+    # carry podcast-level failure (last_refresh_error) and a parked schedule;
+    # re-arm the podcast instead of clearing a (nonexistent) episode.
+    if task.podcast_id is not None:
+        from ...utils.config import get_default_refresh_interval_seconds
+
+        state.repository.clear_podcast_refresh_failure(task.podcast_id, get_default_refresh_interval_seconds())
+    else:
+        state.repository.clear_episode_failure(task.episode_id)
 
     return DLQActionResponse(
         status="ok",
@@ -1707,11 +1748,16 @@ async def retry_all_dlq_tasks(
     retried_ids = []
     skipped = 0
 
+    from ...utils.config import get_default_refresh_interval_seconds
+
     for task in dead_tasks:
         updated_task = state.queue_manager.retry_dead_task(task.id)
         if updated_task:
-            # Clear episode failure state
-            state.repository.clear_episode_failure(task.episode_id)
+            # Clear failure state on the right target (spec #48 feed vs episode).
+            if task.podcast_id is not None:
+                state.repository.clear_podcast_refresh_failure(task.podcast_id, get_default_refresh_interval_seconds())
+            else:
+                state.repository.clear_episode_failure(task.episode_id)
             retried_ids.append(task.id)
         else:
             skipped += 1

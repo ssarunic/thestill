@@ -1290,6 +1290,102 @@ def _get_or_create_entity_enricher(state: "AppState"):
     return state.entity_enricher
 
 
+def handle_refresh_feed(task: Task, state: "AppState") -> None:
+    """Spec #48 — refresh ONE feed as a queued, podcast-scoped task.
+
+    Wraps the existing ``_refresh_single_podcast`` unit of work so the queued
+    path discovers exactly what the inline batch would. Key contracts:
+
+    - **Raise on ``had_error``** — ``_refresh_single_podcast`` returns normally
+      with ``had_error=True`` (a batch contract). The task contract must
+      surface that as a raised error so the worker retries / DLQs it; otherwise
+      a failed fetch becomes a silently-completed task. FM-2: no cache headers
+      are persisted on the failure path, so the next fetch re-validates.
+    - **Per-feed persist** in its own short transaction (incremental
+      visibility), mirroring the inline ``_record_outcome`` semantics.
+    - **Reconcile** episode ids after ``INSERT OR IGNORE`` before fan-out.
+    - **Fresh priority** on the enqueued DOWNLOADs so new episodes jump backfill.
+    """
+    from ..utils.config import (
+        get_default_refresh_interval_seconds,
+        get_refresh_max_interval_seconds,
+        get_refresh_min_interval_seconds,
+    )
+    from .media_source import RSSMediaSource
+
+    podcast_id = task.podcast_id
+    if not podcast_id:
+        raise FatalError("REFRESH_FEED task has no podcast_id")
+
+    repo = state.repository
+    fm = state.feed_manager
+
+    loaded = repo.get_podcast_for_refresh(podcast_id)
+    if loaded is None:
+        raise FatalError(f"Podcast not found for refresh: {podcast_id}")
+    podcast, known_external_ids = loaded
+
+    max_eps = getattr(state.config, "max_episodes_per_podcast", None)
+
+    # 1-2. Fetch (network outside any txn) and surface errors.
+    (podcast, new_eps, had_error, hit, source, headers_rotated) = fm._refresh_single_podcast(
+        podcast, max_eps, known_external_ids
+    )
+    if had_error:
+        # Non-terminal stamp for visibility; the worker parks on terminal exhaustion.
+        try:
+            repo.record_refresh_error(podcast_id, "feed refresh failed", terminal=False)
+        except Exception:
+            logger.warning("refresh_error_stamp_failed", podcast_id=podcast_id)
+        raise TransientError(f"Feed refresh failed for {podcast.title} ({podcast_id})")
+
+    # 3. Per-feed persist — only on success. A plain 304 (no rotated headers)
+    #    persists nothing; otherwise persist the podcast (+ new episodes).
+    persist_podcast = (not hit) or headers_rotated
+    changed = [podcast] if persist_podcast else []
+    if changed or new_eps:
+        repo.save_refresh_batch(changed, new_eps)
+
+    # 4. Reconcile inserted ids (INSERT OR IGNORE may keep a prior row) and
+    #    enqueue DOWNLOAD per resolved episode at fresh priority.
+    enqueued = 0
+    for ep in new_eps:
+        resolved = repo.get_episode_by_external_id(str(podcast.rss_url), ep.external_id)
+        target_id = resolved.id if resolved else ep.id
+        if state.queue_manager.has_pending_task(target_id, TaskStage.DOWNLOAD):
+            continue
+        state.queue_manager.add_task(
+            episode_id=target_id,
+            stage=TaskStage.DOWNLOAD,
+            priority=10,  # spec #48 freshness priority — newly published jumps backfill
+            metadata={"run_full_pipeline": True, "initiated_by": "refresh-feed"},
+        )
+        enqueued += 1
+
+    # 5. Best-effort transcript-link extraction (outside the txn, unchanged).
+    if new_eps and isinstance(source, RSSMediaSource):
+        try:
+            fm._save_transcript_links_for_episodes(podcast, new_eps, source)
+        except Exception:
+            logger.warning("transcript_link_extraction_failed", podcast_id=podcast_id, exc_info=True)
+
+    # 6. Record success + recompute adaptive (AIMD) cadence.
+    repo.record_refresh_success(
+        podcast_id,
+        found_new=bool(new_eps),
+        min_interval=get_refresh_min_interval_seconds(),
+        max_interval=get_refresh_max_interval_seconds(),
+        default_interval=get_default_refresh_interval_seconds(),
+    )
+    logger.info(
+        "refresh_feed_complete",
+        podcast_id=podcast_id,
+        new_episodes=len(new_eps),
+        download_enqueued=enqueued,
+        conditional_get_hit=hit,
+    )
+
+
 def create_task_handlers(
     state: "AppState",
 ) -> Dict[TaskStage, Callable[[Task, ProgressCallback | None], None]]:
@@ -1315,4 +1411,5 @@ def create_task_handlers(
         TaskStage.REBUILD_COOCCURRENCES: lambda task, cb=None: handle_rebuild_cooccurrences(task, state),
         TaskStage.COMPUTE_RELATED: lambda task, cb=None: handle_compute_related(task, state),
         TaskStage.ENRICH_ENTITIES: lambda task, cb=None: handle_enrich_entities(task, state),
+        TaskStage.REFRESH_FEED: lambda task, cb=None: handle_refresh_feed(task, state),
     }

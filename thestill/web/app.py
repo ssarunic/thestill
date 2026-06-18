@@ -335,6 +335,33 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.start()
         logger.info("task_worker_started")
 
+        # Spec #48 — start the background refresh scheduler when enabled. It
+        # enqueues REFRESH_FEED tasks for due feeds on a tick; the worker's
+        # reserved REFRESH_FEED lane processes them. Ships dark: both the
+        # scheduler and the queued path are off unless explicitly enabled.
+        from ..utils.config import (
+            get_default_refresh_interval_seconds,
+            get_refresh_scheduler_tick_seconds,
+            is_refresh_scheduler_enabled,
+            is_refresh_via_queue_enabled,
+        )
+
+        refresh_scheduler = None
+        if is_refresh_scheduler_enabled():
+            from ..core.refresh_scheduler import RefreshScheduler
+
+            refresh_scheduler = RefreshScheduler(
+                repository=repository,
+                queue_manager=queue_manager,
+                tick_seconds=get_refresh_scheduler_tick_seconds(),
+                default_interval_seconds=get_default_refresh_interval_seconds(),
+            )
+            refresh_scheduler.start()
+            app_state.refresh_scheduler = refresh_scheduler
+            logger.info("refresh_scheduler_enabled", via_queue=is_refresh_via_queue_enabled())
+        else:
+            logger.info("refresh_scheduler_disabled")
+
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s
         # cold-load (model deserialization, plus the HuggingFace
@@ -355,6 +382,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
         # Cleanup on shutdown
         logger.info("shutting_down_web_server")
+
+        # Stop the refresh scheduler (if running) before the worker.
+        if refresh_scheduler is not None:
+            refresh_scheduler.stop()
+            logger.info("refresh_scheduler_stopped")
 
         # Stop task worker gracefully
         task_worker.stop()
