@@ -428,8 +428,10 @@ export interface TopPodcastsResponse {
 }
 
 // Pipeline Task Types (Queue-based)
-// Spec #28 entity branch: extract-entities → resolve-entities → reindex
-// runs after summarize off the back of clean.
+// Full mirror of the backend ``TaskStage`` enum (thestill/core/queue_manager.py):
+// the user chain (download → summarize), the spec #28/#46/#47 entity branch
+// (extract-entities → … → enrich-entities), and the spec #48 podcast-scoped
+// producer (refresh-feed).
 export type PipelineStage =
   | 'download'
   | 'downsample'
@@ -439,6 +441,10 @@ export type PipelineStage =
   | 'extract-entities'
   | 'resolve-entities'
   | 'reindex'
+  | 'rebuild-cooccurrences'
+  | 'compute-related'
+  | 'enrich-entities'
+  | 'refresh-feed'
 export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
 // Extended pipeline task status to include new states
@@ -577,7 +583,7 @@ export interface DLQListResponse {
 
 // Spec #28 Phase 3.2 — DLQ filter to keep entity-branch failures from
 // drowning the user-facing critical path in the queue viewer.
-export type DLQBranchFilter = 'all' | 'user' | 'entity'
+export type DLQBranchFilter = 'all' | 'user' | 'entity' | 'feed'
 
 export interface DLQActionResponse {
   status: string
