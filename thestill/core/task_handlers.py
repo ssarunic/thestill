@@ -1347,16 +1347,23 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
         repo.save_refresh_batch(changed, new_eps)
 
     # 4. Reconcile inserted ids (INSERT OR IGNORE may keep a prior row) and
-    #    enqueue DOWNLOAD per resolved episode at fresh priority.
+    #    enqueue the first pipeline stage per resolved episode at fresh priority.
+    #    Mirror batch_processor: when the transcription provider is Dalston it
+    #    fetches the audio directly from the URL, so a freshly-discovered episode
+    #    SKIPS local download/downsample and starts at TRANSCRIBE. Otherwise it
+    #    starts at DOWNLOAD.
+    use_dalston_url = getattr(state.config, "transcription_provider", "") == "dalston"
     enqueued = 0
     for ep in new_eps:
         resolved = repo.get_episode_by_external_id(str(podcast.rss_url), ep.external_id)
         target_id = resolved.id if resolved else ep.id
-        if state.queue_manager.has_pending_task(target_id, TaskStage.DOWNLOAD):
+        audio_url = (resolved.audio_url if resolved else None) or ep.audio_url
+        initial_stage = TaskStage.TRANSCRIBE if (use_dalston_url and audio_url) else TaskStage.DOWNLOAD
+        if state.queue_manager.has_pending_task(target_id, initial_stage):
             continue
         state.queue_manager.add_task(
             episode_id=target_id,
-            stage=TaskStage.DOWNLOAD,
+            stage=initial_stage,
             priority=10,  # spec #48 freshness priority — newly published jumps backfill
             metadata={"run_full_pipeline": True, "initiated_by": "refresh-feed"},
         )
@@ -1381,7 +1388,7 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
         "refresh_feed_complete",
         podcast_id=podcast_id,
         new_episodes=len(new_eps),
-        download_enqueued=enqueued,
+        tasks_enqueued=enqueued,
         conditional_get_hit=hit,
     )
 

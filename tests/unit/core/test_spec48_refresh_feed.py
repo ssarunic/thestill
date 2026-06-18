@@ -248,7 +248,7 @@ def test_scheduler_tick_enqueues_due_feed(db: str) -> None:
 # --------------------------------------------------------------------------
 # Handler: handle_refresh_feed contracts
 # --------------------------------------------------------------------------
-def _make_state(db: str, refresh_return):
+def _make_state(db: str, refresh_return, transcription_provider: str = "whisper"):
     """Build a minimal AppState-like object for handle_refresh_feed."""
     from types import SimpleNamespace
     from unittest.mock import MagicMock
@@ -262,7 +262,7 @@ def _make_state(db: str, refresh_return):
         repository=repo,
         queue_manager=qm,
         feed_manager=fm,
-        config=SimpleNamespace(max_episodes_per_podcast=None),
+        config=SimpleNamespace(max_episodes_per_podcast=None, transcription_provider=transcription_provider),
     )
     return state, repo, qm, fm
 
@@ -326,3 +326,37 @@ def test_handler_persists_reconciles_and_enqueues_download_at_priority(db: str) 
     err = con.execute("SELECT last_refresh_error FROM podcasts WHERE id=?", (PODCAST_ID,)).fetchone()[0]
     con.close()
     assert err is None
+
+
+def test_handler_starts_at_transcribe_for_dalston(db: str) -> None:
+    """With Dalston, a freshly-discovered episode SKIPS local download/downsample
+    and starts at TRANSCRIBE (Dalston fetches the audio URL itself)."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    new_ep = Episode(
+        id="33333333-3333-3333-3333-333333333333",
+        podcast_id=PODCAST_ID,
+        external_id="ep-3",
+        title="Ep 3",
+        description="",
+        pub_date=datetime(2026, 3, 1),
+        audio_url="https://example.com/ep3.mp3",
+        duration=60,
+    )
+    state, repo, qm, _ = _make_state(
+        db, (podcast, [new_ep], False, False, None, False), transcription_provider="dalston"
+    )
+    task = Task(id="e" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+
+    handle_refresh_feed(task, state)
+
+    resolved = repo.get_episode_by_external_id("https://example.com/feed.xml", "ep-3")
+    # No DOWNLOAD task; a TRANSCRIBE task at fresh priority instead.
+    assert qm.get_next_task(stage=TaskStage.DOWNLOAD) is None
+    tr = qm.get_next_task(stage=TaskStage.TRANSCRIBE)
+    assert tr is not None
+    assert tr.episode_id == resolved.id
+    assert tr.priority == 10
