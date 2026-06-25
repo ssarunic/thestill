@@ -2878,7 +2878,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             return [self._save_episode_idempotent(conn, ep) for ep in episodes]
 
-    def save_refresh_batch(self, changed_podcasts: List[Podcast], new_episodes: List[Episode]) -> None:
+    def save_refresh_batch(
+        self,
+        changed_podcasts: List[Podcast],
+        new_episodes: List[Episode],
+        episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+    ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
 
@@ -2895,8 +2900,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ``last_processed``, or conditional-GET cache headers.
             new_episodes: Newly discovered episodes to insert. Must each
                 carry ``podcast_id``.
+            episode_image_updates: Optional ``(podcast_id, external_id,
+                image_url)`` triples re-syncing existing episodes' artwork from
+                the feed. Applied as a guarded UPDATE so only drifted rows write
+                (rotating signed URLs go stale because the INSERT above never
+                revisits an existing episode). New episodes inserted in this same
+                batch already carry the current URL, so their update is a no-op.
         """
-        if not changed_podcasts and not new_episodes:
+        if not changed_podcasts and not new_episodes and not episode_image_updates:
             return
 
         for ep in new_episodes:
@@ -2993,6 +3004,69 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """,
                     episode_params,
                 )
+
+            # Re-sync drifted artwork for existing episodes (stale signed-URL
+            # repair). Keyed by (podcast_id, external_id) so no episode
+            # hydration is needed; the ``IS NOT`` guard keeps it a no-op — and
+            # leaves ``updated_at`` untouched — unless the URL actually changed.
+            # New episodes inserted just above already carry the current URL, so
+            # their update here is a guarded no-op.
+            if episode_image_updates:
+                image_params = [
+                    (
+                        _normalize_artwork_url(image_url),
+                        now_iso,
+                        podcast_id,
+                        external_id,
+                        _normalize_artwork_url(image_url),
+                    )
+                    for podcast_id, external_id, image_url in episode_image_updates
+                ]
+                conn.executemany(
+                    """
+                    UPDATE episodes
+                    SET image_url = ?, updated_at = ?
+                    WHERE podcast_id = ? AND external_id = ? AND image_url IS NOT ?
+                    """,
+                    image_params,
+                )
+
+    def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
+        """Update ``image_url`` for existing episodes in one transaction.
+
+        Used by the image-repair routine: ``refresh`` discovers episodes with
+        ``INSERT OR IGNORE`` and never revisits an existing row, so artwork that
+        the feed later re-signs (e.g. Transistor's imgproxy URLs, whose
+        signatures rotate and start 404ing) goes stale forever. This re-syncs
+        the stored URL from the live feed.
+
+        Args:
+            updates: ``(episode_id, image_url)`` pairs. ``image_url`` is
+                normalized (``http`` -> ``https``) before storage. The
+                ``WHERE`` guard skips no-op writes so ``updated_at`` only moves
+                when the value actually changed.
+
+        Returns:
+            Number of rows actually changed.
+        """
+        if not updates:
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        params = [
+            (_normalize_artwork_url(image_url), now_iso, episode_id, _normalize_artwork_url(image_url))
+            for episode_id, image_url in updates
+        ]
+        with self._get_connection() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                """
+                UPDATE episodes
+                SET image_url = ?, updated_at = ?
+                WHERE id = ? AND image_url IS NOT ?
+                """,
+                params,
+            )
+            return conn.total_changes - before
 
     # ------------------------------------------------------------------
     # Spec #48 — background refresh scheduling (cadence + failure state)

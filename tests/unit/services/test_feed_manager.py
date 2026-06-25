@@ -371,7 +371,7 @@ class TestGetNewEpisodes:
         assert outcome.conditional_get_hits == 1
         assert mock_repository.save_refresh_batch.called is expect_persist
         if expect_persist:
-            changed, _rows = mock_repository.save_refresh_batch.call_args[0]
+            changed = mock_repository.save_refresh_batch.call_args[0][0]
             assert podcast in changed
 
 

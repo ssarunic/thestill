@@ -668,6 +668,51 @@ def test_save_podcast_inserts_new_podcast(temp_db, sample_podcast):
     assert found.description == "Test description"
 
 
+def test_save_refresh_batch_resyncs_drifted_episode_image(temp_db, sample_podcast, sample_episode):
+    """save_refresh_batch re-syncs an existing episode's drifted image_url.
+
+    Mirrors the rotating signed-URL case: refresh never re-inserts an existing
+    episode, so artwork is updated through the guarded image-update path.
+    """
+    sample_episode.podcast_id = sample_podcast.id
+    sample_episode.image_url = "https://cdn.example.com/old-signature/art.jpg"
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    new_url = "https://cdn.example.com/new-signature/art.jpg"
+    temp_db.save_refresh_batch(
+        [],
+        [],
+        episode_image_updates=[(sample_podcast.id, sample_episode.external_id, new_url)],
+    )
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.image_url == new_url
+
+
+def test_save_refresh_batch_image_update_is_noop_when_unchanged(temp_db, sample_podcast, sample_episode):
+    """An unchanged image_url leaves the row — and updated_at — untouched."""
+    sample_episode.podcast_id = sample_podcast.id
+    sample_episode.image_url = "https://cdn.example.com/art.jpg"
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    before = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+
+    import time
+
+    time.sleep(0.05)
+    temp_db.save_refresh_batch(
+        [],
+        [],
+        episode_image_updates=[(sample_podcast.id, sample_episode.external_id, "https://cdn.example.com/art.jpg")],
+    )
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.image_url == "https://cdn.example.com/art.jpg"
+    assert after.updated_at == before.updated_at
+
+
 def test_save_podcast_does_not_touch_episodes(temp_db, sample_podcast, sample_episode):
     """Test save_podcast() does not modify episodes."""
     # First save podcast with episode using full save()

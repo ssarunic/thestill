@@ -71,7 +71,7 @@ def test_fetch_error_sentinel_sets_had_error(tmp_path, monkeypatch):
     monkeypatch.setattr(source, "fetch_and_parse", lambda *a, **k: _error_result())
     monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
 
-    podcast, new_eps, had_error, hit, _src, _rot = fm._refresh_single_podcast(_podcast(), None, set())
+    podcast, new_eps, had_error, hit, _src, _rot, _imgs = fm._refresh_single_podcast(_podcast(), None, set())
 
     assert had_error is True
     assert new_eps == []
@@ -94,7 +94,7 @@ def test_successful_fetch_is_not_flagged(tmp_path, monkeypatch):
     monkeypatch.setattr(source, "fetch_and_parse", lambda *a, **k: not_modified)
     monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
 
-    _podcast_out, _eps, had_error, hit, _src, _rot = fm._refresh_single_podcast(_podcast(), None, set())
+    _podcast_out, _eps, had_error, hit, _src, _rot, _imgs = fm._refresh_single_podcast(_podcast(), None, set())
 
     assert had_error is False
     assert hit is True  # conditional-GET hit, not an error

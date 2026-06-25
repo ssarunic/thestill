@@ -16,6 +16,7 @@ import { ExplicitBadge } from '../components/ExplicitBadge'
 import PipelineActionButton from '../components/PipelineActionButton'
 import FailureBanner from '../components/FailureBanner'
 import ShareButton from '../components/ShareButton'
+import SmartImage from '../components/SmartImage'
 import KeyEntitiesStrip from '../components/episode-entities/KeyEntitiesStrip'
 import EntityRail from '../components/episode-entities/EntityRail'
 import EntityFilterBar from '../components/episode-entities/EntityFilterBar'
@@ -248,22 +249,21 @@ export default function EpisodeDetail() {
         <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-start gap-4">
             {/* Episode/Podcast artwork - prioritize episode artwork, fall back to podcast artwork */}
-            {(episode.image_url || episode.podcast_image_url) ? (
-              <img
-                src={episode.image_url || episode.podcast_image_url || ''}
-                alt={`${episode.title} artwork`}
-                width={96}
-                height={96}
-                loading="eager"
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
-              />
-            ) : (
-              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
-                <svg className="w-8 h-8 sm:w-10 sm:h-10 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              </div>
-            )}
+            <SmartImage
+              sources={[episode.image_url, episode.podcast_image_url]}
+              alt={`${episode.title} artwork`}
+              width={96}
+              height={96}
+              loading="eager"
+              className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
+              fallback={
+                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
+                  <svg className="w-8 h-8 sm:w-10 sm:h-10 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+              }
+            />
             <div className="flex-1 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4 text-center sm:text-left">
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{episode.title}</h1>

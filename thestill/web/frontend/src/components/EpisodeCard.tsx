@@ -6,6 +6,7 @@ import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
 import FailureDetailsModal from './FailureDetailsModal'
+import SmartImage from './SmartImage'
 
 interface EpisodeCardProps {
   episode: Episode | EpisodeWithPodcast
@@ -75,9 +76,15 @@ export default function EpisodeCard({
   const isFailed = episode.is_failed && episode.failure_type
   const isSelectable = onSelect !== undefined
 
-  // Get artwork URL - prioritize episode image, fall back to podcast image
+  // Artwork sources in priority order - episode image, then podcast image.
+  // SmartImage self-heals broken (e.g. expired Transistor) URLs and falls back
+  // down the chain before showing the placeholder.
   const episodeWithPodcast = episode as EpisodeWithPodcast
-  const artworkUrl = episode.image_url || episodeWithPodcast.podcast_image_url || podcastImageUrl || null
+  const artworkSources = [
+    episode.image_url,
+    episodeWithPodcast.podcast_image_url,
+    podcastImageUrl,
+  ]
 
   // Get podcast title for display
   const displayPodcastTitle = podcastTitle || episodeWithPodcast.podcast_title
@@ -104,34 +111,33 @@ export default function EpisodeCard({
   const content = (
     <div className="flex items-start gap-3 sm:gap-4">
       {/* Episode artwork */}
-      {artworkUrl ? (
-        <img
-          src={artworkUrl}
-          alt=""
-          width={40}
-          height={40}
-          loading="lazy"
-          className="w-10 h-10 rounded-md object-cover flex-shrink-0 aspect-square"
-        />
-      ) : (
-        <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 aspect-square ${
-          isFailed
-            ? episode.failure_type === 'fatal'
-              ? 'bg-red-100'
-              : 'bg-yellow-100'
-            : 'bg-gray-100'
-        }`}>
-          <svg className={`w-5 h-5 ${
+      <SmartImage
+        sources={artworkSources}
+        alt=""
+        width={40}
+        height={40}
+        loading="lazy"
+        className="w-10 h-10 rounded-md object-cover flex-shrink-0 aspect-square"
+        fallback={
+          <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 aspect-square ${
             isFailed
               ? episode.failure_type === 'fatal'
-                ? 'text-red-400'
-                : 'text-yellow-400'
-              : 'text-gray-400'
-          }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-          </svg>
-        </div>
-      )}
+                ? 'bg-red-100'
+                : 'bg-yellow-100'
+              : 'bg-gray-100'
+          }`}>
+            <svg className={`w-5 h-5 ${
+              isFailed
+                ? episode.failure_type === 'fatal'
+                  ? 'text-red-400'
+                  : 'text-yellow-400'
+                : 'text-gray-400'
+            }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            </svg>
+          </div>
+        }
+      />
 
       <div className="flex-1 min-w-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-2">

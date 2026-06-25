@@ -401,6 +401,48 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
         ctx.exit(1)
 
 
+@main.command(name="repair-images")
+@click.option("--podcast-id", help="Repair a specific podcast (index or RSS URL)")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would change without writing")
+@click.pass_context
+@require_config
+@log_command
+def repair_images(ctx, podcast_id, dry_run):
+    """Re-sync stale episode artwork URLs from the live feed.
+
+    ``refresh`` never revisits an existing episode, so artwork served behind
+    rotating signed URLs (e.g. Transistor imgproxy) goes stale and 404s. This
+    compares each tracked episode's stored image URL against the current feed
+    and updates the ones that drifted.
+    """
+    click.echo("🖼️  Repairing episode artwork URLs..." + (" (dry run)" if dry_run else ""))
+
+    outcome = ctx.obj.feed_manager.repair_episode_images(
+        podcast_id=podcast_id,
+        dry_run=dry_run,
+    )
+
+    if outcome.episodes_updated == 0:
+        click.echo(f"✓ No stale artwork found ({outcome.podcasts_checked} podcast(s) checked)")
+    else:
+        verb = "Would update" if dry_run else "Updated"
+        click.echo(
+            f"✅ {verb} {outcome.episodes_updated} episode image(s) across {len(outcome.updated_by_podcast)} podcast(s):"
+        )
+        for slug, count in outcome.updated_by_podcast.items():
+            click.echo(f"  • {slug}: {count}")
+        if dry_run:
+            click.echo("\n(Run without --dry-run to apply)")
+
+    if outcome.podcasts_with_errors:
+        click.echo(
+            f"\n⚠️  {outcome.podcasts_with_errors} feed(s) errored during repair — see logs "
+            "(event=image_repair_failed).",
+            err=True,
+        )
+        ctx.exit(1)
+
+
 @main.command()
 @click.option("--podcast-id", help="Download from specific podcast (index or RSS URL)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to download per podcast")

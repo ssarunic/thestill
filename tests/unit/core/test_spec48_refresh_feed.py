@@ -275,7 +275,7 @@ def test_handler_raises_on_had_error_and_enqueues_nothing(db: str) -> None:
     repo0 = SqlitePodcastRepository(db)
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     # had_error=True returned normally (batch contract) — handler must RAISE.
-    state, repo, qm, _ = _make_state(db, (podcast, [], True, False, None, False))
+    state, repo, qm, _ = _make_state(db, (podcast, [], True, False, None, False, []))
     task = Task(id="c" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
     with pytest.raises(TransientError):
@@ -307,7 +307,7 @@ def test_handler_persists_reconciles_and_enqueues_download_at_priority(db: str) 
         audio_url="https://example.com/ep2.mp3",
         duration=60,
     )
-    state, repo, qm, _ = _make_state(db, (podcast, [new_ep], False, False, None, False))
+    state, repo, qm, _ = _make_state(db, (podcast, [new_ep], False, False, None, False, []))
     task = Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
     handle_refresh_feed(task, state)
@@ -347,7 +347,7 @@ def test_handler_starts_at_transcribe_for_dalston(db: str) -> None:
         duration=60,
     )
     state, repo, qm, _ = _make_state(
-        db, (podcast, [new_ep], False, False, None, False), transcription_provider="dalston"
+        db, (podcast, [new_ep], False, False, None, False, []), transcription_provider="dalston"
     )
     task = Task(id="e" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
@@ -387,7 +387,7 @@ def test_handler_repairs_orphaned_discovered_episode(db: str) -> None:
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     # 304 / no new episodes this run.
-    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False))
+    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, []))
     task = Task(id="f" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
     handle_refresh_feed(task, state)

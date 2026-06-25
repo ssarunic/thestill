@@ -236,7 +236,12 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def save_refresh_batch(self, changed_podcasts: List[Podcast], new_episodes: List[Episode]) -> None:
+    def save_refresh_batch(
+        self,
+        changed_podcasts: List[Podcast],
+        new_episodes: List[Episode],
+        episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+    ) -> None:
         """
         Persist a refresh batch in a single transaction (spec #19).
 
@@ -250,6 +255,11 @@ class PodcastRepository(ABC):
             changed_podcasts: Podcasts whose state changed this refresh.
             new_episodes: Episodes to insert. Must each have
                 ``podcast_id`` set.
+            episode_image_updates: Optional ``(podcast_id, external_id,
+                image_url)`` triples re-syncing existing episodes' artwork from
+                the feed (rotating signed URLs go stale because new-episode
+                discovery never revisits an existing row). Applied as a guarded
+                update so only drifted rows write.
         """
         pass
 
