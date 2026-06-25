@@ -138,6 +138,25 @@ class TestCancellationNotHealable:
         _backdate_completed(qm, task.id, 60)
         assert qm.find_healable_tasks(cooldown=timedelta(minutes=10), max_heal_attempts=2) == []
 
+    def test_cancel_retry_clears_infra_class_so_healer_skips(self, db_path):
+        # cancel_retry() moves a retry_scheduled task to failed; like fail_task
+        # it must clear the 'infra' label so the healer can't requeue a retry
+        # the user explicitly cancelled (spec #49 review P2).
+        qm = QueueManager(db_path)
+        task = qm.add_task(episode_id=EPISODE_ID, stage=TaskStage.TRANSCRIBE)
+        qm.schedule_retry(task.id, "Failed to connect: [Errno 8] nodename", error_class="infra")
+        assert qm.get_task(task.id).status == TaskStatus.RETRY_SCHEDULED
+        assert qm.get_task(task.id).error_class == "infra"
+
+        cancelled = qm.cancel_retry(task.id)
+        assert cancelled is not None
+        assert cancelled.status == TaskStatus.FAILED
+        assert cancelled.error_class is None
+        assert cancelled.next_retry_at is None
+
+        _backdate_completed(qm, task.id, 60)
+        assert qm.find_healable_tasks(cooldown=timedelta(minutes=10), max_heal_attempts=2) == []
+
 
 class TestFindHealableTasks:
     def test_selects_infra_failed_past_cooldown(self, db_path):

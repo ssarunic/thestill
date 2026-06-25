@@ -1713,6 +1713,13 @@ class QueueManager:
         """
         Cancel a scheduled retry, marking the task as failed.
 
+        Spec #49: clears ``error_class`` (and the now-moot ``next_retry_at``) so
+        the auto-healer never resurrects a retry the user explicitly cancelled.
+        A ``retry_scheduled`` task can carry an 'infra' label from
+        ``schedule_retry``; without this, the healer — which requeues
+        ``status='failed'`` + ``error_class='infra'`` rows after a cooldown —
+        would silently re-queue it. Mirrors ``fail_task``.
+
         Args:
             task_id: ID of the task to cancel
 
@@ -1727,6 +1734,8 @@ class QueueManager:
                 UPDATE tasks
                 SET status = 'failed',
                     error_message = COALESCE(last_error, 'Retry cancelled by user'),
+                    error_class = NULL,
+                    next_retry_at = NULL,
                     completed_at = ?,
                     updated_at = ?
                 WHERE id = ? AND status = 'retry_scheduled'
