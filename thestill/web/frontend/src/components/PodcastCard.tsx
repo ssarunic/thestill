@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { PodcastSummary } from '../api/types'
+import SmartImage from './SmartImage'
 
 interface PodcastCardProps {
   podcast: PodcastSummary
@@ -19,22 +20,21 @@ export default function PodcastCard({ podcast }: PodcastCardProps) {
         {/* Header */}
         <div className="flex items-start gap-4">
           {/* Podcast artwork */}
-          {podcast.image_url ? (
-            <img
-              src={podcast.image_url}
-              alt={`${podcast.title} artwork`}
-              width={64}
-              height={64}
-              loading="lazy"
-              className="w-16 h-16 rounded-lg object-cover flex-shrink-0 aspect-square"
-            />
-          ) : (
-            <div className="w-16 h-16 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 aspect-square">
-              <svg className="w-8 h-8 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </div>
-          )}
+          <SmartImage
+            sources={[podcast.image_url]}
+            alt={`${podcast.title} artwork`}
+            width={64}
+            height={64}
+            loading="lazy"
+            className="w-16 h-16 rounded-lg object-cover flex-shrink-0 aspect-square"
+            fallback={
+              <div className="w-16 h-16 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 aspect-square">
+                <svg className="w-8 h-8 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </div>
+            }
+          />
 
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-gray-900 truncate">{podcast.title}</h3>

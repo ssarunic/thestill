@@ -62,6 +62,20 @@ class RefreshOutcome(NamedTuple):
     conditional_get_hits: int
 
 
+class ImageRepairOutcome(NamedTuple):
+    """Result of an episode-image repair pass.
+
+    ``refresh`` never re-reads an existing episode's ``image_url``, so artwork
+    served behind rotating signed URLs (e.g. Transistor imgproxy) goes stale
+    and starts 404ing. This pass re-syncs episode artwork from the live feed.
+    """
+
+    podcasts_checked: int
+    episodes_updated: int
+    podcasts_with_errors: int
+    updated_by_podcast: Dict[str, int]
+
+
 class PodcastFeedManager:
     """
     Manages podcast feeds and episodes.
@@ -256,7 +270,7 @@ class PodcastFeedManager:
         podcast: Podcast,
         max_episodes_per_podcast: Optional[int],
         known_external_ids: Optional[set] = None,
-    ) -> Tuple[Podcast, List[Episode], bool, bool, Any, bool]:
+    ) -> Tuple[Podcast, List[Episode], bool, bool, Any, bool, List[Tuple[str, str, Optional[str]]]]:
         """
         Refresh a single podcast. Safe to call from a worker thread.
 
@@ -267,14 +281,18 @@ class PodcastFeedManager:
 
         Returns:
             (podcast, new_episodes, had_error, conditional_get_hit, source,
-            headers_rotated). ``conditional_get_hit`` is True when the server
-            returned 304 and no parse/extract work ran. ``headers_rotated`` is
-            True when a 304 response carried a *new* ETag / Last-Modified that
-            we must still persist (RFC 7232) — otherwise the rotated header is
-            silently dropped and the next refresh sends a stale validator,
-            losing the cache hit. ``source`` is the detected media source
-            instance, returned so the caller can reuse it for transcript-link
-            extraction without re-detecting.
+            headers_rotated, image_rows). ``conditional_get_hit`` is True when
+            the server returned 304 and no parse/extract work ran.
+            ``headers_rotated`` is True when a 304 response carried a *new* ETag
+            / Last-Modified that we must still persist (RFC 7232) — otherwise
+            the rotated header is silently dropped and the next refresh sends a
+            stale validator, losing the cache hit. ``source`` is the detected
+            media source instance, returned so the caller can reuse it for
+            transcript-link extraction without re-detecting. ``image_rows`` are
+            ``(podcast_id, external_id, image_url)`` triples for every feed entry
+            on a 200 — the batch writer re-syncs existing episodes' drifted
+            artwork from these (signed CDN URLs rotate and the stored ones go
+            stale because new-episode discovery never revisits an existing row).
         """
         podcast_start = time.perf_counter()
         had_error = False
@@ -282,6 +300,7 @@ class PodcastFeedManager:
         source: Any = None
         conditional_get_hit = False
         headers_rotated = False
+        image_rows: List[Tuple[str, str, Optional[str]]] = []
         try:
             rss_url_str = str(podcast.rss_url)
             source = self.media_source_factory.detect_source(rss_url_str)
@@ -316,7 +335,24 @@ class PodcastFeedManager:
                     if result.last_modified and result.last_modified != podcast.last_modified:
                         podcast.last_modified = result.last_modified
                         headers_rotated = True
-                    return podcast, [], False, True, source, headers_rotated
+                    return podcast, [], False, True, source, headers_rotated, image_rows
+
+                # Spec #42/#49 — a fetch/parse failure (DNS, HTTP error, empty
+                # body) comes back as an error SENTINEL: content/parsed_feed are
+                # None and ``error`` is set, with NO exception raised. The old
+                # code fell through to ``episodes = []`` and reported success,
+                # so a feed outage silently cleared ``last_refresh_error`` and
+                # never retried/parked (errors-as-empty-results). Treat it as a
+                # hard error so the queued REFRESH_FEED task raises and recovers.
+                if result.error or result.content is None:
+                    had_error = True
+                    logger.error(
+                        "feed_fetch_failed",
+                        podcast_rss_url=rss_url_str,
+                        status_code=result.status_code,
+                        error=result.error,
+                    )
+                    return podcast, [], True, False, source, headers_rotated, image_rows
 
                 rss_content = result.content
                 parsed_feed = result.parsed_feed
@@ -334,6 +370,23 @@ class PodcastFeedManager:
                     )
                     if metadata:
                         self._apply_rss_metadata(podcast, metadata)
+
+                    # Re-sync existing episodes' artwork from the feed. Reuses
+                    # the already-parsed feed (no extra fetch); the batch
+                    # writer's guarded UPDATE only writes rows that drifted, so
+                    # this is near-free when nothing changed. Bound to
+                    # already-tracked episodes — brand-new ones are inserted with
+                    # their current URL below, and emitting the whole catalogue
+                    # would fire thousands of no-op UPDATEs against untracked
+                    # GUIDs on large feeds.
+                    known = known_external_ids or set()
+                    if known:
+                        feed_images = source.extract_episode_images(parsed_feed)
+                        image_rows = [
+                            (podcast.id, external_id, url)
+                            for external_id, url in feed_images.items()
+                            if external_id in known
+                        ]
 
             # Cap discovery only on a podcast's first-ever refresh — that's the
             # legitimate "don't backfill a 600-episode catalogue when adding a
@@ -420,7 +473,7 @@ class PodcastFeedManager:
             )
         # headers_rotated only governs the 304 path (which returns above); a
         # 200 response routes the podcast through changed_podcasts regardless.
-        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated
+        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated, image_rows
 
     def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
         """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
@@ -525,6 +578,7 @@ class PodcastFeedManager:
         # thread flushes them in a single transaction after the loop.
         changed_podcasts: List[Podcast] = []
         new_episode_rows: List[Episode] = []
+        episode_image_updates: List[Tuple[str, str, Optional[str]]] = []
         transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
 
         def _record_outcome(
@@ -534,6 +588,7 @@ class PodcastFeedManager:
             hit: bool,
             source: Any,
             headers_rotated: bool,
+            image_rows: List[Tuple[str, str, Optional[str]]],
         ) -> None:
             nonlocal podcasts_with_errors, conditional_get_hits
             if had_error:
@@ -559,6 +614,11 @@ class PodcastFeedManager:
                     changed_podcasts.append(podcast)
                 return
             changed_podcasts.append(podcast)
+            # Re-sync drifted artwork for already-tracked episodes (200 path
+            # only; a 304 returns above with empty image_rows). The guarded
+            # UPDATE in the batch writer makes unchanged rows a no-op.
+            if image_rows:
+                episode_image_updates.extend(image_rows)
             if eps:
                 new_episodes.append((podcast, eps))
                 new_episode_rows.extend(eps)
@@ -569,7 +629,9 @@ class PodcastFeedManager:
         if use_pool:
             # Preserve input ordering in the returned list so callers see a
             # deterministic shape regardless of completion order.
-            results: Dict[int, Tuple[Podcast, List[Episode], bool, bool, Any, bool]] = {}
+            results: Dict[
+                int, Tuple[Podcast, List[Episode], bool, bool, Any, bool, List[Tuple[str, str, Optional[str]]]]
+            ] = {}
             with ThreadPoolExecutor(
                 max_workers=min(self.max_workers, total_podcasts),
                 thread_name_prefix="thestill-refresh",
@@ -597,7 +659,7 @@ class PodcastFeedManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        results[idx] = (podcast, [], True, False, None, False)
+                        results[idx] = (podcast, [], True, False, None, False, [])
                     if progress_callback:
                         returned_podcast = results[idx][0]
                         progress_callback(completed, total_podcasts, returned_podcast.title)
@@ -619,13 +681,14 @@ class PodcastFeedManager:
         # Single-transaction batch persist (spec #19). Runs even when
         # `new_episode_rows` is empty, because podcasts that saw a 200
         # response still need their refreshed cache headers saved.
-        if changed_podcasts or new_episode_rows:
+        if changed_podcasts or new_episode_rows or episode_image_updates:
             with log_phase_timing(
                 "persist_batch",
                 podcasts=len(changed_podcasts),
                 new_episodes=len(new_episode_rows),
+                image_updates=len(episode_image_updates),
             ):
-                self.repository.save_refresh_batch(changed_podcasts, new_episode_rows)
+                self.repository.save_refresh_batch(changed_podcasts, new_episode_rows, episode_image_updates)
 
         # Transcript links rely on the debug RSS file that was written
         # during the fetch; do them after the main batch so a failure
@@ -675,6 +738,96 @@ class PodcastFeedManager:
             progress_callback=progress_callback,
             podcast_id=podcast_id,
         ).episodes_by_podcast
+
+    def repair_episode_images(
+        self,
+        podcast_id: Optional[str] = None,
+        dry_run: bool = False,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> ImageRepairOutcome:
+        """Re-sync stale episode ``image_url`` values from the live feed.
+
+        ``refresh`` discovers episodes with ``INSERT OR IGNORE`` and never
+        revisits an existing row, so episode artwork served behind rotating
+        signed URLs (Transistor's imgproxy signatures rotate and the old ones
+        start returning 404) is never updated. This compares each tracked
+        episode's stored URL against the current feed and updates the ones that
+        drifted. Only RSS-backed podcasts are checked — other sources don't use
+        these expiring URLs.
+
+        Args:
+            podcast_id: Optional podcast UUID or RSS URL to limit the pass.
+            dry_run: When True, report what would change without writing.
+            progress_callback: Optional ``(index, total, title)`` callback.
+
+        Returns:
+            An :class:`ImageRepairOutcome` summarising the pass.
+        """
+        if podcast_id:
+            podcast = self.repository.get_by_url(podcast_id) or self.repository.get_by_id(podcast_id)
+            podcasts = [podcast] if podcast else []
+            if not podcast:
+                logger.warning("Podcast not found for image repair", podcast_id=podcast_id)
+        else:
+            podcasts = self.repository.get_all()
+
+        total = len(podcasts)
+        episodes_updated = 0
+        podcasts_with_errors = 0
+        updated_by_podcast: Dict[str, int] = {}
+
+        for idx, podcast in enumerate(podcasts):
+            if progress_callback:
+                progress_callback(idx, total, podcast.title)
+            try:
+                source = self.media_source_factory.detect_source(str(podcast.rss_url))
+                if not isinstance(source, RSSMediaSource):
+                    continue
+
+                # Empty dedup filters => the whole feed is returned, each
+                # Episode carrying its current image_url.
+                feed_episodes = source.fetch_episodes(
+                    url=str(podcast.rss_url),
+                    existing_episodes=[],
+                    last_processed=None,
+                    max_episodes=None,
+                    podcast_slug=podcast.slug,
+                    known_external_ids=None,
+                )
+                feed_images = {ep.external_id: ep.image_url for ep in feed_episodes if ep.external_id}
+
+                updates: List[Tuple[str, Optional[str]]] = []
+                for ep in podcast.episodes:
+                    feed_url = feed_images.get(ep.external_id)
+                    if feed_url and feed_url != ep.image_url:
+                        updates.append((ep.id, feed_url))
+
+                if updates:
+                    changed = len(updates) if dry_run else self.repository.update_episode_image_urls(updates)
+                    if changed:
+                        episodes_updated += changed
+                        updated_by_podcast[podcast.slug] = changed
+                        logger.info(
+                            "episode_images_repaired",
+                            podcast_slug=podcast.slug,
+                            updated=changed,
+                            dry_run=dry_run,
+                        )
+            except Exception as e:
+                podcasts_with_errors += 1
+                logger.error(
+                    "image_repair_failed",
+                    podcast_slug=getattr(podcast, "slug", None),
+                    error=str(e),
+                    exc_info=True,
+                )
+
+        return ImageRepairOutcome(
+            podcasts_checked=total,
+            episodes_updated=episodes_updated,
+            podcasts_with_errors=podcasts_with_errors,
+            updated_by_podcast=updated_by_podcast,
+        )
 
     def _save_transcript_links_for_episodes(
         self,

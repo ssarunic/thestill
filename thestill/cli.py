@@ -299,13 +299,54 @@ def list(ctx):
 @click.option("--podcast-id", help="Refresh specific podcast (index or RSS URL)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to discover per podcast")
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be discovered without updating feeds.json")
+@click.option(
+    "--queue",
+    "-q",
+    is_flag=True,
+    help="Spec #48: enqueue REFRESH_FEED tasks for the worker instead of refreshing inline "
+    "(also implied by REFRESH_VIA_QUEUE=true). With no --podcast-id, enqueues all due feeds.",
+)
 @click.pass_context
 @require_config
 @log_command
-def refresh(ctx, podcast_id, max_episodes, dry_run):
+def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
     """Refresh podcast feeds and discover new episodes (step 1)"""
     # Use shared services from context
     config = ctx.obj.config
+
+    # Spec #48 — queued path: enqueue REFRESH_FEED task(s) and return. The
+    # running server's worker (reserved REFRESH_FEED lane) processes them and
+    # fans out per new episode. Triggered by the explicit --queue flag only —
+    # NOT by REFRESH_VIA_QUEUE, so the default `thestill refresh` keeps its
+    # inline behaviour (and FM-4 non-zero exit on feed errors) regardless of env.
+    from .utils.config import get_default_refresh_interval_seconds
+
+    if queue and not dry_run:
+        from .core.queue_manager import QueueManager, TaskStage
+
+        qm = QueueManager(str(config.database_path))
+        if podcast_id:
+            podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+            if not podcast:
+                click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+                ctx.exit(1)
+            task = qm.add_feed_task(str(podcast.id), TaskStage.REFRESH_FEED)
+            if task:
+                click.echo(f"📨 Enqueued REFRESH_FEED for: {podcast.title}")
+            else:
+                click.echo(f"↪️  Already queued (coalesced): {podcast.title}")
+        else:
+            repo = ctx.obj.repository
+            repo.seed_unscheduled_feeds(get_default_refresh_interval_seconds())
+            due = repo.get_due_podcasts()
+            enqueued = 0
+            for pid in due:
+                if qm.add_feed_task(str(pid), TaskStage.REFRESH_FEED) is not None:
+                    enqueued += 1
+            click.echo(f"📨 Enqueued {enqueued} due feed(s) ({len(due)} due). Worker will refresh them.")
+        click.echo("💡 Ensure the server/worker is running so tasks get processed.")
+        return
+
     refresh_service = RefreshService(ctx.obj.feed_manager, ctx.obj.podcast_service)
 
     # Use CLI option if provided, otherwise fall back to config
@@ -355,6 +396,48 @@ def refresh(ctx, podcast_id, max_episodes, dry_run):
             f"\n⚠️  {result.podcasts_with_errors} feed(s) errored during refresh — see logs "
             "(event=feed_refresh_summary, had_error=true). Their cache headers were not "
             "advanced, so the next refresh retries them.",
+            err=True,
+        )
+        ctx.exit(1)
+
+
+@main.command(name="repair-images")
+@click.option("--podcast-id", help="Repair a specific podcast (index or RSS URL)")
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would change without writing")
+@click.pass_context
+@require_config
+@log_command
+def repair_images(ctx, podcast_id, dry_run):
+    """Re-sync stale episode artwork URLs from the live feed.
+
+    ``refresh`` never revisits an existing episode, so artwork served behind
+    rotating signed URLs (e.g. Transistor imgproxy) goes stale and 404s. This
+    compares each tracked episode's stored image URL against the current feed
+    and updates the ones that drifted.
+    """
+    click.echo("🖼️  Repairing episode artwork URLs..." + (" (dry run)" if dry_run else ""))
+
+    outcome = ctx.obj.feed_manager.repair_episode_images(
+        podcast_id=podcast_id,
+        dry_run=dry_run,
+    )
+
+    if outcome.episodes_updated == 0:
+        click.echo(f"✓ No stale artwork found ({outcome.podcasts_checked} podcast(s) checked)")
+    else:
+        verb = "Would update" if dry_run else "Updated"
+        click.echo(
+            f"✅ {verb} {outcome.episodes_updated} episode image(s) across {len(outcome.updated_by_podcast)} podcast(s):"
+        )
+        for slug, count in outcome.updated_by_podcast.items():
+            click.echo(f"  • {slug}: {count}")
+        if dry_run:
+            click.echo("\n(Run without --dry-run to apply)")
+
+    if outcome.podcasts_with_errors:
+        click.echo(
+            f"\n⚠️  {outcome.podcasts_with_errors} feed(s) errored during repair — see logs "
+            "(event=image_repair_failed).",
             err=True,
         )
         ctx.exit(1)

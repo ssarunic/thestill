@@ -266,6 +266,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Each TaskStage gets its own poll loop + semaphore so slow stages
     # (transcribe) don't starve fast ones (clean).
     task_handlers = create_task_handlers(app_state)
+    from ..utils.config import (
+        get_circuit_cooldown_seconds,
+        get_circuit_failure_threshold,
+        get_circuit_window_seconds,
+        get_queue_heal_cooldown_minutes,
+        get_queue_heal_interval_seconds,
+        get_queue_max_heal_attempts,
+        is_queue_auto_heal_enabled,
+        is_queue_circuit_breaker_enabled,
+    )
+
     task_worker = TaskWorker(
         queue_manager,
         task_handlers,
@@ -273,6 +284,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         repository=repository,
         parallel_jobs=config.parallel_jobs,
         parallel_jobs_per_stage=config.get_parallel_jobs_per_stage(),
+        auto_heal_enabled=is_queue_auto_heal_enabled(),
+        heal_interval_s=get_queue_heal_interval_seconds(),
+        heal_cooldown_minutes=get_queue_heal_cooldown_minutes(),
+        max_heal_attempts=get_queue_max_heal_attempts(),
+        circuit_breaker_enabled=is_queue_circuit_breaker_enabled(),
+        circuit_failure_threshold=get_circuit_failure_threshold(),
+        circuit_window_seconds=get_circuit_window_seconds(),
+        circuit_cooldown_seconds=get_circuit_cooldown_seconds(),
     )
     app_state.task_worker = task_worker
 
@@ -335,6 +354,33 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         task_worker.start()
         logger.info("task_worker_started")
 
+        # Spec #48 — start the background refresh scheduler when enabled. It
+        # enqueues REFRESH_FEED tasks for due feeds on a tick; the worker's
+        # reserved REFRESH_FEED lane processes them. Ships dark: both the
+        # scheduler and the queued path are off unless explicitly enabled.
+        from ..utils.config import (
+            get_default_refresh_interval_seconds,
+            get_refresh_scheduler_tick_seconds,
+            is_refresh_scheduler_enabled,
+            is_refresh_via_queue_enabled,
+        )
+
+        refresh_scheduler = None
+        if is_refresh_scheduler_enabled():
+            from ..core.refresh_scheduler import RefreshScheduler
+
+            refresh_scheduler = RefreshScheduler(
+                repository=repository,
+                queue_manager=queue_manager,
+                tick_seconds=get_refresh_scheduler_tick_seconds(),
+                default_interval_seconds=get_default_refresh_interval_seconds(),
+            )
+            refresh_scheduler.start()
+            app_state.refresh_scheduler = refresh_scheduler
+            logger.info("refresh_scheduler_enabled", via_queue=is_refresh_via_queue_enabled())
+        else:
+            logger.info("refresh_scheduler_disabled")
+
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s
         # cold-load (model deserialization, plus the HuggingFace
@@ -355,6 +401,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
         # Cleanup on shutdown
         logger.info("shutting_down_web_server")
+
+        # Stop the refresh scheduler (if running) before the worker.
+        if refresh_scheduler is not None:
+            refresh_scheduler.stop()
+            logger.info("refresh_scheduler_stopped")
 
         # Stop task worker gracefully
         task_worker.stop()

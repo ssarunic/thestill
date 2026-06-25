@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { usePodcast, usePodcastEpisodesInfinite, useFollowPodcast, useUnfollowPodcast, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
+import SmartImage from '../components/SmartImage'
 import ExpandableDescription from '../components/ExpandableDescription'
 import { ExplicitBadge } from '../components/ExplicitBadge'
 import { ExternalLink } from '../components/ExternalLink'
@@ -103,22 +104,21 @@ export default function PodcastDetail() {
         <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
             {/* Podcast artwork */}
-            {podcast.image_url ? (
-              <img
-                src={podcast.image_url}
-                alt={`${podcast.title} artwork`}
-                width={96}
-                height={96}
-                loading="eager"
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
-              />
-            ) : (
-              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
-                <svg className="w-10 h-10 sm:w-12 sm:h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              </div>
-            )}
+            <SmartImage
+              sources={[podcast.image_url]}
+              alt={`${podcast.title} artwork`}
+              width={96}
+              height={96}
+              loading="eager"
+              className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
+              fallback={
+                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
+                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+              }
+            />
 
             <div className="flex-1 text-center sm:text-left">
               <div className="flex items-start justify-between gap-4">

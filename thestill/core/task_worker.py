@@ -52,8 +52,10 @@ import structlog
 
 from thestill.utils.exceptions import FatalError, TransientError
 
+from .circuit_breaker import CircuitState, StageCircuitBreaker
+from .error_classifier import classify_error_class
 from .progress import ProgressCallback, ProgressUpdate
-from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage
+from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage, is_feed_scoped_stage
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -89,6 +91,14 @@ class TaskWorker:
         repository: Optional["SqlitePodcastRepository"] = None,
         parallel_jobs: int = 1,
         parallel_jobs_per_stage: Optional[Dict[TaskStage, int]] = None,
+        auto_heal_enabled: bool = False,
+        heal_interval_s: float = 300.0,
+        heal_cooldown_minutes: float = 10.0,
+        max_heal_attempts: int = 2,
+        circuit_breaker_enabled: bool = False,
+        circuit_failure_threshold: int = 3,
+        circuit_window_seconds: float = 120.0,
+        circuit_cooldown_seconds: float = 60.0,
     ):
         """
         Initialize task worker.
@@ -117,6 +127,27 @@ class TaskWorker:
         self.parallel_jobs_per_stage: Dict[TaskStage, int] = {
             stage: max(1, overrides.get(stage, self.parallel_jobs)) for stage in TaskStage
         }
+
+        # Spec #49 Layer 3 — auto-heal loop config. When enabled, a periodic
+        # sweep requeues infra-class ``failed`` tasks once their dependency has
+        # had time to recover, bounded per-task by ``max_heal_attempts``.
+        self.auto_heal_enabled = auto_heal_enabled
+        self.heal_interval_s = max(30.0, heal_interval_s)
+        self.heal_cooldown_minutes = max(0.0, heal_cooldown_minutes)
+        self.max_heal_attempts = max(0, max_heal_attempts)
+
+        # Spec #49 Layer 1 — per-stage circuit breaker. When enabled, infra
+        # failures that breach a threshold pause the stage's poller instead of
+        # grinding every in-flight task to death against a dead dependency.
+        self._breaker: Optional[StageCircuitBreaker] = (
+            StageCircuitBreaker(
+                failure_threshold=circuit_failure_threshold,
+                window_seconds=circuit_window_seconds,
+                cooldown_seconds=circuit_cooldown_seconds,
+            )
+            if circuit_breaker_enabled
+            else None
+        )
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -180,11 +211,35 @@ class TaskWorker:
                     return next(iter(stage_active.values()))
         return None
 
+    @staticmethod
+    def _task_key(task: Task) -> str:
+        """Spec #48 — unique in-memory active-set key per task target.
+
+        Episode tasks key by ``episode_id``; podcast-scoped (REFRESH_FEED)
+        tasks key by ``podcast:<id>`` so multiple feed tasks (all with
+        ``episode_id is None``) don't collapse onto a single ``None`` slot.
+        """
+        if task.episode_id is not None:
+            return task.episode_id
+        return f"podcast:{task.podcast_id}"
+
     def _all_active_episode_ids_locked(self) -> set[str]:
         """Return episode IDs active in any stage. Caller must hold _active_lock."""
         ids: set[str] = set()
         for stage_active in self._active_by_stage.values():
-            ids.update(stage_active.keys())
+            for task in stage_active.values():
+                if task.episode_id is not None:
+                    ids.add(task.episode_id)
+        return ids
+
+    def _all_active_podcast_ids_locked(self) -> set[str]:
+        """Return podcast IDs active in any feed-scoped stage (per-podcast
+        mutex for REFRESH_FEED). Caller must hold _active_lock."""
+        ids: set[str] = set()
+        for stage_active in self._active_by_stage.values():
+            for task in stage_active.values():
+                if task.podcast_id is not None:
+                    ids.add(task.podcast_id)
         return ids
 
     def get_status(self) -> dict:
@@ -205,6 +260,9 @@ class TaskWorker:
             "active_episodes": active_count,
             "stages": stages,
             "poll_interval": self.poll_interval,
+            # Spec #49 L1 — non-closed breakers only (empty when all healthy),
+            # so the queue monitor can show which stages are paused on an outage.
+            "circuit_breakers": (self._breaker.snapshot() if self._breaker is not None else {}),
         }
 
     def _run_loop(self) -> None:
@@ -242,6 +300,12 @@ class TaskWorker:
         # ``_safe_schedule_retry``. Sweeps far less often than the stage
         # pollers — a wedged task only needs to recover eventually, not fast.
         pollers.append(asyncio.create_task(self._periodic_stale_task_reset()))
+        # Spec #49 Layer 3 — the missing recovery loop over terminal states:
+        # auto-requeue infra-class ``failed`` tasks once their dependency
+        # recovers, so an outage that drained the retry budget self-heals
+        # instead of waiting for a human to click "retry".
+        if self.auto_heal_enabled:
+            pollers.append(asyncio.create_task(self._periodic_terminal_heal()))
 
         try:
             await asyncio.gather(*pollers, return_exceptions=True)
@@ -279,6 +343,65 @@ class TaskWorker:
         finally:
             logger.info("stale_task_reset_poll_ended")
 
+    async def _periodic_terminal_heal(self) -> None:
+        """Periodically auto-requeue infra-class ``failed`` tasks (spec #49 L3).
+
+        This is the recovery loop the queue previously lacked: once a shared
+        dependency (DNS, the transcription runtime, a provider) recovers, the
+        tasks it killed during the outage are reset to ``pending`` and flow
+        back through the pipeline — no manual "retry" click. The cooldown keeps
+        us from requeuing into a still-down dependency, and the per-task
+        ``max_heal_attempts`` cap means a genuinely permanent failure stops
+        looping and stays loudly terminal.
+        """
+        logger.info(
+            "terminal_heal_poll_started",
+            interval_s=self.heal_interval_s,
+            cooldown_minutes=self.heal_cooldown_minutes,
+            max_heal_attempts=self.max_heal_attempts,
+        )
+        try:
+            while self._running:
+                await asyncio.sleep(self.heal_interval_s)
+                if not self._running:
+                    break
+                try:
+                    self._heal_terminal_tasks()
+                except Exception as e:
+                    logger.warning("periodic_terminal_heal_error", error=str(e))
+        finally:
+            logger.info("terminal_heal_poll_ended")
+
+    def _heal_terminal_tasks(self) -> int:
+        """Run one auto-heal sweep; return the number of tasks requeued.
+
+        Split out from the async loop so it can be unit-tested directly and so
+        the loop body stays trivial. Swallows nothing the caller needs — the
+        loop wraps it for belt-and-suspenders, but a healthy DB never raises.
+        """
+        from datetime import timedelta
+
+        cooldown = timedelta(minutes=self.heal_cooldown_minutes)
+        healable = self.queue_manager.find_healable_tasks(
+            cooldown=cooldown,
+            max_heal_attempts=self.max_heal_attempts,
+        )
+        if not healable:
+            return 0
+
+        healed = 0
+        for task in healable:
+            if self.queue_manager.heal_task(task.id, self.max_heal_attempts) is not None:
+                healed += 1
+
+        if healed:
+            logger.info(
+                "queue_auto_heal_swept",
+                healed=healed,
+                candidates=len(healable),
+            )
+        return healed
+
     async def _stage_poll_loop(self, stage: TaskStage, sem: asyncio.Semaphore) -> None:
         """Poll the queue for a single stage and dispatch up to its capacity."""
         capacity = self.parallel_jobs_per_stage[stage]
@@ -289,22 +412,44 @@ class TaskWorker:
             try:
                 with self._active_lock:
                     slots = capacity - len(active)
-                    exclude = self._all_active_episode_ids_locked() or None
+                    exclude_eps = self._all_active_episode_ids_locked() or None
+                    exclude_pods = self._all_active_podcast_ids_locked() or None
 
                 if slots > 0:
                     for _ in range(slots):
-                        task = self.queue_manager.get_next_task(stage=stage, exclude_episode_ids=exclude)
-                        if task is None:
+                        # Spec #49 L1 — gate on the breaker. When OPEN the call
+                        # returns False and the stage pauses; when it promotes
+                        # to HALF_OPEN it reserves a single probe slot that we
+                        # MUST release (cancel_dispatch) if the queue is empty.
+                        if self._breaker is not None and not self._breaker.allow_dispatch(stage):
                             break
 
+                        task = self.queue_manager.get_next_task(
+                            stage=stage,
+                            exclude_episode_ids=exclude_eps,
+                            exclude_podcast_ids=exclude_pods,
+                        )
+                        if task is None:
+                            if self._breaker is not None:
+                                self._breaker.cancel_dispatch(stage)
+                            break
+
+                        key = self._task_key(task)
                         with self._active_lock:
                             # Recheck under lock: another stage may have claimed this
-                            # episode between the poll and now. Same-episode cross-stage
-                            # concurrency would race on transcript/summary artifacts.
-                            if any(task.episode_id in s for s in self._active_by_stage.values()):
+                            # target between the poll and now. Same-episode cross-stage
+                            # concurrency would race on transcript/summary artifacts;
+                            # same-podcast feed tasks would double-fetch.
+                            if any(key in s for s in self._active_by_stage.values()):
+                                # Another stage claimed this target; release the
+                                # probe slot we may have reserved so it isn't
+                                # leaked, then move on.
+                                if self._breaker is not None:
+                                    self._breaker.cancel_dispatch(stage)
                                 continue
-                            active[task.episode_id] = task
-                            exclude = self._all_active_episode_ids_locked()
+                            active[key] = task
+                            exclude_eps = self._all_active_episode_ids_locked() or None
+                            exclude_pods = self._all_active_podcast_ids_locked() or None
 
                         asyncio.create_task(self._process_task_async(task, sem, stage))
 
@@ -328,7 +473,7 @@ class TaskWorker:
                 await asyncio.to_thread(self._process_task, task)
             finally:
                 with self._active_lock:
-                    self._active_by_stage[stage].pop(task.episode_id, None)
+                    self._active_by_stage[stage].pop(self._task_key(task), None)
 
     def _process_task(self, task: Task) -> None:
         """
@@ -382,29 +527,48 @@ class TaskWorker:
                 self.queue_manager.complete_task(task.id)
                 logger.info("task_completed_successfully")
 
-                # Auto-resolve any stale DLQ rows for this episode at the
-                # same stage or earlier in the same branch. After a user
-                # fixes (e.g.) a bad API key and reruns transcription,
-                # the old dead transcribe row is obsolete — keeping it
-                # around just trains users to ignore the queue.
-                self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
+                # Spec #49 L1 — a success closes the stage's breaker (and is the
+                # signal that a half-open probe passed: dependency recovered).
+                if self._breaker is not None:
+                    self._breaker.record_success(task.stage.value)
 
-                # Chain enqueue next stage if running full pipeline
-                self._maybe_enqueue_next_stage(task)
+                # Feed-scoped (REFRESH_FEED) tasks have no episode and do
+                # their own dynamic DOWNLOAD fan-out inside the handler;
+                # skip the episode-chain bookkeeping entirely.
+                if task.episode_id is not None:
+                    # Auto-resolve any stale DLQ rows for this episode at the
+                    # same stage or earlier in the same branch. After a user
+                    # fixes (e.g.) a bad API key and reruns transcription,
+                    # the old dead transcribe row is obsolete — keeping it
+                    # around just trains users to ignore the queue.
+                    self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
+
+                    # Chain enqueue next stage if running full pipeline
+                    self._maybe_enqueue_next_stage(task)
 
             except FatalError as e:
                 # Fatal error - move to DLQ, no retry
                 error_msg = str(e)
                 logger.error("task_fatal_error", error=error_msg, destination="dlq", exc_info=True)
-                self._safe_mark_dead(task, error_msg)
+                self._safe_mark_dead(task, error_msg, "fatal")
                 self._mark_episode_failed(task, error_msg, "fatal")
                 self._report_failure(task.id, error_msg)
 
             except TransientError as e:
-                # Transient error - schedule retry with backoff
+                # Transient error - schedule retry with backoff. Spec #49:
+                # attribute it as 'infra' (shared dependency down → healable)
+                # vs 'item' (this work is bad → manual retry) so an outage that
+                # drains the retry budget can self-recover once it clears.
                 error_msg = str(e)
-                logger.warning("task_transient_error", error=error_msg, will_retry=True, exc_info=True)
-                updated_task = self._safe_schedule_retry(task, error_msg)
+                error_class = classify_error_class(e)
+                logger.warning(
+                    "task_transient_error",
+                    error=error_msg,
+                    error_class=error_class,
+                    will_retry=True,
+                    exc_info=True,
+                )
+                updated_task = self._handle_transient_failure(task, error_msg, error_class)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
                     self._mark_episode_failed(task, error_msg, "transient")
@@ -413,8 +577,9 @@ class TaskWorker:
             except Exception as e:
                 # Unknown exception - treat as transient and retry
                 error_msg = str(e)
-                logger.exception("task_unexpected_error", error=error_msg, exc_info=True)
-                updated_task = self._safe_schedule_retry(task, error_msg)
+                error_class = classify_error_class(e)
+                logger.exception("task_unexpected_error", error=error_msg, error_class=error_class, exc_info=True)
+                updated_task = self._handle_transient_failure(task, error_msg, error_class)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
                     self._mark_episode_failed(task, error_msg, "transient")
@@ -538,6 +703,26 @@ class TaskWorker:
             return
 
         try:
+            if is_feed_scoped_stage(task.stage):
+                # Spec #48 — feed-scoped failure domain. There is no episode
+                # to mark; write podcast-level failure state and PARK the feed
+                # (terminal here: this is only called once retries are
+                # exhausted / on a fatal error), so the scheduler stops
+                # re-enqueuing it. Operator retry re-arms it. Cache headers are
+                # untouched (FM-2 is enforced on the feed path).
+                self.repository.record_refresh_error(
+                    podcast_id=task.podcast_id,
+                    error=error_msg,
+                    terminal=True,
+                )
+                logger.info(
+                    "refresh_feed_failed_parked",
+                    stage=task.stage.value,
+                    failure_type=failure_type,
+                    podcast_id=task.podcast_id,
+                )
+                return
+
             if is_entity_branch_stage(task.stage):
                 # Entity-branch failures live in their own status column;
                 # ``failed_at_stage`` and the episode-card UX stay
@@ -573,7 +758,30 @@ class TaskWorker:
         except Exception as e:
             logger.warning(f"Failed to reset stale tasks: {e}")
 
-    def _safe_schedule_retry(self, task: Task, error_msg: str) -> Optional[Task]:
+    def _handle_transient_failure(self, task: Task, error_msg: str, error_class: Optional[str]) -> Optional[Task]:
+        """Route a transient/unknown failure: spend retry budget, or — when an
+        infra failure trips the stage breaker — park it without spending budget.
+
+        Spec #49 L1+L2 join here: the breaker decides *whether the stage runs*,
+        and for an infra failure that has tripped it we must NOT charge the
+        item's ``max_retries`` (the failure is the dependency's fault). The task
+        is rescheduled eligible-immediately; the breaker keeps the poller from
+        re-dispatching it until a half-open probe confirms recovery.
+        """
+        if self._breaker is not None and error_class == "infra":
+            state = self._breaker.record_failure(task.stage.value)
+            if state is not CircuitState.CLOSED:
+                logger.warning(
+                    "task_parked_circuit_open",
+                    stage=task.stage.value,
+                    circuit_state=state.value,
+                    error=error_msg,
+                    note="not charging retry budget while dependency is down",
+                )
+                return self.queue_manager.reschedule_without_budget(task.id, error_msg, error_class)
+        return self._safe_schedule_retry(task, error_msg, error_class)
+
+    def _safe_schedule_retry(self, task: Task, error_msg: str, error_class: Optional[str] = None) -> Optional[Task]:
         """Schedule a retry without leaving the row stuck in ``processing``.
 
         Two failure modes the naive call can't survive:
@@ -605,7 +813,7 @@ class TaskWorker:
             return current
 
         try:
-            return self.queue_manager.schedule_retry(task.id, error_msg)
+            return self.queue_manager.schedule_retry(task.id, error_msg, error_class)
         except Exception as e:
             logger.error(
                 "schedule_retry_failed",
@@ -618,10 +826,10 @@ class TaskWorker:
             )
             return None
 
-    def _safe_mark_dead(self, task: Task, error_msg: str) -> None:
+    def _safe_mark_dead(self, task: Task, error_msg: str, error_class: Optional[str] = None) -> None:
         """``mark_dead`` analogue of ``_safe_schedule_retry``: never leave processing."""
         try:
-            self.queue_manager.mark_dead(task.id, error_msg)
+            self.queue_manager.mark_dead(task.id, error_msg, error_class)
         except Exception as e:
             logger.error(
                 "mark_dead_failed",

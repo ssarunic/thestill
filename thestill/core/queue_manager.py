@@ -87,6 +87,57 @@ class TaskStage(str, Enum):
     # The scheduled ``enrich-entities`` batch still owns retries + staleness.
     ENRICH_ENTITIES = "enrich-entities"
 
+    # Spec #48 — podcast-scoped root/producer stage. One task = one feed.
+    # Carries ``podcast_id`` (not ``episode_id``), fans out DOWNLOAD tasks for
+    # newly-discovered episodes, and is a separate (feed-scoped) failure
+    # domain — see ``_FEED_SCOPED_STAGES`` / ``is_feed_scoped_stage``.
+    REFRESH_FEED = "refresh-feed"
+
+
+# Spec #48 §"Failure isolation" — REFRESH_FEED is podcast-scoped: it has no
+# episode to mark failed. A failure writes podcast-level state
+# (``podcasts.last_refresh_error``) instead of ``episodes.failed_at_stage``,
+# and a terminal failure parks the feed (``next_refresh_at = NULL``).
+# ``task_worker._mark_episode_failed`` branches on this set.
+_FEED_SCOPED_STAGES = frozenset({TaskStage.REFRESH_FEED})
+
+
+def is_feed_scoped_stage(stage: TaskStage) -> bool:
+    """Return True if ``stage`` targets a podcast (``podcast_id``) rather than
+    an episode (``episode_id``) — currently only REFRESH_FEED (spec #48)."""
+    return stage in _FEED_SCOPED_STAGES
+
+
+# Spec #49 Layer 4 — stages that re-run deterministically from their inputs and
+# are therefore safe to AUTO-RESUME (reset to 'pending') after an interruption,
+# rather than being marked 'failed' for a human to retry. The user chain
+# (download→summarize) each reads a durable upstream artifact and rewrites its
+# own output idempotently; REFRESH_FEED is the spec #48 precedent (re-fetching a
+# feed is safe). Entity-branch stages are deliberately EXCLUDED — they are a
+# separate, coalesced corpus-mutation domain whose restart semantics are out of
+# this carve-out's scope, so they keep the conservative →failed behaviour.
+_IDEMPOTENT_STAGES = frozenset(
+    {
+        TaskStage.REFRESH_FEED,
+        TaskStage.DOWNLOAD,
+        TaskStage.DOWNSAMPLE,
+        TaskStage.TRANSCRIBE,
+        TaskStage.CLEAN,
+        TaskStage.SUMMARIZE,
+    }
+)
+
+
+def is_idempotent_stage(stage: TaskStage) -> bool:
+    """Return True if ``stage`` is safe to auto-resume after an interruption.
+
+    Drives ``recover_interrupted_tasks`` (spec #49 L4): an interrupted
+    idempotent stage is reset to ``pending`` (resume) instead of ``failed``,
+    so a server restart mid-pipeline doesn't strand re-runnable work in the
+    DLQ. Generalises the spec #48 feed-scoped carve-out to the whole user chain.
+    """
+    return stage in _IDEMPOTENT_STAGES
+
 
 # Spec #28 §6 — the entity branch is a separate failure domain. A
 # failure on any of these stages must not mark the episode as failed in
@@ -142,6 +193,12 @@ STAGE_SUCCESSORS: Dict[TaskStage, List[TaskStage]] = {
     TaskStage.REBUILD_COOCCURRENCES: [TaskStage.COMPUTE_RELATED],
     TaskStage.COMPUTE_RELATED: [TaskStage.ENRICH_ENTITIES],
     TaskStage.ENRICH_ENTITIES: [],
+    # Spec #48 — REFRESH_FEED is a root/producer with no STATIC successor: it
+    # fans out DOWNLOAD per newly-discovered episode dynamically inside the
+    # handler (data-driven, not one→one). Mapped to ``[]`` to satisfy the
+    # "every stage has an entry" invariant; the worker never auto-chains a
+    # feed task (it has no episode), so this empty list is the correct no-op.
+    TaskStage.REFRESH_FEED: [],
 }
 
 
@@ -218,9 +275,14 @@ class Task:
     """Represents a queued task."""
 
     id: str
-    episode_id: str
-    stage: TaskStage
-    status: TaskStatus
+    # Exactly one of ``episode_id`` / ``podcast_id`` is set (enforced by a
+    # table CHECK). Episode-scoped stages (DOWNLOAD…ENRICH_ENTITIES) carry
+    # ``episode_id``; the podcast-scoped REFRESH_FEED stage (spec #48) carries
+    # ``podcast_id`` and has no episode at enqueue time — it produces them.
+    episode_id: Optional[str] = None
+    podcast_id: Optional[str] = None
+    stage: TaskStage = TaskStage.DOWNLOAD
+    status: TaskStatus = TaskStatus.PENDING
     priority: int = 0
     error_message: Optional[str] = None  # Final error message (when failed/dead)
     created_at: Optional[datetime] = None
@@ -233,6 +295,12 @@ class Task:
     next_retry_at: Optional[datetime] = None
     error_type: Optional[ErrorType] = None
     last_error: Optional[str] = None  # Most recent error (before final failure)
+    # Spec #49 — auto-healing attribution. ``error_class`` is 'infra' | 'item'
+    # | 'fatal' (None on legacy rows); the healer only requeues 'infra'.
+    # ``heal_attempts`` bounds that second look; ``last_heal_at`` gates cooldown.
+    error_class: Optional[str] = None
+    heal_attempts: int = 0
+    last_heal_at: Optional[datetime] = None
     # Pipeline metadata (for chain enqueueing)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -241,6 +309,7 @@ class Task:
         return {
             "id": self.id,
             "episode_id": self.episode_id,
+            "podcast_id": self.podcast_id,
             "stage": self.stage.value,
             "status": self.status.value,
             "priority": self.priority,
@@ -254,6 +323,9 @@ class Task:
             "next_retry_at": self.next_retry_at.isoformat() if self.next_retry_at else None,
             "error_type": self.error_type.value if self.error_type else None,
             "last_error": self.last_error,
+            "error_class": self.error_class,
+            "heal_attempts": self.heal_attempts,
+            "last_heal_at": self.last_heal_at.isoformat() if self.last_heal_at else None,
             "metadata": self.metadata,
         }
 
@@ -380,6 +452,11 @@ class QueueManager:
     # both the fresh-DB ``CREATE TABLE`` and the rebuild migration's DDL.
     _TASKS_STAGE_CHECK = "CHECK (stage IN ({values}))".format(values=", ".join(f"'{s.value}'" for s in TaskStage))
 
+    # Spec #48 — exactly one of (episode_id, podcast_id) is set. ``IS NOT NULL``
+    # yields 1/0; ``<>`` is XOR, so the row is valid iff precisely one target is
+    # present. Rejects rows with both set or neither set.
+    _TASKS_TARGET_CHECK = "CHECK ((episode_id IS NOT NULL) <> (podcast_id IS NOT NULL))"
+
     def _ensure_table(self):
         """Create tasks table if not exists and run migrations."""
         with self._get_connection() as conn:
@@ -388,7 +465,8 @@ class QueueManager:
                 f"""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY NOT NULL,
-                    episode_id TEXT NOT NULL,
+                    episode_id TEXT NULL,
+                    podcast_id TEXT NULL,
                     stage TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     priority INTEGER DEFAULT 0,
@@ -398,7 +476,9 @@ class QueueManager:
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
                     FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                    FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                     CHECK (length(id) = 36),
+                    {self._TASKS_TARGET_CHECK},
                     {self._TASKS_STAGE_CHECK}
                 )
             """
@@ -411,6 +491,22 @@ class QueueManager:
             self._migrate_add_column(conn, "tasks", "error_type", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "last_error", "TEXT NULL")
             self._migrate_add_column(conn, "tasks", "metadata", "TEXT NULL")
+            # Spec #49 — queue auto-healing. ``error_class`` refines the binary
+            # transient/fatal ``error_type`` into 'infra' | 'item' | 'fatal'
+            # (see error_classifier.classify_error_class); the healer loop only
+            # ever requeues 'infra' rows. ``heal_attempts`` / ``last_heal_at``
+            # bound that second look so a genuine poison message can't loop
+            # forever. All additive + defaulted; existing rows backfill to NULL
+            # (label-only — they are not retroactively healed).
+            self._migrate_add_column(conn, "tasks", "error_class", "TEXT NULL")
+            self._migrate_add_column(conn, "tasks", "heal_attempts", "INTEGER DEFAULT 0")
+            self._migrate_add_column(conn, "tasks", "last_heal_at", "TIMESTAMP NULL")
+            # Spec #48 — podcast-scoped target column. Added without the inline
+            # FK / CHECK (SQLite ALTER cannot add either); legacy DBs always
+            # trip the rebuild below — which installs ``episode_id`` nullable,
+            # the FK, and the exactly-one-target CHECK — because their stored
+            # DDL still carries ``episode_id TEXT NOT NULL``.
+            self._migrate_add_column(conn, "tasks", "podcast_id", "TEXT NULL")
 
             # Spec #28 §0.5 — rebuild the tasks table whenever the existing
             # CHECK constraint is missing any current ``TaskStage`` value.
@@ -435,15 +531,25 @@ class QueueManager:
             existing_ddl = row["sql"] if row else None
             if existing_ddl:
                 missing_stages = [s.value for s in TaskStage if f"'{s.value}'" not in existing_ddl]
-                if missing_stages:
+                # Spec #48 — legacy DBs carry ``episode_id TEXT NOT NULL`` and no
+                # exactly-one-target CHECK. Detecting either (the stored DDL
+                # normalises whitespace, so match the canonical token) forces the
+                # same rebuild dance: only a table rebuild can drop the NOT NULL
+                # and install the FK + target CHECK.
+                needs_target_migration = (
+                    "episode_id TEXT NOT NULL" in existing_ddl or "(episode_id IS NOT NULL)" not in existing_ddl
+                )
+                if missing_stages or needs_target_migration:
                     logger.info(
-                        "Migrating tasks table: widening stage CHECK constraint",
+                        "Migrating tasks table: rebuild (stage CHECK and/or podcast target)",
                         missing_stages=missing_stages,
+                        target_migration=needs_target_migration,
                     )
                     self._rebuild_tasks_with_extended_check(conn)
                     logger.info(
-                        "Migration complete: tasks table rebuilt with current TaskStage values",
+                        "Migration complete: tasks table rebuilt",
                         added_stages=missing_stages,
+                        target_migration=needs_target_migration,
                     )
 
             # Indexes for efficient querying
@@ -481,6 +587,15 @@ class QueueManager:
                 ON tasks(stage, status, priority DESC, created_at ASC)
             """
             )
+            # Spec #48 — feed-scoped lookups: the enqueue uniqueness guard
+            # (``has_pending_feed_task``) and the per-podcast active filter.
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tasks_podcast_stage
+                ON tasks(podcast_id, stage)
+                WHERE podcast_id IS NOT NULL
+            """
+            )
 
             logger.debug("Tasks table ensured")
 
@@ -509,7 +624,8 @@ class QueueManager:
             f"""
             CREATE TABLE tasks_new_spec28 (
                 id TEXT PRIMARY KEY NOT NULL,
-                episode_id TEXT NOT NULL,
+                episode_id TEXT NULL,
+                podcast_id TEXT NULL,
                 stage TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 priority INTEGER DEFAULT 0,
@@ -524,28 +640,36 @@ class QueueManager:
                 error_type TEXT NULL,
                 last_error TEXT NULL,
                 metadata TEXT NULL,
+                error_class TEXT NULL,
+                heal_attempts INTEGER DEFAULT 0,
+                last_heal_at TIMESTAMP NULL,
                 FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                FOREIGN KEY (podcast_id) REFERENCES podcasts(id),
                 CHECK (length(id) = 36),
+                {self._TASKS_TARGET_CHECK},
                 {self._TASKS_STAGE_CHECK}
             )
             """
         )
         # Copy every column we explicitly enumerated in the new DDL —
         # listing them by name keeps the migration robust against future
-        # column additions on either side.
+        # column additions on either side. ``podcast_id`` is copied too: it
+        # was ALTER-added before this rebuild fired, so it exists on the
+        # source table (NULL for every legacy/episode-scoped row, which
+        # satisfies the exactly-one-target CHECK alongside their episode_id).
         conn.execute(
             """
             INSERT INTO tasks_new_spec28 (
-                id, episode_id, stage, status, priority, error_message,
+                id, episode_id, podcast_id, stage, status, priority, error_message,
                 created_at, updated_at, started_at, completed_at,
                 retry_count, max_retries, next_retry_at, error_type,
-                last_error, metadata
+                last_error, metadata, error_class, heal_attempts, last_heal_at
             )
             SELECT
-                id, episode_id, stage, status, priority, error_message,
+                id, episode_id, podcast_id, stage, status, priority, error_message,
                 created_at, updated_at, started_at, completed_at,
                 retry_count, max_retries, next_retry_at, error_type,
-                last_error, metadata
+                last_error, metadata, error_class, heal_attempts, last_heal_at
             FROM tasks
             """
         )
@@ -581,6 +705,7 @@ class QueueManager:
         return Task(
             id=row["id"],
             episode_id=row["episode_id"],
+            podcast_id=row["podcast_id"] if "podcast_id" in row.keys() else None,
             stage=TaskStage(row["stage"]),
             status=TaskStatus(row["status"]),
             priority=row["priority"],
@@ -594,6 +719,13 @@ class QueueManager:
             next_retry_at=(datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None),
             error_type=error_type,
             last_error=row["last_error"],
+            error_class=(row["error_class"] if "error_class" in row.keys() else None),
+            heal_attempts=((row["heal_attempts"] or 0) if "heal_attempts" in row.keys() else 0),
+            last_heal_at=(
+                datetime.fromisoformat(row["last_heal_at"])
+                if "last_heal_at" in row.keys() and row["last_heal_at"]
+                else None
+            ),
             metadata=metadata,
         )
 
@@ -650,10 +782,103 @@ class QueueManager:
             updated_at=datetime.fromisoformat(now),
         )
 
+    def add_feed_task(
+        self,
+        podcast_id: str,
+        stage: TaskStage = TaskStage.REFRESH_FEED,
+        priority: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+        max_retries: Optional[int] = None,
+    ) -> Optional[Task]:
+        """Enqueue a podcast-scoped task (spec #48), e.g. REFRESH_FEED.
+
+        Carries ``podcast_id`` with ``episode_id`` NULL. Applies the per-feed
+        coalescing **uniqueness guard**: if a non-terminal task for this
+        (podcast, stage) already exists, returns ``None`` instead of enqueuing
+        a duplicate — two concurrent refreshes of one feed would double-fetch
+        and race on the cache-header write.
+
+        Returns the created ``Task``, or ``None`` if coalesced.
+        """
+        if not is_feed_scoped_stage(stage):
+            raise ValueError(f"add_feed_task is for feed-scoped stages only, got {stage.value}")
+
+        task_id = str(uuid.uuid4())
+        now = now_utc().isoformat()
+        metadata = metadata or {}
+        max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        metadata_json = json.dumps(metadata) if metadata else None
+        created: list[bool] = [False]
+
+        def _write() -> None:
+            with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # Uniqueness guard inside the write txn so two schedulers
+                    # racing the same feed can't both insert.
+                    exists = conn.execute(
+                        """
+                        SELECT 1 FROM tasks
+                        WHERE podcast_id = ? AND stage = ?
+                          AND status IN ('pending', 'processing', 'retry_scheduled')
+                        LIMIT 1
+                        """,
+                        (podcast_id, stage.value),
+                    ).fetchone()
+                    if exists:
+                        conn.rollback()
+                        return
+                    conn.execute(
+                        """
+                        INSERT INTO tasks (id, episode_id, podcast_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+                        VALUES (?, NULL, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                        """,
+                        (task_id, podcast_id, stage.value, priority, max_retries, metadata_json, now, now),
+                    )
+                    created[0] = True
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+        self._exec_with_lock_retry("add_feed_task", _write)
+
+        if not created[0]:
+            logger.debug("feed_task_coalesced", podcast_id=podcast_id, stage=stage.value)
+            return None
+
+        logger.info(f"Feed task queued: {task_id} - {stage.value} for podcast {podcast_id}")
+        return Task(
+            id=task_id,
+            episode_id=None,
+            podcast_id=podcast_id,
+            stage=stage,
+            status=TaskStatus.PENDING,
+            priority=priority,
+            max_retries=max_retries,
+            metadata=metadata,
+            created_at=datetime.fromisoformat(now),
+            updated_at=datetime.fromisoformat(now),
+        )
+
+    def has_pending_feed_task(self, podcast_id: str, stage: TaskStage = TaskStage.REFRESH_FEED) -> bool:
+        """True if a non-terminal feed task exists for this (podcast, stage)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT 1 FROM tasks
+                WHERE podcast_id = ? AND stage = ? AND status IN ('pending', 'processing', 'retry_scheduled')
+                LIMIT 1
+                """,
+                (podcast_id, stage.value),
+            )
+            return cursor.fetchone() is not None
+
     def get_next_task(
         self,
         stage: Optional[TaskStage] = None,
         exclude_episode_ids: Optional[set[str]] = None,
+        exclude_podcast_ids: Optional[set[str]] = None,
     ) -> Optional[Task]:
         """
         Get the next pending or ready-to-retry task, atomically marking it as 'processing'.
@@ -665,6 +890,8 @@ class QueueManager:
         Args:
             stage: Optionally filter to a specific stage
             exclude_episode_ids: Episode IDs to skip (already being processed)
+            exclude_podcast_ids: Podcast IDs to skip — the per-podcast mutex for
+                feed-scoped (REFRESH_FEED) tasks (spec #48)
 
         Returns:
             Task if one is available, None otherwise
@@ -687,8 +914,18 @@ class QueueManager:
 
                 if exclude_episode_ids:
                     placeholders = ",".join("?" for _ in exclude_episode_ids)
-                    conditions.append(f"episode_id NOT IN ({placeholders})")
+                    # Spec #48 — guard the NULL: a feed task has episode_id NULL,
+                    # and ``NULL NOT IN (…)`` is NULL (not TRUE) in SQLite, which
+                    # would wrongly filter every REFRESH_FEED row out whenever any
+                    # episode task is active. The ``IS NULL`` arm keeps feed tasks
+                    # claimable through the episode-exclusion filter.
+                    conditions.append(f"(episode_id IS NULL OR episode_id NOT IN ({placeholders}))")
                     params.extend(exclude_episode_ids)
+
+                if exclude_podcast_ids:
+                    placeholders = ",".join("?" for _ in exclude_podcast_ids)
+                    conditions.append(f"(podcast_id IS NULL OR podcast_id NOT IN ({placeholders}))")
+                    params.extend(exclude_podcast_ids)
 
                 where = " AND ".join(conditions)
                 cursor = conn.execute(
@@ -816,7 +1053,14 @@ class QueueManager:
 
     def fail_task(self, task_id: str, error_message: str) -> None:
         """
-        Mark a task as failed.
+        Mark a task as failed (explicit/manual terminal fail, e.g. user cancel).
+
+        Spec #49: clears ``error_class`` so the auto-healer never resurrects a
+        task that was failed on purpose. The healer only requeues
+        ``error_class='infra'`` rows; a retry_scheduled task carrying a prior
+        'infra' label that the user cancels must NOT be silently re-queued after
+        cooldown. (The retry-exhaustion path in ``schedule_retry`` is what sets
+        a healable label — not this explicit fail.)
 
         Args:
             task_id: ID of the task that failed
@@ -828,7 +1072,11 @@ class QueueManager:
             conn.execute(
                 """
                 UPDATE tasks
-                SET status = 'failed', error_message = ?, completed_at = ?, updated_at = ?
+                SET status = 'failed',
+                    error_message = ?,
+                    error_class = NULL,
+                    completed_at = ?,
+                    updated_at = ?
                 WHERE id = ?
             """,
                 (error_message, now, now, task_id),
@@ -978,7 +1226,7 @@ class QueueManager:
                 """
                 DELETE FROM tasks
                 WHERE status IN ('completed', 'failed', 'dead', 'superseded')
-                AND completed_at < datetime('now', '-' || ? || ' days')
+                AND julianday(completed_at) < julianday('now', '-' || ? || ' days')
             """,
                 (days,),
             )
@@ -1009,7 +1257,14 @@ class QueueManager:
                 UPDATE tasks
                 SET status = 'pending', started_at = NULL, updated_at = ?
                 WHERE status = 'processing'
-                AND started_at < datetime('now', '-' || ? || ' minutes')
+                -- ``started_at`` is stored as ``now_utc().isoformat()`` (ISO-8601
+                -- with a 'T' separator + ``+00:00``), but ``datetime('now', …)``
+                -- renders a space-separated, tz-naive string. A TEXT ``<``
+                -- compares lexicographically: 'T'(84) > ' '(32) at the separator,
+                -- so EVERY stored value sorts after the cutoff and the predicate
+                -- matched zero rows — the watchdog silently never fired. Compare
+                -- as numbers via ``julianday`` so format/offset don't matter.
+                AND julianday(started_at) < julianday('now', '-' || ? || ' minutes')
             """,
                 (now, timeout_minutes),
             )
@@ -1022,32 +1277,55 @@ class QueueManager:
 
     def recover_interrupted_tasks(self, excluded_stages: Optional[List[TaskStage]] = None) -> int:
         """
-        Mark tasks left in 'processing' status as failed.
+        Recover tasks left in 'processing' status by a server restart or crash.
 
-        This should be called on server startup to handle tasks that were
-        interrupted by a server restart or crash. Unlike reset_stale_tasks,
-        this marks them as failed rather than pending, since:
-        1. The work may have partially completed (e.g., partial transcription)
-        2. It's safer to let the user manually retry than auto-retry
-        3. It provides visibility that something went wrong
+        Called on startup. Spec #49 Layer 4 splits recovery by stage idempotency:
+
+        - **Idempotent stages** (``is_idempotent_stage`` — the user chain
+          download→summarize plus REFRESH_FEED) are reset to ``pending`` and
+          RESUME. They re-run deterministically from durable upstream artifacts,
+          so a restart mid-pipeline should pick up where it left off rather than
+          stranding re-runnable work in the DLQ for a human to retry.
+        - **Non-idempotent stages** (currently the entity branch) are marked
+          ``failed`` — the conservative legacy behaviour, preserved where
+          auto-resume isn't clearly safe.
+        - **Excluded stages** are left untouched in ``processing`` (e.g. a cloud
+          transcribe whose remote job may still be running); excluding a stage
+          overrides its idempotent auto-resume.
 
         Args:
-            excluded_stages: Stages to NOT recover (e.g., cloud tasks that may
-                           still be running remotely). Tasks in these stages
-                           will be left in 'processing' status.
+            excluded_stages: Stages to NOT recover at all — left in
+                ``processing`` (cloud tasks that may still be running remotely).
 
         Returns:
-            Number of tasks marked as failed
+            Total interrupted tasks recovered (resumed + failed).
         """
         now = now_utc().isoformat()
-        excluded_stages = excluded_stages or []
+        excluded = set(excluded_stages or [])
+
+        # Idempotent + not explicitly excluded → resume. Excluding a stage wins
+        # over its idempotent auto-resume (the caller knows it's unsafe here).
+        resume_values = [s.value for s in _IDEMPOTENT_STAGES if s not in excluded]
+        # Stages we must NOT mark failed: the ones we just resumed + the
+        # explicitly excluded. Everything else still in 'processing' is failed.
+        skip_fail_values = resume_values + [s.value for s in excluded]
 
         with self._get_connection() as conn:
-            if excluded_stages:
-                # Build placeholders for excluded stages
-                placeholders = ",".join("?" * len(excluded_stages))
-                excluded_values = [s.value for s in excluded_stages]
+            resumed = 0
+            if resume_values:
+                placeholders = ",".join("?" * len(resume_values))
+                cursor = conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET status = 'pending', started_at = NULL, updated_at = ?
+                    WHERE status = 'processing' AND stage IN ({placeholders})
+                    """,
+                    (now, *resume_values),
+                )
+                resumed = cursor.rowcount
 
+            if skip_fail_values:
+                placeholders = ",".join("?" * len(skip_fail_values))
                 cursor = conn.execute(
                     f"""
                     UPDATE tasks
@@ -1058,7 +1336,7 @@ class QueueManager:
                     WHERE status = 'processing'
                     AND stage NOT IN ({placeholders})
                 """,
-                    (now, now, *excluded_values),
+                    (now, now, *skip_fail_values),
                 )
             else:
                 cursor = conn.execute(
@@ -1072,14 +1350,16 @@ class QueueManager:
                 """,
                     (now, now),
                 )
+            failed = cursor.rowcount
 
-            count = cursor.rowcount
-            if count > 0:
-                logger.warning(f"Recovered {count} interrupted task(s) - marked as failed")
+            if resumed > 0:
+                logger.info(f"Recovered {resumed} interrupted task(s) - resumed (idempotent)")
+            if failed > 0:
+                logger.warning(f"Recovered {failed} interrupted task(s) - marked as failed")
 
-            return count
+            return resumed + failed
 
-    def schedule_retry(self, task_id: str, error_message: str) -> Optional[Task]:
+    def schedule_retry(self, task_id: str, error_message: str, error_class: Optional[str] = None) -> Optional[Task]:
         """
         Schedule a task for retry with exponential backoff.
 
@@ -1088,6 +1368,9 @@ class QueueManager:
         Args:
             task_id: ID of the task to retry
             error_message: The error that caused the failure
+            error_class: Spec #49 attribution ('infra' | 'item'); persisted on
+                the row so the healer loop can later find infra-class ``failed``
+                tasks. ``None`` leaves the column unchanged (legacy callers).
 
         Returns:
             Updated Task object, or None if task not found
@@ -1108,6 +1391,9 @@ class QueueManager:
                 max_retries = row["max_retries"] or self.DEFAULT_MAX_RETRIES
                 new_retry_count = current_retry + 1
 
+                # Spec #49 — persist the infra/item attribution alongside the
+                # binary error_type. COALESCE keeps any existing label when the
+                # caller passes None, so we never clobber a prior classification.
                 if new_retry_count >= max_retries:
                     # Exhausted retries - mark as failed
                     conn.execute(
@@ -1118,11 +1404,12 @@ class QueueManager:
                             error_message = ?,
                             last_error = ?,
                             error_type = 'transient',
+                            error_class = COALESCE(?, error_class),
                             completed_at = ?,
                             updated_at = ?
                         WHERE id = ?
                     """,
-                        (new_retry_count, error_message, error_message, now_iso, now_iso, task_id),
+                        (new_retry_count, error_message, error_message, error_class, now_iso, now_iso, task_id),
                     )
                     logger.warning(
                         f"Task {task_id} exhausted retries ({new_retry_count}/{max_retries}), marked as failed"
@@ -1141,11 +1428,12 @@ class QueueManager:
                             next_retry_at = ?,
                             last_error = ?,
                             error_type = 'transient',
+                            error_class = COALESCE(?, error_class),
                             started_at = NULL,
                             updated_at = ?
                         WHERE id = ?
                     """,
-                        (new_retry_count, next_retry_iso, error_message, now_iso, task_id),
+                        (new_retry_count, next_retry_iso, error_message, error_class, now_iso, task_id),
                     )
                     logger.info(
                         f"Task {task_id} scheduled for retry {new_retry_count}/{max_retries} "
@@ -1156,7 +1444,49 @@ class QueueManager:
         # Return updated task (read can hit the same lock; retry through the helper too).
         return self._exec_with_lock_retry("schedule_retry_readback", lambda: self.get_task(task_id))
 
-    def mark_dead(self, task_id: str, error_message: str) -> Optional[Task]:
+    def reschedule_without_budget(
+        self, task_id: str, error_message: str, error_class: Optional[str] = None
+    ) -> Optional[Task]:
+        """Re-queue a task WITHOUT charging its retry budget (spec #49 L1).
+
+        Used when an infra-class failure occurs while the stage's circuit
+        breaker is open/half-open: the failure is the dependency's fault, not
+        the item's, so ``retry_count`` is left untouched. The row goes back to
+        ``retry_scheduled`` eligible immediately (``next_retry_at = now``); the
+        breaker — not a backoff timer — is what keeps the poller from
+        re-dispatching it until the dependency recovers.
+
+        Args:
+            task_id: ID of the task to park.
+            error_message: The infra error that tripped/held the breaker.
+            error_class: Attribution to persist (typically 'infra').
+
+        Returns:
+            Updated Task, or None if not found.
+        """
+        now = now_utc().isoformat()
+
+        def _write() -> None:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'retry_scheduled',
+                        next_retry_at = ?,
+                        last_error = ?,
+                        error_type = 'transient',
+                        error_class = COALESCE(?, error_class),
+                        started_at = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                """,
+                    (now, error_message, error_class, now, task_id),
+                )
+
+        self._exec_with_lock_retry("reschedule_without_budget", _write)
+        return self._exec_with_lock_retry("reschedule_without_budget_readback", lambda: self.get_task(task_id))
+
+    def mark_dead(self, task_id: str, error_message: str, error_class: Optional[str] = None) -> Optional[Task]:
         """
         Move a task to the Dead Letter Queue (status='dead').
 
@@ -1165,6 +1495,9 @@ class QueueManager:
         Args:
             task_id: ID of the task to mark as dead
             error_message: The fatal error description
+            error_class: Spec #49 attribution; defaults to 'fatal' since a dead
+                task is by definition fatal. Recorded for queue-viewer parity
+                with retry/failed rows. Never healed (the healer skips 'dead').
 
         Returns:
             Updated Task object, or None if task not found
@@ -1178,11 +1511,12 @@ class QueueManager:
                 SET status = 'dead',
                     error_message = ?,
                     error_type = 'fatal',
+                    error_class = ?,
                     completed_at = ?,
                     updated_at = ?
                 WHERE id = ?
             """,
-                (error_message, now, now, task_id),
+                (error_message, error_class or "fatal", now, now, task_id),
             )
 
             if cursor.rowcount == 0:
@@ -1264,9 +1598,127 @@ class QueueManager:
         logger.info("Task moved from DLQ back to pending", task_id=task_id)
         return self.get_task(task_id)
 
+    def find_healable_tasks(
+        self,
+        *,
+        cooldown: timedelta,
+        max_heal_attempts: int,
+        limit: int = 100,
+    ) -> List[Task]:
+        """
+        Find ``failed`` tasks eligible for an auto-heal requeue (spec #49 L3).
+
+        A task is healable when all hold:
+
+        - ``status='failed'`` — the healer NEVER touches ``dead`` (fatal means
+          fatal) or any live/pending state.
+        - ``error_class='infra'`` — only shared-dependency outages get a second
+          look; per-item ('item') failures stay terminal until a human acts.
+        - ``heal_attempts < max_heal_attempts`` — bounds the loop so a
+          permanently-broken dependency can't requeue forever.
+        - a ``cooldown`` has elapsed since both the last failure
+          (``completed_at``) and the last heal (``last_heal_at``) — avoids
+          re-requeuing into a dependency that is still down.
+
+        Args:
+            cooldown: Minimum age since last failure/heal before re-requeuing.
+            max_heal_attempts: Per-task cap on auto-heal rounds.
+            limit: Max rows to return per sweep (staged re-admission).
+
+        Returns:
+            Healable tasks, oldest failure first (drain the longest-stuck first).
+        """
+        cutoff = (now_utc() - cooldown).isoformat()
+        sql = """
+            SELECT * FROM tasks
+            WHERE status = 'failed'
+              AND error_class = 'infra'
+              AND COALESCE(heal_attempts, 0) < ?
+              AND (completed_at IS NULL OR completed_at <= ?)
+              AND (last_heal_at IS NULL OR last_heal_at <= ?)
+            ORDER BY completed_at ASC
+            LIMIT ?
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(sql, (max_heal_attempts, cutoff, cutoff, limit))
+            return [self._row_to_task(row) for row in cursor.fetchall()]
+
+    def heal_task(self, task_id: str, max_heal_attempts: int) -> Optional[Task]:
+        """
+        Auto-heal a single ``failed`` infra-class task back to ``pending``.
+
+        The healer-loop analogue of the manual ``retry_dead_task``, but: it
+        only ever transitions ``failed`` + ``error_class='infra'`` rows (never
+        ``dead``), it increments ``heal_attempts`` and stamps ``last_heal_at``,
+        and it re-checks the cap inside the UPDATE's WHERE clause so a
+        concurrent sweep cannot push a row past ``max_heal_attempts``.
+
+        ``retry_count`` is reset to 0 so the requeued task gets a fresh retry
+        budget against the (hopefully recovered) dependency. ``error_class`` is
+        intentionally left intact: if the dependency is still down the task
+        re-fails as infra and remains healable until the cap is hit.
+
+        Args:
+            task_id: ID of the failed infra-class task to requeue.
+            max_heal_attempts: Per-task cap; the transition no-ops at the cap.
+
+        Returns:
+            Updated Task (now ``pending``), or None if not eligible.
+        """
+        now = now_utc().isoformat()
+
+        def _write() -> int:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'pending',
+                        retry_count = 0,
+                        error_message = NULL,
+                        last_error = NULL,
+                        next_retry_at = NULL,
+                        started_at = NULL,
+                        completed_at = NULL,
+                        heal_attempts = COALESCE(heal_attempts, 0) + 1,
+                        last_heal_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                      AND status = 'failed'
+                      AND error_class = 'infra'
+                      AND COALESCE(heal_attempts, 0) < ?
+                """,
+                    (now, now, task_id, max_heal_attempts),
+                )
+                return cursor.rowcount
+
+        rowcount = self._exec_with_lock_retry("heal_task", _write)
+        if rowcount == 0:
+            logger.warning(
+                "queue_heal_skip",
+                task_id=task_id,
+                note="not failed/infra or heal cap reached",
+            )
+            return None
+
+        healed = self.get_task(task_id)
+        logger.info(
+            "queue_heal_requeued",
+            task_id=task_id,
+            stage=healed.stage.value if healed else None,
+            heal_attempts=healed.heal_attempts if healed else None,
+        )
+        return healed
+
     def cancel_retry(self, task_id: str) -> Optional[Task]:
         """
         Cancel a scheduled retry, marking the task as failed.
+
+        Spec #49: clears ``error_class`` (and the now-moot ``next_retry_at``) so
+        the auto-healer never resurrects a retry the user explicitly cancelled.
+        A ``retry_scheduled`` task can carry an 'infra' label from
+        ``schedule_retry``; without this, the healer — which requeues
+        ``status='failed'`` + ``error_class='infra'`` rows after a cooldown —
+        would silently re-queue it. Mirrors ``fail_task``.
 
         Args:
             task_id: ID of the task to cancel
@@ -1282,6 +1734,8 @@ class QueueManager:
                 UPDATE tasks
                 SET status = 'failed',
                     error_message = COALESCE(last_error, 'Retry cancelled by user'),
+                    error_class = NULL,
+                    next_retry_at = NULL,
                     completed_at = ?,
                     updated_at = ?
                 WHERE id = ? AND status = 'retry_scheduled'

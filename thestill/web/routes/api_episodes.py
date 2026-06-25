@@ -418,8 +418,15 @@ async def retry_failed_episode(
     # Clear the failure state
     app_state.repository.clear_episode_failure(episode_id)
 
-    # Queue a new task
-    task = app_state.queue_manager.add_task(episode_id, retry_stage)
+    # Queue a new task with run_full_pipeline so the retry CONTINUES the chain
+    # (retry_stage → … → summarize + entity branch), not just the one failed
+    # stage. Without this the episode stops again the moment the retried stage
+    # succeeds — e.g. a retried transcribe would never auto-advance to clean.
+    task = app_state.queue_manager.add_task(
+        episode_id,
+        retry_stage,
+        metadata={"run_full_pipeline": True, "initiated_by": "episode-retry"},
+    )
 
     return EpisodeRetryResponse(
         status="ok",

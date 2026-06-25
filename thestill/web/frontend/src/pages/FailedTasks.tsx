@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useDLQTasks, useRetryDLQTask, useSkipDLQTask, useRetryAllDLQTasks } from '../hooks/useApi'
 import type { DLQTask, DLQBranchFilter, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
-import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES } from '../constants/stages'
+import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
 
 // Spec #28 entity-branch failures don't normally appear here — they go
 // to ``entity_extraction_status='failed'``, not the ``tasks`` DLQ — but
@@ -260,8 +260,13 @@ export default function FailedTasks() {
 
   const tasks = data?.tasks || []
   const allTasks = allData?.tasks || []
-  const userCount = allTasks.filter(t => !ENTITY_BRANCH_STAGES.has(t.stage)).length
+  // Match the backend branch filters: ``user`` excludes BOTH the entity branch
+  // and the feed (refresh-feed) branch, which each get their own tab/count.
+  const userCount = allTasks.filter(
+    t => !ENTITY_BRANCH_STAGES.has(t.stage) && !FEED_SCOPED_STAGES.has(t.stage)
+  ).length
   const entityCount = allTasks.filter(t => ENTITY_BRANCH_STAGES.has(t.stage)).length
+  const feedCount = allTasks.filter(t => FEED_SCOPED_STAGES.has(t.stage)).length
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -317,6 +322,7 @@ export default function FailedTasks() {
         {([
           { key: 'user' as const, label: 'User pipeline', count: userCount },
           { key: 'entity' as const, label: 'Entity branch', count: entityCount },
+          { key: 'feed' as const, label: 'Feed refresh', count: feedCount },
           { key: 'all' as const, label: 'All', count: allTasks.length },
         ]).map(tab => (
           <button

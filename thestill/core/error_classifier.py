@@ -89,6 +89,34 @@ TRANSIENT_PATTERNS = [
     r"broken pipe",
 ]
 
+# Error message patterns that indicate an *infrastructure* failure — a shared
+# dependency (DNS, the transcription model runtime, a provider endpoint) is
+# down, not that this particular work item is bad. Spec #49 Layer 2: these
+# are correlated across every task that touches the dependency during an
+# outage, so charging each one the same 3-strike budget guarantees the whole
+# in-flight batch dies together (see specs/49 "The Retry Budget Trap").
+#
+# Kept deliberately CONSERVATIVE — explicit substrings, not broad regex — so
+# a genuine per-item error is never misread as infra and retried forever.
+# A failure matching one of these is labelled ``error_class='infra'`` and
+# becomes eligible for the healer loop once the dependency recovers.
+INFRA_PATTERNS = [
+    # DNS resolution failures (host offline / network down). The macOS and
+    # glibc getaddrinfo strings that the 2026-06-23 outage actually produced
+    # — none of which match the generic ``dns.*fail`` transient pattern.
+    r"nodename nor servname",
+    r"name or service not known",
+    r"temporary failure in name resolution",
+    r"getaddrinfo",
+    r"\[errno 8\]",
+    r"failed to connect",
+    r"connection refused",
+    # Transcription model runtime unavailable (Dalston/NeMo engine restarting).
+    r"runtime_unavailable",
+    # Connection pool exhausted against a dead host (requests/urllib3).
+    r"max retries exceeded with url",
+]
+
 # Error message patterns that indicate fatal errors
 FATAL_PATTERNS = [
     r"not found",
@@ -114,6 +142,12 @@ FATAL_PATTERNS = [
     r"missing.*api.*key",
     r"invalid.*api.*key",
     r"authentication failed",
+    # Deterministic download guards: the same URL produces the same result
+    # every time, so retrying is pointless. Covers the redirect-cap abort,
+    # SSRF/unsafe-URL refusals, and the size-cap refusal in audio_downloader.
+    r"too many redirects",
+    r"unsafe url",
+    r"refusing.*download",
 ]
 
 
@@ -185,6 +219,61 @@ def is_fatal_error(exception: Exception) -> bool:
         return True
 
     return False
+
+
+def is_infrastructure_error(exception: Exception) -> bool:
+    """
+    Check if an exception represents an *infrastructure* failure — a shared
+    dependency is down (DNS, model runtime, provider endpoint) rather than the
+    work item being bad.
+
+    Spec #49 Layer 2: infra failures are correlated across tasks and outlast
+    the retry budget, so they must be attributed separately from per-item
+    failures and made eligible for the healer loop once the dependency
+    recovers. Accepts an exception or a bare message string.
+
+    Args:
+        exception: The exception (or message) to classify
+
+    Returns:
+        True if the error matches a known infrastructure-outage signature
+    """
+    error_str = str(exception).lower()
+    for pattern in INFRA_PATTERNS:
+        if re.search(pattern, error_str, re.IGNORECASE):
+            return True
+    return False
+
+
+def classify_error_class(exception: Exception) -> str:
+    """
+    Attribute an error to one of three classes for queue auto-healing (#49).
+
+    The taxonomy refines the binary transient/fatal split into a third axis
+    that distinguishes "the environment is unhealthy" from "this work is bad":
+
+    - ``'fatal'`` — will never succeed (404, corrupt input). Routes to ``dead``;
+      never auto-healed.
+    - ``'infra'`` — a shared dependency is down. The failure is not the item's
+      fault; once the dependency recovers the same work should succeed, so the
+      healer loop is allowed to requeue it (bounded by ``heal_attempts``).
+    - ``'item'`` — a per-item transient or unclassified error. Keeps the
+      existing 3-strike budget and, once exhausted, requires manual retry.
+
+    Fatal is checked first (most specific), then infra, then everything else
+    falls through to item. Accepts an exception or a bare message string.
+
+    Args:
+        exception: The exception (or message) to classify
+
+    Returns:
+        One of ``'fatal'``, ``'infra'``, ``'item'``
+    """
+    if is_fatal_error(exception):
+        return "fatal"
+    if is_infrastructure_error(exception):
+        return "infra"
+    return "item"
 
 
 def _extract_http_status_code(exception: Exception) -> Optional[int]:

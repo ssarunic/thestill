@@ -27,6 +27,116 @@ from .path_manager import PathManager
 logger = structlog.get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Spec #48 — background refresh scheduler knobs.
+#
+# Standalone env getters (not Config fields) so the podcast repository and the
+# scheduler can read them without constructing the full Config. All ship the
+# queued path DARK: the scheduler and the queued refresh path are both
+# disabled by default and flip per deployment via env.
+# ---------------------------------------------------------------------------
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("invalid_int_env_using_default", env=name, value=raw, default=default)
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_default_refresh_interval_seconds() -> int:
+    """Seeded/initial per-feed refresh interval (default 1h)."""
+    return _env_int("REFRESH_DEFAULT_INTERVAL_SECONDS", 3600)
+
+
+def get_refresh_min_interval_seconds() -> int:
+    """AIMD lower clamp — never poll a feed faster than this (default 15m)."""
+    return _env_int("REFRESH_MIN_INTERVAL_SECONDS", 900)
+
+
+def get_refresh_max_interval_seconds() -> int:
+    """AIMD upper clamp — back off no slower than this (default 24h)."""
+    return _env_int("REFRESH_MAX_INTERVAL_SECONDS", 86400)
+
+
+def is_refresh_via_queue_enabled() -> bool:
+    """When true, ``thestill refresh`` and the scheduler enqueue REFRESH_FEED
+    tasks instead of running the inline batch (spec #48). Default: off."""
+    return _env_bool("REFRESH_VIA_QUEUE", False)
+
+
+def is_refresh_scheduler_enabled() -> bool:
+    """When true, the web server runs the background scheduler tick that
+    enqueues due feeds. Default: off (ships dark)."""
+    return _env_bool("REFRESH_SCHEDULER_ENABLED", False)
+
+
+def get_refresh_scheduler_tick_seconds() -> int:
+    """How often the scheduler scans for due feeds (default 60s). This is the
+    scheduling granularity, NOT the per-feed poll interval."""
+    return _env_int("REFRESH_SCHEDULER_TICK_SECONDS", 60)
+
+
+# ---------------------------------------------------------------------------
+# Spec #49 — queue auto-healing. The worker auto-requeues infra-class
+# ``failed`` tasks (DNS / model-runtime / provider outages) once their
+# dependency recovers, bounded per-task by a heal-attempt cap. Ships ON for
+# self-hosted; flip ``QUEUE_AUTO_HEAL=false`` to fall back to manual retries.
+# ---------------------------------------------------------------------------
+def is_queue_auto_heal_enabled() -> bool:
+    """When true, the task worker runs the periodic terminal-heal loop that
+    requeues infra-class ``failed`` tasks. Default: on."""
+    return _env_bool("QUEUE_AUTO_HEAL", True)
+
+
+def get_queue_heal_interval_seconds() -> int:
+    """How often the auto-heal loop sweeps for healable tasks (default 300s)."""
+    return _env_int("QUEUE_HEAL_INTERVAL_SECONDS", 300)
+
+
+def get_queue_heal_cooldown_minutes() -> int:
+    """Minimum age since a task's last failure/heal before it is re-requeued
+    (default 10m) — avoids requeuing into a still-down dependency."""
+    return _env_int("QUEUE_HEAL_COOLDOWN_MINUTES", 10)
+
+
+def get_queue_max_heal_attempts() -> int:
+    """Per-task cap on auto-heal rounds before the row stays terminal and loud
+    (default 2). Bounds the loop against a permanently-broken dependency."""
+    return _env_int("QUEUE_MAX_HEAL_ATTEMPTS", 2)
+
+
+def is_queue_circuit_breaker_enabled() -> bool:
+    """When true, the worker runs a per-stage circuit breaker that pauses a
+    stage after repeated infra failures instead of draining every in-flight
+    task's retry budget against a dead dependency (spec #49 L1). Default: on."""
+    return _env_bool("QUEUE_CIRCUIT_BREAKER", True)
+
+
+def get_circuit_failure_threshold() -> int:
+    """Infra failures within the window that trip a stage breaker OPEN (default 3)."""
+    return _env_int("QUEUE_CIRCUIT_FAILURE_THRESHOLD", 3)
+
+
+def get_circuit_window_seconds() -> int:
+    """Rolling window over which breaker failures are counted (default 120s)."""
+    return _env_int("QUEUE_CIRCUIT_WINDOW_SECONDS", 120)
+
+
+def get_circuit_cooldown_seconds() -> int:
+    """How long a stage breaker stays OPEN before a half-open probe (default 60s)."""
+    return _env_int("QUEUE_CIRCUIT_COOLDOWN_SECONDS", 60)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -93,6 +203,10 @@ class Config(BaseModel):
     extract_entities_parallel_jobs: Optional[int] = None
     resolve_entities_parallel_jobs: Optional[int] = None
     reindex_parallel_jobs: Optional[int] = None
+    # Spec #48 — REFRESH_FEED gets a small RESERVED lane so a feed storm can
+    # never starve the heavy stages (transcribe/clean). Defaults to 2 rather
+    # than falling back to ``parallel_jobs``.
+    refresh_feed_parallel_jobs: Optional[int] = 2
     # Spec #28 §2.10 — sentence-transformers model used to embed
     # transcript segments into the ``chunks`` table for hybrid corpus
     # search. Must be a key in ``thestill.search.base.EMBEDDING_MODEL_DIMS``;
@@ -265,6 +379,7 @@ class Config(BaseModel):
             TaskStage.EXTRACT_ENTITIES: self.extract_entities_parallel_jobs,
             TaskStage.RESOLVE_ENTITIES: self.resolve_entities_parallel_jobs,
             TaskStage.REINDEX: self.reindex_parallel_jobs,
+            TaskStage.REFRESH_FEED: self.refresh_feed_parallel_jobs,
         }
         return {stage: (value if value and value > 0 else self.parallel_jobs) for stage, value in overrides.items()}
 
@@ -431,6 +546,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
                 "extract-entities",
                 "resolve-entities",
                 "reindex",
+                "refresh-feed",
             )
             if os.getenv(f"{stage.replace('-', '_').upper()}_PARALLEL_JOBS")
         },

@@ -28,13 +28,14 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from structlog import get_logger
 
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..utils.datetime_utils import now_utc
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from ..utils.slug import generate_slug
 from .podcast_repository import EpisodeRepository, PodcastRepository
@@ -1447,6 +1448,58 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             self._backfill_pending_operations_from_files(conn)
             logger.info("Migration complete: pending_transcription_operations created (spec #40)")
 
+        # spec #48 — background refresh scheduling + per-feed adaptive cadence.
+        # Runs LAST in _run_migrations so the backfill's ``synthetic`` /
+        # ``is_complete`` filters reference columns that earlier migration
+        # steps have already added. Columns are nullable with no default; a
+        # migration that only adds them leaves every existing podcast PARKED
+        # (next_refresh_at NULL), so the queued path would enqueue zero feeds —
+        # hence the backfill.
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns_now = {row["name"] for row in cursor.fetchall()}
+        added_cadence = False
+        if "refresh_interval_seconds" not in podcast_columns_now:
+            logger.info("Migrating database: adding refresh_interval_seconds to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN refresh_interval_seconds INTEGER NULL")
+            added_cadence = True
+        if "next_refresh_at" not in podcast_columns_now:
+            logger.info("Migrating database: adding next_refresh_at to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN next_refresh_at TIMESTAMP NULL")
+        if "last_refresh_at" not in podcast_columns_now:
+            logger.info("Migrating database: adding last_refresh_at to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_refresh_at TIMESTAMP NULL")
+        if "last_refresh_error" not in podcast_columns_now:
+            logger.info("Migrating database: adding last_refresh_error to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_refresh_error TEXT NULL")
+
+        # Backfill: seed active (non-synthetic, ongoing) feeds with the default
+        # interval and a due time jittered across the first window — NOT all at
+        # ``now`` (that would thunder-herd the scheduler's first tick). Runs
+        # once (gated by ``added_cadence``).
+        if added_cadence:
+            from ..utils.config import get_default_refresh_interval_seconds
+
+            default_interval = get_default_refresh_interval_seconds()
+            now_dt = now_utc()
+            rows = conn.execute(
+                "SELECT id FROM podcasts WHERE COALESCE(synthetic, 0) = 0 AND COALESCE(is_complete, 0) = 0 "
+                "AND (COALESCE(auto_added, 0) = 0 "
+                "OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))"
+            ).fetchall()
+            for row in rows:
+                pid = row["id"]
+                offset = (hash(pid) % max(1, default_interval)) if default_interval > 0 else 0
+                next_at = (now_dt + timedelta(seconds=offset)).isoformat()
+                conn.execute(
+                    "UPDATE podcasts SET refresh_interval_seconds = ?, next_refresh_at = ? WHERE id = ?",
+                    (default_interval, next_at, pid),
+                )
+            logger.info("Backfilled refresh schedule for active podcasts", count=len(rows))
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_podcasts_due ON podcasts(next_refresh_at) WHERE next_refresh_at IS NOT NULL"
+        )
+
     # ------------------------------------------------------------------
     # Spec #40 — file → DB backfill
     # ------------------------------------------------------------------
@@ -1897,6 +1950,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- spec #19: HTTP conditional-GET cache
                 etag TEXT NULL,
                 last_modified TEXT NULL,
+                -- spec #48: background refresh scheduling + adaptive cadence.
+                -- ISO-8601 UTC text. ``next_refresh_at IS NULL`` is the PARKED
+                -- state (never seeded, or terminally failed) — the scheduler's
+                -- due query excludes it. ``last_refresh_error`` stays set while
+                -- parked so the staleness/FM-4 alarm still sees the failure.
+                refresh_interval_seconds INTEGER NULL,
+                next_refresh_at TIMESTAMP NULL,
+                last_refresh_at TIMESTAMP NULL,
+                last_refresh_error TEXT NULL,
                 -- Synthetic fallback parent (e.g. bare-audio imports);
                 -- excluded from refresh, browse, and follow flows.
                 synthetic INTEGER NOT NULL DEFAULT 0,
@@ -2266,6 +2328,63 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 )
             )
         return podcasts, dedup
+
+    def get_podcast_for_refresh(self, podcast_id: str) -> Optional[Tuple[Podcast, Set[str]]]:
+        """Single-feed analogue of :meth:`get_podcasts_for_refresh` (spec #48).
+
+        Loads one podcast (cache headers + watermark, episodes left empty) plus
+        the set of its known ``external_id`` values — exactly the inputs
+        ``_refresh_single_podcast`` expects. Returns ``None`` if not found.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
+                       p.primary_category_id, p.secondary_category_id,
+                       p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
+                       p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at
+                FROM podcasts p WHERE p.id = ?
+                """,
+                (podcast_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            known = {
+                r["external_id"]
+                for r in conn.execute("SELECT external_id FROM episodes WHERE podcast_id = ?", (podcast_id,))
+            }
+
+        explicit = None
+        if row["explicit"] is not None:
+            explicit = row["explicit"] == 1
+        primary_top, primary_sub = self._resolve_category_id_to_pair(row["primary_category_id"])
+        secondary_top, secondary_sub = self._resolve_category_id_to_pair(row["secondary_category_id"])
+        podcast = Podcast(
+            id=row["id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            rss_url=row["rss_url"],
+            title=row["title"],
+            slug=row["slug"] or "",
+            description=row["description"],
+            image_url=row["image_url"],
+            language=row["language"] if row["language"] else "en",
+            primary_category=primary_top,
+            primary_subcategory=primary_sub,
+            secondary_category=secondary_top,
+            secondary_subcategory=secondary_sub,
+            author=row["author"],
+            explicit=explicit,
+            show_type=row["show_type"],
+            website_url=row["website_url"],
+            is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
+            copyright=row["copyright"],
+            last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
+            last_processed_at=_row_opt_dt(row, "last_processed_at"),
+            etag=row["etag"],
+            last_modified=row["last_modified"],
+            episodes=[],
+        )
+        return podcast, known
 
     def get_top_podcast_regions(self) -> List[str]:
         """Return the list of regions that currently have top-podcast data."""
@@ -2759,7 +2878,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         with self._get_connection() as conn:
             return [self._save_episode_idempotent(conn, ep) for ep in episodes]
 
-    def save_refresh_batch(self, changed_podcasts: List[Podcast], new_episodes: List[Episode]) -> None:
+    def save_refresh_batch(
+        self,
+        changed_podcasts: List[Podcast],
+        new_episodes: List[Episode],
+        episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+    ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
 
@@ -2776,8 +2900,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ``last_processed``, or conditional-GET cache headers.
             new_episodes: Newly discovered episodes to insert. Must each
                 carry ``podcast_id``.
+            episode_image_updates: Optional ``(podcast_id, external_id,
+                image_url)`` triples re-syncing existing episodes' artwork from
+                the feed. Applied as a guarded UPDATE so only drifted rows write
+                (rotating signed URLs go stale because the INSERT above never
+                revisits an existing episode). New episodes inserted in this same
+                batch already carry the current URL, so their update is a no-op.
         """
-        if not changed_podcasts and not new_episodes:
+        if not changed_podcasts and not new_episodes and not episode_image_updates:
             return
 
         for ep in new_episodes:
@@ -2874,6 +3004,281 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """,
                     episode_params,
                 )
+
+            # Re-sync drifted artwork for existing episodes (stale signed-URL
+            # repair). Keyed by (podcast_id, external_id) so no episode
+            # hydration is needed; the ``IS NOT`` guard keeps it a no-op — and
+            # leaves ``updated_at`` untouched — unless the URL actually changed.
+            # New episodes inserted just above already carry the current URL, so
+            # their update here is a guarded no-op.
+            if episode_image_updates:
+                image_params = [
+                    (
+                        _normalize_artwork_url(image_url),
+                        now_iso,
+                        podcast_id,
+                        external_id,
+                        _normalize_artwork_url(image_url),
+                    )
+                    for podcast_id, external_id, image_url in episode_image_updates
+                ]
+                conn.executemany(
+                    """
+                    UPDATE episodes
+                    SET image_url = ?, updated_at = ?
+                    WHERE podcast_id = ? AND external_id = ? AND image_url IS NOT ?
+                    """,
+                    image_params,
+                )
+
+    def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
+        """Update ``image_url`` for existing episodes in one transaction.
+
+        Used by the image-repair routine: ``refresh`` discovers episodes with
+        ``INSERT OR IGNORE`` and never revisits an existing row, so artwork that
+        the feed later re-signs (e.g. Transistor's imgproxy URLs, whose
+        signatures rotate and start 404ing) goes stale forever. This re-syncs
+        the stored URL from the live feed.
+
+        Args:
+            updates: ``(episode_id, image_url)`` pairs. ``image_url`` is
+                normalized (``http`` -> ``https``) before storage. The
+                ``WHERE`` guard skips no-op writes so ``updated_at`` only moves
+                when the value actually changed.
+
+        Returns:
+            Number of rows actually changed.
+        """
+        if not updates:
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        params = [
+            (_normalize_artwork_url(image_url), now_iso, episode_id, _normalize_artwork_url(image_url))
+            for episode_id, image_url in updates
+        ]
+        with self._get_connection() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                """
+                UPDATE episodes
+                SET image_url = ?, updated_at = ?
+                WHERE id = ? AND image_url IS NOT ?
+                """,
+                params,
+            )
+            return conn.total_changes - before
+
+    # ------------------------------------------------------------------
+    # Spec #48 — background refresh scheduling (cadence + failure state)
+    # ------------------------------------------------------------------
+    def get_due_podcasts(self, now: Optional[datetime] = None, limit: int = 500) -> List[str]:
+        """Return ids of feeds DUE for refresh, oldest-due first.
+
+        Due = scheduled (``next_refresh_at IS NOT NULL`` — parked feeds are
+        excluded) and ``next_refresh_at <= now``, restricted to active feeds
+        (non-synthetic, ongoing). The explicit ``IS NOT NULL`` makes the
+        parked-vs-future distinction clear even though ``NULL <= now`` is NULL.
+        """
+        now_iso = (now or now_utc()).isoformat()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM podcasts
+                WHERE next_refresh_at IS NOT NULL
+                  AND next_refresh_at <= ?
+                  AND COALESCE(synthetic, 0) = 0
+                  AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                ORDER BY next_refresh_at ASC
+                LIMIT ?
+                """,
+                (now_iso, limit),
+            ).fetchall()
+            return [row["id"] for row in rows]
+
+    def get_discovered_unqueued_episodes(
+        self, podcast_id: str, within_days: int = 2, limit: int = 25
+    ) -> List[Tuple[str, Optional[str]]]:
+        """Spec #48 P1 — RECENT episodes persisted but never enqueued (orphans).
+
+        ``handle_refresh_feed`` persists new episodes, then enqueues their first
+        task in a *separate* write. If the process dies (or ``add_task`` fails)
+        in between, the episodes are durable but have no task; the next refresh
+        reloads their external_ids as "known", so ``new_eps`` is empty and the
+        fan-out is never repaired. This query is the idempotent recovery: an
+        episode in DISCOVERED state (no artifact paths, not failed) with **no
+        task row at all** is an orphan. The handler enqueues these every run, so
+        a healthy run just re-finds the episodes it persisted this cycle, and a
+        crashed prior run is self-healed on the next tick.
+
+        Scoped to ``within_days`` (default 2): refresh runs at most every ~24h,
+        so a genuine crash-orphan is always recent. This deliberately EXCLUDES
+        the historical "discovered but never processed" backlog (pre-spec-48
+        episodes the user never queued for processing) — enqueuing those would
+        be a surprise flood, not a repair. Bounded by ``limit`` per call so even
+        a burst drains gradually. Returns ``(episode_id, audio_url)`` pairs.
+        """
+        cutoff = (now_utc() - timedelta(days=within_days)).isoformat()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.id, e.audio_url
+                FROM episodes e
+                WHERE e.podcast_id = ?
+                  AND e.created_at >= ?
+                  AND e.failed_at_stage IS NULL
+                  AND e.audio_path IS NULL
+                  AND e.downsampled_audio_path IS NULL
+                  AND e.raw_transcript_path IS NULL
+                  AND e.clean_transcript_path IS NULL
+                  AND e.summary_path IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
+                ORDER BY e.pub_date DESC
+                LIMIT ?
+                """,
+                (podcast_id, cutoff, limit),
+            ).fetchall()
+            return [(row["id"], row["audio_url"]) for row in rows]
+
+    def seed_unscheduled_feeds(self, default_interval_seconds: int, now: Optional[datetime] = None) -> int:
+        """Seed active feeds that have NEVER been scheduled or attempted.
+
+        Distinguishes never-seeded (``next_refresh_at`` NULL *and* no prior
+        attempt) from PARKED (terminally failed — carries ``last_refresh_error``
+        / ``last_refresh_at``): only the former is seeded, so a parked feed is
+        never silently revived. Lets newly-added podcasts become due without
+        editing every insert path. Returns the number seeded.
+        """
+        now_dt = now or now_utc()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM podcasts
+                WHERE next_refresh_at IS NULL
+                  AND last_refresh_at IS NULL
+                  AND last_refresh_error IS NULL
+                  AND COALESCE(synthetic, 0) = 0
+                  AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                """
+            ).fetchall()
+            for row in rows:
+                pid = row["id"]
+                offset = (hash(pid) % max(1, default_interval_seconds)) if default_interval_seconds > 0 else 0
+                next_at = (now_dt + timedelta(seconds=offset)).isoformat()
+                conn.execute(
+                    "UPDATE podcasts SET refresh_interval_seconds = ?, next_refresh_at = ? WHERE id = ?",
+                    (default_interval_seconds, next_at, pid),
+                )
+            if rows:
+                logger.info("Seeded refresh schedule for unscheduled feeds", count=len(rows))
+            return len(rows)
+
+    def record_refresh_success(
+        self,
+        podcast_id: str,
+        found_new: bool,
+        min_interval: int,
+        max_interval: int,
+        default_interval: int,
+        now: Optional[datetime] = None,
+    ) -> str:
+        """Record a successful refresh and recompute the adaptive (AIMD)
+        interval. New episodes → shorten (÷2, decrease); none → lengthen
+        (×1.5, increase). Clears ``last_refresh_error``. Returns the new
+        ``next_refresh_at`` ISO string.
+        """
+        now_dt = now or now_utc()
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT refresh_interval_seconds FROM podcasts WHERE id = ?",
+                (podcast_id,),
+            ).fetchone()
+            current = row["refresh_interval_seconds"] if row and row["refresh_interval_seconds"] else default_interval
+            if found_new:
+                new_interval = max(min_interval, current // 2)
+            else:
+                new_interval = min(max_interval, int(current * 1.5))
+            new_interval = max(min_interval, min(max_interval, new_interval))
+            next_at = (now_dt + timedelta(seconds=new_interval)).isoformat()
+            conn.execute(
+                """
+                UPDATE podcasts
+                SET refresh_interval_seconds = ?,
+                    next_refresh_at = ?,
+                    last_refresh_at = ?,
+                    last_refresh_error = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (new_interval, next_at, now_dt.isoformat(), now_dt.isoformat(), podcast_id),
+            )
+            return next_at
+
+    def record_refresh_error(
+        self,
+        podcast_id: str,
+        error: str,
+        terminal: bool,
+        now: Optional[datetime] = None,
+    ) -> None:
+        """Record a feed-scoped refresh failure (spec #48 failure isolation).
+
+        Always stamps ``last_refresh_at`` + ``last_refresh_error``. A
+        **terminal** failure PARKS the feed (``next_refresh_at = NULL``) so the
+        scheduler stops re-enqueuing it every interval; only operator retry
+        (:meth:`clear_podcast_refresh_failure`) re-arms it. Retryable errors
+        leave ``next_refresh_at`` alone — the task's own retry will re-fetch.
+        Never touches cache headers (FM-2 is enforced on the feed path).
+        """
+        now_dt = now or now_utc()
+        with self._get_connection() as conn:
+            if terminal:
+                conn.execute(
+                    """
+                    UPDATE podcasts
+                    SET last_refresh_at = ?, last_refresh_error = ?, next_refresh_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now_dt.isoformat(), error[:2000], now_dt.isoformat(), podcast_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE podcasts
+                    SET last_refresh_at = ?, last_refresh_error = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now_dt.isoformat(), error[:2000], now_dt.isoformat(), podcast_id),
+                )
+
+    def clear_podcast_refresh_failure(
+        self,
+        podcast_id: str,
+        default_interval: int,
+        now: Optional[datetime] = None,
+    ) -> str:
+        """Operator retry of a parked feed: clear the error and re-arm
+        ``next_refresh_at`` to ``now`` so the next tick re-enqueues it.
+        Returns the new ``next_refresh_at``.
+        """
+        now_dt = now or now_utc()
+        next_at = now_dt.isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE podcasts
+                SET last_refresh_error = NULL,
+                    next_refresh_at = ?,
+                    refresh_interval_seconds = COALESCE(refresh_interval_seconds, ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (next_at, default_interval, now_dt.isoformat(), podcast_id),
+            )
+        return next_at
 
     def _save_episode_idempotent(self, conn: sqlite3.Connection, episode: Episode) -> Episode:
         """

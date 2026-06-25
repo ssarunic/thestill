@@ -84,14 +84,26 @@ function TaskCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <Link
-            to={`/podcasts/${task.podcast_slug}/episodes/${task.episode_slug}`}
-            className={`font-medium text-gray-900 hover:text-primary-600 line-clamp-1 ${compact ? 'text-sm' : ''}`}
-          >
-            {task.episode_title}
-          </Link>
+          {/* Spec #48 — feed (refresh-feed) tasks are podcast-scoped: no
+              episode, so render the podcast title without a (broken) episode
+              link. ``episode_slug`` is empty for these. */}
+          {task.episode_slug ? (
+            <Link
+              to={`/podcasts/${task.podcast_slug}/episodes/${task.episode_slug}`}
+              className={`font-medium text-gray-900 hover:text-primary-600 line-clamp-1 ${compact ? 'text-sm' : ''}`}
+            >
+              {task.episode_title}
+            </Link>
+          ) : (
+            <Link
+              to={`/podcasts/${task.podcast_slug}`}
+              className={`font-medium text-gray-900 hover:text-primary-600 line-clamp-1 ${compact ? 'text-sm' : ''}`}
+            >
+              {task.podcast_title}
+            </Link>
+          )}
           <p className={`text-gray-500 mt-0.5 line-clamp-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-            {task.podcast_title}
+            {task.episode_slug ? task.podcast_title : task.episode_title}
           </p>
 
           {/* Per-lane cards omit the stage badge (stage is implicit in the lane).
@@ -423,9 +435,12 @@ export default function QueueViewer() {
   // sorts last. Source of truth in src/constants/stages.ts.
   const latestCompletedByEpisode = new Map<string, QueuedTaskWithContext>()
   for (const task of completed_tasks) {
-    const existing = latestCompletedByEpisode.get(task.episode_id)
+    // Spec #48 — feed tasks have no episode_id; key them by task_id so they
+    // don't all collapse into a single empty-string bucket.
+    const key = task.episode_id || task.task_id
+    const existing = latestCompletedByEpisode.get(key)
     if (!existing || STAGE_RANK[task.stage] > STAGE_RANK[existing.stage]) {
-      latestCompletedByEpisode.set(task.episode_id, task)
+      latestCompletedByEpisode.set(key, task)
     }
   }
   const collapsedCompletedTasks = Array.from(latestCompletedByEpisode.values()).sort((a, b) => {
@@ -536,7 +551,7 @@ export default function QueueViewer() {
           </h2>
           <div className="space-y-2">
             {collapsedCompletedTasks.map((task) => (
-              <TaskCard key={task.episode_id} task={task} compact showStageBadge />
+              <TaskCard key={task.episode_id || task.task_id} task={task} compact showStageBadge />
             ))}
           </div>
         </div>

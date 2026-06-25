@@ -1141,6 +1141,32 @@ class RSSMediaSource(MediaSource):
 
         return None
 
+    def extract_episode_images(self, parsed_feed: Any) -> Dict[str, Optional[str]]:
+        """Map every feed entry's ``external_id`` to its current artwork URL.
+
+        Used by the refresh path to re-sync stale episode artwork: ``refresh``
+        discovers episodes once and never revisits them, so artwork served
+        behind rotating signed URLs (e.g. Transistor imgproxy) goes stale. The
+        ``external_id`` key derivation mirrors :meth:`fetch_episodes` exactly so
+        the keys line up with stored episodes.
+
+        Args:
+            parsed_feed: A feedparser result.
+
+        Returns:
+            ``{external_id: image_url}`` for every parseable entry.
+        """
+        images: Dict[str, Optional[str]] = {}
+        for entry in parsed_feed.entries:
+            try:
+                episode_date = self._parse_date(entry.get("published_parsed"))
+                external_id = entry.get("guid", entry.get("id", str(episode_date)))
+                images[external_id] = self._extract_episode_image(entry)
+            except Exception:
+                # A malformed entry must not blank the whole image sync.
+                continue
+        return images
+
     def extract_transcript_links(self, rss_content: str) -> Dict[str, List[TranscriptLink]]:
         """
         Extract podcast:transcript links from raw RSS content.
