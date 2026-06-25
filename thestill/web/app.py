@@ -266,6 +266,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Each TaskStage gets its own poll loop + semaphore so slow stages
     # (transcribe) don't starve fast ones (clean).
     task_handlers = create_task_handlers(app_state)
+    from ..utils.config import (
+        get_circuit_cooldown_seconds,
+        get_circuit_failure_threshold,
+        get_circuit_window_seconds,
+        get_queue_heal_cooldown_minutes,
+        get_queue_heal_interval_seconds,
+        get_queue_max_heal_attempts,
+        is_queue_auto_heal_enabled,
+        is_queue_circuit_breaker_enabled,
+    )
+
     task_worker = TaskWorker(
         queue_manager,
         task_handlers,
@@ -273,6 +284,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         repository=repository,
         parallel_jobs=config.parallel_jobs,
         parallel_jobs_per_stage=config.get_parallel_jobs_per_stage(),
+        auto_heal_enabled=is_queue_auto_heal_enabled(),
+        heal_interval_s=get_queue_heal_interval_seconds(),
+        heal_cooldown_minutes=get_queue_heal_cooldown_minutes(),
+        max_heal_attempts=get_queue_max_heal_attempts(),
+        circuit_breaker_enabled=is_queue_circuit_breaker_enabled(),
+        circuit_failure_threshold=get_circuit_failure_threshold(),
+        circuit_window_seconds=get_circuit_window_seconds(),
+        circuit_cooldown_seconds=get_circuit_cooldown_seconds(),
     )
     app_state.task_worker = task_worker
 

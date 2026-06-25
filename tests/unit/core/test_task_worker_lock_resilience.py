@@ -69,7 +69,8 @@ class TestSafeScheduleRetry:
         result = worker._safe_schedule_retry(_make_task(), "real failure")
 
         assert result is rescheduled
-        queue.schedule_retry.assert_called_once_with("task-uuid", "real failure")
+        # error_class defaults to None when the caller doesn't classify (spec #49).
+        queue.schedule_retry.assert_called_once_with("task-uuid", "real failure", None)
 
     def test_swallows_schedule_retry_failure(self):
         """A secondary lock on ``schedule_retry`` must not propagate.

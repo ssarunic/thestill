@@ -318,6 +318,23 @@ class PodcastFeedManager:
                         headers_rotated = True
                     return podcast, [], False, True, source, headers_rotated
 
+                # Spec #42/#49 — a fetch/parse failure (DNS, HTTP error, empty
+                # body) comes back as an error SENTINEL: content/parsed_feed are
+                # None and ``error`` is set, with NO exception raised. The old
+                # code fell through to ``episodes = []`` and reported success,
+                # so a feed outage silently cleared ``last_refresh_error`` and
+                # never retried/parked (errors-as-empty-results). Treat it as a
+                # hard error so the queued REFRESH_FEED task raises and recovers.
+                if result.error or result.content is None:
+                    had_error = True
+                    logger.error(
+                        "feed_fetch_failed",
+                        podcast_rss_url=rss_url_str,
+                        status_code=result.status_code,
+                        error=result.error,
+                    )
+                    return podcast, [], True, False, source, headers_rotated
+
                 rss_content = result.content
                 parsed_feed = result.parsed_feed
 

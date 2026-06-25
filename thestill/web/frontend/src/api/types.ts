@@ -476,7 +476,10 @@ export interface PipelineTaskResponse {
 
 export interface PipelineTaskStatusResponse {
   task_id: string
-  episode_id: string
+  // Feed-scoped (REFRESH_FEED) tasks are podcast-scoped: episode_id is null
+  // and podcast_id is set. Episode-scoped tasks are the inverse.
+  episode_id: string | null
+  podcast_id: string | null
   stage: PipelineStage
   status: PipelineTaskStatus
   error_message: string | null

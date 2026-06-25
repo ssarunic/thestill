@@ -495,7 +495,11 @@ class QueuedTaskStatusResponse(BaseModel):
     """Response for queued task status queries."""
 
     task_id: str
-    episode_id: str
+    # Spec #48 — feed-scoped (REFRESH_FEED) tasks carry ``podcast_id`` and have
+    # no episode, so ``episode_id`` must be nullable; a required ``str`` 500s
+    # the endpoint for those tasks.
+    episode_id: Optional[str] = None
+    podcast_id: Optional[str] = None
     stage: str
     status: str
     error_message: Optional[str] = None
@@ -1031,6 +1035,7 @@ async def get_queued_task_status(
     return QueuedTaskStatusResponse(
         task_id=task.id,
         episode_id=task.episode_id,
+        podcast_id=task.podcast_id,
         stage=task.stage.value,
         status=task.status.value,
         error_message=task.error_message,

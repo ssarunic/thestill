@@ -55,7 +55,12 @@ logger = get_logger(__name__)
 
 
 _ALLOWED_SCHEMES: Tuple[str, ...] = ("http", "https")
-_MAX_REDIRECTS = 5
+# Podcast audio URLs routinely stack several analytics-prefix services
+# (Podtrac -> Spotify prefix -> Podscribe -> Swap.fm -> the real host),
+# each adding a 30x hop. A cap of 5 was too tight for these legitimate
+# chains; 10 covers them while still bounding the walk. Every hop is
+# individually SSRF-validated, so raising the cap does not weaken the guard.
+_MAX_REDIRECTS = 10
 _DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -251,8 +256,7 @@ def guarded_redirect_fetch(
         location = response.headers.get("Location", "")
         if not location:
             raise UnsafeURLError(
-                f"redirect response {response.status_code} from {current_url!r} "
-                "lacked a Location header"
+                f"redirect response {response.status_code} from {current_url!r} " "lacked a Location header"
             )
         # RFC 7231: Location may be relative; resolve against the URL we
         # just hit so an attacker cannot rewrite the host via "///evil".
@@ -260,9 +264,7 @@ def guarded_redirect_fetch(
         validate_public_url(next_url)
         current_url = next_url
 
-    raise TooManyRedirects(
-        f"too many redirects fetching {url!r} (cap={max_redirects})"
-    )
+    raise TooManyRedirects(f"too many redirects fetching {url!r} (cap={max_redirects})")
 
 
 __all__ = [
