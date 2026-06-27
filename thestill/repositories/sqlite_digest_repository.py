@@ -25,11 +25,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 from structlog import get_logger
 
 from ..models.digest import Digest, DigestStatus
+from ..utils.sqlite_ext import connect
 from .digest_repository import DigestRepository
 
 logger = get_logger(__name__)
@@ -53,27 +54,10 @@ class SqliteDigestRepository(DigestRepository):
         logger.info("Initialized SQLite digest repository", db_path=str(self.db_path))
 
     @contextmanager
-    def _get_connection(self) -> sqlite3.Connection:
-        """
-        Get database connection with proper setup.
-
-        Features:
-        - Row factory for dict-like access
-        - Foreign keys enabled
-        - Automatic commit/rollback
-        """
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-
-        try:
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
+        """Tuned SQLite connection. See ``thestill.utils.sqlite_ext.connect``."""
+        with connect(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def get_by_id(self, digest_id: str) -> Optional[Digest]:
         """Get digest by internal UUID (primary key)."""

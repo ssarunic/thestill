@@ -24,6 +24,9 @@ error to the caller.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator, Union
 
 
 class SqliteVecNotInstalledError(RuntimeError):
@@ -80,3 +83,68 @@ def maybe_load_vec_extension(conn: sqlite3.Connection) -> bool:
         return False
     _vec_available = True
     return True
+
+
+# Per-connection write-lock budget (milliseconds). A contended writer waits up
+# to this long for the single SQLite writer lock before raising
+# ``database is locked``. Without it the default is 0 — fail-fast on the first
+# collision. See ``connect`` for the full concurrency rationale.
+BUSY_TIMEOUT_MS = 5000
+
+
+@contextmanager
+def connect(
+    db_path: Union[str, Path],
+    *,
+    load_vec: str = "none",
+    row_factory: bool = True,
+) -> Iterator[sqlite3.Connection]:
+    """Open a tuned SQLite connection; commit on success, rollback on error, always close.
+
+    Single source of truth for the per-connection PRAGMAs every repository
+    and writer needs, so the concurrency story can't silently drift apart
+    between connection sites (which is how ``database is locked`` storms
+    creep in — one repo with ``busy_timeout`` set, another without):
+
+    - ``foreign_keys = ON``    — off by default in SQLite.
+    - ``journal_mode = WAL``   — one writer + many readers proceed
+      concurrently instead of stalling behind a single journal lock. WAL
+      is a persistent DB property, but re-asserting it per connection is
+      cheap and keeps fresh DBs correct regardless of which repo opens first.
+    - ``busy_timeout``         — a contended writer waits up to
+      ``BUSY_TIMEOUT_MS`` for the writer lock and serializes gracefully,
+      instead of fail-fast crashing the moment a peer holds it.
+    - ``synchronous = NORMAL`` — safe under WAL and shortens how long a
+      writer holds the lock by skipping the per-commit ``fsync`` that the
+      default ``FULL`` forces.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        load_vec: sqlite-vec extension policy. ``"none"`` (default) skips it;
+            ``"soft"`` best-effort loads it (repos whose cascades fire the
+            ``chunks_vec`` triggers but stay usable without the extra);
+            ``"require"`` hard-loads and raises ``SqliteVecNotInstalledError``
+            if missing (writers that cannot function without vec0).
+        row_factory: Use ``sqlite3.Row`` for dict-like column access.
+    """
+    conn = sqlite3.connect(str(db_path))
+    if row_factory:
+        conn.row_factory = sqlite3.Row
+    if load_vec == "require":
+        load_vec_extension(conn)
+    elif load_vec == "soft":
+        maybe_load_vec_extension(conn)
+    elif load_vec != "none":
+        raise ValueError(f"load_vec must be 'none', 'soft', or 'require', got {load_vec!r}")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

@@ -1357,19 +1357,42 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     #    fetches the audio directly from the URL, so a freshly-discovered episode
     #    SKIPS local download/downsample and starts at TRANSCRIBE; otherwise it
     #    starts at DOWNLOAD.
-    use_dalston_url = getattr(state.config, "transcription_provider", "") == "dalston"
+    provider = getattr(state.config, "transcription_provider", "")
+    discovered = repo.get_discovered_unqueued_episodes(podcast_id)
+
+    # Initial-backfill cap: a brand-new podcast discovers its ENTIRE back catalog
+    # in one refresh, but we only want to auto-transcribe the most-recent few on
+    # subscribe (the rest stay available to process manually). Cap to N (config),
+    # counting episodes already auto-submitted (e.g. by follow-seed) against the
+    # budget, and mark the remainder ``auto_process_excluded`` so this recovery
+    # sweep never enqueues them — even after the podcast becomes "established"
+    # once its seeded episodes publish. An established podcast skips the cap, so
+    # every genuinely-new episode (and any real crash-orphan) still flows through.
+    if not repo.has_processed_episodes(podcast_id):
+        cap = max(0, getattr(state.config, "inbox_seed_on_follow", 2) - repo.count_episodes_with_tasks(podcast_id))
+        to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
+        skipped = [eid for eid, _ in discovered[cap:]]
+        if skipped:
+            repo.mark_episodes_auto_process_excluded(skipped)
+            logger.info(
+                "refresh_feed_initial_backfill_capped",
+                podcast_id=podcast_id,
+                cap=cap,
+                excluded=len(skipped),
+            )
+    else:
+        to_enqueue = discovered
+
     enqueued = 0
-    for episode_id, audio_url in repo.get_discovered_unqueued_episodes(podcast_id):
-        initial_stage = TaskStage.TRANSCRIBE if (use_dalston_url and audio_url) else TaskStage.DOWNLOAD
-        if state.queue_manager.has_pending_task(episode_id, initial_stage):
-            continue
-        state.queue_manager.add_task(
+    for episode_id, audio_url in to_enqueue:
+        # spec #48 freshness priority (10) — newly published jumps backfill.
+        if state.queue_manager.enqueue_full_pipeline(
             episode_id=episode_id,
-            stage=initial_stage,
-            priority=10,  # spec #48 freshness priority — newly published jumps backfill
-            metadata={"run_full_pipeline": True, "initiated_by": "refresh-feed"},
-        )
-        enqueued += 1
+            audio_url=audio_url,
+            transcription_provider=provider,
+            initiated_by="refresh-feed",
+        ):
+            enqueued += 1
 
     # 5. Best-effort transcript-link extraction (outside the txn, unchanged).
     if new_eps and isinstance(source, RSSMediaSource):

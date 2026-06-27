@@ -51,6 +51,7 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from structlog import get_logger
 
+from ..models.podcast import EpisodeState
 from ..utils.datetime_utils import now_utc
 
 logger = get_logger(__name__)
@@ -106,6 +107,49 @@ def is_feed_scoped_stage(stage: TaskStage) -> bool:
     """Return True if ``stage`` targets a podcast (``podcast_id``) rather than
     an episode (``episode_id``) — currently only REFRESH_FEED (spec #48)."""
     return stage in _FEED_SCOPED_STAGES
+
+
+# The pipeline-entry stage for an episode in a given state. SUMMARIZED (and the
+# implicit FAILED) have no next stage and are absent → ``starting_stage_for``
+# returns None.
+STATE_TO_NEXT_STAGE: Dict[EpisodeState, TaskStage] = {
+    EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
+    EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
+    EpisodeState.DOWNSAMPLED: TaskStage.TRANSCRIBE,
+    EpisodeState.TRANSCRIBED: TaskStage.CLEAN,
+    EpisodeState.CLEANED: TaskStage.SUMMARIZE,
+}
+
+
+def starting_stage_for(
+    episode_state: EpisodeState,
+    *,
+    transcription_provider: Optional[str] = None,
+    has_audio_url: bool = False,
+    has_downsampled_audio: bool = False,
+) -> Optional[TaskStage]:
+    """The pipeline stage an episode should (re)start at, given its state.
+
+    Single source of truth for the "where does this episode enter the pipeline"
+    decision, shared by every enqueue path (refresh-feed, follow-seed/publish
+    fan-out via :meth:`QueueManager.enqueue_full_pipeline`, batch processing,
+    and the per-stage web commands). Maps the episode's current state to the
+    next stage, with one provider-specific shortcut: when the transcription
+    provider is Dalston it fetches audio directly from the URL, so a DISCOVERED
+    episode that still has its ``audio_url`` (and no downsampled copy) SKIPS
+    local download/downsample and starts at TRANSCRIBE.
+
+    Returns ``None`` when the episode is already SUMMARIZED (or FAILED) and has
+    no next stage.
+    """
+    if (
+        transcription_provider == "dalston"
+        and episode_state == EpisodeState.DISCOVERED
+        and has_audio_url
+        and not has_downsampled_audio
+    ):
+        return TaskStage.TRANSCRIBE
+    return STATE_TO_NEXT_STAGE.get(episode_state)
 
 
 # Spec #49 Layer 4 — stages that re-run deterministically from their inputs and
@@ -429,23 +473,10 @@ class QueueManager:
           workers competing for the next task this is the difference
           between "graceful serialisation" and "spurious crashes".
         """
-        from ..utils.sqlite_ext import maybe_load_vec_extension
+        from ..utils.sqlite_ext import connect
 
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        maybe_load_vec_extension(conn)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-
-        try:
+        with connect(self.db_path, load_vec="soft") as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     # Spec #28 §0.5 — the canonical CHECK clause for ``tasks.stage``.
     # Derived from ``TaskStage`` so adding a stage in the enum auto-updates
@@ -781,6 +812,59 @@ class QueueManager:
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
         )
+
+    def enqueue_full_pipeline(
+        self,
+        *,
+        episode_id: str,
+        audio_url: Optional[str],
+        transcription_provider: str,
+        initiated_by: str,
+        priority: int = 10,
+    ) -> bool:
+        """Enqueue the first stage of an episode's full pipeline, URL-optimized.
+
+        When the transcription provider is Dalston it fetches the audio directly
+        from the URL, so an episode that still has its ``audio_url`` SKIPS local
+        download/downsample and starts at TRANSCRIBE; otherwise it starts at
+        DOWNLOAD. ``run_full_pipeline=True`` keeps clean → summarize → entities
+        chaining after the first stage (see ``_maybe_enqueue_next_stage``).
+
+        Idempotent: returns ``False`` without enqueuing when the episode already
+        has an active (pending/processing/retry) task for the chosen stage, so it
+        is safe to call from multiple delivery paths (refresh, follow-seed,
+        publish fan-out) for the same episode.
+
+        Args:
+            episode_id: Episode to process.
+            audio_url: The episode's source audio URL (may be ``None``).
+            transcription_provider: ``config.transcription_provider`` — only
+                ``"dalston"`` enables the download-skipping URL path.
+            initiated_by: Provenance tag stored in task metadata for tracing.
+            priority: Queue priority (default 10 — spec #48 freshness priority).
+
+        Returns:
+            ``True`` if a task was enqueued, ``False`` if it was coalesced.
+        """
+        # DISCOVERED orphan: starting_stage_for applies the Dalston URL shortcut
+        # (TRANSCRIBE) or the default DISCOVERED → DOWNLOAD. Never None here.
+        initial_stage = (
+            starting_stage_for(
+                EpisodeState.DISCOVERED,
+                transcription_provider=transcription_provider,
+                has_audio_url=bool(audio_url),
+            )
+            or TaskStage.DOWNLOAD
+        )
+        if self.has_pending_task(episode_id, initial_stage):
+            return False
+        self.add_task(
+            episode_id=episode_id,
+            stage=initial_stage,
+            priority=priority,
+            metadata={"run_full_pipeline": True, "initiated_by": initiated_by},
+        )
+        return True
 
     def add_feed_task(
         self,
@@ -1881,3 +1965,41 @@ class QueueManager:
             result["completed"] = [self._row_to_task(row) for row in cursor.fetchall()]
 
             return result
+
+    def sum_duration_by_stage(self, statuses: Optional[List[str]] = None) -> Dict[str, int]:
+        """
+        Sum the episode audio length (seconds) of queued tasks, grouped by stage.
+
+        Joins ``tasks`` to ``episodes`` so the totals reflect the full backlog,
+        not the capped display list returned by :meth:`get_active_tasks` — this is
+        what lets the queue viewer show an accurate "time to process" estimate
+        even when more than 100 episodes are pending for a stage.
+
+        Args:
+            statuses: Task statuses to include. Defaults to the in-flight
+                backlog (``pending`` + ``processing``). Feed-scoped tasks have no
+                episode and are naturally excluded by the inner join.
+
+        Returns:
+            Mapping of stage value -> total duration in seconds. Stages with no
+            durable durations are omitted (caller treats missing as None/0).
+        """
+        if statuses is None:
+            statuses = ["pending", "processing"]
+        if not statuses:
+            return {}
+
+        placeholders = ",".join("?" for _ in statuses)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT t.stage AS stage, SUM(e.duration) AS total
+                FROM tasks t
+                JOIN episodes e ON t.episode_id = e.id
+                WHERE t.status IN ({placeholders})
+                  AND e.duration IS NOT NULL
+                GROUP BY t.stage
+                """,
+                tuple(statuses),
+            )
+            return {row["stage"]: int(row["total"]) for row in cursor.fetchall() if row["total"] is not None}

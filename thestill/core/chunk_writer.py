@@ -35,7 +35,7 @@ from typing import Optional
 from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedTranscript
-from ..utils.sqlite_ext import load_vec_extension
+from ..utils.sqlite_ext import connect
 from .embedding_model import EmbeddingModel, centroid_blob
 
 logger = get_logger(__name__)
@@ -54,28 +54,16 @@ class ChunkWriter:
 
     @contextmanager
     def _get_connection(self):
-        """Connection with sqlite-vec loaded (the AI trigger needs it).
+        """Tuned connection with sqlite-vec required (the AI trigger needs it).
 
-        Raises ``SqliteVecNotInstalledError`` from
-        ``load_vec_extension`` if the extension isn't installed —
-        chunk writes are impossible without it, so a hard error is
-        the right surface (vs. the soft-load used by repositories
-        that only need it for cascade triggers).
+        ``load_vec="require"`` hard-loads the extension, raising
+        ``SqliteVecNotInstalledError`` if it's missing — chunk writes are
+        impossible without it, so a hard error is the right surface (vs. the
+        soft-load used by repos that only need it for cascade triggers).
+        See ``thestill.utils.sqlite_ext.connect``.
         """
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        load_vec_extension(conn)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        try:
+        with connect(self.db_path, load_vec="require") as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def write_episode(
         self,

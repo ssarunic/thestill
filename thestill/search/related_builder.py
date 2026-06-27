@@ -51,7 +51,7 @@ from typing import Dict, List, Tuple
 
 from structlog import get_logger
 
-from ..utils.sqlite_ext import load_vec_extension
+from ..utils.sqlite_ext import connect
 from .base import embedding_dim_for
 
 logger = get_logger(__name__)
@@ -185,13 +185,8 @@ def build_related_episodes(
 @contextmanager
 def _candidate_conn(db_path):
     """Read connection with sqlite-vec loaded (for the episode_vec ANN)."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    load_vec_extension(conn)
-    try:
+    with connect(db_path, load_vec="require") as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 def _episode_vec_rowmap(conn, embedding_model_name) -> Dict[int, str]:
@@ -297,17 +292,12 @@ def _persist_idf(db_path, vectorizer) -> None:
     """Replace ``related_idf`` with the fitted vocabulary + idf weights (Tier 3 reuse)."""
     terms = vectorizer.get_feature_names_out().tolist()
     idfs = vectorizer.idf_.tolist()
-    conn = sqlite3.connect(db_path)
-    try:
+    # Shared helper supplies WAL + busy_timeout so this corpus-wide rewrite
+    # serializes against concurrent writers instead of fail-fast crashing.
+    with connect(db_path, row_factory=False) as conn:
         conn.execute("BEGIN")
         conn.execute("DELETE FROM related_idf")
         conn.executemany("INSERT INTO related_idf (term, idf) VALUES (?, ?)", zip(terms, idfs))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +500,7 @@ def _write_pairs_scoped(db_path: str, out: Dict[str, List[Tuple[str, float]]]) -
     score keeps its prior rail rather than being silently emptied.
     """
     flat = [(src, rel, rank, score) for src, ranked in out.items() for rank, (rel, score) in enumerate(ranked)]
-    conn = sqlite3.connect(db_path)
-    try:
+    with connect(db_path, row_factory=False) as conn:
         conn.execute("BEGIN")
         conn.executemany("DELETE FROM episode_related WHERE episode_id = ?", [(a,) for a in out])
         if flat:
@@ -519,12 +508,6 @@ def _write_pairs_scoped(db_path: str, out: Dict[str, List[Tuple[str, float]]]) -
                 "INSERT INTO episode_related (episode_id, related_episode_id, rank, score) VALUES (?, ?, ?, ?)",
                 flat,
             )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
     return len(flat)
 
 
@@ -666,8 +649,7 @@ def _load_entity_sets(db_path: str, episode_ids=None) -> Dict[str, frozenset]:
 
 def _write_pairs(db_path: str, rows: List[Tuple[str, str, int, float]]) -> None:
     """Replace the whole ``episode_related`` table in one transaction."""
-    conn = sqlite3.connect(db_path)
-    try:
+    with connect(db_path, row_factory=False) as conn:
         conn.execute("BEGIN")
         conn.execute("DELETE FROM episode_related")
         if rows:
@@ -675,9 +657,3 @@ def _write_pairs(db_path: str, rows: List[Tuple[str, str, int, float]]) -> None:
                 "INSERT INTO episode_related (episode_id, related_episode_id, rank, score) VALUES (?, ?, ?, ?)",
                 rows,
             )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()

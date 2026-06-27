@@ -26,7 +26,7 @@ Plus the read/state-mutation APIs used by the inbox view.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from structlog import get_logger
 
@@ -35,6 +35,8 @@ from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 
 if TYPE_CHECKING:
+    from ..core.queue_manager import QueueManager
+    from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..utils.config import Config
 
 logger = get_logger(__name__)
@@ -64,13 +66,28 @@ class InboxService:
         follower_repository: PodcastFollowerRepository,
         *,
         seed_on_follow_count: int = 2,
+        queue_manager: Optional["QueueManager"] = None,
+        podcast_repository: Optional["SqlitePodcastRepository"] = None,
+        transcription_provider: str = "",
     ) -> None:
         if seed_on_follow_count < 0:
             raise ValueError("seed_on_follow_count must be non-negative")
         self._repository = inbox_repository
         self._followers = follower_repository
         self._seed_count = seed_on_follow_count
-        logger.info("InboxService initialized", seed_on_follow=seed_on_follow_count)
+        # Optional transcription plumbing. When both are supplied, episodes
+        # delivered to an inbox (follow-seed, publish fan-out) are submitted for
+        # the URL-optimized full pipeline so a brand-new follower's inbox fills
+        # with readable summaries without a manual transcribe step. Best-effort:
+        # absent deps disable the behavior; enqueue failures never break delivery.
+        self._queue = queue_manager
+        self._podcasts = podcast_repository
+        self._transcription_provider = transcription_provider
+        logger.info(
+            "InboxService initialized",
+            seed_on_follow=seed_on_follow_count,
+            auto_transcribe=bool(queue_manager and podcast_repository),
+        )
 
     @classmethod
     def from_config(
@@ -78,12 +95,23 @@ class InboxService:
         config: "Config",
         inbox_repository: InboxRepository,
         follower_repository: PodcastFollowerRepository,
+        *,
+        queue_manager: Optional["QueueManager"] = None,
+        podcast_repository: Optional["SqlitePodcastRepository"] = None,
     ) -> "InboxService":
-        """Builder that pulls ``seed_on_follow_count`` from ``Config``."""
+        """Builder that pulls ``seed_on_follow_count`` from ``Config``.
+
+        When ``queue_manager`` and ``podcast_repository`` are supplied, delivered
+        episodes are auto-submitted for the full pipeline (URL-optimized via the
+        configured transcription provider).
+        """
         return cls(
             inbox_repository,
             follower_repository,
             seed_on_follow_count=config.inbox_seed_on_follow,
+            queue_manager=queue_manager,
+            podcast_repository=podcast_repository,
+            transcription_provider=getattr(config, "transcription_provider", ""),
         )
 
     # ------------------------------------------------------------------
@@ -123,6 +151,13 @@ class InboxService:
             followers=len(follower_ids),
             inserted=inserted,
         )
+        # A freshly-published episode is normally already enqueued by the
+        # refresh-feed handler; this is the idempotent safety net so anything
+        # that reaches an inbox is guaranteed a pipeline run.
+        self._ensure_pipeline(
+            lambda: self._podcasts.get_unqueued_unprocessed_episodes([episode_id]),
+            source="follow_new",
+        )
         return inserted
 
     def seed_on_follow(self, user_id: str, podcast_id: str) -> int:
@@ -142,6 +177,18 @@ class InboxService:
         """
         if self._seed_count == 0:
             return 0
+
+        # Kick off transcription of the recent backlog FIRST, independently of
+        # inbox delivery below. A brand-new podcast has no published episodes yet
+        # (publish only happens once the pipeline finishes), so delivery is a
+        # no-op on first follow — but the backlog still needs to start
+        # processing. Selecting by air date (pub_date) is what a listener means
+        # by "transcribe the last few episodes I just subscribed to". As each
+        # episode completes, ``fanout_on_publish`` delivers it to this inbox.
+        self._ensure_pipeline(
+            lambda: self._podcasts.get_recent_unqueued_unprocessed_episodes(podcast_id, self._seed_count),
+            source="follow_seed",
+        )
 
         episode_ids = self._repository.recent_published_episode_ids(podcast_id, self._seed_count)
         if not episode_ids:
@@ -187,6 +234,52 @@ class InboxService:
             dry_run=dry_run,
         )
         return inserted
+
+    def _ensure_pipeline(self, lookup: "Callable[[], List]", *, source: str) -> int:
+        """Run ``lookup`` for ``(episode_id, audio_url)`` orphans and enqueue them.
+
+        Best-effort transcription submission shared by both delivery paths; they
+        differ only in which repository query selects the pending set:
+
+        - ``fanout_on_publish`` filters specific delivered episodes
+          (``get_unqueued_unprocessed_episodes``) — usually none, since the
+          refresh handler already enqueued them; this is the idempotent net.
+        - ``seed_on_follow`` selects the podcast's recent backlog by air date
+          (``get_recent_unqueued_unprocessed_episodes``) regardless of
+          inbox-publish state, so a brand-new podcast still starts processing.
+
+        No-op when the optional queue/podcast plumbing is absent. ``lookup`` is
+        invoked only after that guard, so it may dereference those deps.
+        """
+        if not (self._queue and self._podcasts):
+            return 0
+        try:
+            pending = lookup()
+        except Exception:
+            logger.exception("inbox_pipeline_lookup_failed", source=source)
+            return 0
+        return self._enqueue_pipeline(pending, source=source)
+
+    def _enqueue_pipeline(self, pending: List, *, source: str) -> int:
+        """Enqueue the URL-optimized full pipeline for ``(episode_id, audio_url)``
+        pairs. Best-effort and idempotent (``enqueue_full_pipeline`` coalesces
+        against in-flight tasks). Returns the number actually enqueued.
+        """
+        enqueued = 0
+        for episode_id, audio_url in pending:
+            try:
+                if self._queue.enqueue_full_pipeline(
+                    episode_id=episode_id,
+                    audio_url=audio_url,
+                    transcription_provider=self._transcription_provider,
+                    initiated_by=f"inbox-{source}",
+                ):
+                    enqueued += 1
+            except Exception:
+                logger.exception("inbox_pipeline_enqueue_failed", episode_id=episode_id, source=source)
+        if enqueued:
+            logger.info("inbox_pipeline_enqueued", source=source, count=enqueued)
+        return enqueued
 
     def mark_state(self, user_id: str, episode_id: str, state: str) -> InboxEntry:
         """

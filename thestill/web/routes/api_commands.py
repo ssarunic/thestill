@@ -32,7 +32,7 @@ from structlog import get_logger
 
 from ...core.queue_manager import ENTITY_BRANCH_STAGES, QueueManager, Task, TaskStage
 from ...core.queue_manager import TaskStatus as QueueTaskStatus
-from ...core.queue_manager import is_feed_scoped_stage
+from ...core.queue_manager import is_feed_scoped_stage, starting_stage_for
 from ...models.podcast import EpisodeState
 from ...models.user import User
 from ..dependencies import AppState, get_app_state, require_admin, require_auth
@@ -554,6 +554,10 @@ class StageWorkerStatus(BaseModel):
     capacity: int  # Max parallel jobs for this stage
     pending: int  # Tasks waiting for this stage
     retry_scheduled: int  # Tasks in backoff for this stage
+    # Total episode audio length queued for this stage (pending + processing),
+    # summed over the full DB rather than the capped display list so the ETA
+    # stays accurate past the 100-row pending limit. None when no durations.
+    total_duration_seconds: Optional[int] = None
 
 
 class QueueTasksResponse(BaseModel):
@@ -647,24 +651,12 @@ def _get_starting_stage(
     Returns:
         Next TaskStage to execute, or None if episode is already summarized
     """
-    # Dalston can fetch audio via URL — skip download/downsample for DISCOVERED episodes
-    if (
-        transcription_provider == "dalston"
-        and episode_state == EpisodeState.DISCOVERED
-        and has_audio_url
-        and not has_downsampled_audio
-    ):
-        return TaskStage.TRANSCRIBE
-
-    state_to_stage = {
-        EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
-        EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
-        EpisodeState.DOWNSAMPLED: TaskStage.TRANSCRIBE,
-        EpisodeState.TRANSCRIBED: TaskStage.CLEAN,
-        EpisodeState.CLEANED: TaskStage.SUMMARIZE,
-        EpisodeState.SUMMARIZED: None,  # Already at final state
-    }
-    return state_to_stage.get(episode_state)
+    return starting_stage_for(
+        episode_state,
+        transcription_provider=transcription_provider,
+        has_audio_url=has_audio_url,
+        has_downsampled_audio=has_downsampled_audio,
+    )
 
 
 def _validate_episode_for_stage(
@@ -1193,6 +1185,9 @@ async def get_queue_tasks(
     stage_status = state.task_worker.get_status()["stages"]
     pending_by_stage = Counter(t.stage.value for t in tasks_by_status["pending"])
     retry_by_stage = Counter(t.stage.value for t in tasks_by_status["retry_scheduled"])
+    # Summed over the full DB (not the capped pending list) so the per-stage
+    # "time to process" estimate stays accurate beyond the 100-row display cap.
+    duration_by_stage = state.queue_manager.sum_duration_by_stage()
 
     stages = [
         StageWorkerStatus(
@@ -1201,6 +1196,7 @@ async def get_queue_tasks(
             capacity=stage_status[stage.value]["capacity"],
             pending=pending_by_stage[stage.value],
             retry_scheduled=retry_by_stage[stage.value],
+            total_duration_seconds=duration_by_stage.get(stage.value),
         )
         for stage in TaskStage
     ]

@@ -329,3 +329,147 @@ def test_unread_count(service, db_path, user_repo, podcast_repo, inbox_repo):
 def test_service_rejects_negative_seed_count(inbox_repo, follower_repo):
     with pytest.raises(ValueError):
         InboxService(inbox_repo, follower_repo, seed_on_follow_count=-1)
+
+
+# ============================================================================
+# auto-transcribe on delivery (any inbox entry → full pipeline)
+# ============================================================================
+
+
+def _mark_episode_artifact(db_path, episode_id, column, value):
+    """Stamp an artifact path so the episode no longer looks DISCOVERED."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(f"UPDATE episodes SET {column} = ? WHERE id = ?", (value, episode_id))
+        conn.commit()
+
+
+@pytest.fixture
+def queue_manager(db_path):
+    from thestill.core.queue_manager import QueueManager
+
+    return QueueManager(db_path)
+
+
+@pytest.fixture
+def transcribing_service(inbox_repo, follower_repo, podcast_repo, queue_manager):
+    """InboxService wired with the auto-transcribe plumbing (Dalston URL path)."""
+    return InboxService(
+        inbox_repo,
+        follower_repo,
+        seed_on_follow_count=2,
+        queue_manager=queue_manager,
+        podcast_repository=podcast_repo,
+        transcription_provider="dalston",
+    )
+
+
+def _stages_for(queue_manager, episode_id):
+    return [t.stage for t in queue_manager.get_tasks_for_episode(episode_id)]
+
+
+def test_seed_on_follow_submits_backlog_for_pipeline(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager
+):
+    from thestill.core.queue_manager import TaskStage
+
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    _make_published_episode(db_path, podcast.id, "old", base)
+    mid_id = _make_published_episode(db_path, podcast.id, "mid", base + timedelta(days=1))
+    new_id = _make_published_episode(db_path, podcast.id, "new", base + timedelta(days=2))
+
+    assert transcribing_service.seed_on_follow(alice.id, podcast.id) == 2
+
+    # The two seeded episodes are enqueued; Dalston + audio_url → TRANSCRIBE
+    # (download/downsample skipped). run_full_pipeline keeps the chain going.
+    for ep_id in (mid_id, new_id):
+        tasks = queue_manager.get_tasks_for_episode(ep_id)
+        assert [t.stage for t in tasks] == [TaskStage.TRANSCRIBE]
+        assert tasks[0].metadata.get("run_full_pipeline") is True
+        assert tasks[0].metadata.get("initiated_by") == "inbox-follow_seed"
+
+
+def test_seed_on_follow_transcribes_backlog_when_nothing_published_yet(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager
+):
+    """Regression: a brand-new podcast has NO published episodes (publish only
+    happens post-pipeline), so inbox delivery is empty on first follow — but the
+    recent backlog must still be enqueued for transcription, selected by air
+    date (``pub_date``), not publish state."""
+    from thestill.core.queue_manager import TaskStage
+
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # published_at=None mirrors a freshly-discovered episode; only pub_date set.
+    old_id = _make_published_episode(db_path, podcast.id, "old", None, pub_date=base)
+    mid_id = _make_published_episode(db_path, podcast.id, "mid", None, pub_date=base + timedelta(days=1))
+    new_id = _make_published_episode(db_path, podcast.id, "new", None, pub_date=base + timedelta(days=2))
+
+    # Nothing is published → inbox delivery is 0...
+    assert transcribing_service.seed_on_follow(alice.id, podcast.id) == 0
+    # ...but the newest 2 (by air date) are enqueued for transcription anyway.
+    assert _stages_for(queue_manager, new_id) == [TaskStage.TRANSCRIBE]
+    assert _stages_for(queue_manager, mid_id) == [TaskStage.TRANSCRIBE]
+    assert _stages_for(queue_manager, old_id) == []  # beyond seed_on_follow_count=2
+
+
+def test_seed_on_follow_non_dalston_starts_at_download(
+    inbox_repo, follower_repo, podcast_repo, queue_manager, db_path, user_repo
+):
+    from thestill.core.queue_manager import TaskStage
+
+    service = InboxService(
+        inbox_repo,
+        follower_repo,
+        seed_on_follow_count=2,
+        queue_manager=queue_manager,
+        podcast_repository=podcast_repo,
+        transcription_provider="whisper",
+    )
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+
+    service.seed_on_follow(alice.id, podcast.id)
+    assert _stages_for(queue_manager, ep_id) == [TaskStage.DOWNLOAD]
+
+
+def test_seed_on_follow_skips_already_processed_episode(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager
+):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "done", datetime.now(timezone.utc))
+    # Already transcribed → not an orphan → must not be re-enqueued.
+    _mark_episode_artifact(db_path, ep_id, "raw_transcript_path", "raw/done.json")
+
+    transcribing_service.seed_on_follow(alice.id, podcast.id)
+    assert queue_manager.get_tasks_for_episode(ep_id) == []
+
+
+def test_seed_on_follow_enqueue_is_idempotent(transcribing_service, db_path, user_repo, podcast_repo, queue_manager):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+
+    transcribing_service.seed_on_follow(alice.id, podcast.id)
+    # A second follower seeding the same episode must not double-enqueue: the
+    # episode now has a pending task, so the guard coalesces it.
+    transcribing_service.seed_on_follow(bob.id, podcast.id)
+    assert len(queue_manager.get_tasks_for_episode(ep_id)) == 1
+
+
+def test_seed_on_follow_without_queue_plumbing_does_not_enqueue(
+    service, db_path, user_repo, podcast_repo, queue_manager
+):
+    # The default ``service`` fixture has no queue_manager → delivery only,
+    # no transcription side effect.
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+
+    assert service.seed_on_follow(alice.id, podcast.id) == 1
+    assert queue_manager.get_tasks_for_episode(ep_id) == []

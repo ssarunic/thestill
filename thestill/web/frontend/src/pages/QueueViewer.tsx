@@ -106,28 +106,26 @@ function TaskCard({
             {task.episode_slug ? task.podcast_title : task.episode_title}
           </p>
 
-          {/* Per-lane cards omit the stage badge (stage is implicit in the lane).
-              Status-grouped sections (Retry Scheduled, Recently Completed) opt
-              in via showStageBadge so the stage stays visible. */}
-          {renderStageBadge && (
+          {/* Meta row. Per-lane cards omit the stage badge (stage is implicit
+              in the lane); status-grouped sections (Retry Scheduled, Recently
+              Completed) opt in via showStageBadge. Episode length is shown in
+              both modes so the queue surfaces how long each item runs. */}
+          {(renderStageBadge || task.duration_formatted || task.retry_count > 0) && (
             <div className={`flex flex-wrap items-center gap-2 ${compact ? 'mt-1' : 'mt-2'}`}>
-              <span
-                className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[task.stage] || 'bg-gray-100 text-gray-700'}`}
-              >
-                {task.stage}
-              </span>
-              {!compact && task.duration_formatted && (
+              {renderStageBadge && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[task.stage] || 'bg-gray-100 text-gray-700'}`}
+                >
+                  {task.stage}
+                </span>
+              )}
+              {task.duration_formatted && (
                 <span className="text-xs text-gray-500">{task.duration_formatted}</span>
               )}
               {task.retry_count > 0 && (
                 <span className="text-xs text-yellow-600">Retry #{task.retry_count}</span>
               )}
             </div>
-          )}
-          {compact && !renderStageBadge && task.retry_count > 0 && (
-            <span className="text-xs text-yellow-600 mt-1 inline-block">
-              Retry #{task.retry_count}
-            </span>
           )}
 
           <div className={`text-gray-400 ${compact ? 'mt-1 text-xs' : 'mt-2 text-xs'}`}>
@@ -252,6 +250,13 @@ function StageLane({
           </span>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-600">
+          {/* Transcribe is the slow stage — surface the summed audio length of
+              queued episodes so the backlog reads as a rough time-to-process. */}
+          {stage.stage === 'transcribe' && (stage.total_duration_seconds ?? 0) > 0 && (
+            <span className="text-gray-500" title="Total audio length queued to transcribe">
+              ~{formatDuration(stage.total_duration_seconds as number)} to transcribe
+            </span>
+          )}
           <span className={isBackpressured ? 'text-red-700 font-medium' : ''}>
             {stage.pending} pending
           </span>

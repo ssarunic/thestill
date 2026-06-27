@@ -213,7 +213,17 @@ def main(ctx, config, quiet):
         # need both the repository and the service.
         follower_repository = SqlitePodcastFollowerRepository(db_path=config_obj.database_path)
         inbox_repository = SqliteInboxRepository(db_path=config_obj.database_path)
-        inbox_service = InboxService.from_config(config_obj, inbox_repository, follower_repository)
+        # A shared queue manager lets follow-seed deliveries auto-submit the
+        # backlog for the URL-optimized full pipeline (parity with the web app).
+        from .core.queue_manager import QueueManager as _QueueManager
+
+        inbox_service = InboxService.from_config(
+            config_obj,
+            inbox_repository,
+            follower_repository,
+            queue_manager=_QueueManager(str(config_obj.database_path)),
+            podcast_repository=repository,
+        )
 
         # Spec #28 — entity-layer repository (always-on; the schema
         # is created by SqlitePodcastRepository's migration block).

@@ -31,21 +31,11 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from structlog import get_logger
 
-from ..core.queue_manager import QueueManager, Task, TaskStage, TaskStatus
+from ..core.queue_manager import STATE_TO_NEXT_STAGE  # noqa: F401 — re-exported for back-compat (tests import it here)
+from ..core.queue_manager import QueueManager, Task, TaskStage, TaskStatus, starting_stage_for
 from ..models.podcast import Episode, EpisodeState, Podcast
 
 logger = get_logger(__name__)
-
-
-# Map EpisodeState to the next TaskStage needed
-STATE_TO_NEXT_STAGE: Dict[EpisodeState, TaskStage] = {
-    EpisodeState.DISCOVERED: TaskStage.DOWNLOAD,
-    EpisodeState.DOWNLOADED: TaskStage.DOWNSAMPLE,
-    EpisodeState.DOWNSAMPLED: TaskStage.TRANSCRIBE,
-    EpisodeState.TRANSCRIBED: TaskStage.CLEAN,
-    EpisodeState.CLEANED: TaskStage.SUMMARIZE,
-    # SUMMARIZED and FAILED have no next stage
-}
 
 
 @dataclass
@@ -230,17 +220,14 @@ class BatchQueueService:
         result: BatchQueueResult,
     ) -> Optional[QueuedEpisode]:
         """Queue a single episode, returning QueuedEpisode or None if skipped."""
-        # Determine next stage based on current state
-        next_stage = STATE_TO_NEXT_STAGE.get(episode.state)
-
-        # Dalston can fetch audio via URL — skip download/downsample for DISCOVERED episodes
-        if (
-            self.transcription_provider == "dalston"
-            and episode.state == EpisodeState.DISCOVERED
-            and episode.audio_url
-            and not episode.downsampled_audio_path
-        ):
-            next_stage = TaskStage.TRANSCRIBE
+        # Next stage for the episode's state, incl. the Dalston URL shortcut
+        # (DISCOVERED + audio_url → TRANSCRIBE). Shared with every enqueue path.
+        next_stage = starting_stage_for(
+            episode.state,
+            transcription_provider=self.transcription_provider,
+            has_audio_url=bool(episode.audio_url),
+            has_downsampled_audio=bool(episode.downsampled_audio_path),
+        )
 
         if next_stage is None:
             reason = (

@@ -1362,6 +1362,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Migrating database: adding episodes.canonical_id column")
             conn.execute("ALTER TABLE episodes ADD COLUMN canonical_id TEXT NULL")
 
+        # Migration: ``auto_process_excluded`` marks back-catalog episodes that a
+        # brand-new podcast's initial backfill deliberately chose NOT to
+        # auto-transcribe (only the most-recent N are processed on subscribe).
+        # The spec #48 refresh-feed recovery sweep skips these so they are never
+        # auto-enqueued, while genuine crash-orphans (flag = 0) are still
+        # recovered. A user can still manually process an excluded episode.
+        if "auto_process_excluded" not in episode_columns:
+            logger.info("Migrating database: adding episodes.auto_process_excluded column")
+            conn.execute("ALTER TABLE episodes ADD COLUMN auto_process_excluded INTEGER NOT NULL DEFAULT 0")
+
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_canonical_id "
             "ON episodes(canonical_id) WHERE canonical_id IS NOT NULL"
@@ -2211,23 +2221,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
           that touches the ``chunks_vec`` virtual table without
           ``no such module: vec0``
         """
-        from ..utils.sqlite_ext import maybe_load_vec_extension
+        from ..utils.sqlite_ext import connect
 
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row  # Dict-like access
-        maybe_load_vec_extension(conn)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-
-        try:
+        with connect(self.db_path, load_vec="soft") as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     @contextmanager
     def transaction(self):
@@ -3128,6 +3125,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 WHERE e.podcast_id = ?
                   AND e.created_at >= ?
                   AND e.failed_at_stage IS NULL
+                  AND e.auto_process_excluded = 0
                   AND e.audio_path IS NULL
                   AND e.downsampled_audio_path IS NULL
                   AND e.raw_transcript_path IS NULL
@@ -3140,6 +3138,138 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (podcast_id, cutoff, limit),
             ).fetchall()
             return [(row["id"], row["audio_url"]) for row in rows]
+
+    def get_unqueued_unprocessed_episodes(self, episode_ids: List[str]) -> List[Tuple[str, Optional[str]]]:
+        """Filter ``episode_ids`` to those that still need the full pipeline.
+
+        Returns ``(episode_id, audio_url)`` for each given episode that is an
+        untouched DISCOVERED orphan — no artifact paths, not failed, and with no
+        task row at all — using the same predicate as
+        ``get_discovered_unqueued_episodes`` but scoped to a caller-supplied set
+        (the inbox follow-seed / publish fan-out paths, which already know which
+        episodes they delivered). Episodes that are already processing, done, or
+        failed are dropped, so callers can enqueue the result unconditionally.
+
+        Unlike the refresh-recovery query this is NOT time-windowed: a follow can
+        legitimately seed an old-but-never-processed episode that should still be
+        transcribed on demand.
+        """
+        if not episode_ids:
+            return []
+        placeholders = ",".join("?" for _ in episode_ids)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT e.id, e.audio_url
+                FROM episodes e
+                WHERE e.id IN ({placeholders})
+                  AND e.failed_at_stage IS NULL
+                  AND e.audio_path IS NULL
+                  AND e.downsampled_audio_path IS NULL
+                  AND e.raw_transcript_path IS NULL
+                  AND e.clean_transcript_path IS NULL
+                  AND e.summary_path IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
+                """,
+                tuple(episode_ids),
+            ).fetchall()
+            return [(row["id"], row["audio_url"]) for row in rows]
+
+    def get_recent_unqueued_unprocessed_episodes(self, podcast_id: str, limit: int) -> List[Tuple[str, Optional[str]]]:
+        """The podcast's ``limit`` most-recent un-started episodes, by air date.
+
+        Returns ``(episode_id, audio_url)`` for the newest episodes (ordered by
+        ``COALESCE(pub_date, published_at) DESC`` — the listener's notion of
+        "recent", matching the inbox seed) that are still untouched orphans: no
+        artifact paths, not failed, and with no task row.
+
+        This drives the subscribe-time transcription backlog. Unlike
+        ``recent_published_episode_ids`` it does NOT require ``published_at`` —
+        a brand-new podcast's episodes are all unpublished until the pipeline
+        runs, so gating on publish state would (wrongly) enqueue nothing. And
+        unlike ``get_discovered_unqueued_episodes`` it is NOT time-windowed:
+        following a podcast should transcribe its recent backlog even when the
+        latest episode aired weeks ago.
+        """
+        if limit <= 0:
+            return []
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.id, e.audio_url
+                FROM episodes e
+                WHERE e.podcast_id = ?
+                  AND e.failed_at_stage IS NULL
+                  AND e.auto_process_excluded = 0
+                  AND e.audio_path IS NULL
+                  AND e.downsampled_audio_path IS NULL
+                  AND e.raw_transcript_path IS NULL
+                  AND e.clean_transcript_path IS NULL
+                  AND e.summary_path IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
+                ORDER BY COALESCE(e.pub_date, e.published_at) DESC
+                LIMIT ?
+                """,
+                (podcast_id, limit),
+            ).fetchall()
+            return [(row["id"], row["audio_url"]) for row in rows]
+
+    def has_processed_episodes(self, podcast_id: str) -> bool:
+        """True once the podcast has at least one episode past discovery.
+
+        "Processed" means any pipeline progress — an artifact path or a publish
+        timestamp. Distinguishes a brand-new podcast still in its initial
+        backfill (False → cap auto-transcription to the most-recent N) from an
+        established one (True → auto-transcribe every newly-discovered episode).
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM episodes
+                WHERE podcast_id = ?
+                  AND (published_at IS NOT NULL
+                       OR raw_transcript_path IS NOT NULL
+                       OR clean_transcript_path IS NOT NULL
+                       OR summary_path IS NOT NULL)
+                LIMIT 1
+                """,
+                (podcast_id,),
+            ).fetchone()
+            return row is not None
+
+    def count_episodes_with_tasks(self, podcast_id: str) -> int:
+        """Number of the podcast's episodes that have ever had a queue task.
+
+        Used to size the initial-backfill cap: episodes already auto-submitted
+        (e.g. by the follow-seed path) count against the "most-recent N" budget
+        so seed + refresh-feed don't together exceed it.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM episodes e
+                WHERE e.podcast_id = ?
+                  AND EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
+                """,
+                (podcast_id,),
+            ).fetchone()
+            return row["n"] if row else 0
+
+    def mark_episodes_auto_process_excluded(self, episode_ids: List[str]) -> int:
+        """Flag ``episode_ids`` so the refresh-feed sweep never auto-enqueues them.
+
+        Applied to a brand-new podcast's back catalog beyond the most-recent N.
+        Idempotent. Returns the number of rows updated.
+        """
+        if not episode_ids:
+            return 0
+        placeholders = ",".join("?" for _ in episode_ids)
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                f"UPDATE episodes SET auto_process_excluded = 1 WHERE id IN ({placeholders})",
+                tuple(episode_ids),
+            )
+            return cur.rowcount
 
     def seed_unscheduled_feeds(self, default_interval_seconds: int, now: Optional[datetime] = None) -> int:
         """Seed active feeds that have NEVER been scheduled or attempted.

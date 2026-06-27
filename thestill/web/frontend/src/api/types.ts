@@ -641,6 +641,7 @@ export interface StageWorkerStatus {
   capacity: number // Max parallel jobs for this stage
   pending: number // Tasks waiting for this stage
   retry_scheduled: number // Tasks in backoff for this stage
+  total_duration_seconds?: number | null // Summed episode length queued for this stage (pending + processing)
 }
 
 export interface QueueTasksResponse {

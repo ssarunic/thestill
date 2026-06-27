@@ -34,6 +34,7 @@ from typing import Iterator, List, Optional
 from structlog import get_logger
 
 from ..models.pending_operation import PendingOperation
+from ..utils.sqlite_ext import connect
 
 logger = get_logger(__name__)
 
@@ -74,25 +75,15 @@ class SqlitePendingOperationsRepository:
 
     @contextmanager
     def _get_connection(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        # Parallel transcription chunk workers (and the web server) all write
-        # pending-operation rows concurrently. SQLite serializes writers, and
-        # without a per-connection ``busy_timeout`` the loser of a write race
-        # fails fast with ``database is locked`` instead of waiting its turn.
-        # Match the podcast/entity repos so this repo participates in the same
-        # WAL + 5s-timeout concurrency story.
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        try:
+        """Tuned SQLite connection. See ``thestill.utils.sqlite_ext.connect``.
+
+        Parallel transcription chunk workers (and the web server) all write
+        pending-operation rows concurrently; the shared helper's WAL +
+        ``busy_timeout`` make the loser of a write race wait its turn instead
+        of fail-fast with ``database is locked``.
+        """
+        with connect(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     # --- Mutations -----------------------------------------------------------
 

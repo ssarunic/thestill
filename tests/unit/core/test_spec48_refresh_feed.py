@@ -397,6 +397,120 @@ def test_handler_repairs_orphaned_discovered_episode(db: str) -> None:
     assert not repo.get_discovered_unqueued_episodes(PODCAST_ID)  # no longer orphaned
 
 
+def _add_discovered_episodes(repo, count: int, *, start_day: int = 2):
+    """Persist ``count`` extra discovered episodes (no tasks, no artifacts)."""
+    eps = [
+        Episode(
+            id=f"aaaaaaaa-0000-0000-0000-{n:012d}",
+            podcast_id=PODCAST_ID,
+            external_id=f"bk-{n}",
+            title=f"Backlog {n}",
+            description="",
+            pub_date=datetime(2026, 1, start_day + n),
+            audio_url=f"https://example.com/bk{n}.mp3",
+            duration=60,
+        )
+        for n in range(count)
+    ]
+    repo.save_refresh_batch([], eps)
+    return eps
+
+
+def _excluded_count(db: str) -> int:
+    con = sqlite3.connect(db)
+    n = con.execute("SELECT COUNT(*) FROM episodes WHERE auto_process_excluded = 1").fetchone()[0]
+    con.close()
+    return n
+
+
+def test_handler_initial_backfill_caps_to_seed_and_marks_rest(db: str) -> None:
+    """Brand-new podcast: only the most-recent N are auto-enqueued; the rest of
+    the back catalog is marked ``auto_process_excluded`` so the sweep skips it."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    _add_discovered_episodes(repo0, 4)  # 5 total discovered (Ep1 + 4), none processed/queued
+    assert len(repo0.get_discovered_unqueued_episodes(PODCAST_ID)) == 5
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, []), transcription_provider="dalston")
+    state.config.inbox_seed_on_follow = 2
+    task = Task(id="a" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+
+    handle_refresh_feed(task, state)
+
+    # Exactly 2 enqueued (the most-recent), other 3 excluded → nothing left to sweep.
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _excluded_count(db) == 3
+    assert repo.get_discovered_unqueued_episodes(PODCAST_ID) == []
+
+    # Idempotent: a second tick (still no episode published) enqueues nothing more.
+    task2 = Task(id="b" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+    handle_refresh_feed(task2, state)
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+
+
+def test_handler_initial_backfill_counts_already_queued_toward_cap(db: str) -> None:
+    """Episodes already auto-submitted (e.g. by follow-seed) count against the
+    cap, so seed + refresh-feed together never exceed N."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    qm0 = QueueManager(db)
+    _add_discovered_episodes(repo0, 4)  # 5 total
+    # Simulate the follow-seed having already enqueued the 2 most-recent.
+    for eid, url in repo0.get_recent_unqueued_unprocessed_episodes(PODCAST_ID, 2):
+        qm0.enqueue_full_pipeline(
+            episode_id=eid, audio_url=url, transcription_provider="dalston", initiated_by="inbox-follow_seed"
+        )
+    assert repo0.count_episodes_with_tasks(PODCAST_ID) == 2
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, []), transcription_provider="dalston")
+    state.config.inbox_seed_on_follow = 2
+    task = Task(id="c" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+
+    handle_refresh_feed(task, state)
+
+    # cap = 2 - 2 = 0 → refresh enqueues nothing more; remaining 3 excluded.
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _excluded_count(db) == 3
+
+
+def test_handler_established_podcast_skips_cap(db: str) -> None:
+    """Once a podcast has a processed episode, every newly-discovered episode is
+    auto-enqueued (no cap) — the subscribe-time backlog cap is first-add only."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    # Mark the seed episode as processed → podcast is "established".
+    con = sqlite3.connect(db)
+    con.execute(
+        "UPDATE episodes SET raw_transcript_path='raw/ep1.json', published_at='2026-01-01T00:00:00+00:00' WHERE id=?",
+        (EPISODE_ID,),
+    )
+    con.commit()
+    con.close()
+    _add_discovered_episodes(repo0, 3)  # 3 brand-new episodes
+    assert repo0.has_processed_episodes(PODCAST_ID) is True
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, []))
+    state.config.inbox_seed_on_follow = 2
+    task = Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+
+    handle_refresh_feed(task, state)
+
+    # All 3 new episodes enqueued despite N=2; nothing excluded.
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 3
+    assert _excluded_count(db) == 0
+
+
 def test_due_query_excludes_unfollowed_auto_added(db: str) -> None:
     """Scheduler must not poll auto-added feeds nobody follows (matches
     get_podcasts_for_refresh eligibility)."""

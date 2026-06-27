@@ -182,7 +182,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # into FollowerService so ``follow`` can seed the new follower's inbox.
     follower_repository = SqlitePodcastFollowerRepository(db_path=config.database_path)
     inbox_repository = SqliteInboxRepository(db_path=config.database_path)
-    inbox_service = InboxService.from_config(config, inbox_repository, follower_repository)
+    inbox_service = InboxService.from_config(
+        config,
+        inbox_repository,
+        follower_repository,
+        queue_manager=queue_manager,
+        podcast_repository=repository,
+    )
     follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
 
     import_service = ImportService(

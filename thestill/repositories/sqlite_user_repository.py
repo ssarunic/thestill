@@ -25,11 +25,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from structlog import get_logger
 
 from ..models.user import User
+from ..utils.sqlite_ext import connect
 from .user_repository import UserRepository
 
 logger = get_logger(__name__)
@@ -53,27 +54,10 @@ class SqliteUserRepository(UserRepository):
         logger.info(f"Initialized SQLite user repository: {self.db_path}")
 
     @contextmanager
-    def _get_connection(self) -> sqlite3.Connection:
-        """
-        Get database connection with proper setup.
-
-        Features:
-        - Row factory for dict-like access
-        - Foreign keys enabled
-        - Automatic commit/rollback
-        """
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-
-        try:
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
+        """Tuned SQLite connection. See ``thestill.utils.sqlite_ext.connect``."""
+        with connect(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def get_by_id(self, user_id: str) -> Optional[User]:
         """Get user by internal UUID (primary key)."""

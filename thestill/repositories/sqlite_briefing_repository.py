@@ -18,11 +18,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from structlog import get_logger
 
 from ..models.briefing import Briefing
+from ..utils.sqlite_ext import connect
 from .briefing_repository import BriefingRepository
 
 logger = get_logger(__name__)
@@ -36,18 +37,10 @@ class SqliteBriefingRepository(BriefingRepository):
         logger.info("Initialized SQLite briefing repository", db_path=str(self.db_path))
 
     @contextmanager
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        try:
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
+        """Tuned SQLite connection. See ``thestill.utils.sqlite_ext.connect``."""
+        with connect(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def insert(self, briefing: Briefing) -> Briefing:
         with self._get_connection() as conn:

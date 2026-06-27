@@ -25,11 +25,12 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, Iterator, List, Optional, Tuple
 
 from structlog import get_logger
 
 from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
+from ..utils.sqlite_ext import connect
 from .inbox_repository import InboxRepository
 from .sqlite_podcast_repository import episode_from_row
 
@@ -82,18 +83,10 @@ class SqliteInboxRepository(InboxRepository):
         logger.info("Initialized SQLite inbox repository", db_path=str(self.db_path))
 
     @contextmanager
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        try:
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
+        """Tuned SQLite connection. See ``thestill.utils.sqlite_ext.connect``."""
+        with connect(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     # ------------------------------------------------------------------
     # Writes
