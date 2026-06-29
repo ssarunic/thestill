@@ -444,3 +444,60 @@ class TestSupersedeStaleTasks:
         qm.supersede_stale_tasks(eid_a, TaskStage.SUMMARIZE)
         assert qm.get_task(dead_a.id).status.value == "superseded"
         assert qm.get_task(dead_b.id).status.value == "dead"
+
+
+class TestClearEpisodeFailureForStages:
+    """``clear_episode_failure_for_stages`` drops the episode-level failure
+    banner when a later success makes it moot.
+
+    Failure scenario this fixes: an episode failed at ``transcribe`` (e.g. a
+    DNS blip — ``Failed to connect: nodename nor servname provided``), then
+    succeeded on a subsequent run. ``supersede_stale_tasks`` clears the dead
+    queue row, but the inbox keeps showing the episode as failed (with a
+    Retry button) until the ``failed_at_stage`` banner is cleared too.
+    """
+
+    def _seed_failed_episode(self, db_path: str, stage: str) -> tuple[SqlitePodcastRepository, str]:
+        repo = SqlitePodcastRepository(db_path=db_path)
+        podcast_id = str(uuid.uuid4())
+        eid = str(uuid.uuid4())
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (?, ?, ?, ?)",
+                (podcast_id, "https://example.com/x.xml", "Pod", "pod"),
+            )
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url) VALUES (?, ?, ?, ?, ?)",
+                (eid, podcast_id, "ext-1", "Ep", "https://example.com/e.mp3"),
+            )
+            conn.commit()
+        repo.mark_episode_failed(eid, stage, "Failed to connect", "transient")
+        return repo, eid
+
+    def _failed_stage(self, repo: SqlitePodcastRepository, eid: str) -> str | None:
+        return repo.get_episode(eid)[1].failed_at_stage
+
+    def test_clears_when_failed_stage_at_or_before_completed(self, tmp_path):
+        """Completing ``transcribe`` clears a ``transcribe`` failure banner."""
+        repo, eid = self._seed_failed_episode(str(tmp_path / "x.db"), "transcribe")
+        cleared = repo.clear_episode_failure_for_stages(eid, ["download", "downsample", "transcribe"])
+        assert cleared is True
+        assert self._failed_stage(repo, eid) is None
+
+    def test_does_not_clear_later_stage_failure(self, tmp_path):
+        """A ``transcribe`` success must not wipe a ``summarize`` failure
+        recorded for a stage that has not been re-run yet."""
+        repo, eid = self._seed_failed_episode(str(tmp_path / "x.db"), "summarize")
+        cleared = repo.clear_episode_failure_for_stages(eid, ["download", "downsample", "transcribe"])
+        assert cleared is False
+        assert self._failed_stage(repo, eid) == "summarize"
+
+    def test_no_failure_recorded_is_noop(self, tmp_path):
+        repo, eid = self._seed_failed_episode(str(tmp_path / "x.db"), "transcribe")
+        repo.clear_episode_failure(eid)
+        assert repo.clear_episode_failure_for_stages(eid, ["transcribe"]) is False
+
+    def test_empty_stage_list_is_noop(self, tmp_path):
+        repo, eid = self._seed_failed_episode(str(tmp_path / "x.db"), "transcribe")
+        assert repo.clear_episode_failure_for_stages(eid, []) is False
+        assert self._failed_stage(repo, eid) == "transcribe"

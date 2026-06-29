@@ -278,10 +278,11 @@ _ENTITY_BRANCH_ORDER: List[TaskStage] = [
 ]
 
 
-def _stages_at_or_before(stage: TaskStage) -> List[TaskStage]:
+def stages_at_or_before(stage: TaskStage) -> List[TaskStage]:
     """Stages in the same branch up to and including ``stage``.
 
-    Used to find DLQ rows that a successful ``stage`` makes moot.
+    Used to find DLQ rows (and the episode-level failure banner) that a
+    successful ``stage`` makes moot.
     """
     for branch in (_USER_CHAIN_ORDER, _ENTITY_BRANCH_ORDER):
         if stage in branch:
@@ -1109,7 +1110,7 @@ class QueueManager:
 
         Returns the number of rows marked ``superseded``.
         """
-        in_branch = _stages_at_or_before(completed_stage)
+        in_branch = stages_at_or_before(completed_stage)
         if not in_branch:
             return 0
         now = now_utc().isoformat()

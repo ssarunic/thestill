@@ -55,7 +55,15 @@ from thestill.utils.exceptions import FatalError, TransientError
 from .circuit_breaker import CircuitState, StageCircuitBreaker
 from .error_classifier import classify_error_class
 from .progress import ProgressCallback, ProgressUpdate
-from .queue_manager import QueueManager, Task, TaskStage, get_next_stages, is_entity_branch_stage, is_feed_scoped_stage
+from .queue_manager import (
+    QueueManager,
+    Task,
+    TaskStage,
+    get_next_stages,
+    is_entity_branch_stage,
+    is_feed_scoped_stage,
+    stages_at_or_before,
+)
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -542,6 +550,19 @@ class TaskWorker:
                     # the old dead transcribe row is obsolete — keeping it
                     # around just trains users to ignore the queue.
                     self.queue_manager.supersede_stale_tasks(task.episode_id, task.stage)
+
+                    # The episode-level failure banner (failed_at_stage /
+                    # failure_reason) is what drives the inbox "Retry"
+                    # affordance — superseding the dead queue rows above does
+                    # not touch it. Clear it too when this success makes it
+                    # moot, scoped to the same-branch stages at or before the
+                    # one that just completed so a success here can't wipe a
+                    # failure recorded at a later, not-yet-rerun stage.
+                    if self.repository is not None:
+                        self.repository.clear_episode_failure_for_stages(
+                            task.episode_id,
+                            [s.value for s in stages_at_or_before(task.stage)],
+                        )
 
                     # Chain enqueue next stage if running full pipeline
                     self._maybe_enqueue_next_stage(task)

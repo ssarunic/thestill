@@ -30,7 +30,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from structlog import get_logger
 
@@ -3742,6 +3742,52 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 logger.info(f"Cleared failure state for episode {episode_id}")
             else:
                 logger.warning(f"Failed to clear failure for episode {episode_id}: not found")
+            return updated
+
+    def clear_episode_failure_for_stages(self, episode_id: str, stages: Sequence[str]) -> bool:
+        """Clear an episode's failure banner only if it was recorded at one of ``stages``.
+
+        Called on successful stage completion: when a stage finishes (often on a
+        later run after a transient outage), the failure it had recorded is now
+        moot and the inbox should stop showing it as failed. Scoping by stage
+        (rather than clearing unconditionally) means a success at an earlier
+        stage does not wipe a failure recorded at a later, not-yet-rerun stage.
+
+        Args:
+            episode_id: Episode UUID
+            stages: Stage names whose recorded failure this success supersedes
+                (typically the same-branch stages at or before the completed one).
+
+        Returns:
+            True if a stale failure was cleared, False otherwise.
+        """
+        if not stages:
+            return False
+
+        now = datetime.now(timezone.utc)
+        placeholders = ",".join("?" * len(stages))
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE episodes
+                SET failed_at_stage = NULL,
+                    failure_reason = NULL,
+                    failure_type = NULL,
+                    failed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND failed_at_stage IN ({placeholders})
+            """,
+                (now.isoformat(), episode_id, *stages),
+            )
+
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(
+                    "Cleared stale failure for episode %s on successful stage completion",
+                    episode_id,
+                )
             return updated
 
     def update_entity_extraction_status(self, episode_id: str, status: str) -> bool:
