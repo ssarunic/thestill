@@ -54,6 +54,30 @@ def _transcript_to_json(transcript: Transcript) -> str:
     return json.dumps(transcript.model_dump(mode="json"), ensure_ascii=False, indent=2)
 
 
+def _existing_transcript_is_valid(config, relative_transcript_path: str) -> bool:
+    """Return ``True`` only if a *complete, parseable* transcript already exists.
+
+    ``handle_transcribe`` writes the artifact before the DB row update, and the
+    local backend's ``write_text`` is not atomic, so a crash mid-write could
+    leave a truncated file. We therefore validate that the bytes round-trip
+    through ``Transcript`` before trusting the artifact for resume — a partial
+    or corrupt file falls through to a fresh transcription rather than poisoning
+    the downstream clean/summarize stages.
+    """
+    if not config.file_storage.exists(relative_transcript_path):
+        return False
+    try:
+        Transcript.model_validate_json(config.file_storage.read_text(relative_transcript_path))
+        return True
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning(
+            "Existing transcript artifact is invalid; will re-transcribe",
+            transcript_path=relative_transcript_path,
+            error=str(error),
+        )
+        return False
+
+
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
 from ..utils.console import ConsoleOutput
@@ -358,17 +382,8 @@ def handle_transcribe(
 
     # Transcription errors are usually transient (API issues, rate limits)
     with _handler_error_context(f"transcribing {episode.title}"):
-        # Create transcriber based on config (with progress callback if available)
-        logger.debug(f"Creating transcriber, provider={config.transcription_provider}")
-        transcriber = create_transcriber(
-            config,
-            config.path_manager,
-            pending_ops_repository=getattr(state, "pending_ops_repository", None),
-            progress_callback=progress_callback,
-        )
-        logger.debug(f"Transcriber created: {type(transcriber).__name__}")
-
-        # Determine output path
+        # Determine output path. Computed before the (expensive) provider call
+        # so we can probe for an already-persisted artifact and resume.
         if use_dalston_url:
             podcast_subdir = podcast.slug
             transcript_filename = f"{episode.slug}_transcript.json"
@@ -379,47 +394,76 @@ def handle_transcribe(
 
         transcript_path = config.path_manager.raw_transcripts_dir() / podcast_subdir / transcript_filename
         output_db_path = f"{podcast_subdir}/{transcript_filename}"
+        relative_transcript_path = config.path_manager.to_relative(transcript_path)
 
-        language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
-        logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
-
-        # Spec #35 — materialise audio for transcribers via ``local_copy``.
-        # On the local backend this is the real path (no copy); on S3 it
-        # downloads to a tempfile and cleans up on context exit. Dalston's
-        # URL-fetch mode skips local audio entirely.
-        audio_context = nullcontext(enter_result=None) if use_dalston_url else config.file_storage.local_copy(audio_key)
-
-        with audio_context as materialised_audio:
-            if use_dalston_url:
-                logger.info(f"Starting transcription via URL: {episode.audio_url}")
-                audio_path_for_transcriber = f"{podcast_subdir}/{episode.slug}"
-            else:
-                audio_path_for_transcriber = str(materialised_audio)
-                file_size_mb = materialised_audio.stat().st_size / 1024 / 1024
-                logger.info(f"Starting transcription: {materialised_audio.name} ({file_size_mb:.1f}MB)")
-
-            transcript_data = transcriber.transcribe_audio(
-                audio_path_for_transcriber,
-                options=TranscribeOptions(
-                    language=language,
-                    episode_id=episode.id,
-                    podcast_slug=podcast.slug,
-                    episode_slug=episode.slug,
-                    audio_url=str(episode.audio_url) if use_dalston_url else None,
-                    progress_callback=progress_callback,
-                ),
+        # Idempotent resume: the transcript artifact is written to durable
+        # storage *before* the DB row is updated, so a transient failure in
+        # that DB write (e.g. ``database is locked``) leaves a complete
+        # transcript on disk. Re-transcribing on retry would throw away a
+        # provider call that already succeeded — for long episodes that is a
+        # ~20-minute Dalston job re-run, and re-running it has repeatedly
+        # tripped network timeouts that exhaust the retry budget and fail an
+        # episode whose transcript was already in hand. If a valid artifact
+        # already exists, skip straight to the persist step.
+        if _existing_transcript_is_valid(config, relative_transcript_path):
+            logger.info(
+                "Reusing existing transcript artifact; skipping re-transcription",
+                episode_id=episode.id,
+                transcript_path=output_db_path,
             )
-        logger.info(f"Transcription completed, result: {type(transcript_data).__name__}")
+        else:
+            # Create transcriber based on config (with progress callback if available)
+            logger.debug(f"Creating transcriber, provider={config.transcription_provider}")
+            transcriber = create_transcriber(
+                config,
+                config.path_manager,
+                pending_ops_repository=getattr(state, "pending_ops_repository", None),
+                progress_callback=progress_callback,
+            )
+            logger.debug(f"Transcriber created: {type(transcriber).__name__}")
 
-        if not transcript_data:
-            raise TransientError(f"Transcription returned no data for episode: {episode.title}")
+            language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
+            logger.info(f"Transcribing with language: {language} (podcast language: {podcast.language})")
 
-        # Persist the returned Transcript via FileStorage so the artefact lands
-        # on the configured backend.
-        config.file_storage.write_text(
-            config.path_manager.to_relative(transcript_path),
-            _transcript_to_json(transcript_data),
-        )
+            # Spec #35 — materialise audio for transcribers via ``local_copy``.
+            # On the local backend this is the real path (no copy); on S3 it
+            # downloads to a tempfile and cleans up on context exit. Dalston's
+            # URL-fetch mode skips local audio entirely.
+            audio_context = (
+                nullcontext(enter_result=None) if use_dalston_url else config.file_storage.local_copy(audio_key)
+            )
+
+            with audio_context as materialised_audio:
+                if use_dalston_url:
+                    logger.info(f"Starting transcription via URL: {episode.audio_url}")
+                    audio_path_for_transcriber = f"{podcast_subdir}/{episode.slug}"
+                else:
+                    audio_path_for_transcriber = str(materialised_audio)
+                    file_size_mb = materialised_audio.stat().st_size / 1024 / 1024
+                    logger.info(f"Starting transcription: {materialised_audio.name} ({file_size_mb:.1f}MB)")
+
+                transcript_data = transcriber.transcribe_audio(
+                    audio_path_for_transcriber,
+                    options=TranscribeOptions(
+                        language=language,
+                        episode_id=episode.id,
+                        podcast_slug=podcast.slug,
+                        episode_slug=episode.slug,
+                        audio_url=str(episode.audio_url) if use_dalston_url else None,
+                        progress_callback=progress_callback,
+                    ),
+                )
+            logger.info(f"Transcription completed, result: {type(transcript_data).__name__}")
+
+            if not transcript_data:
+                raise TransientError(f"Transcription returned no data for episode: {episode.title}")
+
+            # Persist the returned Transcript via FileStorage so the artefact
+            # lands on the configured backend.
+            config.file_storage.write_text(
+                relative_transcript_path,
+                _transcript_to_json(transcript_data),
+            )
 
         state.feed_manager.mark_episode_processed(
             str(podcast.rss_url),
@@ -1328,7 +1372,7 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     max_eps = getattr(state.config, "max_episodes_per_podcast", None)
 
     # 1-2. Fetch (network outside any txn) and surface errors.
-    (podcast, new_eps, had_error, hit, source, headers_rotated, image_rows) = fm._refresh_single_podcast(
+    podcast, new_eps, had_error, hit, source, headers_rotated, image_rows = fm._refresh_single_podcast(
         podcast, max_eps, known_external_ids
     )
     if had_error:
