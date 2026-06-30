@@ -1134,12 +1134,28 @@ class SqliteEntityRepository:
         4. Returns the number of cooccurrence rows materialised.
 
         ``episode_ids=None`` is a full rebuild — wipe-and-replace.
+
+        Concurrency: the corpus-wide self-join + ``GROUP BY`` is the
+        expensive part and used to run *inside* the write transaction,
+        holding the single WAL writer lock for as long as the aggregate
+        took (observed materialising ~90k rows in one shot). Under load
+        that starved simple per-stage writers (download / transcribe /
+        clean persists) past ``busy_timeout`` → ``database is locked``.
+        We now split the work: phase 1 computes the aggregate as a plain
+        read (no writer lock under WAL), phase 2 takes the writer lock
+        only for the cheap ``DELETE`` + bulk ``INSERT`` of the already
+        materialised rows. The ``DELETE``/``INSERT`` stay in one
+        transaction so readers never see a half-rebuilt scope; the
+        aggregate reflecting phase-1 state (not phase-2) is fine — any
+        mention written in the gap re-triggers a rebuild for its episode.
         """
+        # ---- Phase 1: read-only aggregate (no writer lock held) ----
+        affected_ids: Optional[List[str]]
         with self._get_connection() as conn:
             if episode_ids is None:
-                conn.execute("DELETE FROM entity_cooccurrences")
+                affected_ids = None
                 affected_predicate = ""
-                params: list = []
+                select_params: list = []
             else:
                 if not episode_ids:
                     return 0
@@ -1159,33 +1175,23 @@ class SqliteEntityRepository:
                 if not affected_ids:
                     return 0
                 aff_placeholders = ",".join("?" * len(affected_ids))
-                conn.execute(
-                    f"""
-                    DELETE FROM entity_cooccurrences
-                    WHERE entity_a_id IN ({aff_placeholders})
-                       OR entity_b_id IN ({aff_placeholders})
-                    """,
-                    affected_ids + affected_ids,
-                )
                 affected_predicate = (
                     f" AND (a.entity_id IN ({aff_placeholders}) " f"     OR b.entity_id IN ({aff_placeholders}))"
                 )
-                params = affected_ids + affected_ids
+                select_params = affected_ids + affected_ids
 
             # Self-join scoped to resolved mentions; canonical pair
             # ordering via the ``a.entity_id < b.entity_id`` predicate
             # in the JOIN clause matches the ``CHECK (a < b)`` on the
-            # target table.
-            cursor = conn.execute(
+            # target table. Materialised into memory so the writer lock
+            # below covers only row insertion, not the aggregate.
+            pair_rows = conn.execute(
                 f"""
-                INSERT INTO entity_cooccurrences (
-                    entity_a_id, entity_b_id, episode_count, last_seen_at
-                )
                 SELECT
-                    a.entity_id,
-                    b.entity_id,
-                    COUNT(DISTINCT a.episode_id),
-                    MAX(COALESCE(a.resolved_at, a.created_at))
+                    a.entity_id AS entity_a_id,
+                    b.entity_id AS entity_b_id,
+                    COUNT(DISTINCT a.episode_id) AS episode_count,
+                    MAX(COALESCE(a.resolved_at, a.created_at)) AS last_seen_at
                 FROM entity_mentions a
                 JOIN entity_mentions b
                     ON a.episode_id = b.episode_id
@@ -1195,9 +1201,35 @@ class SqliteEntityRepository:
                   {affected_predicate}
                 GROUP BY a.entity_id, b.entity_id
                 """,
-                params,
-            )
-            inserted = cursor.rowcount
+                select_params,
+            ).fetchall()
+
+        insert_values = [(r["entity_a_id"], r["entity_b_id"], r["episode_count"], r["last_seen_at"]) for r in pair_rows]
+
+        # ---- Phase 2: short write transaction (DELETE + bulk INSERT) ----
+        with self._get_connection() as conn:
+            if affected_ids is None:
+                conn.execute("DELETE FROM entity_cooccurrences")
+            else:
+                aff_placeholders = ",".join("?" * len(affected_ids))
+                conn.execute(
+                    f"""
+                    DELETE FROM entity_cooccurrences
+                    WHERE entity_a_id IN ({aff_placeholders})
+                       OR entity_b_id IN ({aff_placeholders})
+                    """,
+                    affected_ids + affected_ids,
+                )
+            if insert_values:
+                conn.executemany(
+                    """
+                    INSERT INTO entity_cooccurrences (
+                        entity_a_id, entity_b_id, episode_count, last_seen_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    insert_values,
+                )
+        inserted = len(insert_values)
         logger.info(
             "cooccurrences_rebuilt",
             scope_episode_count=len(episode_ids) if episode_ids else None,

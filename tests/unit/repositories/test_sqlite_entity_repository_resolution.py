@@ -233,6 +233,123 @@ class TestCooccurrenceRebuild:
         # any pair where musk is one side — which catches musk-tesla.
         assert any("tesla" in pair[0] or "tesla" in pair[1] for pair in keys)
 
+    def test_aggregate_runs_outside_the_write_transaction(self, seeded):
+        """The expensive self-join must NOT hold the WAL writer lock.
+
+        Pins the contention fix: phase 1 computes the pair aggregate in a
+        read connection that is fully closed *before* phase 2 opens the
+        write connection for the DELETE + bulk INSERT. We spy on
+        ``_get_connection`` to assert the connection lifecycle and that no
+        write statement is issued on the read connection.
+        """
+        from contextlib import contextmanager
+
+        tmp_db, ep1, ep2 = seeded
+        repo = self._seed_two_resolved_pair(tmp_db, ep1, ep2)
+
+        events: list[tuple] = []
+        orig = repo._get_connection
+
+        class _ProxyConn:
+            def __init__(self, real, idx):
+                self._real = real
+                self._idx = idx
+
+            def _record(self, sql):
+                events.append(("exec", self._idx, sql.strip().split()[0].upper()))
+
+            def execute(self, sql, *a, **k):
+                self._record(sql)
+                return self._real.execute(sql, *a, **k)
+
+            def executemany(self, sql, *a, **k):
+                self._record(sql)
+                return self._real.executemany(sql, *a, **k)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        @contextmanager
+        def spy():
+            idx = sum(1 for e in events if e[0] == "open")
+            events.append(("open", idx))
+            try:
+                with orig() as real:
+                    yield _ProxyConn(real, idx)
+            finally:
+                events.append(("close", idx))
+
+        repo._get_connection = spy
+        try:
+            repo.rebuild_cooccurrences(episode_ids=[ep2])
+        finally:
+            repo._get_connection = orig
+
+        # Exactly two connections, strictly sequential: read phase (0)
+        # closes before write phase (1) opens — no overlap, so the
+        # aggregate never coexists with the writer lock.
+        lifecycle = [e for e in events if e[0] in ("open", "close")]
+        assert lifecycle == [("open", 0), ("close", 0), ("open", 1), ("close", 1)]
+
+        writes_on_read_conn = [
+            e for e in events if e[0] == "exec" and e[1] == 0 and e[2] in {"INSERT", "DELETE", "UPDATE"}
+        ]
+        assert writes_on_read_conn == [], "read/aggregate phase must not write"
+
+        writes_on_write_conn = [e[2] for e in events if e[0] == "exec" and e[1] == 1]
+        assert "DELETE" in writes_on_write_conn and "INSERT" in writes_on_write_conn
+
+    def test_scoped_rebuild_clears_stale_rows_with_no_new_pairs(self, seeded):
+        """A scoped rebuild whose entities yield no pairs still DELETEs.
+
+        Guards the ``if insert_values:`` guard around the INSERT: the
+        DELETE must run unconditionally so stale cooccurrence rows for
+        the affected entities are removed even when the aggregate yields
+        nothing to replace them.
+        """
+        tmp_db, ep1, ep2 = seeded
+        repo = self._seed_two_resolved_pair(tmp_db, ep1, ep2)
+
+        # A third episode whose only resolved mention is a brand-new
+        # entity that co-occurs with nothing → affected set {solo},
+        # zero new pairs.
+        ep3 = str(uuid.uuid4())
+        conn = sqlite3.connect(str(tmp_db))
+        try:
+            podcast_id = conn.execute("SELECT id FROM podcasts LIMIT 1").fetchone()[0]
+            conn.execute(
+                "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url) VALUES (?, ?, ?, ?, ?)",
+                (ep3, podcast_id, "e3", "Ep e3", "https://example.com/e3.mp3"),
+            )
+            # A pre-existing stale cooccurrence row touching solo that the
+            # scoped DELETE must remove (a < b per the CHECK constraint).
+            conn.execute(
+                "INSERT INTO entity_cooccurrences (entity_a_id, entity_b_id, episode_count, last_seen_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("person:solo", "zzz:ghost", 1, "2020-01-01T00:00:00+00:00"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        repo.upsert_entity(_entity("person:solo", type_=EntityType.PERSON, qid="SOLO"))
+        repo.insert_mentions([_mention(ep3, 1, "Solo")])
+        for m in repo.list_pending_mentions(episode_id=ep3):
+            repo.resolve_mention(mention_id=m.id, entity_id="person:solo", status="resolved")
+
+        n = repo.rebuild_cooccurrences(episode_ids=[ep3])
+
+        assert n == 0  # solo forms no pair → nothing inserted
+        conn = sqlite3.connect(str(tmp_db))
+        try:
+            stale = conn.execute(
+                "SELECT 1 FROM entity_cooccurrences WHERE entity_a_id = ? OR entity_b_id = ?",
+                ("person:solo", "person:solo"),
+            ).fetchall()
+        finally:
+            conn.close()
+        assert stale == [], "unconditional DELETE must clear stale rows touching the affected entity"
+
 
 class TestAliasMergeHelpers:
     def test_find_duplicate_qid_pairs(self, seeded):
