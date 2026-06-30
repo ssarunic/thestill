@@ -357,7 +357,18 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
         click.echo("💡 Ensure the server/worker is running so tasks get processed.")
         return
 
-    refresh_service = RefreshService(ctx.obj.feed_manager, ctx.obj.podcast_service)
+    # Wire the queue so the inline refresh auto-enqueues newly discovered
+    # episodes for the full pipeline (parity with the web app and the queued
+    # ``--queue`` / handle_refresh_feed path). Tasks are processed by a running
+    # server/worker; without one they queue harmlessly until a worker runs.
+    from .core.queue_manager import QueueManager as _RefreshQueueManager
+
+    refresh_service = RefreshService(
+        ctx.obj.feed_manager,
+        ctx.obj.podcast_service,
+        queue_manager=_RefreshQueueManager(str(config.database_path)),
+        config=config,
+    )
 
     # Use CLI option if provided, otherwise fall back to config
     max_episodes_limit = max_episodes if max_episodes else config.max_episodes_per_podcast

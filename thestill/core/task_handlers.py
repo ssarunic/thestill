@@ -1390,53 +1390,17 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     if changed or new_eps or image_rows:
         repo.save_refresh_batch(changed, new_eps, image_rows)
 
-    # 4. Enqueue the first pipeline stage for every DISCOVERED-but-unqueued
-    #    episode of this feed. Driving off DB state (not the in-memory new_eps)
-    #    does the reconcile (INSERT OR IGNORE may have kept a prior row) AND the
-    #    P1 recovery in one query: episodes persisted by a prior run that died
-    #    before enqueuing have no task and are repaired here, idempotently. On a
-    #    healthy run this is exactly the episodes just persisted.
-    #
-    #    Mirror batch_processor: when the transcription provider is Dalston it
-    #    fetches the audio directly from the URL, so a freshly-discovered episode
-    #    SKIPS local download/downsample and starts at TRANSCRIBE; otherwise it
-    #    starts at DOWNLOAD.
-    provider = getattr(state.config, "transcription_provider", "")
-    discovered = repo.get_discovered_unqueued_episodes(podcast_id)
-
-    # Initial-backfill cap: a brand-new podcast discovers its ENTIRE back catalog
-    # in one refresh, but we only want to auto-transcribe the most-recent few on
-    # subscribe (the rest stay available to process manually). Cap to N (config),
-    # counting episodes already auto-submitted (e.g. by follow-seed) against the
-    # budget, and mark the remainder ``auto_process_excluded`` so this recovery
-    # sweep never enqueues them — even after the podcast becomes "established"
-    # once its seeded episodes publish. An established podcast skips the cap, so
-    # every genuinely-new episode (and any real crash-orphan) still flows through.
-    if not repo.has_processed_episodes(podcast_id):
-        cap = max(0, getattr(state.config, "inbox_seed_on_follow", 2) - repo.count_episodes_with_tasks(podcast_id))
-        to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
-        skipped = [eid for eid, _ in discovered[cap:]]
-        if skipped:
-            repo.mark_episodes_auto_process_excluded(skipped)
-            logger.info(
-                "refresh_feed_initial_backfill_capped",
-                podcast_id=podcast_id,
-                cap=cap,
-                excluded=len(skipped),
-            )
-    else:
-        to_enqueue = discovered
-
-    enqueued = 0
-    for episode_id, audio_url in to_enqueue:
-        # spec #48 freshness priority (10) — newly published jumps backfill.
-        if state.queue_manager.enqueue_full_pipeline(
-            episode_id=episode_id,
-            audio_url=audio_url,
-            transcription_provider=provider,
-            initiated_by="refresh-feed",
-        ):
-            enqueued += 1
+    # 4. Auto-enqueue the first pipeline stage for every DISCOVERED-but-unqueued
+    #    episode of this feed. Shared with the inline refresh path
+    #    (``RefreshService.refresh``) so every refresh trigger behaves the same.
+    #    Drives off DB state (idempotent + crash-recovery) and applies the
+    #    initial-backfill cap for brand-new podcasts. See the helper for detail.
+    enqueued = state.queue_manager.enqueue_discovered_episodes(
+        podcast_id=podcast_id,
+        repository=repo,
+        config=state.config,
+        initiated_by="refresh-feed",
+    )
 
     # 5. Best-effort transcript-link extraction (outside the txn, unchanged).
     if new_eps and isinstance(source, RSSMediaSource):

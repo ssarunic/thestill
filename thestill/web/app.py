@@ -164,12 +164,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         max_per_host=config.refresh_max_per_host,
     )
     podcast_service = PodcastService(config.storage_path, repository, path_manager, file_storage=config.file_storage)
-    refresh_service = RefreshService(feed_manager, podcast_service)
     stats_service = StatsService(config.storage_path, repository, path_manager)
     task_manager = get_task_manager()
 
     # Initialize task queue and worker
     queue_manager = QueueManager(config.database_path)
+
+    # RefreshService takes the queue so an inline refresh (web "Refresh" button,
+    # add-podcast) auto-enqueues newly discovered episodes for the full pipeline.
+    refresh_service = RefreshService(feed_manager, podcast_service, queue_manager=queue_manager, config=config)
 
     # Initialize progress store for real-time progress updates
     progress_store = ProgressStore()

@@ -16,7 +16,7 @@
 Refresh service - Business logic for feed refreshing and episode discovery
 """
 
-from typing import Callable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 from structlog import get_logger
@@ -24,6 +24,9 @@ from structlog import get_logger
 from ..core.feed_manager import PodcastFeedManager
 from ..models.podcast import Episode, Podcast
 from .podcast_service import PodcastService
+
+if TYPE_CHECKING:
+    from ..core.queue_manager import QueueManager
 
 logger = get_logger(__name__)
 
@@ -55,16 +58,31 @@ class RefreshService:
         podcast_service: Podcast service for podcast lookups
     """
 
-    def __init__(self, feed_manager: PodcastFeedManager, podcast_service: PodcastService) -> None:
+    def __init__(
+        self,
+        feed_manager: PodcastFeedManager,
+        podcast_service: PodcastService,
+        queue_manager: Optional["QueueManager"] = None,
+        config: Any = None,
+    ) -> None:
         """
         Initialize refresh service.
 
         Args:
             feed_manager: Feed manager for RSS operations
             podcast_service: Podcast service for podcast lookups
+            queue_manager: Optional task queue. When provided (with ``config``),
+                a non-dry-run refresh auto-enqueues newly discovered episodes for
+                the full pipeline — matching the queued ``handle_refresh_feed``
+                path. Omitted (``None``) in contexts without a worker queue, in
+                which case refresh only discovers + persists (legacy behaviour).
+            config: App config, required alongside ``queue_manager`` for the
+                provider-aware entry-stage choice and the backfill cap.
         """
         self.feed_manager: PodcastFeedManager = feed_manager
         self.podcast_service: PodcastService = podcast_service
+        self.queue_manager: Optional["QueueManager"] = queue_manager
+        self.config: Any = config
 
     def refresh(
         self,
@@ -132,8 +150,25 @@ class RefreshService:
 
         # Persist changes if not dry-run
         if not dry_run:
-            # Changes are already persisted by feed_manager.get_new_episodes()
-            logger.info("Refresh complete", total_episodes=total_episodes)
+            # Changes are already persisted by feed_manager.refresh_feeds().
+            # Auto-enqueue newly discovered episodes for the full pipeline so an
+            # inline refresh (CLI / web / MCP) processes new episodes the same
+            # way the queued ``handle_refresh_feed`` path does. Drives off DB
+            # state per refreshed podcast, so it's idempotent and skips episodes
+            # already queued. Gated on a wired queue_manager + config; absent
+            # those, refresh stays discover-and-persist only.
+            enqueued_total = 0
+            if self.queue_manager is not None and self.config is not None:
+                for podcast, episodes in episodes_to_add:
+                    if not episodes:
+                        continue
+                    enqueued_total += self.queue_manager.enqueue_discovered_episodes(
+                        podcast_id=podcast.id,
+                        repository=self.feed_manager.repository,
+                        config=self.config,
+                        initiated_by="refresh",
+                    )
+            logger.info("Refresh complete", total_episodes=total_episodes, tasks_enqueued=enqueued_total)
 
         return RefreshResult(
             total_episodes=total_episodes,

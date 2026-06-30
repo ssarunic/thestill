@@ -122,7 +122,17 @@ def setup_tools(server: Server, storage_path: str):
         max_workers=config.refresh_max_workers,
         max_per_host=config.refresh_max_per_host,
     )
-    refresh_service = RefreshService(feed_manager, podcast_service)
+    # Wire the queue so an MCP-triggered refresh auto-enqueues newly discovered
+    # episodes for the full pipeline (parity with the web app and CLI). Tasks
+    # are processed by a running server/worker.
+    from ..core.queue_manager import QueueManager as _RefreshQueueManager
+
+    refresh_service = RefreshService(
+        feed_manager,
+        podcast_service,
+        queue_manager=_RefreshQueueManager(str(config.database_path)),
+        config=config,
+    )
     audio_downloader = AudioDownloader(
         str(path_manager.original_audio_dir()),
         max_bytes=config.max_audio_bytes,

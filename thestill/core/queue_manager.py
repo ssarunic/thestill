@@ -867,6 +867,74 @@ class QueueManager:
         )
         return True
 
+    def enqueue_discovered_episodes(
+        self,
+        *,
+        podcast_id: str,
+        repository: Any,
+        config: Any,
+        initiated_by: str,
+    ) -> int:
+        """Auto-enqueue the full pipeline for a feed's discovered-but-unqueued episodes.
+
+        Shared by both refresh paths — the queued ``handle_refresh_feed`` task
+        and the inline ``RefreshService.refresh`` (CLI / web / MCP) — so a
+        freshly-refreshed feed begins processing its new episodes the same way
+        no matter how the refresh was triggered.
+
+        Drives off DB state (``get_discovered_unqueued_episodes``) rather than an
+        in-memory new-episode list, which buys idempotency (already-queued
+        episodes are filtered out) and crash-recovery (episodes persisted by a
+        prior run that died before enqueuing are repaired on the next refresh)
+        for free.
+
+        Initial-backfill cap: a brand-new podcast discovers its ENTIRE back
+        catalog in one refresh, but only the most-recent few should auto-process
+        on subscribe; the remainder are marked ``auto_process_excluded`` so this
+        sweep never enqueues them. An established podcast skips the cap, so every
+        genuinely-new episode (and any real crash-orphan) flows through.
+
+        Args:
+            podcast_id: Feed whose discovered episodes to enqueue.
+            repository: Podcast repository (``get_discovered_unqueued_episodes``,
+                ``has_processed_episodes``, ``count_episodes_with_tasks``,
+                ``mark_episodes_auto_process_excluded``).
+            config: App config (``transcription_provider``, ``inbox_seed_on_follow``).
+            initiated_by: Provenance tag stored in task metadata for tracing.
+
+        Returns:
+            Number of episodes for which a first-stage task was enqueued.
+        """
+        provider = getattr(config, "transcription_provider", "")
+        discovered = repository.get_discovered_unqueued_episodes(podcast_id)
+
+        if not repository.has_processed_episodes(podcast_id):
+            cap = max(0, getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id))
+            to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
+            skipped = [eid for eid, _ in discovered[cap:]]
+            if skipped:
+                repository.mark_episodes_auto_process_excluded(skipped)
+                logger.info(
+                    "refresh_feed_initial_backfill_capped",
+                    podcast_id=podcast_id,
+                    cap=cap,
+                    excluded=len(skipped),
+                )
+        else:
+            to_enqueue = discovered
+
+        enqueued = 0
+        for episode_id, audio_url in to_enqueue:
+            # spec #48 freshness priority (10) — newly published jumps backfill.
+            if self.enqueue_full_pipeline(
+                episode_id=episode_id,
+                audio_url=audio_url,
+                transcription_provider=provider,
+                initiated_by=initiated_by,
+            ):
+                enqueued += 1
+        return enqueued
+
     def add_feed_task(
         self,
         podcast_id: str,
