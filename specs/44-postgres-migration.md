@@ -2,7 +2,9 @@
 
 > **Status:** 📝 Draft (2026-05-22)
 > **Created:** 2026-05-22
-> **Updated:** 2026-05-22
+> **Updated:** 2026-07-01 — re-verified against codebase; no migration work
+> started, verdict unchanged. Refreshed file sizes, line numbers, and call-site
+> counts; noted the `search/sqlite_vec_client.py` split.
 > **Author:** Engineering
 > **Priority:** High — prerequisite for [43-aws-hosting.md](43-aws-hosting.md)
 > **Related:** [43-aws-hosting.md](43-aws-hosting.md), [01-architecture.md](01-architecture.md) (repository pattern), [04-testing.md](04-testing.md), [28-corpus-search-and-entities.md](28-corpus-search-and-entities.md) (sqlite-vec / entities), [16-full-pipeline-and-failure-handling.md](16-full-pipeline-and-failure-handling.md) (task queue + DLQ), [20-parallel-task-queues.md](20-parallel-task-queues.md), [42-robustness-and-failure-mode-hardening.md](42-robustness-and-failure-mode-hardening.md) (FM-3 datetime boundary, FM-5 test fidelity)
@@ -84,13 +86,13 @@ anticipation of a Postgres move.
 
 | Repo | Interface (ABC) | SQLite impl |
 |---|:---:|:---:|
-| podcast / episode | ✓ | ✓ `SqlitePodcastRepository(PodcastRepository, EpisodeRepository)` (~190 KB) |
+| podcast / episode | ✓ | ✓ `SqlitePodcastRepository(PodcastRepository, EpisodeRepository)` (~227 KB) |
 | digest | ✓ | ✓ |
 | briefing | ✓ | ✓ |
 | inbox | ✓ | ✓ |
 | podcast_follower | ✓ | ✓ |
 | user | ✓ | ✓ |
-| **entity** | **✗ (no base class)** | ✓ `SqliteEntityRepository` (~60 KB) |
+| **entity** | **✗ (no base class)** | ✓ `SqliteEntityRepository` (~77 KB) |
 | **pending_operations** | **✗ (no base class)** | ✓ `SqlitePendingOperationsRepository` |
 
 **What's missing (why it can't run on PG yet).**
@@ -100,22 +102,25 @@ anticipation of a Postgres move.
    [cli.py:187](../thestill/cli.py#L187),
    [web/app.py:159](../thestill/web/app.py#L159),
    [mcp/tools.py:97](../thestill/mcp/tools.py#L97), and `mcp/resources.py`.
-   ~30 instantiation sites total. No factory.
+   ~21 instantiation sites total. No factory.
 3. **Config is SQLite-shaped end to end.** Only `database_path` (a *file path*)
    exists — no `DATABASE_URL`/DSN
-   ([utils/config.py:59](../thestill/utils/config.py#L59),
-   [:366](../thestill/utils/config.py#L366)). Constructors take `db_path=…`,
+   ([utils/config.py:169](../thestill/utils/config.py#L169),
+   [:348](../thestill/utils/config.py#L348)). Constructors take `db_path=…`,
    not a connection/pool. No psycopg/asyncpg dependency (the `sqlalchemy` /
    `alembic` in `uv.lock` are transitive via **optuna**, not wired in).
 4. **The two un-interfaced repos are the ones most needed in the cloud.**
-   `SqliteEntityRepository` (~60 KB, no base class) is the heart of the
+   `SqliteEntityRepository` (~77 KB, no base class) is the heart of the
    entity/search feature [#43](43-aws-hosting.md) runs;
    `SqlitePendingOperationsRepository` tracks async Dalston/ElevenLabs jobs.
    Both need an interface extracted before a PG impl can slot in.
 5. **The trickiest subsystems bypass the seam.** The task queue
    ([core/queue_manager.py](../thestill/core/queue_manager.py): `sqlite3.connect`
-   - WAL + `busy_timeout`) and vector search (`core/chunk_writer.py` +
-   sqlite-vec `vec0`) sit outside any repository interface — direct ports.
+   - WAL + `busy_timeout`) and vector search
+   ([search/sqlite_vec_client.py](../thestill/search/sqlite_vec_client.py) k-NN
+   over `vec0` / `vec_distance_cosine`, plus the write path in
+   [core/chunk_writer.py](../thestill/core/chunk_writer.py)) sit outside any
+   repository interface — direct ports.
 
 ---
 
@@ -128,7 +133,7 @@ anticipation of a Postgres move.
 - **Config.** Add `DATABASE_URL` (DSN). When set → Postgres; else fall back to
   the existing `database_path` (SQLite) for local/test. A single
   `make_repositories(config)` factory returns the right concrete set,
-  replacing the ~30 hardcoded `Sqlite*Repository(db_path=…)` call sites with
+  replacing the ~21 hardcoded `Sqlite*Repository(db_path=…)` call sites with
   one wiring point per entry surface (cli, web, mcp).
 - **Schema.** Postgres DDL for every table the SQLite schema creates today.
   Adopt **alembic** for migrations (already present transitively; make it a
@@ -164,7 +169,7 @@ Ordered roughly by dependency and effort.
 **Phase 1 — Port the 6 interfaced repos (bulk).**
 
 - Write `Postgres*Repository` for podcast/episode, digest, briefing, inbox,
-  podcast_follower, user. Dominated by the ~190 KB
+  podcast_follower, user. Dominated by the ~227 KB
   [sqlite_podcast_repository.py](../thestill/repositories/sqlite_podcast_repository.py).
 - Apply the [dialect checklist](#dialect-gotchas-checklist) per file.
 
@@ -249,7 +254,7 @@ reason to do this before the AWS cutover.
 
 ## Risks
 
-- **Scope creep on the 190 KB podcast repo** — port mechanically against the
+- **Scope creep on the 227 KB podcast repo** — port mechanically against the
   checklist; resist re-design mid-port.
 - **pgvector index RAM** grows with the corpus; size RDS accordingly
   ([#43](43-aws-hosting.md) sizing) and verify search recall post-port.
