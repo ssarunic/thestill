@@ -137,6 +137,50 @@ def get_circuit_cooldown_seconds() -> int:
     return _env_int("QUEUE_CIRCUIT_COOLDOWN_SECONDS", 60)
 
 
+# ---------------------------------------------------------------------------
+# Spec #49 follow-up — per-stage handler watchdog. A handler that blocks past
+# its stage's timeout is presumed wedged: the classic trigger is a network
+# socket frozen by a host sleep/suspend with no lower-level timeout, which the
+# 2026-07-01 clean stall traced back to. On timeout the worker frees the
+# stage's slot so the pipeline keeps flowing; the stale-task reset requeues the
+# abandoned row. Defaults are generous (never trip legitimate work) and
+# per-stage; ``None`` disables the watchdog for a stage. ``QUEUE_STAGE_WATCHDOG_
+# SECONDS`` overrides the base for every stage (0 = disable everywhere).
+# ---------------------------------------------------------------------------
+def get_stage_watchdog_seconds() -> Dict["TaskStage", Optional[float]]:  # noqa: F821
+    """Resolve the per-stage handler watchdog timeout (seconds).
+
+    Built-in defaults are sized well above any legitimate handler runtime so
+    the watchdog only ever fires on a genuine hang. ``QUEUE_STAGE_WATCHDOG_
+    SECONDS`` sets a uniform base for every stage; ``0`` disables the watchdog
+    entirely (returns ``None`` for every stage).
+    """
+    from ..core.queue_manager import TaskStage
+
+    base = _env_int("QUEUE_STAGE_WATCHDOG_SECONDS", 0)
+    if base > 0:
+        return {stage: float(base) for stage in TaskStage}
+
+    # Per-stage defaults (seconds). Network/LLM stages get a bounded watchdog;
+    # transcribe is left unbounded because a long episode on local Whisper can
+    # legitimately run for hours and we won't risk killing real work.
+    defaults: Dict[str, Optional[float]] = {
+        "download": 3600.0,
+        "downsample": 3600.0,
+        "transcribe": None,
+        "clean": 1800.0,
+        "summarize": 1800.0,
+        "extract-entities": 1800.0,
+        "resolve-entities": 1800.0,
+        "reindex": 1800.0,
+        "rebuild-cooccurrences": 1800.0,
+        "compute-related": 1800.0,
+        "enrich-entities": 1800.0,
+        "refresh-feed": 1800.0,
+    }
+    return {stage: defaults.get(stage.value, 1800.0) for stage in TaskStage}
+
+
 class Config(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -550,7 +594,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
             )
             if os.getenv(f"{stage.replace('-', '_').upper()}_PARALLEL_JOBS")
         },
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
+        "embedding_model": os.getenv(
+            "EMBEDDING_MODEL",
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        ),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
             int(os.getenv("MAX_EPISODES_PER_PODCAST")) if os.getenv("MAX_EPISODES_PER_PODCAST") else None

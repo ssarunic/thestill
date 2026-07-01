@@ -107,6 +107,7 @@ class TaskWorker:
         circuit_failure_threshold: int = 3,
         circuit_window_seconds: float = 120.0,
         circuit_cooldown_seconds: float = 60.0,
+        watchdog_timeout_per_stage: Optional[Dict[TaskStage, Optional[float]]] = None,
     ):
         """
         Initialize task worker.
@@ -156,6 +157,17 @@ class TaskWorker:
             if circuit_breaker_enabled
             else None
         )
+
+        # Spec #49 follow-up — per-stage handler watchdog. A handler that runs
+        # past its stage's timeout is presumed wedged (e.g. a network socket
+        # frozen by a host sleep with no lower-level timeout — the 2026-07-01
+        # clean stall); the watchdog frees the stage's slot so it keeps
+        # flowing. Absent config, every stage is None (disabled) to preserve
+        # legacy behaviour for callers that don't wire it.
+        overrides_wd = watchdog_timeout_per_stage or {}
+        self._watchdog_timeout_s: Dict[TaskStage, Optional[float]] = {
+            stage: overrides_wd.get(stage) for stage in TaskStage
+        }
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -302,7 +314,9 @@ class TaskWorker:
         semaphores: Dict[TaskStage, asyncio.Semaphore] = {
             stage: asyncio.Semaphore(self.parallel_jobs_per_stage[stage]) for stage in TaskStage
         }
-        pollers = [asyncio.create_task(self._stage_poll_loop(stage, semaphores[stage])) for stage in TaskStage]
+        pollers = [
+            asyncio.create_task(self._supervised_stage_poll_loop(stage, semaphores[stage])) for stage in TaskStage
+        ]
         # Long-running watchdog that catches tasks left in ``processing`` by
         # crashes or by the lock-race bookkeeping failure that motivated
         # ``_safe_schedule_retry``. Sweeps far less often than the stage
@@ -410,6 +424,38 @@ class TaskWorker:
             )
         return healed
 
+    async def _supervised_stage_poll_loop(self, stage: TaskStage, sem: asyncio.Semaphore) -> None:
+        """Run a stage poller, restarting it if it ever crashes.
+
+        The inner ``_stage_poll_loop`` already swallows per-iteration
+        exceptions, but a defect that escaped that guard — or a ``BaseException``
+        short of cancellation — would otherwise silently kill this stage's
+        poller for the life of the process. That is exactly the single-stage
+        silent-degradation failure mode: every other stage keeps draining while
+        one goes dark until the next restart. This supervisor logs the crash
+        and respawns the loop after a capped backoff so a stage can't stay dark.
+        """
+        backoff = 1.0
+        while self._running:
+            try:
+                await self._stage_poll_loop(stage, sem)
+                # A clean return means ``self._running`` went False — normal
+                # shutdown, nothing to restart.
+                return
+            except asyncio.CancelledError:
+                raise
+            except BaseException as e:  # noqa: BLE001 — supervisor must catch all
+                logger.exception(
+                    "stage_poll_loop_crashed",
+                    stage=stage.value,
+                    error=str(e),
+                    restart_in_s=backoff,
+                    note="respawning poller",
+                    exc_info=True,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+
     async def _stage_poll_loop(self, stage: TaskStage, sem: asyncio.Semaphore) -> None:
         """Poll the queue for a single stage and dispatch up to its capacity."""
         capacity = self.parallel_jobs_per_stage[stage]
@@ -475,10 +521,33 @@ class TaskWorker:
         logger.info("stage_poll_loop_ended", stage=stage.value)
 
     async def _process_task_async(self, task: Task, sem: asyncio.Semaphore, stage: TaskStage) -> None:
-        """Process a task in a thread, bounded by the stage's semaphore."""
+        """Process a task in a thread, bounded by the stage's semaphore.
+
+        A per-stage watchdog (``_watchdog_timeout_s``) caps how long the handler
+        may block. On timeout we free the semaphore + active slot so the stage
+        keeps flowing even though the abandoned worker thread may still be alive
+        (Python can't force-kill it) — the canonical trigger is a network call
+        frozen by a host sleep with no lower-level timeout. We deliberately do
+        NOT reschedule the row here: it stays ``processing`` and the periodic
+        stale-task reset requeues it, which avoids racing the abandoned thread
+        if it later revives and writes its own completion/retry.
+        """
         async with sem:
             try:
-                await asyncio.to_thread(self._process_task, task)
+                timeout = self._watchdog_timeout_s.get(stage)
+                if timeout is not None and timeout > 0:
+                    await asyncio.wait_for(asyncio.to_thread(self._process_task, task), timeout=timeout)
+                else:
+                    await asyncio.to_thread(self._process_task, task)
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error(
+                    "task_handler_timeout",
+                    stage=stage.value,
+                    task_id=task.id,
+                    episode_id=task.episode_id,
+                    timeout_s=self._watchdog_timeout_s.get(stage),
+                    note="freeing worker slot; stale-task reset will requeue the abandoned row",
+                )
             finally:
                 with self._active_lock:
                     self._active_by_stage[stage].pop(self._task_key(task), None)
@@ -570,7 +639,12 @@ class TaskWorker:
             except FatalError as e:
                 # Fatal error - move to DLQ, no retry
                 error_msg = str(e)
-                logger.error("task_fatal_error", error=error_msg, destination="dlq", exc_info=True)
+                logger.error(
+                    "task_fatal_error",
+                    error=error_msg,
+                    destination="dlq",
+                    exc_info=True,
+                )
                 self._safe_mark_dead(task, error_msg, "fatal")
                 self._mark_episode_failed(task, error_msg, "fatal")
                 self._report_failure(task.id, error_msg)
@@ -599,7 +673,12 @@ class TaskWorker:
                 # Unknown exception - treat as transient and retry
                 error_msg = str(e)
                 error_class = classify_error_class(e)
-                logger.exception("task_unexpected_error", error=error_msg, error_class=error_class, exc_info=True)
+                logger.exception(
+                    "task_unexpected_error",
+                    error=error_msg,
+                    error_class=error_class,
+                    exc_info=True,
+                )
                 updated_task = self._handle_transient_failure(task, error_msg, error_class)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
