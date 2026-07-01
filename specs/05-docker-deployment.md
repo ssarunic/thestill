@@ -1,6 +1,6 @@
 # Docker Deployment — Cloud-Only Slim Image
 
-**Status**: 📋 Planned
+**Status**: 🚧 Active development (2026-07-01 — corrected: Dockerfile ships the `slim`/`full` multi-stage targets, built in CI)
 **Created**: 2026-04-13
 **Updated**: 2026-04-13
 **Priority**: Medium (new deployment target, no feature impact)

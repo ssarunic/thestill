@@ -1,6 +1,6 @@
 # Per-User Digest from Inbox
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Active development (2026-07-01 — corrected: `services/briefing_service.py` selects from the per-user inbox by cursor)
 > **Created:** 2026-05-08
 > **Updated:** 2026-05-08
 > **Author:** Product & Engineering

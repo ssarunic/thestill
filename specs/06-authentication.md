@@ -1,6 +1,6 @@
 # Authentication Specification for thestill
 
-> **Status:** Draft
+> **Status:** 🚧 Active development (2026-07-01 — corrected: opt-in auth system shipped — `auth` router, `auth_service`, Google OAuth, `AuthContext`, `/login`)
 > **Created:** 2025-01-15
 > **Author:** Product & Engineering
 

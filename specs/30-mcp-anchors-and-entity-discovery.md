@@ -1,6 +1,6 @@
 # MCP — Anchor Queries and Entity Discovery
 
-**Status**: 📝 Draft
+**Status**: 🚧 Active development (2026-07-01 — corrected: `mcp/entity_tools.py` ships `get_entity`, `find_mentions`, `list_episodes_by_entity`, `search_corpus`)
 **Created**: 2026-05-06
 **Updated**: 2026-05-06
 **Priority**: Medium (closes the gap between the web entity surface and the MCP/LLM-harness surface introduced by spec #28)

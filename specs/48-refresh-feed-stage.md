@@ -1,6 +1,6 @@
 # Refresh as a Pipeline Stage — `REFRESH_FEED`
 
-> **Status:** 📝 Draft (2026-06-10)
+> **Status:** 🚧 Active development (2026-07-01 — corrected: `REFRESH_FEED` stage live in the queue, ships dark behind `REFRESH_VIA_QUEUE`)
 > **Created:** 2026-06-10
 > **Updated:** 2026-06-16
 > **Author:** Engineering

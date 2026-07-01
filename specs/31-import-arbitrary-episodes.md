@@ -1,6 +1,6 @@
 # Import Arbitrary Episodes Specification
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Active development (2026-07-01 — corrected: `services/import_service.py` (`import_url`) shipped)
 > **Created:** 2026-05-06
 > **Updated:** 2026-05-08
 > **Author:** Product & Engineering
@@ -294,6 +294,7 @@ This is a Phase 1 deliverable, not a "verify" item.
 ### Discovery Behavior
 
 **Current state (verified):**
+
 - `GET /api/podcasts` already filters to the calling user's follows (via `follower_repository.get_followed_podcast_ids`). Auto-added podcasts won't appear here unless the user follows them — no change required.
 - `GET /api/top-podcasts` reads from a separate curated `top_podcasts` table, not from `podcasts`. Unaffected by imports — no change required.
 

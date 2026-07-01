@@ -1,6 +1,6 @@
 # Entity Page Enrichment
 
-> **Status:** 📝 Draft (2026-05-22)
+> **Status:** 🚧 Active development (2026-07-01 — corrected: Tier-0 shipped via #47 — `models/enrichment.py`, entity repo reads `enrichment`)
 > **Created:** 2026-05-22
 > **Updated:** 2026-05-22
 > **Author:** Engineering

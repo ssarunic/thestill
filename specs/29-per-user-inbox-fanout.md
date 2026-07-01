@@ -1,6 +1,6 @@
 # Per-User Inbox & Episode Fan-Out Specification
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Active development (2026-07-01 — corrected: inbox repository + `inbox_service` shipped)
 > **Created:** 2026-05-05
 > **Updated:** 2026-05-05
 > **Author:** Product & Engineering
