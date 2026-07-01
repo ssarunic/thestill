@@ -795,7 +795,16 @@ class QueueManager:
                     INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
                     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
-                    (task_id, episode_id, stage.value, priority, max_retries, metadata_json, now, now),
+                    (
+                        task_id,
+                        episode_id,
+                        stage.value,
+                        priority,
+                        max_retries,
+                        metadata_json,
+                        now,
+                        now,
+                    ),
                 )
 
         self._exec_with_lock_retry("add_task", _write)
@@ -909,7 +918,10 @@ class QueueManager:
         discovered = repository.get_discovered_unqueued_episodes(podcast_id)
 
         if not repository.has_processed_episodes(podcast_id):
-            cap = max(0, getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id))
+            cap = max(
+                0,
+                getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id),
+            )
             to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
             skipped = [eid for eid, _ in discovered[cap:]]
             if skipped:
@@ -986,7 +998,16 @@ class QueueManager:
                         INSERT INTO tasks (id, episode_id, podcast_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
                         VALUES (?, NULL, ?, ?, 'pending', ?, ?, ?, ?, ?)
                         """,
-                        (task_id, podcast_id, stage.value, priority, max_retries, metadata_json, now, now),
+                        (
+                            task_id,
+                            podcast_id,
+                            stage.value,
+                            priority,
+                            max_retries,
+                            metadata_json,
+                            now,
+                            now,
+                        ),
                     )
                     created[0] = True
                     conn.commit()
@@ -1138,29 +1159,62 @@ class QueueManager:
                 conn.rollback()
                 raise
 
-    def complete_task(self, task_id: str) -> None:
+    def complete_task(self, task_id: str, claim_started_at: Optional[str] = None) -> bool:
         """
         Mark a task as completed.
 
         Args:
-            task_id: ID of the task to complete
+            task_id: ID of the task to complete.
+            claim_started_at: Optional lease guard — the ISO ``started_at`` the
+                worker was handed when it claimed this task. When provided, the
+                row is completed only if it is still ``processing`` under that
+                exact claim timestamp. This defeats the watchdog-abandonment
+                race: a handler that the per-stage watchdog gave up on keeps
+                running in its thread, but its row may since have been requeued
+                (stale-task reset) and reclaimed by another worker under a new
+                ``started_at``. Without the guard, the revived zombie would
+                complete a claim it no longer owns and double-fire the successor
+                fan-out. ``None`` = legacy unconditional complete.
+
+        Returns:
+            True iff this call actually transitioned the row to ``completed``.
         """
         now = now_utc().isoformat()
 
-        def _write() -> None:
+        def _write() -> int:
             with self._get_connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'completed', completed_at = ?, updated_at = ?
-                    WHERE id = ?
-                """,
-                    (now, now, task_id),
-                )
+                if claim_started_at is not None:
+                    cursor = conn.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'completed', completed_at = ?, updated_at = ?
+                        WHERE id = ? AND status = 'processing' AND started_at = ?
+                        """,
+                        (now, now, task_id, claim_started_at),
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'completed', completed_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, now, task_id),
+                    )
+                return cursor.rowcount or 0
 
-        self._exec_with_lock_retry("complete_task", _write)
+        applied = self._exec_with_lock_retry("complete_task", _write)
+        won = applied > 0
 
-        logger.info(f"Task completed: {task_id}")
+        if won:
+            logger.info(f"Task completed: {task_id}")
+        elif claim_started_at is not None:
+            logger.warning(
+                "complete_task_claim_lost",
+                task_id=task_id,
+                note="row no longer owned by this claim (watchdog-abandoned handler); not completing",
+            )
+        return won
 
     def supersede_stale_tasks(self, episode_id: str, completed_stage: TaskStage) -> int:
         """Auto-resolve dead/failed DLQ rows that ``completed_stage`` makes moot.
@@ -1336,7 +1390,13 @@ class QueueManager:
                 WHERE stage = ? AND status = ?
                 RETURNING episode_id
                 """,
-                (TaskStatus.COMPLETED.value, now, now, stage.value, TaskStatus.PENDING.value),
+                (
+                    TaskStatus.COMPLETED.value,
+                    now,
+                    now,
+                    stage.value,
+                    TaskStatus.PENDING.value,
+                ),
             ).fetchall()
         return [r["episode_id"] for r in rows]
 
@@ -1512,7 +1572,13 @@ class QueueManager:
 
             return resumed + failed
 
-    def schedule_retry(self, task_id: str, error_message: str, error_class: Optional[str] = None) -> Optional[Task]:
+    def schedule_retry(
+        self,
+        task_id: str,
+        error_message: str,
+        error_class: Optional[str] = None,
+        claim_started_at: Optional[str] = None,
+    ) -> Optional[Task]:
         """
         Schedule a task for retry with exponential backoff.
 
@@ -1524,21 +1590,26 @@ class QueueManager:
             error_class: Spec #49 attribution ('infra' | 'item'); persisted on
                 the row so the healer loop can later find infra-class ``failed``
                 tasks. ``None`` leaves the column unchanged (legacy callers).
+            claim_started_at: Optional lease guard (see ``complete_task``). When
+                provided, only reschedules while the row is still ``processing``
+                under this exact claim timestamp, so a watchdog-abandoned zombie
+                can't clobber a row another worker has since reclaimed.
 
         Returns:
-            Updated Task object, or None if task not found
+            Updated Task object, or None if task not found / claim lost
         """
         now = now_utc()
         now_iso = now.isoformat()
+        guard = " AND status = 'processing' AND started_at = ?" if claim_started_at is not None else ""
 
-        def _write() -> None:
+        def _write() -> int:
             with self._get_connection() as conn:
                 # Get current task state
                 cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"Cannot schedule retry for unknown task: {task_id}")
-                    return
+                    return 0
 
                 current_retry = row["retry_count"] or 0
                 max_retries = row["max_retries"] or self.DEFAULT_MAX_RETRIES
@@ -1549,8 +1620,19 @@ class QueueManager:
                 # caller passes None, so we never clobber a prior classification.
                 if new_retry_count >= max_retries:
                     # Exhausted retries - mark as failed
-                    conn.execute(
-                        """
+                    params: list = [
+                        new_retry_count,
+                        error_message,
+                        error_message,
+                        error_class,
+                        now_iso,
+                        now_iso,
+                        task_id,
+                    ]
+                    if claim_started_at is not None:
+                        params.append(claim_started_at)
+                    updated = conn.execute(
+                        f"""
                         UPDATE tasks
                         SET status = 'failed',
                             retry_count = ?,
@@ -1560,21 +1642,33 @@ class QueueManager:
                             error_class = COALESCE(?, error_class),
                             completed_at = ?,
                             updated_at = ?
-                        WHERE id = ?
+                        WHERE id = ?{guard}
                     """,
-                        (new_retry_count, error_message, error_message, error_class, now_iso, now_iso, task_id),
+                        params,
                     )
-                    logger.warning(
-                        f"Task {task_id} exhausted retries ({new_retry_count}/{max_retries}), marked as failed"
-                    )
+                    if updated.rowcount:
+                        logger.warning(
+                            f"Task {task_id} exhausted retries ({new_retry_count}/{max_retries}), marked as failed"
+                        )
+                    return updated.rowcount or 0
                 else:
                     # Schedule retry with exponential backoff
                     backoff = calculate_backoff(new_retry_count)
                     next_retry = now + backoff
                     next_retry_iso = next_retry.isoformat()
 
-                    conn.execute(
-                        """
+                    params = [
+                        new_retry_count,
+                        next_retry_iso,
+                        error_message,
+                        error_class,
+                        now_iso,
+                        task_id,
+                    ]
+                    if claim_started_at is not None:
+                        params.append(claim_started_at)
+                    updated = conn.execute(
+                        f"""
                         UPDATE tasks
                         SET status = 'retry_scheduled',
                             retry_count = ?,
@@ -1584,21 +1678,34 @@ class QueueManager:
                             error_class = COALESCE(?, error_class),
                             started_at = NULL,
                             updated_at = ?
-                        WHERE id = ?
+                        WHERE id = ?{guard}
                     """,
-                        (new_retry_count, next_retry_iso, error_message, error_class, now_iso, task_id),
+                        params,
                     )
-                    logger.info(
-                        f"Task {task_id} scheduled for retry {new_retry_count}/{max_retries} "
-                        f"at {next_retry_iso} (in {backoff.total_seconds():.0f}s)"
-                    )
+                    if updated.rowcount:
+                        logger.info(
+                            f"Task {task_id} scheduled for retry {new_retry_count}/{max_retries} "
+                            f"at {next_retry_iso} (in {backoff.total_seconds():.0f}s)"
+                        )
+                    return updated.rowcount or 0
 
-        self._exec_with_lock_retry("schedule_retry", _write)
+        applied = self._exec_with_lock_retry("schedule_retry", _write)
+        if claim_started_at is not None and not applied:
+            logger.warning(
+                "schedule_retry_claim_lost",
+                task_id=task_id,
+                note="row no longer owned by this claim (watchdog-abandoned handler); not rescheduling",
+            )
+            return None
         # Return updated task (read can hit the same lock; retry through the helper too).
         return self._exec_with_lock_retry("schedule_retry_readback", lambda: self.get_task(task_id))
 
     def reschedule_without_budget(
-        self, task_id: str, error_message: str, error_class: Optional[str] = None
+        self,
+        task_id: str,
+        error_message: str,
+        error_class: Optional[str] = None,
+        claim_started_at: Optional[str] = None,
     ) -> Optional[Task]:
         """Re-queue a task WITHOUT charging its retry budget (spec #49 L1).
 
@@ -1618,11 +1725,15 @@ class QueueManager:
             Updated Task, or None if not found.
         """
         now = now_utc().isoformat()
+        guard = " AND status = 'processing' AND started_at = ?" if claim_started_at is not None else ""
 
-        def _write() -> None:
+        def _write() -> int:
             with self._get_connection() as conn:
-                conn.execute(
-                    """
+                params: list = [now, error_message, error_class, now, task_id]
+                if claim_started_at is not None:
+                    params.append(claim_started_at)
+                cursor = conn.execute(
+                    f"""
                     UPDATE tasks
                     SET status = 'retry_scheduled',
                         next_retry_at = ?,
@@ -1631,15 +1742,29 @@ class QueueManager:
                         error_class = COALESCE(?, error_class),
                         started_at = NULL,
                         updated_at = ?
-                    WHERE id = ?
+                    WHERE id = ?{guard}
                 """,
-                    (now, error_message, error_class, now, task_id),
+                    params,
                 )
+                return cursor.rowcount or 0
 
-        self._exec_with_lock_retry("reschedule_without_budget", _write)
+        applied = self._exec_with_lock_retry("reschedule_without_budget", _write)
+        if claim_started_at is not None and not applied:
+            logger.warning(
+                "reschedule_without_budget_claim_lost",
+                task_id=task_id,
+                note="row no longer owned by this claim (watchdog-abandoned handler); not rescheduling",
+            )
+            return None
         return self._exec_with_lock_retry("reschedule_without_budget_readback", lambda: self.get_task(task_id))
 
-    def mark_dead(self, task_id: str, error_message: str, error_class: Optional[str] = None) -> Optional[Task]:
+    def mark_dead(
+        self,
+        task_id: str,
+        error_message: str,
+        error_class: Optional[str] = None,
+        claim_started_at: Optional[str] = None,
+    ) -> Optional[Task]:
         """
         Move a task to the Dead Letter Queue (status='dead').
 
@@ -1651,15 +1776,22 @@ class QueueManager:
             error_class: Spec #49 attribution; defaults to 'fatal' since a dead
                 task is by definition fatal. Recorded for queue-viewer parity
                 with retry/failed rows. Never healed (the healer skips 'dead').
+            claim_started_at: Optional lease guard (see ``complete_task``). When
+                provided, only kills the row while it is still ``processing``
+                under this exact claim timestamp.
 
         Returns:
-            Updated Task object, or None if task not found
+            Updated Task object, or None if task not found / claim lost
         """
         now = now_utc().isoformat()
+        guard = " AND status = 'processing' AND started_at = ?" if claim_started_at is not None else ""
 
         with self._get_connection() as conn:
+            params: list = [error_message, error_class or "fatal", now, now, task_id]
+            if claim_started_at is not None:
+                params.append(claim_started_at)
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE tasks
                 SET status = 'dead',
                     error_message = ?,
@@ -1667,13 +1799,20 @@ class QueueManager:
                     error_class = ?,
                     completed_at = ?,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?{guard}
             """,
-                (error_message, error_class or "fatal", now, now, task_id),
+                params,
             )
 
             if cursor.rowcount == 0:
-                logger.warning(f"Cannot mark unknown task as dead: {task_id}")
+                if claim_started_at is not None:
+                    logger.warning(
+                        "mark_dead_claim_lost",
+                        task_id=task_id,
+                        note="row no longer owned by this claim (watchdog-abandoned handler); not killing",
+                    )
+                else:
+                    logger.warning(f"Cannot mark unknown task as dead: {task_id}")
                 return None
 
         logger.error(f"Task {task_id} moved to DLQ (dead): {error_message}")

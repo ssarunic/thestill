@@ -282,6 +282,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         get_queue_heal_cooldown_minutes,
         get_queue_heal_interval_seconds,
         get_queue_max_heal_attempts,
+        get_stage_watchdog_seconds,
         is_queue_auto_heal_enabled,
         is_queue_circuit_breaker_enabled,
     )
@@ -301,6 +302,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         circuit_failure_threshold=get_circuit_failure_threshold(),
         circuit_window_seconds=get_circuit_window_seconds(),
         circuit_cooldown_seconds=get_circuit_cooldown_seconds(),
+        watchdog_timeout_per_stage=get_stage_watchdog_seconds(),
     )
     app_state.task_worker = task_worker
 
@@ -310,7 +312,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         import asyncio
 
         logger.info("starting_web_server")
-        logger.info("server_configuration", storage_path=str(config.storage_path), database=str(config.database_path))
+        logger.info(
+            "server_configuration",
+            storage_path=str(config.storage_path),
+            database=str(config.database_path),
+        )
 
         # Fail fast on misconfigured transcription provider. In slim Docker
         # deployments this catches the .env.example default
@@ -351,9 +357,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 for podcast in podcasts_to_follow:
                     try:
                         follower_service.follow(default_user.id, podcast.id)
-                        logger.info("auto_followed_podcast", podcast_title=podcast.title, user_id=default_user.id)
+                        logger.info(
+                            "auto_followed_podcast",
+                            podcast_title=podcast.title,
+                            user_id=default_user.id,
+                        )
                     except Exception as e:
-                        logger.warning("auto_follow_failed", podcast_title=podcast.title, error=str(e))
+                        logger.warning(
+                            "auto_follow_failed",
+                            podcast_title=podcast.title,
+                            error=str(e),
+                        )
                 logger.info("single_user_auto_follow_complete", count=len(podcasts_to_follow))
 
         # Set event loop in progress store for cross-thread async operations
@@ -439,7 +453,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # detail server-side.
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
-        logger.exception("unhandled_exception", path=str(request.url.path), error_type=type(exc).__name__)
+        logger.exception(
+            "unhandled_exception",
+            path=str(request.url.path),
+            error_type=type(exc).__name__,
+        )
         if _is_dev:
             return JSONResponse(
                 status_code=500,
@@ -562,7 +580,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
         logger.info("serving_static_frontend", directory=str(static_dir))
     else:
-        logger.warning("static_directory_not_found", directory=str(static_dir), note="frontend_not_available")
+        logger.warning(
+            "static_directory_not_found",
+            directory=str(static_dir),
+            note="frontend_not_available",
+        )
 
     logger.info("fastapi_application_created")
 
