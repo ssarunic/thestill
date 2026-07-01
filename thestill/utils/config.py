@@ -157,9 +157,15 @@ def get_stage_watchdog_seconds() -> Dict["TaskStage", Optional[float]]:  # noqa:
     """
     from ..core.queue_manager import TaskStage
 
-    base = _env_int("QUEUE_STAGE_WATCHDOG_SECONDS", 0)
-    if base > 0:
-        return {stage: float(base) for stage in TaskStage}
+    # Distinguish "unset" (use per-stage defaults) from an explicit override.
+    # An explicit ``0`` (or any non-positive) means "disable the watchdog
+    # everywhere" — the documented global kill switch.
+    raw = os.getenv("QUEUE_STAGE_WATCHDOG_SECONDS")
+    if raw is not None and raw.strip() != "":
+        base = _env_int("QUEUE_STAGE_WATCHDOG_SECONDS", 0)
+        if base > 0:
+            return {stage: float(base) for stage in TaskStage}
+        return {stage: None for stage in TaskStage}
 
     # Per-stage defaults (seconds). Network/LLM stages get a bounded watchdog;
     # transcribe is left unbounded because a long episode on local Whisper can

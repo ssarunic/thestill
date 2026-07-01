@@ -168,6 +168,10 @@ class TaskWorker:
         self._watchdog_timeout_s: Dict[TaskStage, Optional[float]] = {
             stage: overrides_wd.get(stage) for stage in TaskStage
         }
+        # Count of handler threads the watchdog abandoned (still alive, holding
+        # an executor slot). Guarded by ``_active_lock``. Surfaced in
+        # get_status so a thread leak is visible instead of silent.
+        self._abandoned_threads: Dict[TaskStage, int] = {stage: 0 for stage in TaskStage}
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -243,6 +247,14 @@ class TaskWorker:
             return task.episode_id
         return f"podcast:{task.podcast_id}"
 
+    @staticmethod
+    def _claim_token(task: Task) -> Optional[str]:
+        """Lease token for a claimed task: its ``started_at`` (set atomically at
+        claim time by ``get_next_task``). complete/retry/dead writes carry this
+        so a handler the watchdog abandoned can't act on a row that a different
+        worker has since reclaimed under a fresh ``started_at``."""
+        return task.started_at.isoformat() if task.started_at is not None else None
+
     def _all_active_episode_ids_locked(self) -> set[str]:
         """Return episode IDs active in any stage. Caller must hold _active_lock."""
         ids: set[str] = set()
@@ -273,12 +285,19 @@ class TaskWorker:
                 for stage in TaskStage
             }
             active_count = sum(s["active"] for s in stages.values())
+            abandoned = {s.value: n for s, n in self._abandoned_threads.items() if n}
+            abandoned_total = sum(self._abandoned_threads.values())
         return {
             "running": self.is_running(),
             "parallel_jobs": self.parallel_jobs,
             "parallel_jobs_per_stage": {s.value: c for s, c in self.parallel_jobs_per_stage.items()},
             "active_episodes": active_count,
             "stages": stages,
+            # Watchdog-abandoned handler threads (still alive, leaking an
+            # executor slot). Non-zero here is the signal to investigate a
+            # wedged dependency; empty dict when healthy.
+            "abandoned_threads": abandoned,
+            "abandoned_threads_total": abandoned_total,
             "poll_interval": self.poll_interval,
             # Spec #49 L1 — non-closed breakers only (empty when all healthy),
             # so the queue monitor can show which stages are paused on an outage.
@@ -540,13 +559,22 @@ class TaskWorker:
                 else:
                     await asyncio.to_thread(self._process_task, task)
             except (asyncio.TimeoutError, TimeoutError):
+                # The handler thread is abandoned, not killed — it keeps
+                # occupying a slot in the shared thread executor. Count it so
+                # the leak is observable (get_status) and loud: a climbing
+                # total means handlers are wedging faster than they drain, and
+                # the shared executor can eventually saturate every stage.
+                with self._active_lock:
+                    self._abandoned_threads[stage] += 1
+                    total_abandoned = sum(self._abandoned_threads.values())
                 logger.error(
                     "task_handler_timeout",
                     stage=stage.value,
                     task_id=task.id,
                     episode_id=task.episode_id,
                     timeout_s=self._watchdog_timeout_s.get(stage),
-                    note="freeing worker slot; stale-task reset will requeue the abandoned row",
+                    abandoned_threads_total=total_abandoned,
+                    note="freeing worker slot; abandoned thread leaks until it unblocks; stale-task reset requeues the row",
                 )
             finally:
                 with self._active_lock:
@@ -600,8 +628,17 @@ class TaskWorker:
                 # Execute the handler with optional progress callback
                 handler(task, progress_callback)
 
-                # Handler completed successfully - mark task complete
-                self.queue_manager.complete_task(task.id)
+                # Handler completed successfully - mark task complete under the
+                # claim lease. If the watchdog abandoned an earlier attempt on
+                # this row and a different worker has since reclaimed it, our
+                # completion is rejected here and we MUST NOT run the successor
+                # fan-out (that is the double-enqueue the lease guard prevents).
+                if not self.queue_manager.complete_task(task.id, claim_started_at=self._claim_token(task)):
+                    logger.warning(
+                        "task_completion_skipped_claim_lost",
+                        note="row reclaimed by another worker; skipping bookkeeping + successor fan-out",
+                    )
+                    return
                 logger.info("task_completed_successfully")
 
                 # Spec #49 L1 — a success closes the stage's breaker (and is the
@@ -878,6 +915,11 @@ class TaskWorker:
                     error=error_msg,
                     note="not charging retry budget while dependency is down",
                 )
+                claim = self._claim_token(task)
+                if claim is not None:
+                    return self.queue_manager.reschedule_without_budget(
+                        task.id, error_msg, error_class, claim_started_at=claim
+                    )
                 return self.queue_manager.reschedule_without_budget(task.id, error_msg, error_class)
         return self._safe_schedule_retry(task, error_msg, error_class)
 
@@ -913,6 +955,9 @@ class TaskWorker:
             return current
 
         try:
+            claim = self._claim_token(task)
+            if claim is not None:
+                return self.queue_manager.schedule_retry(task.id, error_msg, error_class, claim_started_at=claim)
             return self.queue_manager.schedule_retry(task.id, error_msg, error_class)
         except Exception as e:
             logger.error(
@@ -929,7 +974,11 @@ class TaskWorker:
     def _safe_mark_dead(self, task: Task, error_msg: str, error_class: Optional[str] = None) -> None:
         """``mark_dead`` analogue of ``_safe_schedule_retry``: never leave processing."""
         try:
-            self.queue_manager.mark_dead(task.id, error_msg, error_class)
+            claim = self._claim_token(task)
+            if claim is not None:
+                self.queue_manager.mark_dead(task.id, error_msg, error_class, claim_started_at=claim)
+            else:
+                self.queue_manager.mark_dead(task.id, error_msg, error_class)
         except Exception as e:
             logger.error(
                 "mark_dead_failed",
