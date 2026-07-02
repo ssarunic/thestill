@@ -399,7 +399,7 @@ class PostgresEntityRepository(EntityRepository):
         if role is not None:
             sql += " AND m.role = %s"
             params.append(role)
-        sql += " ORDER BY e.pub_date DESC, m.start_ms ASC LIMIT %s"
+        sql += " ORDER BY e.pub_date DESC NULLS LAST, m.start_ms ASC LIMIT %s"
         params.append(limit)
         with connect(self.dsn) as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -439,7 +439,7 @@ class PostgresEntityRepository(EntityRepository):
             sql += " AND e.pub_date BETWEEN %s AND %s"
             params.append(date_range[0])
             params.append(date_range[1])
-        sql += " ORDER BY e.pub_date DESC, m.start_ms ASC LIMIT %s"
+        sql += " ORDER BY e.pub_date DESC NULLS LAST, m.start_ms ASC LIMIT %s"
         params.append(limit)
         with connect(self.dsn) as conn:
             rows = conn.execute(sql, params).fetchall()

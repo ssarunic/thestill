@@ -508,7 +508,7 @@ class EpisodesMixin:
                   AND e.clean_transcript_path IS NULL
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                ORDER BY e.pub_date DESC
+                ORDER BY e.pub_date DESC NULLS LAST
                 LIMIT %s
                 """,
                 (podcast_id, cutoff, limit),
@@ -1045,7 +1045,7 @@ class EpisodesMixin:
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE p.rss_url = %s
-                ORDER BY e.pub_date DESC
+                ORDER BY e.pub_date DESC NULLS LAST
                 """,
                 (podcast_url,),
             ).fetchall()
@@ -1136,7 +1136,7 @@ class EpisodesMixin:
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
-                ORDER BY e.pub_date DESC
+                ORDER BY e.pub_date DESC NULLS LAST
                 """
             ).fetchall()
 
@@ -1236,10 +1236,13 @@ class EpisodesMixin:
         # Build WHERE clause
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-        # Validate and build ORDER BY clause
+        # Validate and build ORDER BY clause. Null placement is pinned to
+        # SQLite's semantics (NULLs last on DESC, first on ASC) — Postgres
+        # defaults to the opposite, which would float undated episodes to
+        # the top of the default newest-first listing.
         valid_sort_fields = {"pub_date": "e.pub_date", "title": "e.title", "updated_at": "e.updated_at"}
         sort_field = valid_sort_fields.get(sort_by, "e.pub_date")
-        order_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+        order_direction = "ASC NULLS FIRST" if sort_order.lower() == "asc" else "DESC NULLS LAST"
 
         with connect(self.dsn) as conn:
             # Get total count
@@ -1428,7 +1431,7 @@ class EpisodesMixin:
                     WHERE e.podcast_id = %s
                       AND EXISTS (SELECT 1 FROM episode_transcript_links etl
                                   WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL)
-                    ORDER BY e.pub_date DESC
+                    ORDER BY e.pub_date DESC NULLS LAST
                     """,
                     (podcast_id,),
                 ).fetchall()
@@ -1439,7 +1442,7 @@ class EpisodesMixin:
                     FROM episodes e
                     WHERE EXISTS (SELECT 1 FROM episode_transcript_links etl
                                   WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL)
-                    ORDER BY e.pub_date DESC
+                    ORDER BY e.pub_date DESC NULLS LAST
                     """
                 ).fetchall()
 

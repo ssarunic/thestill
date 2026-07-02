@@ -51,7 +51,13 @@ _schema_ready: set[str] = set()
 
 
 def _ensure_pg_schema(dsn: str) -> None:
-    """One-time idempotent typed-schema bootstrap per DSN per process."""
+    """One-time idempotent typed-schema bootstrap per DSN per process.
+
+    NOTE: bootstraps at the default 384-dim vector size, which matches both
+    currently registered embedding models. Before registering a non-384
+    model, thread ``embedding_dim_for(config.embedding_model)`` through here
+    — a dimension mismatch surfaces as a pgvector insert error, not silently.
+    """
     with _schema_lock:
         if dsn in _schema_ready:
             return
