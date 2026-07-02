@@ -43,12 +43,8 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
-from ..repositories.sqlite_briefing_repository import SqliteBriefingRepository
-from ..repositories.sqlite_digest_repository import SqliteDigestRepository
-from ..repositories.sqlite_inbox_repository import SqliteInboxRepository
-from ..repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
-from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
-from ..repositories.sqlite_user_repository import SqliteUserRepository
+from ..repositories.digest_repository import DigestRepository
+from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
@@ -107,8 +103,8 @@ class CachedStaticFiles(StaticFiles):
 def _build_narration_runner(
     config: Config,
     path_manager: PathManager,
-    podcast_repository: SqlitePodcastRepository,
-    digest_repository: SqliteDigestRepository,
+    podcast_repository: PodcastRepository,
+    digest_repository: DigestRepository,
 ) -> Optional[NarrationRunner]:
     """Construct a ``NarrationRunner`` when narration is enabled (spec #33).
 
@@ -154,9 +150,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     if config is None:
         config = load_config()
 
-    # Initialize shared services (same pattern as CLI)
+    # Initialize shared services (same pattern as CLI). Spec #44 — all
+    # persistence resolves through the backend factory: SQLite by default,
+    # Postgres when DATABASE_URL is set.
+    from ..repositories.factory import make_repositories
+
+    repos = make_repositories(config)
     path_manager = PathManager(str(config.storage_path))
-    repository = SqlitePodcastRepository(db_path=config.database_path)
+    repository = repos.podcast
     feed_manager = PodcastFeedManager(
         repository,
         path_manager,
@@ -168,7 +169,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     task_manager = get_task_manager()
 
     # Initialize task queue and worker
-    queue_manager = QueueManager(config.database_path)
+    queue_manager = repos.queue_manager
 
     # RefreshService takes the queue so an inline refresh (web "Refresh" button,
     # add-podcast) auto-enqueues newly discovered episodes for the full pipeline.
@@ -178,13 +179,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     progress_store = ProgressStore()
 
     # Initialize authentication services
-    user_repository = SqliteUserRepository(db_path=config.database_path)
+    user_repository = repos.user
     auth_service = AuthService(config, user_repository)
 
     # Initialize follower + inbox services. The inbox service is injected
     # into FollowerService so ``follow`` can seed the new follower's inbox.
-    follower_repository = SqlitePodcastFollowerRepository(db_path=config.database_path)
-    inbox_repository = SqliteInboxRepository(db_path=config.database_path)
+    follower_repository = repos.follower
+    inbox_repository = repos.inbox
     inbox_service = InboxService.from_config(
         config,
         inbox_repository,
@@ -202,17 +203,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     )
 
     # Initialize digest repository
-    digest_repository = SqliteDigestRepository(db_path=config.database_path)
+    digest_repository = repos.digest
 
-    # Spec #40 — pending transcription operations now live in SQLite.
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
-
-    pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
+    # Spec #40 — pending transcription operations (backend-resolved).
+    pending_ops_repository = repos.pending_ops
 
     # Per-user briefings (spec #36). The renderer is wired in here so
     # production briefings get a script.md on disk; tests/CLIs that
     # only need the state machine can still pass renderer=None.
-    briefing_repository = SqliteBriefingRepository(db_path=config.database_path)
+    briefing_repository = repos.briefing
     briefing_renderer = BriefingRenderer(
         DigestGenerator(path_manager, config.file_storage),
         repository,
@@ -225,21 +224,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         renderer=briefing_renderer,
     )
 
-    # Spec #28 — entity-layer repository. Schema is created by the
-    # podcast repo's migration block; this just opens connections.
+    # Spec #28 — entity-layer repository + search backend, backend-resolved
+    # (spec #44): sqlite-vec locally, pgvector when DATABASE_URL is set.
     from ..core.embedding_model import EmbeddingModel
-    from ..repositories.sqlite_entity_repository import SqliteEntityRepository
-    from ..search.sqlite_vec_client import SqliteVecBackend
+    from ..repositories.factory import make_search_backend
 
-    entity_repository = SqliteEntityRepository(db_path=config.database_path)
+    entity_repository = repos.entity
     # Spec #28 §2.10 — eager construction of both the wrapper and the
     # backend; sentence-transformers itself only loads inside
     # EmbeddingModel.encode_one() on the first semantic/hybrid call.
     embedding_model = EmbeddingModel(config.embedding_model)
-    search_backend = SqliteVecBackend(
-        db_path=config.database_path,
-        embedding_model=embedding_model,
-    )
+    search_backend = make_search_backend(config, embedding_model)
 
     # Create placeholder app_state first (task_worker needs it for handlers)
     app_state = AppState(

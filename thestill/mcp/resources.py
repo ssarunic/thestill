@@ -26,7 +26,6 @@ from mcp.server import Server
 from mcp.types import Resource, TextContent
 from structlog import get_logger
 
-from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..services import PodcastService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
@@ -48,7 +47,10 @@ def setup_resources(server: Server, storage_path: str):
 
     # Initialize shared components
     path_manager = PathManager(storage_path)
-    repository = SqlitePodcastRepository(db_path=config.database_path)
+    # Spec #44 — backend-resolved through the factory.
+    from ..repositories.factory import make_repositories
+
+    repository = make_repositories(config).podcast
     podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
 
     @server.list_resources()

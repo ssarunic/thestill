@@ -33,10 +33,6 @@ from ..core.audio_downloader import AudioDownloader
 from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
-from ..repositories.sqlite_digest_repository import SqliteDigestRepository
-from ..repositories.sqlite_entity_repository import SqliteEntityRepository
-from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
-from ..repositories.sqlite_user_repository import SqliteUserRepository
 from ..services import (
     DigestEpisodeSelector,
     DigestGenerator,
@@ -92,28 +88,25 @@ def setup_tools(server: Server, storage_path: str):
     _session_key = os.getenv("MCP_SESSION_KEY") or f"pid-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     logger.info("mcp_session_key_initialized", session_key=_session_key)
 
-    # Initialize shared components
-    path_manager = PathManager(storage_path)
-    repository = SqlitePodcastRepository(db_path=config.database_path)
-    digest_repository = SqliteDigestRepository(db_path=config.database_path)
-    # Spec #40 — pending transcription operations live in SQLite.
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    # Initialize shared components (spec #44 — persistence backend-resolved
+    # through the factory: SQLite by default, Postgres when DATABASE_URL set).
+    from ..repositories.factory import make_repositories, make_search_backend
 
-    pending_ops_repository = SqlitePendingOperationsRepository(db_path=config.database_path)
+    repos = make_repositories(config)
+    path_manager = PathManager(storage_path)
+    repository = repos.podcast
+    digest_repository = repos.digest
+    # Spec #40 — pending transcription operations (backend-resolved).
+    pending_ops_repository = repos.pending_ops
     # Spec #28 §1.8 — entity-layer repository, surfaced via the
     # entity tools registered below.
-    entity_repository = SqliteEntityRepository(db_path=config.database_path)
-    # Spec #28 §2.10 — sqlite-vec corpus search. The EmbeddingModel
-    # wrapper is cheap; sentence-transformers loads only when
-    # encode_one fires (first semantic/hybrid call).
+    entity_repository = repos.entity
+    # Spec #28 §2.10 — corpus search. The EmbeddingModel wrapper is cheap;
+    # sentence-transformers loads only on the first semantic/hybrid call.
     from ..core.embedding_model import EmbeddingModel
-    from ..search.sqlite_vec_client import SqliteVecBackend
 
     embedding_model = EmbeddingModel(config.embedding_model)
-    search_backend = SqliteVecBackend(
-        db_path=config.database_path,
-        embedding_model=embedding_model,
-    )
+    search_backend = make_search_backend(config, embedding_model)
     podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
@@ -125,12 +118,11 @@ def setup_tools(server: Server, storage_path: str):
     # Wire the queue so an MCP-triggered refresh auto-enqueues newly discovered
     # episodes for the full pipeline (parity with the web app and CLI). Tasks
     # are processed by a running server/worker.
-    from ..core.queue_manager import QueueManager as _RefreshQueueManager
 
     refresh_service = RefreshService(
         feed_manager,
         podcast_service,
-        queue_manager=_RefreshQueueManager(str(config.database_path)),
+        queue_manager=repos.queue_manager,
         config=config,
     )
     audio_downloader = AudioDownloader(
@@ -138,7 +130,7 @@ def setup_tools(server: Server, storage_path: str):
         max_bytes=config.max_audio_bytes,
     )
     audio_preprocessor = AudioPreprocessor(logger=logger)
-    user_repository = SqliteUserRepository(db_path=config.database_path)
+    user_repository = repos.user
     auth_service = AuthService(config, user_repository)
     digest_generator = DigestGenerator(path_manager, config.file_storage)
     digest_selector = DigestEpisodeSelector(repository, digest_repository)

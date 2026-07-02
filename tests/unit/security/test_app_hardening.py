@@ -81,19 +81,19 @@ def _config_for(**overrides) -> Config:
 
 def _build_app(config: Config):
     """Construct the FastAPI app with most heavy deps stubbed out."""
-    # Patch repositories / services so we don't need a real DB or network.
+    # Patch the persistence factory + services so we don't need a real DB or
+    # network. Spec #44: app.py resolves all repositories through
+    # repositories.factory.make_repositories, so that seam (patched where
+    # app.py imports it from) replaces the per-class Sqlite* patches.
     with (
-        patch("thestill.web.app.SqlitePodcastRepository"),
-        patch("thestill.web.app.SqliteDigestRepository"),
-        patch("thestill.web.app.SqliteUserRepository"),
-        patch("thestill.web.app.SqlitePodcastFollowerRepository"),
+        patch("thestill.repositories.factory.make_repositories"),
+        patch("thestill.repositories.factory.make_search_backend"),
         patch("thestill.web.app.PodcastFeedManager"),
         patch("thestill.web.app.PodcastService"),
         patch("thestill.web.app.RefreshService"),
         patch("thestill.web.app.StatsService"),
         patch("thestill.web.app.AuthService"),
         patch("thestill.web.app.FollowerService"),
-        patch("thestill.web.app.QueueManager"),
         patch("thestill.web.app.ProgressStore"),
         patch("thestill.web.app.get_task_manager"),
         patch("thestill.web.app.create_task_handlers"),

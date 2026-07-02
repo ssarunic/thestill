@@ -217,6 +217,11 @@ class Config(BaseModel):
     # Storage Paths
     storage_path: Path = Path("./data")
     database_path: str = ""  # SQLite database path (default: storage_path/podcasts.db)
+    # Spec #44 — Postgres backend selector. When ``DATABASE_URL`` is set, the
+    # repository factory (``repositories.factory``) returns Postgres-backed
+    # implementations; otherwise it falls back to the SQLite path above. Ships
+    # empty so local/self-hosted stays on SQLite with zero config change.
+    database_url: str = ""  # psycopg DSN, e.g. postgresql://user:pass@host:5432/db
 
     # Spec #35 — pluggable file storage. ``local`` keeps the historical
     # on-disk behaviour; ``s3`` routes audio/transcript/summary artefacts
@@ -567,6 +572,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "dalston_model": os.getenv("DALSTON_MODEL", ""),
         "storage_path": storage_path,
         "database_path": database_path,
+        "database_url": os.getenv("DATABASE_URL", ""),  # Spec #44 — empty = SQLite
         # Note: Path operations should use config.path_manager methods
         # Removed: audio_path, downsampled_audio_path, raw_transcripts_path,
         # clean_transcripts_path, summaries_path, evaluations_path

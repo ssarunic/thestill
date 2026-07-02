@@ -15,6 +15,24 @@ jobs:
     name: Python tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Spec #44 — real Postgres (with pgvector) so the dual-backend contract
+    # suites run their Postgres cases in CI instead of skipping. The suites
+    # skip cleanly when TEST_DATABASE_URL is unset, so local SQLite-only
+    # runs are unaffected.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: thestill_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -32,8 +50,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install (frozen) with dev extras
-        run: uv sync --frozen --extra dev
+      - name: Install (frozen) with dev + postgres extras
+        run: uv sync --frozen --extra dev --extra postgres
 
       # spec #42 (FM-3): gate the tz-naive-datetime ban (ruff DTZ rules) +
       # the existing print() ban. A tz-naive datetime slipping back in is
@@ -45,6 +63,10 @@ jobs:
       - name: pytest
         # Skip tests/perf/: a separate ``latency`` job runs them so noise on
         # the latency budget doesn't block unrelated unit-test work.
+        # TEST_DATABASE_URL activates the Postgres cases of the dual-backend
+        # contract suites (spec #44) against the pgvector service above.
+        env:
+          TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:55432/thestill_test
         run: uv run pytest -q --tb=short --ignore=tests/perf
 
   latency:

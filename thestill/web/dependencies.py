@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from ..repositories.inbox_repository import InboxRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
@@ -120,7 +120,7 @@ class AppState:
     # Spec #40 — pending transcription operations now live in SQLite.
     # ``Optional`` only so legacy test fixtures that construct AppState by
     # hand don't have to update yet; production paths always pass a repo.
-    pending_ops_repository: "Optional[SqlitePendingOperationsRepository]" = None
+    pending_ops_repository: "Optional[PendingOperationsRepository]" = None
     # Spec #48 — background refresh scheduler (set at startup when enabled).
     refresh_scheduler: "Optional[RefreshScheduler]" = None
     entity_extractor: "Optional[EntityExtractor]" = None

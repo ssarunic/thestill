@@ -1,10 +1,18 @@
 # SQLite → Postgres Migration
 
-> **Status:** 📝 Draft (2026-05-22)
+> **Status:** 🚧 Implemented on branch `feat/postgres-migration-phase0` (2026-07-02) —
+> all phases 0–6 code-complete: typed native schema (uuid/timestamptz/boolean/
+> jsonb/vector + HNSW), all 8 repos ported (EntityRepository +
+> PendingOperationsRepository ABCs extracted), PostgresQueueManager with a
+> single-statement `FOR UPDATE SKIP LOCKED` claim, pgvector search backend +
+> chunk writer + related-builder, `make_repositories` factory wired through
+> cli/web/mcp/task-handlers, and a two-step data migration (text mirror +
+> parity oracle → in-database typed promotion). Dual-backend contract suites
+> run every port against a real Postgres. Alembic adopted (initial revision
+> executes the shared SCHEMA_SQL) and CI runs the dual-backend contract
+> suites against a pgvector service.
 > **Created:** 2026-05-22
-> **Updated:** 2026-07-01 — re-verified against codebase; no migration work
-> started, verdict unchanged. Refreshed file sizes, line numbers, and call-site
-> counts; noted the `search/sqlite_vec_client.py` split.
+> **Updated:** 2026-07-02
 > **Author:** Engineering
 > **Priority:** High — prerequisite for [43-aws-hosting.md](43-aws-hosting.md)
 > **Related:** [43-aws-hosting.md](43-aws-hosting.md), [01-architecture.md](01-architecture.md) (repository pattern), [04-testing.md](04-testing.md), [28-corpus-search-and-entities.md](28-corpus-search-and-entities.md) (sqlite-vec / entities), [16-full-pipeline-and-failure-handling.md](16-full-pipeline-and-failure-handling.md) (task queue + DLQ), [20-parallel-task-queues.md](20-parallel-task-queues.md), [42-robustness-and-failure-mode-hardening.md](42-robustness-and-failure-mode-hardening.md) (FM-3 datetime boundary, FM-5 test fidelity)
