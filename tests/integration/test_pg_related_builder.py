@@ -46,6 +46,10 @@ def _pg_ok(dsn: str) -> bool:
         return False
 
 
+# sklearn (TfidfVectorizer) ships in the [entities] extra; the CI python job
+# installs only dev+postgres, so skip rather than fail there.
+pytest.importorskip("sklearn", reason="related-builder needs scikit-learn ([entities] extra)")
+
 pytestmark = pytest.mark.skipif(not _pg_ok(PG_DSN), reason="Postgres not reachable — set TEST_DATABASE_URL")
 
 DIM = 384

@@ -75,6 +75,12 @@ postgres = [
     "psycopg[binary,pool]>=3.1",
     # pgvector adapter: numpy arrays <-> vector columns (search + chunk writer).
     "pgvector>=0.3",
+    # register_vector round-trips vector columns as numpy arrays; also used by
+    # the chunk writer / promotion streaming. Cheap, CPU-only.
+    "numpy>=1.24",
+    # Spec #44 Phase 5 — versioned schema migrations. The initial revision
+    # executes postgres_schema.SCHEMA_SQL (single source of truth).
+    "alembic>=1.13",
 ]
 dev = [
     "pytest>=7.4.0",

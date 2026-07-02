@@ -612,19 +612,13 @@ def test_transcript_links_download_lifecycle(h):
         ],
     )
 
-    if h.backend == "sqlite":
-        # Latent SQLite bug: get_episodes_with_undownloaded_transcript_links
-        # projects a partial column list its own row mapper cannot hydrate
-        # (raises IndexError on 'description_html'). The Postgres port fixes
-        # the projection; parity here is asserted on the PG side only.
-        with pytest.raises(Exception):
-            h.repo.get_episodes_with_undownloaded_transcript_links()
-    else:
-        pending = h.repo.get_episodes_with_undownloaded_transcript_links()
-        assert [(e.id, len(ls)) for e, ls in pending] == [(ep.id, 2)]
-        pending = h.repo.get_episodes_with_undownloaded_transcript_links(podcast_id=pid)
-        assert [(e.id, len(ls)) for e, ls in pending] == [(ep.id, 2)]
-        assert h.repo.get_episodes_with_undownloaded_transcript_links(podcast_id=MISSING_ID) == []
+    # Both backends hydrate full rows now — the SQLite partial-projection
+    # bug this branch used to document was fixed alongside the PG port.
+    pending = h.repo.get_episodes_with_undownloaded_transcript_links()
+    assert [(e.id, len(ls)) for e, ls in pending] == [(ep.id, 2)]
+    pending = h.repo.get_episodes_with_undownloaded_transcript_links(podcast_id=pid)
+    assert [(e.id, len(ls)) for e, ls in pending] == [(ep.id, 2)]
+    assert h.repo.get_episodes_with_undownloaded_transcript_links(podcast_id=MISSING_ID) == []
 
     links = h.repo.get_transcript_links(ep.id)
     assert h.repo.mark_transcript_downloaded(links[0].id, "external_transcripts/t1.vtt") is True
@@ -635,9 +629,8 @@ def test_transcript_links_download_lifecycle(h):
     assert len(downloaded) == 1
     assert downloaded[0].downloaded_path == "external_transcripts/t1.vtt"
 
-    if h.backend == "postgres":
-        h.repo.mark_transcript_downloaded(links[1].id, "external_transcripts/t2.srt")
-        assert h.repo.get_episodes_with_undownloaded_transcript_links() == []
+    h.repo.mark_transcript_downloaded(links[1].id, "external_transcripts/t2.srt")
+    assert h.repo.get_episodes_with_undownloaded_transcript_links() == []
 
 
 # ---------------------------------------------------------------------------

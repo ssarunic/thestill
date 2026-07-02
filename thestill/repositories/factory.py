@@ -50,20 +50,21 @@ _schema_lock = threading.Lock()
 _schema_ready: set[str] = set()
 
 
-def _ensure_pg_schema(dsn: str) -> None:
+def _ensure_pg_schema(dsn: str, config: Optional["Config"] = None) -> None:
     """One-time idempotent typed-schema bootstrap per DSN per process.
 
-    NOTE: bootstraps at the default 384-dim vector size, which matches both
-    currently registered embedding models. Before registering a non-384
-    model, thread ``embedding_dim_for(config.embedding_model)`` through here
-    — a dimension mismatch surfaces as a pgvector insert error, not silently.
+    The pgvector column width is resolved from the configured embedding
+    model via ``search.base.embedding_dim_for`` so a non-384-dim model gets
+    a matching schema instead of insert-time dimension errors.
     """
     with _schema_lock:
         if dsn in _schema_ready:
             return
+        from ..search.base import DEFAULT_EMBEDDING_MODEL, embedding_dim_for
         from .postgres_schema import ensure_schema
 
-        ensure_schema(dsn)
+        model = getattr(config, "embedding_model", None) or DEFAULT_EMBEDDING_MODEL
+        ensure_schema(dsn, embedding_dim=embedding_dim_for(model))
         _schema_ready.add(dsn)
 
 
@@ -94,7 +95,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     """Return the full backend-resolved persistence bundle."""
     if uses_postgres(config):
         dsn = config.database_url
-        _ensure_pg_schema(dsn)
+        _ensure_pg_schema(dsn, config)
 
         from ..core.postgres_queue_manager import PostgresQueueManager
         from .postgres_briefing_repository import PostgresBriefingRepository
@@ -148,7 +149,7 @@ def make_user_repository(config: "Config") -> UserRepository:
     """Return just the configured user repository (kept for callers that
     only need auth; prefers the bundle for full wiring)."""
     if uses_postgres(config):
-        _ensure_pg_schema(config.database_url)
+        _ensure_pg_schema(config.database_url, config)
         from .postgres_user_repository import PostgresUserRepository
 
         return PostgresUserRepository(config.database_url)
@@ -161,7 +162,7 @@ def make_user_repository(config: "Config") -> UserRepository:
 def make_search_backend(config: "Config", embedding_model: Any) -> Any:
     """Return the configured SearchBackend (pgvector or sqlite-vec)."""
     if uses_postgres(config):
-        _ensure_pg_schema(config.database_url)
+        _ensure_pg_schema(config.database_url, config)
         from ..search.pgvector_client import PgVectorBackend
 
         return PgVectorBackend(dsn=config.database_url, embedding_model=embedding_model)
@@ -174,7 +175,7 @@ def make_search_backend(config: "Config", embedding_model: Any) -> Any:
 def make_chunk_writer(config: "Config", embedding_model: Any) -> Any:
     """Return the configured chunk writer (pgvector or sqlite-vec)."""
     if uses_postgres(config):
-        _ensure_pg_schema(config.database_url)
+        _ensure_pg_schema(config.database_url, config)
         from ..core.postgres_chunk_writer import PostgresChunkWriter
 
         return PostgresChunkWriter(dsn=config.database_url, embedding_model=embedding_model)
@@ -187,7 +188,7 @@ def make_chunk_writer(config: "Config", embedding_model: Any) -> Any:
 def make_queue_manager(config: "Config") -> Any:
     """Return the configured queue manager (SKIP LOCKED on Postgres)."""
     if uses_postgres(config):
-        _ensure_pg_schema(config.database_url)
+        _ensure_pg_schema(config.database_url, config)
         from ..core.postgres_queue_manager import PostgresQueueManager
 
         return PostgresQueueManager(config.database_url)
