@@ -74,10 +74,12 @@ def repo(request, tmp_path):
 
     from thestill.repositories.postgres_user_repository import PostgresUserRepository
 
-    r = PostgresUserRepository(PG_DSN)  # ensures schema
+    # DROP (not TRUNCATE) first: guarantees the repo's ensure_schema recreates
+    # the typed tables even if something else (an old tool run, a broken test)
+    # left same-named tables with a different shape in this database.
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE users, revoked_tokens")
-    yield r
+        conn.execute("DROP TABLE IF EXISTS users, revoked_tokens CASCADE")
+    yield PostgresUserRepository(PG_DSN)  # ensures schema
 
 
 def _mk_user(**overrides) -> User:

@@ -112,7 +112,7 @@ def test_parity_oracle_catches_tampering(sqlite_db):
     db_migration.migrate_all(sqlite_db, PG_DSN)
     # Corrupt one value in the Postgres copy.
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("UPDATE podcasts SET title = 'TAMPERED' WHERE id = 'p1'")
+        conn.execute("UPDATE sqlite_mirror.podcasts SET title = 'TAMPERED' WHERE id = 'p1'")
         conn.commit()
 
     report = db_migration.verify_parity(sqlite_db, PG_DSN)
@@ -143,7 +143,7 @@ def test_embedded_nul_migrates_without_error_and_keeps_parity(tmp_path):
     import psycopg
 
     with psycopg.connect(PG_DSN) as pconn:
-        val = pconn.execute("SELECT txt FROM t WHERE txt LIKE 'saut%'").fetchone()[0]
+        val = pconn.execute("SELECT txt FROM sqlite_mirror.t WHERE txt LIKE 'saut%'").fetchone()[0]
     assert val == "saut onions"  # NUL dropped, rest intact
 
 
@@ -152,7 +152,7 @@ def test_parity_oracle_catches_row_count_drift(sqlite_db):
 
     db_migration.migrate_all(sqlite_db, PG_DSN)
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("DELETE FROM followers WHERE tag = 'a'")
+        conn.execute("DELETE FROM sqlite_mirror.followers WHERE tag = 'a'")
         conn.commit()
 
     report = db_migration.verify_parity(sqlite_db, PG_DSN)

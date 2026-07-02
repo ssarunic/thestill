@@ -172,18 +172,26 @@ def _coerce_for_copy(value: object) -> object:
     return _strip_nul(str(value))
 
 
+# The mirror lives in its own Postgres schema, NEVER in ``public``. The app's
+# typed tables (PostgresUserRepository et al.) own ``public``; a mirror table
+# with the same name would otherwise clobber them via DROP TABLE ... CASCADE.
+MIRROR_SCHEMA = "sqlite_mirror"
+
+
 def migrate_table(sconn: sqlite3.Connection, pconn, table: str) -> int:
-    """(Re)create ``table`` in Postgres as a text/bytea mirror and copy all rows
-    via COPY. Returns the number of rows copied."""
+    """(Re)create ``table`` in the mirror schema and copy all rows via COPY.
+    Returns the number of rows copied."""
     cols = _columns(sconn, table)
     col_defs = ", ".join(f'"{name}" {_pg_coltype(decl)}' for name, decl in cols)
     col_list = ", ".join(f'"{name}"' for name, _ in cols)
+    qualified = f'"{MIRROR_SCHEMA}"."{table}"'
 
     with pconn.cursor() as cur:
-        cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-        cur.execute(f'CREATE TABLE "{table}" ({col_defs})')
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{MIRROR_SCHEMA}"')
+        cur.execute(f"DROP TABLE IF EXISTS {qualified} CASCADE")
+        cur.execute(f"CREATE TABLE {qualified} ({col_defs})")
         copied = 0
-        with cur.copy(f'COPY "{table}" ({col_list}) FROM STDIN') as copy:
+        with cur.copy(f"COPY {qualified} ({col_list}) FROM STDIN") as copy:
             for row in sconn.execute(f'SELECT {col_list} FROM "{table}"'):
                 copy.write_row([_coerce_for_copy(v) for v in row])
                 copied += 1
@@ -226,7 +234,7 @@ def _pg_table_stats(pconn, sconn: sqlite3.Connection, table: str) -> tuple[int, 
     count = 0
     running = 0
     with pconn.cursor() as cur:
-        cur.execute(f'SELECT {col_list} FROM "{table}"')
+        cur.execute(f'SELECT {col_list} FROM "{MIRROR_SCHEMA}"."{table}"')
         for row in cur:
             running += _row_int(row)
             count += 1
