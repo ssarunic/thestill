@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -272,10 +273,15 @@ def _main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     subset = args.tables.split(",") if args.tables else None
 
+    # CLI output goes to stdout via sys.stdout.write — this is an operator
+    # tool whose report must be pipeable/greppable, not a log stream. The
+    # repo's T201 print ban still applies, hence the explicit writes.
+    out = sys.stdout.write
+
     if args.mode == "tables":
         conn = sqlite3.connect(f"file:{args.sqlite}?mode=ro", uri=True)
         for t in discover_source_tables(conn):
-            print(t)
+            out(f"{t}\n")
         conn.close()
         return 0
 
@@ -285,10 +291,10 @@ def _main(argv: Optional[list[str]] = None) -> int:
     if args.mode == "migrate":
         counts = migrate_all(args.sqlite, args.postgres, subset)
         total = sum(counts.values())
-        print(f"Migrated {len(counts)} tables, {total} rows.")
+        out(f"Migrated {len(counts)} tables, {total} rows.\n")
 
     report = verify_parity(args.sqlite, args.postgres, subset)
-    print(report.summary())
+    out(report.summary() + "\n")
     return 0 if report.ok else 1
 
 
