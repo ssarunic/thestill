@@ -36,6 +36,7 @@ from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedTranscript
 from ..utils.sqlite_ext import connect
+from ..utils.text_sanitizer import sanitize_text
 from .embedding_model import EmbeddingModel, centroid_blob
 
 logger = get_logger(__name__)
@@ -104,7 +105,22 @@ class ChunkWriter:
             )
             return 0
 
-        texts = [_segment_text(seg.speaker, seg.text) for seg in content_segs]
+        # Defense-in-depth vs the sauté-NUL incident: the CleanupPatch
+        # validator scrubs NEW clean-stage output, but reindex reads
+        # transcript JSON from disk — legacy files may predate the validator.
+        # Never let a control char reach chunks.text (Postgres rejects NUL).
+        texts = []
+        stripped_total = 0
+        for seg in content_segs:
+            clean, removed = sanitize_text(_segment_text(seg.speaker, seg.text))
+            stripped_total += removed
+            texts.append(clean)
+        if stripped_total:
+            logger.warning(
+                "chunk_text_control_chars_stripped",
+                episode_id=episode_id,
+                removed=stripped_total,
+            )
         embeddings = self.embedding_model.encode_batch(texts)
         rows = [
             (
