@@ -33,14 +33,50 @@ lifecycle is deliberately out of this first slice.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import psycopg
 from psycopg.rows import dict_row
 
 
-def connect(dsn: str) -> psycopg.Connection:
+def connect(dsn: str, *, vector: bool = False) -> psycopg.Connection:
     """Open a psycopg connection with dict rows.
 
     Returns the connection object itself so callers use it as a context
     manager: ``with connect(dsn) as conn: conn.execute(...)``.
+
+    Args:
+        dsn: connection string.
+        vector: register the pgvector adapter on this connection so
+            numpy arrays / lists bind to ``vector`` columns and reads
+            come back as numpy arrays. Only search/chunk code needs it.
     """
-    return psycopg.connect(dsn, row_factory=dict_row)
+    conn = psycopg.connect(dsn, row_factory=dict_row)
+    if vector:
+        from pgvector.psycopg import register_vector
+
+        register_vector(conn)
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Port conventions (spec #44) — every Postgres repository follows these:
+#
+#   uuid columns:   pass Python str params (psycopg sends an untyped literal,
+#                   PG coerces); READS return uuid.UUID → wrap with as_str().
+#   timestamptz:    pass tz-aware datetime objects; reads are tz-aware
+#                   datetimes already — no .isoformat()/fromisoformat().
+#   boolean:        pass/receive Python bool — no 0/1 mapping.
+#   jsonb:          wrap writes in psycopg.types.json.Jsonb; reads are already
+#                   list/dict — no json.loads().
+#   placeholders:   %s (never ?).
+#   upserts:        INSERT ... ON CONFLICT (...) DO UPDATE/NOTHING.
+#   generated ids:  INSERT ... RETURNING id (never cursor.lastrowid).
+#   LIKE:           SQLite LIKE is ASCII-case-insensitive; use ILIKE when the
+#                   query is a user-facing search.
+# ---------------------------------------------------------------------------
+
+
+def as_str(value: object) -> Optional[str]:
+    """uuid.UUID → str passthrough for row parsing (None-safe)."""
+    return None if value is None else str(value)

@@ -28,7 +28,6 @@ explicit prevents accidental partial implementations.
 import json
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -38,6 +37,13 @@ from structlog import get_logger
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 
+# ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
+# spec #44; re-exported here so existing call sites keep importing them
+# from this module.
+from .entity_repository import EntityHit, EntityRepository, MentionContext
+
+__all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
+
 logger = get_logger(__name__)
 
 # Keeper-tiebreak ranking for ``find_duplicate_qid_pairs``. Derived
@@ -46,7 +52,7 @@ logger = get_logger(__name__)
 _TYPE_PRIORITY = {t.value: i for i, t in enumerate(EntityType)}
 
 
-class SqliteEntityRepository:
+class SqliteEntityRepository(EntityRepository):
     """Phase-0 typed stub for ``entities`` / ``entity_mentions`` tables.
 
     The schema migration lives in ``SqlitePodcastRepository._run_migrations``
@@ -1698,50 +1704,6 @@ def _row_to_enrichment(row: sqlite3.Row) -> EntityEnrichment:
         created_at=_parse_dt(_row_get(row, "created_at")) or now,
         updated_at=_parse_dt(_row_get(row, "updated_at")) or now,
     )
-
-
-@dataclass(frozen=True)
-class EntityHit:
-    """Spec #28 §4.1 — one row from ``search_entities_by_prefix``.
-
-    Lightweight projection used by the ⌘K typeahead path: the full
-    ``EntityRecord`` carries description + timestamps that aren't
-    needed in a dropdown list. ``matched_alias`` is non-``None`` only
-    when the prefix didn't hit ``canonical_name`` directly — the UI
-    uses it to render "Musk → Elon Musk" hints.
-    """
-
-    id: str
-    type: str
-    canonical_name: str
-    matched_alias: Optional[str]
-    mention_count: int
-    # Role boost — non-``None`` when this entity is anchored as a host
-    # of a podcast or guest/recurring on episodes. Lets the typeahead
-    # surface anchor entities even when they have zero transcript
-    # mentions (a host who never says their own name).
-    role: Optional[str] = None
-    role_episode_count: int = 0
-
-
-@dataclass(frozen=True)
-class MentionContext:
-    """A resolved ``EntityMention`` joined with its episode + podcast +
-    entity, ready to render as a ``CitationRow`` (Strategy §4).
-
-    The joined fields live alongside the mention rather than nested so
-    the MCP-tool layer can pluck what it needs without re-joining.
-    """
-
-    mention: EntityMention
-    episode_id: str
-    episode_title: str
-    episode_pub_date: Optional[datetime]
-    podcast_id: str
-    podcast_title: str
-    podcast_slug: str
-    entity_type: Optional[str]
-    entity_canonical_name: Optional[str]
 
 
 def _row_to_mention_context(row: sqlite3.Row) -> MentionContext:

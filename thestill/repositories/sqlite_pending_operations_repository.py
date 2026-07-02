@@ -35,6 +35,7 @@ from structlog import get_logger
 
 from ..models.pending_operation import PendingOperation
 from ..utils.sqlite_ext import connect
+from .pending_operations_repository import PendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,7 @@ def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-class SqlitePendingOperationsRepository:
+class SqlitePendingOperationsRepository(PendingOperationsRepository):
     """SQLite-backed pending transcription operations.
 
     Thread-safety: connection-per-operation via the ``_get_connection``

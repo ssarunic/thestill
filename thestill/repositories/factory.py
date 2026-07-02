@@ -12,24 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Repository backend selector (spec #44 Phase 0).
+"""Repository backend selector (spec #44).
 
-Single wiring point that returns SQLite- or Postgres-backed repositories based
-on config, replacing the ~21 hardcoded ``Sqlite*Repository(db_path=…)`` call
-sites across cli / web / mcp. When ``config.database_url`` is set, Postgres
-implementations are returned; otherwise the SQLite path is used, so local and
-self-hosted keep working with zero config change.
+Single wiring point that returns SQLite- or Postgres-backed persistence based
+on config, replacing the hardcoded ``Sqlite*Repository(db_path=…)`` call sites
+across cli / web / mcp. When ``config.database_url`` is set, Postgres
+implementations are returned (after a one-time idempotent schema bootstrap);
+otherwise the SQLite path is used, so local and self-hosted keep working with
+zero config change.
 
-This slice wires the repos that have a Postgres implementation today
-(``user``). As each remaining repo is ported (spec #44 Phases 1–2), add a
-``make_*_repository`` here — the entry points call the factory, not the
-concrete classes, so they never change again.
+Everything is lazy-imported per backend: a SQLite-only install never imports
+psycopg, and vice versa.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import threading
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional
 
+from .briefing_repository import BriefingRepository
+from .digest_repository import DigestRepository
+from .inbox_repository import InboxRepository
+from .podcast_follower_repository import PodcastFollowerRepository
 from .user_repository import UserRepository
 
 if TYPE_CHECKING:
@@ -41,10 +46,103 @@ def uses_postgres(config: "Config") -> bool:
     return bool(getattr(config, "database_url", "") or "")
 
 
-def make_user_repository(config: "Config") -> UserRepository:
-    """Return the configured user repository (Postgres if ``DATABASE_URL`` set,
-    else SQLite)."""
+_schema_lock = threading.Lock()
+_schema_ready: set[str] = set()
+
+
+def _ensure_pg_schema(dsn: str) -> None:
+    """One-time idempotent typed-schema bootstrap per DSN per process."""
+    with _schema_lock:
+        if dsn in _schema_ready:
+            return
+        from .postgres_schema import ensure_schema
+
+        ensure_schema(dsn)
+        _schema_ready.add(dsn)
+
+
+@dataclass
+class RepositoryBundle:
+    """Everything the entry points need, backend-resolved once.
+
+    ``podcast`` satisfies both PodcastRepository and EpisodeRepository (both
+    concrete classes implement the two ABCs). ``entity`` / ``pending_ops`` /
+    ``queue_manager`` are typed loosely because their interfaces live in
+    their own modules (EntityRepository / PendingOperationsRepository) and the
+    queue is duck-typed by the worker.
+    """
+
+    backend: str  # "sqlite" | "postgres"
+    podcast: Any
+    user: UserRepository
+    follower: PodcastFollowerRepository
+    inbox: InboxRepository
+    digest: DigestRepository
+    briefing: BriefingRepository
+    pending_ops: Any
+    entity: Any
+    queue_manager: Any
+
+
+def make_repositories(config: "Config") -> RepositoryBundle:
+    """Return the full backend-resolved persistence bundle."""
     if uses_postgres(config):
+        dsn = config.database_url
+        _ensure_pg_schema(dsn)
+
+        from ..core.postgres_queue_manager import PostgresQueueManager
+        from .postgres_briefing_repository import PostgresBriefingRepository
+        from .postgres_digest_repository import PostgresDigestRepository
+        from .postgres_entity_repository import PostgresEntityRepository
+        from .postgres_inbox_repository import PostgresInboxRepository
+        from .postgres_pending_operations_repository import PostgresPendingOperationsRepository
+        from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
+        from .postgres_podcast_repository import PostgresPodcastRepository
+        from .postgres_user_repository import PostgresUserRepository
+
+        return RepositoryBundle(
+            backend="postgres",
+            podcast=PostgresPodcastRepository(dsn),
+            user=PostgresUserRepository(dsn),
+            follower=PostgresPodcastFollowerRepository(dsn),
+            inbox=PostgresInboxRepository(dsn),
+            digest=PostgresDigestRepository(dsn),
+            briefing=PostgresBriefingRepository(dsn),
+            pending_ops=PostgresPendingOperationsRepository(dsn),
+            entity=PostgresEntityRepository(dsn),
+            queue_manager=PostgresQueueManager(dsn),
+        )
+
+    db_path = str(config.database_path)
+    from ..core.queue_manager import QueueManager
+    from .sqlite_briefing_repository import SqliteBriefingRepository
+    from .sqlite_digest_repository import SqliteDigestRepository
+    from .sqlite_entity_repository import SqliteEntityRepository
+    from .sqlite_inbox_repository import SqliteInboxRepository
+    from .sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
+    from .sqlite_podcast_repository import SqlitePodcastRepository
+    from .sqlite_user_repository import SqliteUserRepository
+
+    return RepositoryBundle(
+        backend="sqlite",
+        podcast=SqlitePodcastRepository(db_path=db_path),
+        user=SqliteUserRepository(db_path=db_path),
+        follower=SqlitePodcastFollowerRepository(db_path=db_path),
+        inbox=SqliteInboxRepository(db_path=db_path),
+        digest=SqliteDigestRepository(db_path=db_path),
+        briefing=SqliteBriefingRepository(db_path=db_path),
+        pending_ops=SqlitePendingOperationsRepository(db_path=db_path),
+        entity=SqliteEntityRepository(db_path=db_path),
+        queue_manager=QueueManager(db_path),
+    )
+
+
+def make_user_repository(config: "Config") -> UserRepository:
+    """Return just the configured user repository (kept for callers that
+    only need auth; prefers the bundle for full wiring)."""
+    if uses_postgres(config):
+        _ensure_pg_schema(config.database_url)
         from .postgres_user_repository import PostgresUserRepository
 
         return PostgresUserRepository(config.database_url)
@@ -52,3 +150,42 @@ def make_user_repository(config: "Config") -> UserRepository:
     from .sqlite_user_repository import SqliteUserRepository
 
     return SqliteUserRepository(db_path=config.database_path)
+
+
+def make_search_backend(config: "Config", embedding_model: Any) -> Any:
+    """Return the configured SearchBackend (pgvector or sqlite-vec)."""
+    if uses_postgres(config):
+        _ensure_pg_schema(config.database_url)
+        from ..search.pgvector_client import PgVectorBackend
+
+        return PgVectorBackend(dsn=config.database_url, embedding_model=embedding_model)
+
+    from ..search.sqlite_vec_client import SqliteVecBackend
+
+    return SqliteVecBackend(db_path=str(config.database_path), embedding_model=embedding_model)
+
+
+def make_chunk_writer(config: "Config", embedding_model: Any) -> Any:
+    """Return the configured chunk writer (pgvector or sqlite-vec)."""
+    if uses_postgres(config):
+        _ensure_pg_schema(config.database_url)
+        from ..core.postgres_chunk_writer import PostgresChunkWriter
+
+        return PostgresChunkWriter(dsn=config.database_url, embedding_model=embedding_model)
+
+    from ..core.chunk_writer import ChunkWriter
+
+    return ChunkWriter(db_path=str(config.database_path), embedding_model=embedding_model)
+
+
+def make_queue_manager(config: "Config") -> Any:
+    """Return the configured queue manager (SKIP LOCKED on Postgres)."""
+    if uses_postgres(config):
+        _ensure_pg_schema(config.database_url)
+        from ..core.postgres_queue_manager import PostgresQueueManager
+
+        return PostgresQueueManager(config.database_url)
+
+    from ..core.queue_manager import QueueManager
+
+    return QueueManager(str(config.database_path))

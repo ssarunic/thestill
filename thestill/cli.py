@@ -40,6 +40,7 @@ from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.sqlite_digest_repository import SqliteDigestRepository
 from .repositories.sqlite_inbox_repository import SqliteInboxRepository
+from .repositories.pending_operations_repository import PendingOperationsRepository
 from .repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -91,7 +92,7 @@ class CLIContext:
         follower_repository: SqlitePodcastFollowerRepository,
         inbox_repository: SqliteInboxRepository,
         inbox_service: InboxService,
-        pending_ops_repository: Optional[SqlitePendingOperationsRepository] = None,
+        pending_ops_repository: Optional[PendingOperationsRepository] = None,
         entity_repository=None,
         search_backend=None,
         embedding_model=None,

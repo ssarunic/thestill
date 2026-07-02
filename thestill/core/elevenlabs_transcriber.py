@@ -43,7 +43,7 @@ from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
 
 if TYPE_CHECKING:
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -101,7 +101,7 @@ class ElevenLabsTranscriber(Transcriber):
         language: Optional[str] = None,
         tag_audio_events: bool = False,
         path_manager: Optional[PathManager] = None,
-        pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
+        pending_ops_repository: Optional["PendingOperationsRepository"] = None,
         use_async: bool = True,
         async_threshold_mb: int = 0,
         wait_for_webhook: bool = False,

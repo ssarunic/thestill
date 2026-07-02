@@ -57,6 +57,12 @@ def _pg_reachable(dsn: str) -> bool:
 
 PG_OK = _pg_reachable(PG_DSN)
 
+# jti is always str(uuid.uuid4()) in production (utils/jwt.py) — use
+# production-shaped values here (FM-5), not arbitrary strings.
+JTI_1 = "11111111-1111-4111-8111-111111111111"
+JTI_OLD = "22222222-2222-4222-8222-222222222222"
+JTI_FRESH = "33333333-3333-4333-8333-333333333333"
+
 
 @pytest.fixture(params=["sqlite", "postgres"])
 def repo(request, tmp_path):
@@ -74,12 +80,12 @@ def repo(request, tmp_path):
 
     from thestill.repositories.postgres_user_repository import PostgresUserRepository
 
-    # DROP (not TRUNCATE) first: guarantees the repo's ensure_schema recreates
-    # the typed tables even if something else (an old tool run, a broken test)
-    # left same-named tables with a different shape in this database.
+    from thestill.repositories.postgres_schema import ensure_schema
+
+    ensure_schema(PG_DSN)  # idempotent typed-schema bootstrap
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("DROP TABLE IF EXISTS users, revoked_tokens CASCADE")
-    yield PostgresUserRepository(PG_DSN)  # ensures schema
+        conn.execute("TRUNCATE users, revoked_tokens CASCADE")
+    yield PostgresUserRepository(PG_DSN)
 
 
 def _mk_user(**overrides) -> User:
@@ -176,12 +182,12 @@ def test_region_locked_and_is_admin_false_roundtrip(repo):
 # ---------------------------------------------------------------------------
 def test_revoke_and_check_token_is_idempotent(repo):
     exp = datetime.now(timezone.utc) + timedelta(hours=1)
-    assert repo.is_token_revoked("jti-1") is False
-    repo.revoke_token("jti-1", exp)
-    assert repo.is_token_revoked("jti-1") is True
+    assert repo.is_token_revoked(JTI_1) is False
+    repo.revoke_token(JTI_1, exp)
+    assert repo.is_token_revoked(JTI_1) is True
     # Re-revoking the same jti is a no-op, not a constraint error.
-    repo.revoke_token("jti-1", exp)
-    assert repo.is_token_revoked("jti-1") is True
+    repo.revoke_token(JTI_1, exp)
+    assert repo.is_token_revoked(JTI_1) is True
 
 
 def test_empty_jti_is_never_revoked(repo):
@@ -192,12 +198,12 @@ def test_empty_jti_is_never_revoked(repo):
 def test_prune_expired_revocations(repo):
     past = datetime.now(timezone.utc) - timedelta(hours=1)
     future = datetime.now(timezone.utc) + timedelta(hours=1)
-    repo.revoke_token("old", past)
-    repo.revoke_token("fresh", future)
+    repo.revoke_token(JTI_OLD, past)
+    repo.revoke_token(JTI_FRESH, future)
     pruned = repo.prune_expired_revocations()
     assert pruned == 1
-    assert repo.is_token_revoked("old") is False
-    assert repo.is_token_revoked("fresh") is True
+    assert repo.is_token_revoked(JTI_OLD) is False
+    assert repo.is_token_revoked(JTI_FRESH) is True
 
 
 # ---------------------------------------------------------------------------

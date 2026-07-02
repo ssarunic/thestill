@@ -39,62 +39,37 @@ from typing import Optional
 from structlog import get_logger
 
 from ..models.user import User
-from ..utils.postgres_ext import connect
+from ..utils.postgres_ext import as_str, connect
 from .user_repository import UserRepository
 
 logger = get_logger(__name__)
 
 _SELECT_COLS = "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin"
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    id text PRIMARY KEY NOT NULL,
-    email text NOT NULL UNIQUE,
-    name text NULL,
-    picture text NULL,
-    google_id text UNIQUE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    last_login_at timestamptz NULL,
-    region text NULL,
-    region_locked boolean NOT NULL DEFAULT false,
-    is_admin boolean NOT NULL DEFAULT false,
-    CHECK (length(id) = 36),
-    CHECK (length(email) > 0),
-    CHECK (region IS NULL OR length(region) = 2)
-);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS revoked_tokens (
-    jti text PRIMARY KEY NOT NULL,
-    expires_at timestamptz NOT NULL,
-    revoked_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
-"""
-
 
 class PostgresUserRepository(UserRepository):
-    """PostgreSQL-backed user repository. Thread-safe via connection-per-op."""
+    """PostgreSQL-backed user repository. Thread-safe via connection-per-op.
 
-    def __init__(self, dsn: str, *, ensure_schema: bool = True):
+    ``users.id`` and ``revoked_tokens.jti`` are native ``uuid`` columns
+    (schema in ``postgres_schema.py``): str params bind directly; reads
+    come back as ``uuid.UUID`` and are stringified in ``_row_to_user``.
+    """
+
+    def __init__(self, dsn: str, *, ensure_schema: bool = False):
         """
         Args:
             dsn: psycopg connection string, e.g.
                 ``postgresql://user:pass@host:5432/thestill``.
-            ensure_schema: create the ``users`` / ``revoked_tokens`` tables if
-                absent (default). The real migration will move DDL into
-                alembic (spec #44 Phase 5); until then each repo ensures its
-                own tables, mirroring the SQLite repos' ``_ensure_table``.
+            ensure_schema: bootstrap the full typed schema
+                (``postgres_schema.ensure_schema``) before use. The factory
+                does this once per process; tests may opt in per-fixture.
         """
         self.dsn = dsn
         if ensure_schema:
-            self._ensure_schema()
-        logger.info("Initialized Postgres user repository")
+            from .postgres_schema import ensure_schema as _ensure
 
-    def _ensure_schema(self) -> None:
-        with connect(self.dsn) as conn:
-            conn.execute(_SCHEMA)
+            _ensure(dsn)
+        logger.info("Initialized Postgres user repository")
 
     def get_by_id(self, user_id: str) -> Optional[User]:
         """Get user by internal UUID (primary key)."""
@@ -231,7 +206,7 @@ class PostgresUserRepository(UserRepository):
         """Convert a dict row to a User. timestamptz columns come back as
         tz-aware ``datetime`` — no string parsing needed (unlike SQLite)."""
         return User(
-            id=row["id"],
+            id=as_str(row["id"]),
             email=row["email"],
             name=row["name"],
             picture=row["picture"],
