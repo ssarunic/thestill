@@ -8,8 +8,9 @@
 > chunk writer + related-builder, `make_repositories` factory wired through
 > cli/web/mcp/task-handlers, and a two-step data migration (text mirror +
 > parity oracle → in-database typed promotion). Dual-backend contract suites
-> run every port against a real Postgres. Remaining: alembic adoption and a
-> CI Postgres service (follow-ups).
+> run every port against a real Postgres. Alembic adopted (initial revision
+> executes the shared SCHEMA_SQL) and CI runs the dual-backend contract
+> suites against a pgvector service.
 > **Created:** 2026-05-22
 > **Updated:** 2026-07-02
 > **Author:** Engineering
