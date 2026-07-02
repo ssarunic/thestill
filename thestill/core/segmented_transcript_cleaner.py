@@ -42,7 +42,7 @@ widened to amortise the repeated prefix.
 
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
@@ -50,6 +50,7 @@ from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTran
 from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.exceptions import ProhibitedContentError
 from thestill.utils.language_config import resolve_language_spec
+from thestill.utils.text_sanitizer import sanitize_text
 
 logger = get_logger(__name__)
 
@@ -87,6 +88,26 @@ class CleanupPatch(BaseModel):
         description="Sponsor name when kind='ad_break'. Populated from the facts "
         "list when possible, otherwise best-effort.",
     )
+
+    @field_validator("cleaned_text", "sponsor", mode="after")
+    @classmethod
+    def _strip_control_chars(cls, value: Optional[str]) -> Optional[str]:
+        """LLMs occasionally emit raw control characters (observed: Gemini
+        returning U+0000 for an ``é``). Scrub them at the schema boundary so
+        every downstream artefact — markdown, JSON sidecar, chunks, quote
+        excerpts — is clean by construction. Tab/newline pass through; see
+        ``utils.text_sanitizer``. Logged because silent stripping would hide
+        a provider regression (spec #42 FM-4)."""
+        if value is None:
+            return None
+        clean, removed = sanitize_text(value)
+        if removed:
+            logger.warning(
+                "llm_control_chars_stripped",
+                removed=removed,
+                text_preview=clean[:80],
+            )
+        return clean
 
 
 class CleanupPatchBatch(BaseModel):
