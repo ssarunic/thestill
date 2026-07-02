@@ -4861,11 +4861,20 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
     # which would rank against a partial corpus). Refresh it here so the
     # rail stays current without a separate manual step.
     if inserted_total and not podcast_id and not max_episodes:
-        from .search.related_builder import build_related_episodes
+        from .repositories.factory import uses_postgres
+
+        if uses_postgres(config):
+            from .search.pg_related_builder import build_related_episodes
+
+            db_target = config.database_url
+        else:
+            from .search.related_builder import build_related_episodes
+
+            db_target = str(config.database_path)
 
         click.echo("Rebuilding related-episodes index…")
         result = build_related_episodes(
-            str(config.database_path),
+            db_target,
             embedding_model_name=ctx.obj.embedding_model.model_name,
         )
         click.echo(f"  ✓ related: {result['pairs']} pairs across {result['episodes']} episodes")
@@ -4895,12 +4904,22 @@ def related_build(ctx, top_n, tfidf_floor):
     run it after ``chunks backfill`` / ``reindex`` whenever the index
     changes. Cheap — no embedding model load; reuses stored vectors.
     """
-    from .search.related_builder import DEFAULT_TFIDF_FLOOR, build_related_episodes
+    from .repositories.factory import uses_postgres
+    from .search.related_builder import DEFAULT_TFIDF_FLOOR
 
     config = ctx.obj.config
+    if uses_postgres(config):
+        from .search.pg_related_builder import build_related_episodes
+
+        db_target = config.database_url
+    else:
+        from .search.related_builder import build_related_episodes
+
+        db_target = str(config.database_path)
+
     floor = tfidf_floor if tfidf_floor is not None else DEFAULT_TFIDF_FLOOR
     result = build_related_episodes(
-        str(config.database_path),
+        db_target,
         embedding_model_name=ctx.obj.embedding_model.model_name,
         top_n=top_n,
         tfidf_floor=floor,

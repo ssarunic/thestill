@@ -835,14 +835,23 @@ def handle_compute_related(task: Task, state: "AppState") -> None:
     the affected episodes plus their neighbours; below the candidate cap it
     is effectively a full rebuild (exact), above it a true incremental.
     """
-    from ..search.related_builder import update_related_for_episodes
+    from ..repositories.factory import uses_postgres
+
+    if uses_postgres(state.config):
+        from ..search.pg_related_builder import update_related_for_episodes
+
+        db_target = state.config.database_url
+    else:
+        from ..search.related_builder import update_related_for_episodes
+
+        db_target = str(state.config.database_path)
 
     with _handler_error_context(f"computing related episodes for episode {task.episode_id}"):
         with _related_compute_lock:
             coalesced = state.queue_manager.claim_pending_for_coalescing(TaskStage.COMPUTE_RELATED)
             episode_ids = sorted({task.episode_id, *coalesced})
             result = update_related_for_episodes(
-                str(state.config.database_path),
+                db_target,
                 embedding_model_name=state.embedding_model.model_name,
                 episode_ids=episode_ids,
             )
