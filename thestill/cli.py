@@ -58,6 +58,7 @@ from .services.auth_service import AuthService
 from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
 from .utils.cli_logging import log_command
+from .repositories.factory import make_queue_manager
 from .utils.config import load_config
 from .utils.console import ConsoleOutput
 from .utils.datetime_utils import ensure_utc, now_utc
@@ -185,7 +186,12 @@ def main(ctx, config, quiet):
         # Spec #35 — re-use the FileStorage backend constructed inside Config
         # so CLI / web / MCP all share one instance and respect STORAGE_BACKEND.
         file_storage = config_obj.file_storage
-        repository = SqlitePodcastRepository(db_path=config_obj.database_path)
+        # Spec #44 — all persistence resolves through the backend factory:
+        # SQLite by default, Postgres when DATABASE_URL is set.
+        from .repositories.factory import make_repositories, make_search_backend
+
+        repos = make_repositories(config_obj)
+        repository = repos.podcast
         podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=file_storage)
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(
@@ -202,42 +208,34 @@ def main(ctx, config, quiet):
         external_transcript_downloader = ExternalTranscriptDownloader(repository, path_manager, file_storage)
 
         # Initialize auth service for default user support
-        user_repository = SqliteUserRepository(db_path=config_obj.database_path)
+        user_repository = repos.user
         auth_service = AuthService(config_obj, user_repository)
 
         # Initialize digest repository for digest persistence
-        digest_repository = SqliteDigestRepository(str(config_obj.database_path))
-        # Spec #40 — pending transcription operations live in SQLite, not files.
-        pending_ops_repository = SqlitePendingOperationsRepository(db_path=config_obj.database_path)
+        digest_repository = repos.digest
+        # Spec #40 — pending transcription operations (backend-resolved).
+        pending_ops_repository = repos.pending_ops
 
         # Per-user inbox plumbing: the backfill / follow-seed CLI paths
         # need both the repository and the service.
-        follower_repository = SqlitePodcastFollowerRepository(db_path=config_obj.database_path)
-        inbox_repository = SqliteInboxRepository(db_path=config_obj.database_path)
+        follower_repository = repos.follower
+        inbox_repository = repos.inbox
         # A shared queue manager lets follow-seed deliveries auto-submit the
         # backlog for the URL-optimized full pipeline (parity with the web app).
-        from .core.queue_manager import QueueManager as _QueueManager
-
         inbox_service = InboxService.from_config(
             config_obj,
             inbox_repository,
             follower_repository,
-            queue_manager=_QueueManager(str(config_obj.database_path)),
+            queue_manager=repos.queue_manager,
             podcast_repository=repository,
         )
 
-        # Spec #28 — entity-layer repository (always-on; the schema
-        # is created by SqlitePodcastRepository's migration block).
+        # Spec #28 — entity-layer repository + search backend (backend-resolved).
         from .core.embedding_model import EmbeddingModel
-        from .repositories.sqlite_entity_repository import SqliteEntityRepository
-        from .search.sqlite_vec_client import SqliteVecBackend
 
-        entity_repository = SqliteEntityRepository(db_path=config_obj.database_path)
+        entity_repository = repos.entity
         embedding_model = EmbeddingModel(config_obj.embedding_model)
-        search_backend = SqliteVecBackend(
-            db_path=config_obj.database_path,
-            embedding_model=embedding_model,
-        )
+        search_backend = make_search_backend(config_obj, embedding_model)
 
         # Store all services in typed context object
         ctx.obj = CLIContext(
@@ -335,7 +333,7 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
     if queue and not dry_run:
         from .core.queue_manager import QueueManager, TaskStage
 
-        qm = QueueManager(str(config.database_path))
+        qm = make_queue_manager(config)
         if podcast_id:
             podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
             if not podcast:
@@ -362,12 +360,11 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
     # episodes for the full pipeline (parity with the web app and the queued
     # ``--queue`` / handle_refresh_feed path). Tasks are processed by a running
     # server/worker; without one they queue harmlessly until a worker runs.
-    from .core.queue_manager import QueueManager as _RefreshQueueManager
 
     refresh_service = RefreshService(
         ctx.obj.feed_manager,
         ctx.obj.podcast_service,
-        queue_manager=_RefreshQueueManager(str(config.database_path)),
+        queue_manager=make_queue_manager(config),
         config=config,
     )
 
@@ -2431,7 +2428,7 @@ def digest(
                 ctx.exit(0)
 
         # Step 3: Process episodes through the pipeline
-        queue_manager = QueueManager(str(config.database_path))
+        queue_manager = make_queue_manager(config)
         batch_service = BatchQueueService(
             queue_manager,
             transcription_provider=config.transcription_provider,
@@ -2855,7 +2852,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
 
     # For in-progress digests, check task queue status
     if digest_model.status == DigestStatus.IN_PROGRESS:
-        queue_manager = QueueManager(str(config.database_path))
+        queue_manager = make_queue_manager(config)
 
         completed = 0
         failed = 0
@@ -2906,7 +2903,7 @@ def digest_status(ctx, digest_id, list_all, limit, finalize):
 
         # Collect episode results from queue
         click.echo("\n📝 Generating digest file...")
-        queue_manager = QueueManager(str(config.database_path))
+        queue_manager = make_queue_manager(config)
 
         successful_episodes = []
         failed_episodes = []
@@ -3986,7 +3983,7 @@ def rebuild_entities(ctx, podcast_id, since, max_episodes, dry_run, yes):
             click.echo("Aborted.")
             return
 
-    queue = QueueManager(str(config.database_path))
+    queue = make_queue_manager(config)
     enqueued = 0
     skipped_existing = 0
     for _p, ep in eligible:
@@ -4784,7 +4781,7 @@ def reindex(ctx, status, max_episodes, dry_run):
             click.echo("Nothing to enqueue.")
         return
 
-    queue = QueueManager(str(config.database_path))
+    queue = make_queue_manager(config)
     enqueued = 0
     skipped_existing = 0
     for r in fixable:

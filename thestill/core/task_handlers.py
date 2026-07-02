@@ -753,7 +753,7 @@ def handle_reindex(task: Task, state: "AppState") -> None:
     is already done by this point.
     """
     from ..models.annotated_transcript import AnnotatedTranscript
-    from .chunk_writer import ChunkWriter
+    from ..repositories.factory import make_chunk_writer
 
     podcast, episode = _get_episode_or_fail(task, state)
     if not episode.clean_transcript_json_path:
@@ -770,10 +770,8 @@ def handle_reindex(task: Task, state: "AppState") -> None:
 
     with _handler_error_context(f"chunking {episode.title}"):
         transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
-        writer = ChunkWriter(
-            db_path=str(state.config.database_path),
-            embedding_model=state.embedding_model,
-        )
+        # Spec #44 — backend-resolved: sqlite-vec locally, pgvector on Postgres.
+        writer = make_chunk_writer(state.config, state.embedding_model)
         inserted = writer.write_episode(episode.id, transcript)
         logger.info(
             "reindex_completed",
