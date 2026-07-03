@@ -54,12 +54,12 @@ logger = get_logger(__name__)
 
 # Shared ranking constants — SAME values as sqlite_vec_client (FM-6: one
 # concept, one number; import would create a heavier coupling than repeating
-# three literals with a lockstep note).
+# three literals with a lockstep note). No _SEMANTIC_FILTER_OVERFETCH here:
+# iterative index scans make the sqlite-vec over-fetch hack unnecessary.
 _RRF_K = 60
 _HYBRID_FETCH = 50
 _HYBRID_WEIGHT_LEX = 0.5
 _HYBRID_WEIGHT_SEM = 0.5
-_SEMANTIC_FILTER_OVERFETCH = 10
 _SEMANTIC_MAX_DISTANCE = 0.85
 
 _SELECT = """
@@ -211,10 +211,13 @@ class PgVectorBackend:
 
     def _semantic(self, query_embedding: bytes, *, limit: int, filters: Optional[SearchFilters]) -> List[dict]:
         filter_sql, filter_params = self._filter_clauses(filters)
-        # HNSW scans apply WHERE during traversal (pgvector iterative scans),
-        # but keep the SQLite backend's over-fetch so tightly-filtered result
-        # sets still fill ``limit`` — identical downstream behaviour.
-        knn_k = limit * _SEMANTIC_FILTER_OVERFETCH if filter_sql else limit
+        # pgvector 0.8 iterative index scans replace the SQLite backend's 10x
+        # over-fetch hack: sqlite-vec applied ``k`` BEFORE join filters, so a
+        # tight filter starved the result set. Here the HNSW scan keeps
+        # iterating (relaxed_order: small out-of-order tolerance for a big
+        # recall win) until the post-filter LIMIT is satisfied — exact-size
+        # filtered results, no over-fetch, no Python truncation.
+        knn_k = limit
         sql = f"""
             {_SELECT}
                    (c.embedding <=> %s) AS score
@@ -229,6 +232,8 @@ class PgVectorBackend:
         qvec = _to_vec(query_embedding)
         params = [qvec, self.embedding_model_name, *filter_params, qvec, knn_k]
         with connect(self.dsn, vector=True) as conn:
+            # Scoped to this transaction; no-op setting on pgvector < 0.8.
+            conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
             rows = conn.execute(sql, params).fetchall()
         # Same noise cutoff as the SQLite backend (cosine distance).
         return [r for r in rows if r["score"] <= _SEMANTIC_MAX_DISTANCE]

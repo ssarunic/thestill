@@ -391,57 +391,83 @@ _IDENTITY_TABLES = [
 _ALL_TYPED = [t for t, _ in _PROMOTIONS] + ["chunks", "episode_vectors"]
 
 
+# HNSW indexes are dropped for the bulk vector load and rebuilt afterwards:
+# maintaining the graph per-row made the load the dominant cost of the whole
+# promotion (~35 min for 260k vectors); a deferred build is minutes. This is
+# the standard pgvector bulk-load recipe.
+_VECTOR_INDEXES = {
+    "idx_chunks_embedding_hnsw": "CREATE INDEX idx_chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)",
+    "idx_episode_vectors_hnsw": "CREATE INDEX idx_episode_vectors_hnsw ON episode_vectors USING hnsw (centroid vector_cosine_ops)",
+}
+
+_VECTOR_BATCH = 2000
+
+
 def _promote_vectors(pconn, dim: int) -> dict[str, int]:
-    """Stream chunks + episode_vectors: float32 bytea → pgvector values."""
+    """Stream chunks + episode_vectors: float32 bytea → pgvector values.
+
+    Batched ``executemany`` (psycopg pipelines it) with the HNSW indexes
+    dropped by the caller — per-row graph maintenance is what made the naive
+    loop slow.
+    """
     import numpy as np
     from pgvector.psycopg import register_vector
 
     register_vector(pconn)
     counts = {}
 
+    def _flush(write, sql, batch):
+        if batch:
+            write.executemany(sql, batch)
+            batch.clear()
+
+    chunk_sql = """
+        INSERT INTO chunks (id, episode_id, segment_id, start_ms, end_ms, speaker, text,
+            embedding_model, embedding, created_at) OVERRIDING SYSTEM VALUE
+        VALUES (%s, %s::uuid, %s::bigint, %s::bigint, %s::bigint, %s, %s, %s, %s,
+                NULLIF(%s,'')::timestamptz)
+    """
     with pconn.cursor(name="mirror_chunks") as read, pconn.cursor() as write:
         read.execute(
             f"SELECT id, episode_id, segment_id, start_ms, end_ms, speaker, text, "
             f"embedding_model, embedding, created_at FROM {MIRROR}.chunks"
         )
         n = 0
+        batch: list = []
         for row in read:
             emb = np.frombuffer(bytes(row[8]), dtype=np.float32)
             if emb.shape[0] != dim:
                 logger.warning("chunk_embedding_dim_mismatch", chunk_id=row[0], got=emb.shape[0])
                 continue
-            write.execute(
-                """
-                INSERT INTO chunks (id, episode_id, segment_id, start_ms, end_ms, speaker, text,
-                    embedding_model, embedding, created_at) OVERRIDING SYSTEM VALUE
-                VALUES (%s, %s::uuid, %s::bigint, %s::bigint, %s::bigint, %s, %s, %s, %s,
-                        NULLIF(%s,'')::timestamptz)
-                """,
-                (int(row[0]), row[1], row[2], row[3], row[4], row[5], row[6], row[7], emb, row[9]),
-            )
+            batch.append((int(row[0]), row[1], row[2], row[3], row[4], row[5], row[6], row[7], emb, row[9]))
             n += 1
+            if len(batch) >= _VECTOR_BATCH:
+                _flush(write, chunk_sql, batch)
+        _flush(write, chunk_sql, batch)
     counts["chunks"] = n
 
+    ev_sql = """
+        INSERT INTO episode_vectors (episode_id, embedding_model, chunk_count, centroid,
+            computed_at)
+        VALUES (%s::uuid, %s, %s::bigint, %s, NULLIF(%s,'')::timestamptz)
+    """
     with pconn.cursor(name="mirror_ev") as read, pconn.cursor() as write:
         read.execute(
             f"SELECT episode_id, embedding_model, chunk_count, centroid, computed_at "
             f"FROM {MIRROR}.episode_vectors"
         )
         n = 0
+        batch = []
         for row in read:
             cent = np.frombuffer(bytes(row[3]), dtype=np.float32)
             if cent.shape[0] != dim:
                 logger.warning("centroid_dim_mismatch", episode_id=row[0], got=cent.shape[0])
                 continue
-            write.execute(
-                """
-                INSERT INTO episode_vectors (episode_id, embedding_model, chunk_count, centroid,
-                    computed_at)
-                VALUES (%s::uuid, %s, %s::bigint, %s, NULLIF(%s,'')::timestamptz)
-                """,
-                (row[0], row[1], row[2], cent, row[4]),
-            )
+            batch.append((row[0], row[1], row[2], cent, row[4]))
             n += 1
+            if len(batch) >= _VECTOR_BATCH:
+                _flush(write, ev_sql, batch)
+        _flush(write, ev_sql, batch)
     counts["episode_vectors"] = n
     return counts
 
@@ -465,7 +491,17 @@ def promote(dsn: str, *, embedding_dim: int = 384) -> dict[str, int]:
             counts[table] = cur.rowcount or 0
             logger.info("promoted_table", table=table, rows=counts[table])
 
+        # Deferred HNSW builds: drop -> bulk load -> recreate (see
+        # _VECTOR_INDEXES). Same transaction, so a failure rolls back to a
+        # consistent pre-promotion state, indexes included.
+        for index_name in _VECTOR_INDEXES:
+            conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+
         counts.update(_promote_vectors(conn, embedding_dim))
+
+        for index_name, create_sql in _VECTOR_INDEXES.items():
+            logger.info("rebuilding_vector_index", index=index_name)
+            conn.execute(create_sql)
 
         # Resync identity sequences past the preserved ids.
         for table in _IDENTITY_TABLES:
