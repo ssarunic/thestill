@@ -38,9 +38,10 @@ from .logging import configure_structlog
 from .models.digest import Digest, DigestStatus
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
+from .repositories.factory import make_queue_manager
+from .repositories.pending_operations_repository import PendingOperationsRepository
 from .repositories.sqlite_digest_repository import SqliteDigestRepository
 from .repositories.sqlite_inbox_repository import SqliteInboxRepository
-from .repositories.pending_operations_repository import PendingOperationsRepository
 from .repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -58,7 +59,6 @@ from .services.auth_service import AuthService
 from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
 from .utils.cli_logging import log_command
-from .repositories.factory import make_queue_manager
 from .utils.config import load_config
 from .utils.console import ConsoleOutput
 from .utils.datetime_utils import ensure_utc, now_utc
@@ -4731,9 +4731,8 @@ def reindex(ctx, status, max_episodes, dry_run):
     help. Re-clean those through the spec #18 segment-preserving
     path first.
     """
-    import sqlite3
-
     from .core.queue_manager import QueueManager, TaskStage
+    from .utils.sqlite_ext import connect
 
     config = ctx.obj.config
 
@@ -4755,12 +4754,8 @@ def reindex(ctx, status, max_episodes, dry_run):
            AND {missing_predicate}
          ORDER BY e.created_at DESC
     """
-    conn = sqlite3.connect(str(config.database_path))
-    conn.row_factory = sqlite3.Row
-    try:
+    with connect(config.database_path) as conn:
         rows = conn.execute(sql).fetchall()
-    finally:
-        conn.close()
 
     fixable = [r for r in rows if r["has_sidecar"]]
     legacy = [r for r in rows if not r["has_sidecar"]]

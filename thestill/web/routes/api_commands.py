@@ -21,6 +21,7 @@ with concurrency protection and progress tracking.
 
 import asyncio
 import json
+import sqlite3
 import threading
 from collections import Counter
 from typing import Any, Dict, Optional
@@ -1746,22 +1747,32 @@ async def retry_all_dlq_tasks(
         task_ids_set = set(request.task_ids)
         dead_tasks = [t for t in dead_tasks if t.id in task_ids_set]
 
-    retried_ids = []
-    skipped = 0
-
     from ...utils.config import get_default_refresh_interval_seconds
 
-    for task in dead_tasks:
-        updated_task = state.queue_manager.retry_dead_task(task.id)
-        if updated_task:
-            # Clear failure state on the right target (spec #48 feed vs episode).
-            if task.podcast_id is not None:
-                state.repository.clear_podcast_refresh_failure(task.podcast_id, get_default_refresh_interval_seconds())
-            else:
-                state.repository.clear_episode_failure(task.episode_id)
-            retried_ids.append(task.id)
-        else:
-            skipped += 1
+    # Requeue every candidate in a single write per chunk rather than one
+    # transaction per task. Looping ``retry_dead_task`` here fired 2×N write
+    # transactions from the request thread while the workers were already
+    # draining the freshly-pending rows — the write storm that surfaced as
+    # ``database is locked`` on big retry-all clicks (see specs/49).
+    retried_ids = state.queue_manager.retry_dead_tasks([t.id for t in dead_tasks])
+    retried_set = set(retried_ids)
+    skipped = len(dead_tasks) - len(retried_ids)
+
+    # Clear the failure banners for exactly the rows we requeued, batched by
+    # target type (spec #48: feed-scoped tasks park podcast-level failure,
+    # episode-scoped tasks record episode-level failure). A lock loss here is
+    # non-fatal — the requeue already landed, and each banner self-clears on the
+    # task's next successful stage via ``clear_episode_failure_for_stages`` — so
+    # don't let a cosmetic clear turn a successful retry into a 500.
+    episode_ids = [t.episode_id for t in dead_tasks if t.id in retried_set and t.podcast_id is None]
+    podcast_ids = [t.podcast_id for t in dead_tasks if t.id in retried_set and t.podcast_id is not None]
+    try:
+        if episode_ids:
+            state.repository.clear_episode_failures(episode_ids)
+        if podcast_ids:
+            state.repository.clear_podcast_refresh_failures(podcast_ids, get_default_refresh_interval_seconds())
+    except sqlite3.OperationalError as e:
+        logger.warning("dlq_retry_all_clear_failure_lock", error=str(e), retried=len(retried_ids))
 
     return DLQBulkRetryResponse(
         status="ok",

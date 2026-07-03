@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
 
 from structlog import get_logger
 
@@ -382,6 +382,16 @@ _R = TypeVar("_R")
 # stages can hold the WAL writer for a few seconds at a time). Each entry
 # is the sleep BEFORE the next attempt; the final attempt has no follow-up.
 _LOCK_RETRY_DELAYS: tuple[float, ...] = (0.1, 0.3, 0.7, 1.5, 3.0)
+
+# Keep bulk ``id IN (…)`` writes well under SQLite's host-parameter ceiling
+# (``SQLITE_MAX_VARIABLE_NUMBER``; historically 999) so a large DLQ requeue
+# lands in a handful of statements instead of one oversized — or rejected — one.
+_SQL_PARAM_CHUNK = 900
+
+
+def _chunked(items: Sequence[str], size: int) -> List[List[str]]:
+    """Split ``items`` into consecutive lists of at most ``size`` elements."""
+    return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
 
 def calculate_backoff(retry_count: int) -> timedelta:
@@ -1862,33 +1872,96 @@ class QueueManager:
         """
         now = now_utc().isoformat()
 
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE tasks
-                SET status = 'pending',
-                    retry_count = 0,
-                    error_message = NULL,
-                    error_type = NULL,
-                    last_error = NULL,
-                    next_retry_at = NULL,
-                    started_at = NULL,
-                    completed_at = NULL,
-                    updated_at = ?
-                WHERE id = ? AND status IN ('dead', 'failed')
-            """,
-                (now, task_id),
-            )
-
-            if cursor.rowcount == 0:
-                logger.warning(
-                    "Cannot retry task: not found or not in terminal state",
-                    task_id=task_id,
+        def _write() -> int:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'pending',
+                        retry_count = 0,
+                        error_message = NULL,
+                        error_type = NULL,
+                        last_error = NULL,
+                        next_retry_at = NULL,
+                        started_at = NULL,
+                        completed_at = NULL,
+                        updated_at = ?
+                    WHERE id = ? AND status IN ('dead', 'failed')
+                    """,
+                    (now, task_id),
                 )
-                return None
+                return cursor.rowcount or 0
+
+        # Wrapped like every other queue bookkeeping write: a manual retry click
+        # races the workers draining the queue, so absorb a transient
+        # ``database is locked`` here rather than surfacing it to the operator.
+        if self._exec_with_lock_retry("retry_dead_task", _write) == 0:
+            logger.warning(
+                "Cannot retry task: not found or not in terminal state",
+                task_id=task_id,
+            )
+            return None
 
         logger.info("Task moved from DLQ back to pending", task_id=task_id)
         return self.get_task(task_id)
+
+    def retry_dead_tasks(self, task_ids: Sequence[str]) -> List[str]:
+        """Bulk variant of :meth:`retry_dead_task` — requeue many DLQ rows in a
+        single write per chunk instead of one transaction per task.
+
+        The ``/dlq/retry-all`` endpoint used to loop and call
+        :meth:`retry_dead_task` once per task, opening a write transaction per
+        id (plus one more for the repository's failure-state clear). Firing
+        hundreds of those from the request thread, on top of the workers already
+        draining the freshly-pending rows, is precisely the write storm that
+        pushed contended writers past ``busy_timeout`` and surfaced as
+        ``database is locked`` (see specs/49 "The Retry Budget Trap"). Collapsing
+        the requeue to one ``UPDATE … WHERE id IN (…) RETURNING id`` per chunk
+        turns N writes into 1–2, all under a single ``_exec_with_lock_retry``.
+
+        Args:
+            task_ids: Candidate DLQ task ids. Only rows still in a terminal
+                ('dead'/'failed') state are requeued; already-live ids are
+                silently skipped (matching :meth:`retry_dead_task`).
+
+        Returns:
+            The ids actually transitioned back to ``pending``.
+        """
+        ids = list(task_ids)
+        if not ids:
+            return []
+
+        now = now_utc().isoformat()
+        requeued: List[str] = []
+
+        for chunk in _chunked(ids, _SQL_PARAM_CHUNK):
+            placeholders = ",".join("?" for _ in chunk)
+
+            def _write(chunk: List[str] = chunk, placeholders: str = placeholders) -> List[str]:
+                with self._get_connection() as conn:
+                    cursor = conn.execute(
+                        f"""
+                        UPDATE tasks
+                        SET status = 'pending',
+                            retry_count = 0,
+                            error_message = NULL,
+                            error_type = NULL,
+                            last_error = NULL,
+                            next_retry_at = NULL,
+                            started_at = NULL,
+                            completed_at = NULL,
+                            updated_at = ?
+                        WHERE id IN ({placeholders}) AND status IN ('dead', 'failed')
+                        RETURNING id
+                        """,
+                        (now, *chunk),
+                    )
+                    return [row["id"] for row in cursor.fetchall()]
+
+            requeued.extend(self._exec_with_lock_retry("retry_dead_tasks", _write))
+
+        logger.info("Bulk-requeued DLQ tasks", requested=len(ids), requeued=len(requeued))
+        return requeued
 
     def find_healable_tasks(
         self,

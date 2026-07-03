@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from psycopg.types.json import Jsonb
 from structlog import get_logger
@@ -1207,6 +1207,50 @@ class PostgresQueueManager:
 
         logger.info("Task moved from DLQ back to pending", task_id=task_id)
         return self.get_task(task_id)
+
+    def retry_dead_tasks(self, task_ids: Sequence[str]) -> List[str]:
+        """Bulk variant of :meth:`retry_dead_task` — requeue many DLQ rows in a
+        single ``UPDATE … WHERE id = ANY(%s) RETURNING id``.
+
+        Postgres has no ``busy_timeout``/host-parameter constraints (MVCC + row
+        locks, array binds), so the whole set goes in one statement — but the
+        API parity with the SQLite manager is what lets ``/dlq/retry-all`` avoid
+        the per-task write loop on either backend.
+
+        Args:
+            task_ids: Candidate DLQ task ids; only rows still ('dead'/'failed')
+                are requeued.
+
+        Returns:
+            The ids actually transitioned back to ``pending``.
+        """
+        ids = list(task_ids)
+        if not ids:
+            return []
+
+        now = now_utc()
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'pending',
+                    retry_count = 0,
+                    error_message = NULL,
+                    error_type = NULL,
+                    last_error = NULL,
+                    next_retry_at = NULL,
+                    started_at = NULL,
+                    completed_at = NULL,
+                    updated_at = %s
+                WHERE id = ANY(%s) AND status IN ('dead', 'failed')
+                RETURNING id
+                """,
+                (now, ids),
+            )
+            requeued = [as_str(row["id"]) for row in cursor.fetchall()]
+
+        logger.info("Bulk-requeued DLQ tasks", requested=len(ids), requeued=len(requeued))
+        return requeued
 
     def find_healable_tasks(
         self,
