@@ -4506,17 +4506,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             List of (Episode, List[TranscriptLink]) tuples for episodes with pending downloads
         """
         with self._get_connection() as conn:
-            # Find episodes with undownloaded transcript links
+            # Find episodes with undownloaded transcript links. ``SELECT e.*``
+            # with an EXISTS predicate — ``_row_to_episode`` reads the full
+            # episode column set, and the previous partial DISTINCT projection
+            # raised IndexError on hydration (latent bug surfaced by the spec
+            # #44 Postgres port; prior callers only exercised this via mocks).
             if podcast_id:
                 cursor = conn.execute(
                     """
-                    SELECT DISTINCT e.id, e.podcast_id, e.created_at, e.updated_at, e.external_id,
-                           e.title, e.slug, e.description, e.pub_date, e.audio_url, e.duration,
-                           e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
-                           e.clean_transcript_path, e.summary_path
+                    SELECT e.*
                     FROM episodes e
-                    INNER JOIN episode_transcript_links etl ON e.id = etl.episode_id
-                    WHERE etl.downloaded_path IS NULL AND e.podcast_id = ?
+                    WHERE e.podcast_id = ?
+                      AND EXISTS (
+                        SELECT 1 FROM episode_transcript_links etl
+                        WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL
+                      )
                     ORDER BY e.pub_date DESC
                 """,
                     (podcast_id,),
@@ -4524,13 +4528,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             else:
                 cursor = conn.execute(
                     """
-                    SELECT DISTINCT e.id, e.podcast_id, e.created_at, e.updated_at, e.external_id,
-                           e.title, e.slug, e.description, e.pub_date, e.audio_url, e.duration,
-                           e.audio_path, e.downsampled_audio_path, e.raw_transcript_path,
-                           e.clean_transcript_path, e.summary_path
+                    SELECT e.*
                     FROM episodes e
-                    INNER JOIN episode_transcript_links etl ON e.id = etl.episode_id
-                    WHERE etl.downloaded_path IS NULL
+                    WHERE EXISTS (
+                        SELECT 1 FROM episode_transcript_links etl
+                        WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL
+                      )
                     ORDER BY e.pub_date DESC
                 """
                 )
@@ -4576,12 +4579,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             Podcast object if found, None otherwise
         """
         with self._get_connection() as conn:
+            # Full column set — ``_row_to_podcast`` reads author/explicit/
+            # show_type/… and the previous partial SELECT raised IndexError
+            # (latent bug surfaced by the spec #44 Postgres port; prior
+            # callers only exercised this via mocks).
             cursor = conn.execute(
                 """
                 SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description,
                        p.image_url, p.language,
                        p.primary_category_id, p.secondary_category_id,
-                       p.last_processed, p.updated_at
+                       p.author, p.explicit, p.show_type, p.website_url, p.is_complete,
+                       p.copyright, p.last_processed, p.last_processed_at, p.etag,
+                       p.last_modified, p.updated_at
                 FROM podcasts p
                 INNER JOIN episodes e ON e.podcast_id = p.id
                 WHERE e.id = ?

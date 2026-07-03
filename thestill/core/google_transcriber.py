@@ -43,7 +43,7 @@ from thestill.utils.path_manager import PathManager
 from .transcriber import Transcriber
 
 if TYPE_CHECKING:
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -254,7 +254,7 @@ class GoogleCloudTranscriber(Transcriber):
         parallel_chunks: int = 1,
         path_manager: Optional[PathManager] = None,
         console: Optional[ConsoleOutput] = None,
-        pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
+        pending_ops_repository: Optional["PendingOperationsRepository"] = None,
     ):
         """
         Initialize Google Cloud Speech V2 transcriber with Chirp 3.

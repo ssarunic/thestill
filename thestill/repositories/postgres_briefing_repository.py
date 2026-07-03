@@ -1,0 +1,115 @@
+# Copyright 2025-2026 Thestill
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""PostgreSQL implementation of ``BriefingRepository`` (spec #44).
+
+Port of ``SqliteBriefingRepository`` following the ``utils.postgres_ext``
+conventions: native ``uuid`` ids, ``timestamptz`` datetimes (no isoformat
+round-trips), ``%s`` placeholders. Schema in ``postgres_schema.py``.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from structlog import get_logger
+
+from ..models.briefing import Briefing
+from ..utils.postgres_ext import as_str, connect
+from .briefing_repository import BriefingRepository
+
+logger = get_logger(__name__)
+
+_COLS = "id, user_id, cursor_from, cursor_to, episode_count, script_path, audio_path, created_at, listened_at"
+
+
+class PostgresBriefingRepository(BriefingRepository):
+    """PostgreSQL-backed per-user briefing repository."""
+
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+        logger.info("Initialized Postgres briefing repository")
+
+    def insert(self, briefing: Briefing) -> Briefing:
+        with connect(self.dsn) as conn:
+            conn.execute(
+                """
+                INSERT INTO user_briefings
+                    (id, user_id, cursor_from, cursor_to, episode_count,
+                     script_path, audio_path, created_at, listened_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    briefing.id,
+                    briefing.user_id,
+                    briefing.cursor_from,
+                    briefing.cursor_to,
+                    briefing.episode_count,
+                    briefing.script_path,
+                    briefing.audio_path,
+                    briefing.created_at,
+                    briefing.listened_at,
+                ),
+            )
+        return briefing
+
+    def get(self, briefing_id: str) -> Optional[Briefing]:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                f"SELECT {_COLS} FROM user_briefings WHERE id = %s",
+                (briefing_id,),
+            ).fetchone()
+            return self._row_to_briefing(row) if row else None
+
+    def latest_for_user(self, user_id: str) -> Optional[Briefing]:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_COLS}
+                  FROM user_briefings
+                 WHERE user_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            return self._row_to_briefing(row) if row else None
+
+    def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                f"""
+                UPDATE user_briefings
+                   SET listened_at = %s
+                 WHERE id = %s
+                RETURNING {_COLS}
+                """,
+                (listened_at, briefing_id),
+            ).fetchone()
+            return self._row_to_briefing(row) if row else None
+
+    @staticmethod
+    def _row_to_briefing(row: dict) -> Briefing:
+        return Briefing(
+            id=as_str(row["id"]),
+            user_id=as_str(row["user_id"]),
+            cursor_from=row["cursor_from"],
+            cursor_to=row["cursor_to"],
+            episode_count=row["episode_count"],
+            script_path=row["script_path"],
+            audio_path=row["audio_path"],
+            created_at=row["created_at"],
+            listened_at=row["listened_at"],
+        )

@@ -32,7 +32,7 @@ from .progress import ProgressCallback
 from .transcriber import Transcriber
 
 if TYPE_CHECKING:
-    from ..repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -128,7 +128,7 @@ def create_transcriber(
     config,
     path_manager=None,
     *,
-    pending_ops_repository: Optional["SqlitePendingOperationsRepository"] = None,
+    pending_ops_repository: Optional["PendingOperationsRepository"] = None,
     progress_callback: Optional[ProgressCallback] = None,
     console: Optional[ConsoleOutput] = None,
     elevenlabs_use_async: bool = False,

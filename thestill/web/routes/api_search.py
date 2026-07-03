@@ -27,6 +27,48 @@ from ...search.base import SearchFilters, SearchMode
 from ..dependencies import AppState, get_app_state
 
 logger = get_logger(__name__)
+
+
+def _query(state, sql: str, params: list) -> list[dict]:
+    """Run a read-only metadata query on the active backend (spec #44).
+
+    These route-local lookups predate the repository seam and used raw
+    sqlite3 directly — the "hidden SQLite coupling" spec #44 warned about.
+    The SQL here is dialect-portable (LOWER/LIKE/IN/JOIN), so one string
+    serves both engines: ``?`` placeholders are rewritten to ``%s`` for
+    psycopg, and uuid cells are stringified so callers keep dict-of-str
+    semantics identical to the SQLite rows.
+    """
+    dsn = getattr(state.repository, "dsn", None)
+    if dsn:
+        from ...utils.postgres_ext import connect as pg_connect
+
+        with pg_connect(dsn) as conn:
+            rows = conn.execute(sql.replace("?", "%s"), params).fetchall()
+        import uuid as _uuid
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        def _cell(v):
+            # Match the SQLite row shapes exactly: uuids and timestamps come
+            # back as strings there, and the response models expect strings.
+            # Timestamps normalise to UTC — psycopg renders timestamptz in
+            # the session timezone, which would leak +01:00-style offsets.
+            if isinstance(v, _uuid.UUID):
+                return str(v)
+            if isinstance(v, _dt):
+                return (v.astimezone(_tz.utc) if v.tzinfo else v).isoformat()
+            return v
+
+        return [{k: _cell(v) for k, v in r.items()} for r in rows]
+
+    conn = sqlite3.connect(str(state.repository.db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
 router = APIRouter()
 
 
@@ -195,7 +237,7 @@ def search_corpus(
     # routes directly. The citation's web_url is /episodes/<id> — kept on
     # the wire for MCP/desktop callers but the web doesn't have that route.
     payload_map = _resolve_episode_payloads(
-        db_path=str(state.repository.db_path),
+        state=state,
         episode_ids=[h.episode_id for h in hits],
     )
     results: list[SearchResult] = []
@@ -233,14 +275,14 @@ def search_related(
     topically-related episodes) return ``[]``.
     """
     rows = _read_related(
-        db_path=str(state.repository.db_path),
+        state=state,
         episode_id=episode_id,
         limit=limit,
     )
     return RelatedEpisodesResponse(episode_id=episode_id, episodes=rows)
 
 
-def _read_related(*, db_path: str, episode_id: str, limit: int) -> List[RelatedEpisode]:
+def _read_related(*, state, episode_id: str, limit: int) -> List[RelatedEpisode]:
     """Join ``episode_related`` to episodes/podcasts for deep-linkable cards.
 
     Rows whose related episode lacks slugs are skipped (not linkable),
@@ -264,12 +306,7 @@ def _read_related(*, db_path: str, episode_id: str, limit: int) -> List[RelatedE
         ORDER BY r.rank
         LIMIT ?
     """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(sql, (episode_id, limit)).fetchall()
-    finally:
-        conn.close()
+    rows = _query(state, sql, [episode_id, limit])
     out: List[RelatedEpisode] = []
     for row in rows:
         if not row["podcast_slug"] or not row["episode_slug"]:
@@ -364,7 +401,7 @@ def search_quick(
     #    so we open one short-lived connection rather than threading
     #    yet another service through.
     episode_items = _episode_typeahead(
-        db_path=str(state.repository.db_path),
+        state=state,
         prefix=query,
         limit=limit_per_group,
         podcast_id=resolved_podcast_id,
@@ -401,7 +438,7 @@ def search_quick(
     quote_items: list[QuickQuoteItem] = []
     if quote_hits:
         payload_map = _resolve_episode_payloads(
-            db_path=str(state.repository.db_path),
+            state=state,
             episode_ids=[h.episode_id for h in quote_hits],
         )
         for h in quote_hits:
@@ -460,7 +497,7 @@ def search_quick(
 
 def _episode_typeahead(
     *,
-    db_path: str,
+    state,
     prefix: str,
     limit: int,
     podcast_id: Optional[str],
@@ -504,12 +541,7 @@ def _episode_typeahead(
         LIMIT ?
     """
     params.append(limit)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    finally:
-        conn.close()
+    rows = _query(state, sql, params)
     items: list[QuickEpisodeItem] = []
     for row in rows:
         episode_slug = row["episode_slug"] or ""
@@ -551,7 +583,7 @@ class _EpisodePayload(BaseModel):
 
 def _resolve_episode_payloads(
     *,
-    db_path: str,
+    state,
     episode_ids: List[str],
 ) -> dict[str, _EpisodePayload]:
     """Return playback metadata for each episode id (podcast/episode
@@ -574,12 +606,7 @@ def _resolve_episode_payloads(
         JOIN podcasts p ON p.id = e.podcast_id
         WHERE e.id IN ({placeholders})
     """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(sql, episode_ids).fetchall()
-    finally:
-        conn.close()
+    rows = _query(state, sql, list(episode_ids))
     out: dict[str, _EpisodePayload] = {}
     for row in rows:
         if not row["podcast_slug"] or not row["episode_slug"]:
@@ -596,7 +623,7 @@ def _resolve_episode_payloads(
 
 def _resolve_episode_slugs(
     *,
-    db_path: str,
+    state,
     episode_ids: List[str],
 ) -> dict[str, tuple[str, str]]:
     """Backwards-compatible slug-only shape.
@@ -605,5 +632,5 @@ def _resolve_episode_slugs(
     don't break while the FloatingPlayer wiring rolls out. New code
     should prefer ``_resolve_episode_payloads``.
     """
-    payloads = _resolve_episode_payloads(db_path=db_path, episode_ids=episode_ids)
+    payloads = _resolve_episode_payloads(state=state, episode_ids=episode_ids)
     return {ep_id: (p.podcast_slug, p.episode_slug) for ep_id, p in payloads.items()}
