@@ -32,7 +32,20 @@ from __future__ import annotations
 import os
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
+
+# Load the SAME .env the application loads (utils/config.py does this inside
+# load_config): a deployment configured entirely via .env must migrate the
+# same database — and revision 0001 must see the same EMBEDDING_MODEL for
+# the pgvector column width — that the app will use. Reuses the app's
+# discovery helper rather than duplicating the walk (FM-6); real environment
+# variables still take precedence (load_dotenv does not override).
+from thestill.utils.config import _find_dotenv_from_package
+
+_dotenv = _find_dotenv_from_package()
+if _dotenv:
+    load_dotenv(_dotenv)
 
 config = context.config
 
