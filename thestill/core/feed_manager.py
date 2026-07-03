@@ -281,8 +281,8 @@ class PodcastFeedManager:
 
         Returns:
             (podcast, new_episodes, had_error, conditional_get_hit, source,
-            headers_rotated, image_rows). ``conditional_get_hit`` is True when
-            the server returned 304 and no parse/extract work ran.
+            headers_rotated, image_rows, audio_rows). ``conditional_get_hit`` is
+            True when the server returned 304 and no parse/extract work ran.
             ``headers_rotated`` is True when a 304 response carried a *new* ETag
             / Last-Modified that we must still persist (RFC 7232) — otherwise
             the rotated header is silently dropped and the next refresh sends a
@@ -293,6 +293,12 @@ class PodcastFeedManager:
             on a 200 — the batch writer re-syncs existing episodes' drifted
             artwork from these (signed CDN URLs rotate and the stored ones go
             stale because new-episode discovery never revisits an existing row).
+            ``audio_rows`` are the analogous ``(podcast_id, external_id,
+            audio_url)`` triples — some hosts (e.g. BBC mediaselector) re-publish
+            audio under a new URL while keeping the GUID, so stored enclosure
+            URLs 404 for episodes that haven't been fetched yet; the batch
+            writer repairs those with a guarded UPDATE scoped to not-yet-fetched
+            episodes.
         """
         podcast_start = time.perf_counter()
         had_error = False
@@ -301,6 +307,7 @@ class PodcastFeedManager:
         conditional_get_hit = False
         headers_rotated = False
         image_rows: List[Tuple[str, str, Optional[str]]] = []
+        audio_rows: List[Tuple[str, str, str]] = []
         try:
             rss_url_str = str(podcast.rss_url)
             source = self.media_source_factory.detect_source(rss_url_str)
@@ -335,7 +342,7 @@ class PodcastFeedManager:
                     if result.last_modified and result.last_modified != podcast.last_modified:
                         podcast.last_modified = result.last_modified
                         headers_rotated = True
-                    return podcast, [], False, True, source, headers_rotated, image_rows
+                    return podcast, [], False, True, source, headers_rotated, image_rows, audio_rows
 
                 # Spec #42/#49 — a fetch/parse failure (DNS, HTTP error, empty
                 # body) comes back as an error SENTINEL: content/parsed_feed are
@@ -352,7 +359,7 @@ class PodcastFeedManager:
                         status_code=result.status_code,
                         error=result.error,
                     )
-                    return podcast, [], True, False, source, headers_rotated, image_rows
+                    return podcast, [], True, False, source, headers_rotated, image_rows, audio_rows
 
                 rss_content = result.content
                 parsed_feed = result.parsed_feed
@@ -385,6 +392,19 @@ class PodcastFeedManager:
                         image_rows = [
                             (podcast.id, external_id, url)
                             for external_id, url in feed_images.items()
+                            if external_id in known
+                        ]
+                        # Re-sync existing episodes' enclosure URLs the same
+                        # way: hosts like BBC re-publish audio under a new URL
+                        # while keeping the GUID, so an episode discovered but
+                        # not yet fetched holds a URL that has started 404ing.
+                        # The batch writer's guarded UPDATE only touches rows
+                        # that drifted AND still need their audio, so this is
+                        # near-free when nothing changed.
+                        feed_audio_urls = source.extract_episode_audio_urls(parsed_feed)
+                        audio_rows = [
+                            (podcast.id, external_id, url)
+                            for external_id, url in feed_audio_urls.items()
                             if external_id in known
                         ]
 
@@ -473,7 +493,7 @@ class PodcastFeedManager:
             )
         # headers_rotated only governs the 304 path (which returns above); a
         # 200 response routes the podcast through changed_podcasts regardless.
-        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated, image_rows
+        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated, image_rows, audio_rows
 
     def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
         """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
@@ -579,6 +599,7 @@ class PodcastFeedManager:
         changed_podcasts: List[Podcast] = []
         new_episode_rows: List[Episode] = []
         episode_image_updates: List[Tuple[str, str, Optional[str]]] = []
+        episode_audio_updates: List[Tuple[str, str, str]] = []
         transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
 
         def _record_outcome(
@@ -589,6 +610,7 @@ class PodcastFeedManager:
             source: Any,
             headers_rotated: bool,
             image_rows: List[Tuple[str, str, Optional[str]]],
+            audio_rows: List[Tuple[str, str, str]],
         ) -> None:
             nonlocal podcasts_with_errors, conditional_get_hits
             if had_error:
@@ -614,11 +636,14 @@ class PodcastFeedManager:
                     changed_podcasts.append(podcast)
                 return
             changed_podcasts.append(podcast)
-            # Re-sync drifted artwork for already-tracked episodes (200 path
-            # only; a 304 returns above with empty image_rows). The guarded
-            # UPDATE in the batch writer makes unchanged rows a no-op.
+            # Re-sync drifted artwork and enclosure URLs for already-tracked
+            # episodes (200 path only; a 304 returns above with empty rows).
+            # The guarded UPDATEs in the batch writer make unchanged rows a
+            # no-op.
             if image_rows:
                 episode_image_updates.extend(image_rows)
+            if audio_rows:
+                episode_audio_updates.extend(audio_rows)
             if eps:
                 new_episodes.append((podcast, eps))
                 new_episode_rows.extend(eps)
@@ -630,7 +655,17 @@ class PodcastFeedManager:
             # Preserve input ordering in the returned list so callers see a
             # deterministic shape regardless of completion order.
             results: Dict[
-                int, Tuple[Podcast, List[Episode], bool, bool, Any, bool, List[Tuple[str, str, Optional[str]]]]
+                int,
+                Tuple[
+                    Podcast,
+                    List[Episode],
+                    bool,
+                    bool,
+                    Any,
+                    bool,
+                    List[Tuple[str, str, Optional[str]]],
+                    List[Tuple[str, str, str]],
+                ],
             ] = {}
             with ThreadPoolExecutor(
                 max_workers=min(self.max_workers, total_podcasts),
@@ -659,7 +694,7 @@ class PodcastFeedManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        results[idx] = (podcast, [], True, False, None, False, [])
+                        results[idx] = (podcast, [], True, False, None, False, [], [])
                     if progress_callback:
                         returned_podcast = results[idx][0]
                         progress_callback(completed, total_podcasts, returned_podcast.title)
@@ -681,14 +716,20 @@ class PodcastFeedManager:
         # Single-transaction batch persist (spec #19). Runs even when
         # `new_episode_rows` is empty, because podcasts that saw a 200
         # response still need their refreshed cache headers saved.
-        if changed_podcasts or new_episode_rows or episode_image_updates:
+        if changed_podcasts or new_episode_rows or episode_image_updates or episode_audio_updates:
             with log_phase_timing(
                 "persist_batch",
                 podcasts=len(changed_podcasts),
                 new_episodes=len(new_episode_rows),
                 image_updates=len(episode_image_updates),
+                audio_url_updates=len(episode_audio_updates),
             ):
-                self.repository.save_refresh_batch(changed_podcasts, new_episode_rows, episode_image_updates)
+                self.repository.save_refresh_batch(
+                    changed_podcasts,
+                    new_episode_rows,
+                    episode_image_updates,
+                    episode_audio_updates,
+                )
 
         # Transcript links rely on the debug RSS file that was written
         # during the fetch; do them after the main batch so a failure

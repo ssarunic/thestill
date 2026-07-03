@@ -46,6 +46,11 @@ logger = get_logger(__name__)
 # is float64 but SQLite REAL → Python float can drift below microsecond precision.
 _MTIME_EPSILON = 1e-6
 
+# Keep bulk ``id IN (…)`` writes under SQLite's host-parameter ceiling
+# (``SQLITE_MAX_VARIABLE_NUMBER``; historically 999) so large batch clears land
+# in a handful of statements instead of one oversized — or rejected — one.
+_SQL_PARAM_CHUNK = 900
+
 # Deterministic UUID5 so the synthetic-audio-imports parent has a stable id
 # across runs and machines without persisting it as configuration.
 SYNTHETIC_AUDIO_IMPORTS_RSS = "synthetic://audio-imports"
@@ -2880,6 +2885,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         changed_podcasts: List[Podcast],
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+        episode_audio_updates: Optional[List[Tuple[str, str, str]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
@@ -2903,8 +2909,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (rotating signed URLs go stale because the INSERT above never
                 revisits an existing episode). New episodes inserted in this same
                 batch already carry the current URL, so their update is a no-op.
+            episode_audio_updates: Optional ``(podcast_id, external_id,
+                audio_url)`` triples re-syncing existing episodes' enclosure
+                URLs (hosts like BBC re-publish audio under a new URL for the
+                same GUID, so the stored URL 404s before the episode is
+                fetched). Guarded the same way, and additionally scoped to
+                rows whose audio hasn't been downloaded or transcribed yet —
+                feeds that rotate enclosure URLs on every fetch must not churn
+                already-processed episodes.
         """
-        if not changed_podcasts and not new_episodes and not episode_image_updates:
+        if not changed_podcasts and not new_episodes and not episode_image_updates and not episode_audio_updates:
             return
 
         for ep in new_episodes:
@@ -3026,6 +3040,33 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     WHERE podcast_id = ? AND external_id = ? AND image_url IS NOT ?
                     """,
                     image_params,
+                )
+
+            # Re-sync drifted enclosure URLs for existing episodes that still
+            # need their audio. The ``audio_path IS NULL AND
+            # raw_transcript_path IS NULL`` scope keeps feeds that rotate
+            # enclosure URLs on every fetch from churning already-processed
+            # rows; the ``IS NOT`` guard keeps unchanged rows — and their
+            # ``updated_at`` — untouched.
+            if episode_audio_updates:
+                audio_params = [
+                    (
+                        audio_url,
+                        now_iso,
+                        podcast_id,
+                        external_id,
+                        audio_url,
+                    )
+                    for podcast_id, external_id, audio_url in episode_audio_updates
+                ]
+                conn.executemany(
+                    """
+                    UPDATE episodes
+                    SET audio_url = ?, updated_at = ?
+                    WHERE podcast_id = ? AND external_id = ? AND audio_url IS NOT ?
+                      AND audio_path IS NULL AND raw_transcript_path IS NULL
+                    """,
+                    audio_params,
                 )
 
     def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
@@ -3743,6 +3784,82 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             else:
                 logger.warning(f"Failed to clear failure for episode {episode_id}: not found")
             return updated
+
+    def clear_episode_failures(self, episode_ids: Sequence[str]) -> int:
+        """Bulk variant of :meth:`clear_episode_failure` — clear many episodes'
+        failure banners in one write per chunk.
+
+        Bulk DLQ retry used to call :meth:`clear_episode_failure` once per task,
+        opening a fresh write transaction each time. Collapsing to a single
+        ``UPDATE … WHERE id IN (…)`` per chunk keeps the failure-state clear from
+        adding its own write storm to the queue requeue (see specs/49).
+
+        Args:
+            episode_ids: Episode UUIDs whose failure state should be cleared.
+
+        Returns:
+            Number of episode rows updated.
+        """
+        ids = list(dict.fromkeys(episode_ids))  # de-dupe, preserve order
+        if not ids:
+            return 0
+
+        now = datetime.now(timezone.utc).isoformat()
+        updated = 0
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), _SQL_PARAM_CHUNK):
+                chunk = ids[start : start + _SQL_PARAM_CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"""
+                    UPDATE episodes
+                    SET failed_at_stage = NULL,
+                        failure_reason = NULL,
+                        failure_type = NULL,
+                        failed_at = NULL,
+                        updated_at = ?
+                    WHERE id IN ({placeholders})
+                    """,
+                    (now, *chunk),
+                )
+                updated += cursor.rowcount or 0
+        logger.info("Bulk-cleared episode failure state", requested=len(ids), updated=updated)
+        return updated
+
+    def clear_podcast_refresh_failures(
+        self,
+        podcast_ids: Sequence[str],
+        default_interval: int,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Bulk variant of :meth:`clear_podcast_refresh_failure` — re-arm many
+        parked feeds in one write per chunk. Returns the number of rows updated.
+        """
+        ids = list(dict.fromkeys(podcast_ids))  # de-dupe, preserve order
+        if not ids:
+            return 0
+
+        now_dt = now or now_utc()
+        next_at = now_dt.isoformat()
+        updated = 0
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), _SQL_PARAM_CHUNK):
+                chunk = ids[start : start + _SQL_PARAM_CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"""
+                    UPDATE podcasts
+                    SET last_refresh_error = NULL,
+                        next_refresh_at = ?,
+                        refresh_interval_seconds = COALESCE(refresh_interval_seconds, ?),
+                        updated_at = ?
+                    WHERE id IN ({placeholders})
+                    """,
+                    (next_at, default_interval, next_at, *chunk),
+                )
+                updated += cursor.rowcount or 0
+        logger.info("Bulk-cleared podcast refresh failures", requested=len(ids), updated=updated)
+        return updated
 
     def clear_episode_failure_for_stages(self, episode_id: str, stages: Sequence[str]) -> bool:
         """Clear an episode's failure banner only if it was recorded at one of ``stages``.

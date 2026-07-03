@@ -1167,6 +1167,36 @@ class RSSMediaSource(MediaSource):
                 continue
         return images
 
+    def extract_episode_audio_urls(self, parsed_feed: Any) -> Dict[str, str]:
+        """Map every feed entry's ``external_id`` to its current enclosure URL.
+
+        Used by the refresh path to re-sync stale ``audio_url``s: some hosts
+        (e.g. BBC's mediaselector) re-publish an episode's audio under a new
+        asset URL while keeping the same GUID, so the stored URL starts 404ing
+        for episodes that haven't been fetched yet. The ``external_id`` key
+        derivation mirrors :meth:`fetch_episodes` exactly so the keys line up
+        with stored episodes. Entries without an audio enclosure are omitted —
+        a missing enclosure must never blank a stored URL.
+
+        Args:
+            parsed_feed: A feedparser result.
+
+        Returns:
+            ``{external_id: audio_url}`` for every entry carrying an enclosure.
+        """
+        audio_urls: Dict[str, str] = {}
+        for entry in parsed_feed.entries:
+            try:
+                episode_date = self._parse_date(entry.get("published_parsed"))
+                external_id = entry.get("guid", entry.get("id", str(episode_date)))
+                audio_url = self._extract_audio_url(entry)
+                if audio_url:
+                    audio_urls[external_id] = audio_url
+            except Exception:
+                # A malformed entry must not blank the whole audio-url sync.
+                continue
+        return audio_urls
+
     def extract_transcript_links(self, rss_content: str) -> Dict[str, List[TranscriptLink]]:
         """
         Extract podcast:transcript links from raw RSS content.

@@ -311,17 +311,18 @@ class EpisodesMixin:
         changed_podcasts: List[Podcast],
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+        episode_audio_updates: Optional[List[Tuple[str, str, str]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
 
         Blind podcast-meta UPDATE keyed by id, ``ON CONFLICT DO NOTHING``
         episode inserts (the concurrent-refresh backstop that was
-        ``INSERT OR IGNORE`` on SQLite), and guarded artwork re-syncs
-        (``IS DISTINCT FROM`` replaces SQLite's ``IS NOT ?``) so only drifted
-        rows write. See the SQLite docstring for the full rationale.
+        ``INSERT OR IGNORE`` on SQLite), and guarded artwork / enclosure-URL
+        re-syncs (``IS DISTINCT FROM`` replaces SQLite's ``IS NOT ?``) so only
+        drifted rows write. See the SQLite docstring for the full rationale.
         """
-        if not changed_podcasts and not new_episodes and not episode_image_updates:
+        if not changed_podcasts and not new_episodes and not episode_image_updates and not episode_audio_updates:
             return
 
         for ep in new_episodes:
@@ -447,6 +448,33 @@ class EpisodesMixin:
                     WHERE podcast_id = %s AND external_id = %s AND image_url IS DISTINCT FROM %s
                     """,
                     image_params,
+                )
+
+            # Re-sync drifted enclosure URLs for existing episodes that still
+            # need their audio. The ``audio_path IS NULL AND
+            # raw_transcript_path IS NULL`` scope keeps feeds that rotate
+            # enclosure URLs on every fetch from churning already-processed
+            # rows; the ``IS DISTINCT FROM`` guard keeps unchanged rows — and
+            # their ``updated_at`` — untouched.
+            if episode_audio_updates:
+                audio_params = [
+                    (
+                        audio_url,
+                        now,
+                        podcast_id,
+                        external_id,
+                        audio_url,
+                    )
+                    for podcast_id, external_id, audio_url in episode_audio_updates
+                ]
+                cur.executemany(
+                    """
+                    UPDATE episodes
+                    SET audio_url = %s, updated_at = %s
+                    WHERE podcast_id = %s AND external_id = %s AND audio_url IS DISTINCT FROM %s
+                      AND audio_path IS NULL AND raw_transcript_path IS NULL
+                    """,
+                    audio_params,
                 )
 
     def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
@@ -1266,9 +1294,7 @@ class EpisodesMixin:
             rows = conn.execute(query, params + [limit, offset]).fetchall()
 
             _, id_to_pair = self._category_maps(conn)
-            results = [
-                (self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row)) for row in rows
-            ]
+            results = [(self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row)) for row in rows]
 
             return results, total
 

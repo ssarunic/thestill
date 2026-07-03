@@ -1379,7 +1379,7 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     max_eps = getattr(state.config, "max_episodes_per_podcast", None)
 
     # 1-2. Fetch (network outside any txn) and surface errors.
-    podcast, new_eps, had_error, hit, source, headers_rotated, image_rows = fm._refresh_single_podcast(
+    podcast, new_eps, had_error, hit, source, headers_rotated, image_rows, audio_rows = fm._refresh_single_podcast(
         podcast, max_eps, known_external_ids
     )
     if had_error:
@@ -1394,8 +1394,8 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     #    persists nothing; otherwise persist the podcast (+ new episodes).
     persist_podcast = (not hit) or headers_rotated
     changed = [podcast] if persist_podcast else []
-    if changed or new_eps or image_rows:
-        repo.save_refresh_batch(changed, new_eps, image_rows)
+    if changed or new_eps or image_rows or audio_rows:
+        repo.save_refresh_batch(changed, new_eps, image_rows, audio_rows)
 
     # 4. Auto-enqueue the first pipeline stage for every DISCOVERED-but-unqueued
     #    episode of this feed. Shared with the inline refresh path

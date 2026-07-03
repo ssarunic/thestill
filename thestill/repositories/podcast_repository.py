@@ -241,6 +241,7 @@ class PodcastRepository(ABC):
         changed_podcasts: List[Podcast],
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
+        episode_audio_updates: Optional[List[Tuple[str, str, str]]] = None,
     ) -> None:
         """
         Persist a refresh batch in a single transaction (spec #19).
@@ -260,6 +261,13 @@ class PodcastRepository(ABC):
                 the feed (rotating signed URLs go stale because new-episode
                 discovery never revisits an existing row). Applied as a guarded
                 update so only drifted rows write.
+            episode_audio_updates: Optional ``(podcast_id, external_id,
+                audio_url)`` triples re-syncing existing episodes' enclosure
+                URLs from the feed (some hosts re-publish audio under a new URL
+                for the same GUID, so the stored URL 404s before the episode is
+                fetched). Applied as a guarded update scoped to episodes whose
+                audio hasn't been downloaded or transcribed yet, so a
+                rotating-URL feed can't churn already-processed rows.
         """
         pass
 

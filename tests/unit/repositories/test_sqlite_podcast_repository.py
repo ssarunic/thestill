@@ -713,6 +713,68 @@ def test_save_refresh_batch_image_update_is_noop_when_unchanged(temp_db, sample_
     assert after.updated_at == before.updated_at
 
 
+def test_save_refresh_batch_resyncs_drifted_audio_url(temp_db, sample_podcast, sample_episode):
+    """save_refresh_batch re-syncs a not-yet-fetched episode's drifted audio_url.
+
+    Mirrors the BBC mediaselector case: the host re-publishes the audio under
+    a new URL for the same GUID, so the stored enclosure URL 404s before the
+    episode is ever downloaded.
+    """
+    sample_episode.podcast_id = sample_podcast.id
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    new_url = "https://example.com/re-published.mp3"
+    temp_db.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, new_url)],
+    )
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert str(after.audio_url) == new_url
+
+
+def test_save_refresh_batch_audio_update_is_noop_when_unchanged(temp_db, sample_podcast, sample_episode):
+    """An unchanged audio_url leaves the row — and updated_at — untouched."""
+    sample_episode.podcast_id = sample_podcast.id
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    before = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+
+    import time
+
+    time.sleep(0.05)
+    temp_db.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, str(sample_episode.audio_url))],
+    )
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.audio_url == sample_episode.audio_url
+    assert after.updated_at == before.updated_at
+
+
+def test_save_refresh_batch_audio_update_skips_fetched_episodes(temp_db, sample_podcast, sample_episode):
+    """Episodes whose audio was already downloaded (or transcribed) are not
+    churned by feeds that rotate enclosure URLs on every fetch."""
+    sample_episode.podcast_id = sample_podcast.id
+    sample_episode.audio_path = "test-podcast/episode.mp3"
+    sample_podcast.episodes = [sample_episode]
+    temp_db.save(sample_podcast)
+
+    temp_db.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, "https://example.com/rotated.mp3")],
+    )
+
+    after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
+    assert after.audio_url == sample_episode.audio_url  # untouched
+
+
 def test_save_podcast_does_not_touch_episodes(temp_db, sample_podcast, sample_episode):
     """Test save_podcast() does not modify episodes."""
     # First save podcast with episode using full save()

@@ -298,6 +298,44 @@ def test_save_refresh_batch(h):
     h.repo.save_refresh_batch([], [], None)
 
 
+def test_save_refresh_batch_audio_url_resync(h):
+    """Guarded enclosure-URL re-sync: repairs not-yet-fetched episodes whose
+    host re-published the audio under a new URL (same GUID), but never touches
+    episodes whose audio was already downloaded or transcribed."""
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    rss = f"https://example.com/{uid}/feed.xml"
+
+    stale = _mk_episode(pid, uid, 1)  # discovered, never fetched
+    fetched = _mk_episode(pid, uid, 2, audio_path=f"{uid}-2.mp3")
+    h.repo.save_episodes([stale, fetched])
+
+    h.repo.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[
+            (pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3"),
+            (pid, fetched.external_id, f"https://example.com/{uid}/2-rotated.mp3"),
+        ],
+    )
+
+    repaired = h.repo.get_episode_by_external_id(rss, stale.external_id)
+    assert str(repaired.audio_url) == f"https://example.com/{uid}/1-republished.mp3"
+
+    untouched = h.repo.get_episode_by_external_id(rss, fetched.external_id)
+    assert untouched.audio_url == fetched.audio_url
+
+    # Guarded no-op: re-sending the same URL leaves updated_at alone.
+    before = h.repo.get_episode_by_external_id(rss, stale.external_id)
+    h.repo.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[(pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3")],
+    )
+    after = h.repo.get_episode_by_external_id(rss, stale.external_id)
+    assert after.updated_at == before.updated_at
+
+
 def test_update_episode_image_urls_guarded(h):
     uid = _nonce()
     pid = _mk_parent(h, uid)
@@ -386,7 +424,9 @@ def test_has_processed_episodes(h):
     h.repo.save_episode(ep)
     assert h.repo.has_processed_episodes(pid) is False
 
-    assert h.repo.update_episode(f"https://example.com/{uid}/feed.xml", ep.external_id, {"raw_transcript_path": "t.json"})
+    assert h.repo.update_episode(
+        f"https://example.com/{uid}/feed.xml", ep.external_id, {"raw_transcript_path": "t.json"}
+    )
     assert h.repo.has_processed_episodes(pid) is True
 
 
