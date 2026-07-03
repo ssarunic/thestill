@@ -1,18 +1,19 @@
 # SQLite → Postgres Migration
 
-> **Status:** 🚧 Implemented on branch `feat/postgres-migration-phase0` (2026-07-02) —
-> all phases 0–6 code-complete: typed native schema (uuid/timestamptz/boolean/
-> jsonb/vector + HNSW), all 8 repos ported (EntityRepository +
-> PendingOperationsRepository ABCs extracted), PostgresQueueManager with a
-> single-statement `FOR UPDATE SKIP LOCKED` claim, pgvector search backend +
+> **Status:** ✅ Complete — in production since 2026-07-03. All phases shipped:
+> typed native schema (uuid/timestamptz/boolean/jsonb/vector + HNSW), all 8
+> repos ported (EntityRepository + PendingOperationsRepository ABCs
+> extracted), PostgresQueueManager with a single-statement `FOR UPDATE SKIP
+> LOCKED` claim, pgvector search backend (iterative-scan filtered kNN) +
 > chunk writer + related-builder, `make_repositories` factory wired through
-> cli/web/mcp/task-handlers, and a two-step data migration (text mirror +
-> parity oracle → in-database typed promotion). Dual-backend contract suites
-> run every port against a real Postgres. Alembic adopted (initial revision
-> executes the shared SCHEMA_SQL) and CI runs the dual-backend contract
-> suites against a pgvector service.
+> cli/web/mcp/task-handlers, alembic migrations (revision 0001 = shared
+> SCHEMA_SQL), CI Postgres service running the dual-backend contract suites.
+> Production cutover: fresh snapshot → text mirror (PARITY OK) → typed
+> promotion in 9m22s (PROMOTION OK, 275,422 chunks) → alembic stamp →
+> DATABASE_URL flip. SQLite remains the zero-config default for new installs;
+> rollback = remove DATABASE_URL.
 > **Created:** 2026-05-22
-> **Updated:** 2026-07-02
+> **Updated:** 2026-07-03
 > **Author:** Engineering
 > **Priority:** High — prerequisite for [43-aws-hosting.md](43-aws-hosting.md)
 > **Related:** [43-aws-hosting.md](43-aws-hosting.md), [01-architecture.md](01-architecture.md) (repository pattern), [04-testing.md](04-testing.md), [28-corpus-search-and-entities.md](28-corpus-search-and-entities.md) (sqlite-vec / entities), [16-full-pipeline-and-failure-handling.md](16-full-pipeline-and-failure-handling.md) (task queue + DLQ), [20-parallel-task-queues.md](20-parallel-task-queues.md), [42-robustness-and-failure-mode-hardening.md](42-robustness-and-failure-mode-hardening.md) (FM-3 datetime boundary, FM-5 test fidelity)
