@@ -2,7 +2,7 @@
 
 > **Status:** 🚧 Active development (2026-07-01 — corrected: `services/briefing_service.py` selects from the per-user inbox by cursor)
 > **Created:** 2026-05-08
-> **Updated:** 2026-05-08
+> **Updated:** 2026-07-07 (scheduling follow-up specced: [#50](50-scheduled-briefings.md))
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#33 narrated-digest](33-narrated-digest.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
 
@@ -85,7 +85,9 @@ problems:
   no priority weighting). Punted to a later spec; the inbox subset is
   already a meaningful personalization signal.
 - Background scheduler for "auto-generate at 7 AM local time". Generation
-  stays operator-triggered (CLI / future cron) for v1.
+  stays operator-triggered (CLI / future cron) for v1. Now specced as
+  [#50 scheduled-briefings](50-scheduled-briefings.md) (per-user hour +
+  daily/weekly cadence).
 - Cross-device read-state for the briefing itself. The
   `user_briefings.listened_at` column carries it; client just renders.
 - New surface for "browse all my past briefings" — that already exists in
@@ -341,8 +343,11 @@ behind feature work that builds rate limits + cost controls.
 ## Naming Conventions
 
 - **Schema/code:** `briefing` for the per-user object; `digest` for the
-  legacy global object (kept until removed). Table `user_briefings`,
-  service `BriefingService`, model `Briefing`.
+  legacy global object (kept until removed — **removed 2026-07-07**: the
+  digest CLI/API/UI/MCP surface, repositories, model, and tables are gone;
+  `DigestGenerator` lives on as `BriefingScriptGenerator`, and narration is
+  keyed by `briefing_id`). Table `user_briefings`, service
+  `BriefingService`, model `Briefing`.
 - **User-facing label:** "Today's briefing" / "Briefing". `Digest` is
   retired from the UI on this work.
 - **Cursor field name:** `cursor_from` / `cursor_to`, not `since` /
@@ -413,7 +418,10 @@ behind feature work that builds rate limits + cost controls.
    state. Expected.
 5. **Generation cadence in v1.** Operator-triggered only. Auto-cadence
    ("every morning at 7 AM local time") is a separate spec — needs cron
-   scheduling, timezone awareness, and rate-limiting.
+   scheduling, timezone awareness, and rate-limiting. **Resolved:**
+   [#50 scheduled-briefings](50-scheduled-briefings.md) — per-user
+   `hour_local` + `daily`/`weekly` frequency + timezone settings, with a
+   `next_run_at` due-scan scheduler mirroring #48.
 
 ---
 
@@ -428,6 +436,7 @@ behind feature work that builds rate limits + cost controls.
   day, which produces the right effect for free.
 - **Mid-briefing edits** ("swap this episode out").
 - **Auto-generation scheduler.** Out of scope; CLI-triggered for v1.
+  Specced separately in [#50 scheduled-briefings](50-scheduled-briefings.md).
 - **Migration of historical global digests** under [data/digests/](../data/digests/)
   into per-user briefings. They stay where they are; the new flow
   starts from now.
@@ -446,6 +455,9 @@ behind feature work that builds rate limits + cost controls.
   this spec (§Phase 4).
 - [#22 floating-media-player](22-floating-media-player.md) — the
   player surface that briefing audio plays through.
+- [#50 scheduled-briefings](50-scheduled-briefings.md) — adds the
+  per-user scheduled trigger (hour + daily/weekly cadence) this spec
+  deliberately deferred.
 
 ---
 

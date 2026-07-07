@@ -35,26 +35,17 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .logging import configure_structlog
-from .models.digest import Digest, DigestStatus
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
+from .repositories.briefing_repository import BriefingRepository
 from .repositories.factory import make_queue_manager
 from .repositories.pending_operations_repository import PendingOperationsRepository
-from .repositories.sqlite_digest_repository import SqliteDigestRepository
 from .repositories.sqlite_inbox_repository import SqliteInboxRepository
 from .repositories.sqlite_pending_operations_repository import SqlitePendingOperationsRepository
 from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
-from .services import (
-    BatchQueueService,
-    DigestEpisodeSelector,
-    DigestGenerator,
-    DigestSelectionCriteria,
-    PodcastService,
-    RefreshService,
-    StatsService,
-)
+from .services import PodcastService, RefreshService, StatsService
 from .services.auth_service import AuthService
 from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
@@ -89,7 +80,7 @@ class CLIContext:
         external_transcript_downloader,
         console: ConsoleOutput,
         auth_service: AuthService,
-        digest_repository: SqliteDigestRepository,
+        briefing_repository: BriefingRepository,
         follower_repository: SqlitePodcastFollowerRepository,
         inbox_repository: SqliteInboxRepository,
         inbox_service: InboxService,
@@ -123,7 +114,7 @@ class CLIContext:
         # load on first ``encode_one`` call.
         self.search_backend = search_backend
         self.embedding_model = embedding_model
-        self.digest_repository = digest_repository
+        self.briefing_repository = briefing_repository
         # Spec #40 — pending transcription operations now live in SQLite.
         # Optional for tests; production CLI always passes one.
         self.pending_ops_repository = pending_ops_repository
@@ -211,8 +202,8 @@ def main(ctx, config, quiet):
         user_repository = repos.user
         auth_service = AuthService(config_obj, user_repository)
 
-        # Initialize digest repository for digest persistence
-        digest_repository = repos.digest
+        # Per-user briefing persistence (narration join key).
+        briefing_repository = repos.briefing
         # Spec #40 — pending transcription operations (backend-resolved).
         pending_ops_repository = repos.pending_ops
 
@@ -250,7 +241,7 @@ def main(ctx, config, quiet):
             external_transcript_downloader=external_transcript_downloader,
             console=console,
             auth_service=auth_service,
-            digest_repository=digest_repository,
+            briefing_repository=briefing_repository,
             follower_repository=follower_repository,
             inbox_repository=inbox_repository,
             inbox_service=inbox_service,
@@ -2213,406 +2204,6 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     click.echo(f"✓ {total_processed} episode(s) summarized in {total_time:.1f} seconds")
 
 
-@main.command()
-@click.option("--since", default=None, help="Time window for episodes (e.g., 7d, 24h, 2w). Default: config value")
-@click.option("--max-episodes", "-m", type=int, default=None, help="Maximum episodes to process. Default: config value")
-@click.option("--no-limit", is_flag=True, help="Process all matching episodes (no limit)")
-@click.option("--dry-run", "-d", is_flag=True, help="Preview what would be processed without actually processing")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt for large batches")
-@click.option("--no-refresh", is_flag=True, help="Skip feed refresh (use existing discovered episodes)")
-@click.option("--podcast-id", help="Filter to specific podcast (index, URL, or UUID)")
-@click.option("--output", "-o", type=click.Path(), help="Custom output path for digest file")
-@click.option("--ready-only", is_flag=True, help="Only include already-summarized episodes (skip processing)")
-@click.option("--exclude-digested", is_flag=True, help="Exclude episodes already included in a previous digest")
-@click.option(
-    "--async", "async_mode", is_flag=True, help="Queue processing and return immediately (requires worker process)"
-)
-@click.option(
-    "--no-narrate",
-    "skip_narrate",
-    is_flag=True,
-    help="Skip the narrated-digest enhancement (link-index only). Useful in offline / no-LLM runs.",
-)
-@click.option(
-    "--narration-duration",
-    default=None,
-    help="Target spoken duration for the narrated digest (preset short/medium/long, or 5m / 0:05:00).",
-)
-@click.pass_context
-@require_config
-@log_command
-def digest(
-    ctx,
-    since,
-    max_episodes,
-    no_limit,
-    dry_run,
-    yes,
-    no_refresh,
-    podcast_id,
-    output,
-    ready_only,
-    exclude_digested,
-    skip_narrate,
-    narration_duration,
-    async_mode,
-):
-    """Process new episodes and generate a morning briefing digest.
-
-    Runs the full pipeline (refresh -> download -> downsample -> transcribe ->
-    clean -> summarize) on unprocessed episodes and generates a consolidated
-    markdown digest.
-
-    Use --ready-only to skip processing and generate a digest from already-summarized
-    episodes only. This is useful for quick digest generation without waiting for
-    transcription and summarization.
-
-    Use --async to queue episodes for background processing and return immediately.
-    Check progress with 'thestill digest-status <digest-id>'. Note: async mode
-    requires a separate worker process to be running ('thestill worker').
-
-    By default, processes up to 10 episodes from the last 7 days. Use --no-limit
-    to process all matching episodes, or adjust with --since and --max-episodes.
-
-    Exit codes:
-      0 - All episodes processed successfully (or async queued successfully)
-      1 - Some episodes failed (partial success)
-      2 - Complete failure or configuration error
-    """
-    from .core.queue_manager import QueueManager, TaskStage, TaskStatus
-
-    config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    repository = ctx.obj.repository
-    podcast_service = ctx.obj.podcast_service
-
-    # Parse --since option or use config default
-    if since:
-        try:
-            since_days = parse_time_window(since)
-        except ValueError as e:
-            click.echo(f"❌ Invalid --since value: {e}", err=True)
-            ctx.exit(2)
-    else:
-        since_days = config.digest_default_since_days
-
-    # Determine max_episodes
-    if no_limit:
-        effective_max_episodes = 1000  # Large number effectively meaning no limit
-    elif max_episodes is not None:
-        effective_max_episodes = max_episodes
-    else:
-        effective_max_episodes = config.digest_default_max_episodes
-
-    # Resolve podcast_id to UUID if provided
-    resolved_podcast_id = None
-    if podcast_id:
-        podcast = podcast_service.get_podcast(podcast_id)
-        if not podcast:
-            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
-            ctx.exit(2)
-        resolved_podcast_id = podcast.id
-        click.echo(f"📻 Filtering to podcast: {podcast.title}")
-
-    # Step 1: Optionally refresh feeds
-    if not no_refresh and not dry_run:
-        click.echo("🔍 Refreshing feeds to discover new episodes...")
-        refresh_service = RefreshService(ctx.obj.feed_manager, podcast_service)
-        try:
-            result = refresh_service.refresh(
-                podcast_id=resolved_podcast_id,
-                max_episodes=None,
-                dry_run=False,
-            )
-            if result.total_episodes > 0:
-                click.echo(f"📡 Discovered {result.total_episodes} new episode(s)")
-            else:
-                click.echo("✓ No new episodes discovered")
-            # FM-4: surface feeds that errored so a silent-fleet event is
-            # visible in the briefing run (digest still proceeds on existing
-            # episodes — it does not abort like `thestill refresh`).
-            if result.podcasts_with_errors:
-                click.echo(
-                    f"⚠️  {result.podcasts_with_errors} feed(s) errored during refresh — see logs "
-                    "(event=feed_refresh_summary, had_error=true).",
-                    err=True,
-                )
-        except Exception as e:
-            click.echo(f"⚠️  Feed refresh failed: {e}", err=True)
-            # Continue anyway - we can still process existing episodes
-
-    # Step 2: Select episodes for processing
-    mode_label = "summarized" if ready_only else "unprocessed"
-    click.echo(f"\n🔍 Selecting {mode_label} episodes from last {since_days} days (max: {effective_max_episodes})...")
-
-    # Use digest_repository from context (needed for exclude_digested filtering and persistence)
-    digest_repository = ctx.obj.digest_repository
-
-    # SqlitePodcastRepository implements EpisodeRepository interface
-    # Pass digest_repository if exclude_digested is enabled
-    selector = DigestEpisodeSelector(
-        repository,
-        digest_repository if exclude_digested else None,
-    )
-
-    criteria = DigestSelectionCriteria(
-        since_days=since_days,
-        max_episodes=effective_max_episodes,
-        podcast_id=resolved_podcast_id,
-        ready_only=ready_only,
-        exclude_digested=exclude_digested,
-    )
-
-    selection = selector.select(criteria)
-
-    if not selection.episodes:
-        if ready_only:
-            click.echo("✓ No summarized episodes found")
-            click.echo("💡 Run without --ready-only to process episodes first")
-        else:
-            click.echo("✓ No episodes need processing")
-            click.echo("💡 All episodes within the time window are already summarized")
-        ctx.exit(0)
-
-    # Show selection summary
-    click.echo(f"\n📋 Found {selection.total_matching} episode(s) matching criteria")
-    if selection.total_matching > len(selection.episodes):
-        click.echo(f"   (showing first {len(selection.episodes)} due to --max-episodes limit)")
-
-    # Group episodes by podcast for display
-    episodes_by_podcast = {}
-    for podcast, episode in selection.episodes:
-        if podcast.title not in episodes_by_podcast:
-            episodes_by_podcast[podcast.title] = []
-        episodes_by_podcast[podcast.title].append(episode)
-
-    for podcast_title, episodes in episodes_by_podcast.items():
-        click.echo(f"\n📻 {podcast_title}")
-        for episode in episodes:
-            if episode.state == EpisodeState.SUMMARIZED:
-                state_icon = "●"  # Completed/ready
-            elif episode.state.value == "discovered":
-                state_icon = "○"  # Not started
-            else:
-                state_icon = "◐"  # In progress
-            click.echo(f"  {state_icon} {episode.title} [{episode.state.value}]")
-
-    # Dry run - stop here
-    if dry_run:
-        click.echo("\n(Run without --dry-run to process these episodes)")
-        ctx.exit(0)
-
-    # Async mode conflicts with ready-only
-    if async_mode and ready_only:
-        click.echo("❌ --async and --ready-only cannot be used together", err=True)
-        click.echo("   --ready-only generates immediately from summarized episodes")
-        click.echo("   --async queues episodes for background processing")
-        ctx.exit(2)
-
-    # Ready-only mode: skip processing, generate digest directly
-    if ready_only:
-        click.echo("\n📝 Generating digest from summarized episodes...")
-        start_time = time.time()
-
-        # All selected episodes are already summarized
-        successful_episodes = selection.episodes
-        failed_episodes = []
-        processing_time = time.time() - start_time
-
-    else:
-        # Confirmation prompt for large batches (skip for async mode)
-        if len(selection.episodes) > 10 and not yes and not async_mode:
-            click.echo(f"\n⚠️  About to process {len(selection.episodes)} episodes.")
-            if not click.confirm("Do you want to continue?"):
-                click.echo("Aborted.")
-                ctx.exit(0)
-
-        # Step 3: Process episodes through the pipeline
-        queue_manager = make_queue_manager(config)
-        batch_service = BatchQueueService(
-            queue_manager,
-            transcription_provider=config.transcription_provider,
-        )
-
-        # Async mode: queue and return immediately
-        if async_mode:
-            click.echo("\n🚀 Queueing episodes for background processing...")
-
-            # Create pending digest record first
-            auth_service = ctx.obj.auth_service
-            default_user = auth_service.get_or_create_default_user()
-
-            digest_model = Digest(
-                user_id=default_user.id,
-                period_start=criteria.date_from,
-                period_end=now_utc(),
-                episode_ids=[ep.id for _, ep in selection.episodes],
-                episodes_total=len(selection.episodes),
-                status=DigestStatus.PENDING,
-            )
-            digest_repository.save(digest_model)
-
-            # Queue episodes without waiting
-            result = batch_service.queue_episodes(
-                selection.episodes,
-                wait=False,
-            )
-
-            # Update digest status to in_progress
-            digest_model.mark_in_progress()
-            digest_repository.save(digest_model)
-
-            click.echo(f"\n✓ Digest created: {digest_model.id}")
-            click.echo(f"   Queued: {result.queued_count} episode(s)")
-            click.echo(f"   Skipped: {result.skipped_count}")
-            click.echo(f"\n💡 Check progress with: thestill digest-status {digest_model.id}")
-            ctx.exit(0)
-
-        # Sync mode: queue and wait for completion
-        click.echo("\n🚀 Starting batch processing...")
-        start_time = time.time()
-
-        # Progress callback for CLI output
-        current_episode_idx = [0]  # Use list for mutable closure
-        last_reported_stage = [None]
-        last_episode_id = [None]
-
-        def progress_callback(queued_episode, status, stage):
-            # Track episode changes to update the counter
-            if queued_episode.episode.id != last_episode_id[0]:
-                if last_episode_id[0] is not None:
-                    current_episode_idx[0] += 1
-                last_episode_id[0] = queued_episode.episode.id
-                last_reported_stage[0] = None  # Reset stage tracking for new episode
-
-            episode_title = queued_episode.episode.title[:50]
-            if stage != last_reported_stage[0]:
-                stage_name = stage.value if stage else "unknown"
-                status_name = status.value if status else "unknown"
-                click.echo(
-                    f"  [{current_episode_idx[0]+1}/{len(selection.episodes)}] {episode_title}... {stage_name} ({status_name})"
-                )
-                last_reported_stage[0] = stage
-
-        # Queue and wait for completion
-        result = batch_service.queue_episodes(
-            selection.episodes,
-            wait=True,
-            progress_callback=progress_callback,
-        )
-
-        processing_time = time.time() - start_time
-
-        # Summary of processing
-        click.echo(f"\n📊 Processing Summary:")
-        click.echo(f"   Queued: {result.queued_count}")
-        click.echo(f"   Skipped: {result.skipped_count}")
-        click.echo(f"   Successful: {result.successful_count}")
-        click.echo(f"   Failed: {result.failed_count}")
-        if result.was_interrupted:
-            click.echo("   ⚠️  Processing was interrupted")
-
-        # Step 4: Generate digest
-        click.echo("\n📝 Generating digest...")
-
-        # Collect successful episodes for digest
-        successful_episodes = []
-        failed_episodes = []
-
-        for queued_episode in result.queued:
-            if (
-                queued_episode.final_status == TaskStatus.COMPLETED
-                and queued_episode.final_stage == TaskStage.SUMMARIZE
-            ):
-                successful_episodes.append((queued_episode.podcast, queued_episode.episode))
-            elif queued_episode.final_status in (TaskStatus.FAILED, TaskStatus.DEAD):
-                failed_episodes.append(
-                    (queued_episode.podcast, queued_episode.episode, queued_episode.error_message or "Unknown error")
-                )
-
-        # Add skipped episodes that were already summarized to successful list
-        # (They should be included in the digest)
-        for podcast, episode, reason in result.skipped:
-            if reason == "already summarized":
-                successful_episodes.append((podcast, episode))
-
-    generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
-    digest_content = generator.generate(
-        episodes=successful_episodes,
-        processing_time_seconds=processing_time,
-        failures=failed_episodes,
-    )
-
-    # Determine output path and stored file_path
-    # Always store just the filename for consistency and API compatibility
-    timestamp = now_utc().strftime("%Y-%m-%d_%H%M%S")
-    digest_filename = f"digest_{timestamp}.md"
-
-    if output:
-        output_path = Path(output)
-        # Store just the filename - API access only works for files in default directory
-        stored_file_path = digest_filename
-    else:
-        output_path = path_manager.digest_file(digest_filename)
-        stored_file_path = digest_filename
-
-    generator.write(digest_content, output_path)
-
-    # Persist digest to database
-    auth_service = ctx.obj.auth_service
-    default_user = auth_service.get_or_create_default_user()
-
-    # Create digest model with processing results
-    digest_model = Digest(
-        user_id=default_user.id,
-        period_start=criteria.date_from,
-        period_end=now_utc(),
-        episode_ids=[ep.id for _, ep in successful_episodes],
-        episodes_total=digest_content.stats.total_episodes,
-    )
-
-    # Mark as completed with results
-    digest_model.mark_completed(
-        file_path=stored_file_path,
-        episodes_completed=digest_content.stats.successful_episodes,
-        episodes_failed=digest_content.stats.failed_episodes,
-        processing_time_seconds=processing_time,
-    )
-
-    # Save to database
-    digest_repository.save(digest_model)
-
-    # Final summary
-    click.echo(f"\n🎉 Digest generated!")
-    click.echo(f"   Output: {output_path}")
-    click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
-    click.echo(f"   Processing time: {format_duration(int(processing_time))}")
-
-    # Narration is opt-in per ``narration_enabled`` (spec #33 §"Migration
-    # Strategy"). Explicit ``--narration-duration`` counts as a per-run
-    # opt-in even when the flag is off. ``--no-narrate`` is a hard
-    # opt-out. The link-index digest above already shipped, so any
-    # narration failure downgrades to a warning.
-    narration_explicit = narration_duration is not None
-    if not skip_narrate and (ctx.obj.config.narration_enabled or narration_explicit):
-        _chain_narrate(
-            ctx,
-            digest_id=digest_model.id,
-            target_duration=narration_duration,
-        )
-
-    # Determine exit code
-    if ready_only:
-        # Ready-only mode: success if we have any episodes
-        ctx.exit(0 if successful_episodes else 2)
-    elif result.failed_count == 0 and not result.was_interrupted:
-        ctx.exit(0)  # All success
-    elif result.successful_count > 0:
-        ctx.exit(1)  # Partial success
-    else:
-        ctx.exit(2)  # Complete failure
-
-
 def _resolve_target_seconds_or_warn(config, target_duration: Optional[str], *, prefix: str) -> Optional[int]:
     """Parse ``target_duration`` against the config default. ``None`` on parse error."""
     if target_duration is None:
@@ -2635,17 +2226,18 @@ def _build_narration_runner(ctx, *, llm_provider):
     )
     return NarrationRunner(
         generator=generator,
-        digest_repository=ctx.obj.digest_repository,
+        briefing_repository=ctx.obj.briefing_repository,
+        inbox_repository=ctx.obj.inbox_repository,
         podcast_repository=ctx.obj.repository,
     )
 
 
 def _print_run_summary(run, *, include_target: bool) -> None:
-    """Render the per-run stats block shared by ``narrate`` and the chained ``digest`` flow."""
+    """Render the per-run stats block for ``thestill narrate``."""
     stats = run.content.stats
     click.echo(f"   Mode: {run.content.mode}")
     if include_target:
-        click.echo(f"   Digest: {run.digest_id}")
+        click.echo(f"   Briefing: {run.briefing_id}")
         click.echo(f"   Target: {format_duration(stats.target_duration_seconds)}")
     click.echo(f"   Actual: {format_duration(int(stats.actual_duration_seconds))}")
     if include_target:
@@ -2659,41 +2251,12 @@ def _print_run_summary(run, *, include_target: bool) -> None:
         click.echo(f"   Markdown: {run.markdown_path}")
 
 
-def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> None:
-    """Run ``thestill narrate`` against ``digest_id`` from inside ``digest``.
-
-    Failures are surfaced as warnings, not exit-code errors — the
-    link-index digest already succeeded and the narrated rendering is
-    additive (spec #33 §"Migration Strategy").
-    """
-    from .services.narration import NarrationRunnerError
-
-    target_seconds = _resolve_target_seconds_or_warn(ctx.obj.config, target_duration, prefix="⚠️  Skipping narration:")
-    if target_seconds is None:
-        return
-
-    try:
-        llm_provider = create_llm_provider_from_config(ctx.obj.config)
-    except Exception as exc:  # noqa: BLE001
-        click.echo(f"⚠️  Skipping narration — could not init LLM provider: {exc}", err=True)
-        return
-
-    click.echo("\n🎙  Generating narrated digest…")
-    runner = _build_narration_runner(ctx, llm_provider=llm_provider)
-    try:
-        run = runner.run(digest_id=digest_id, target_duration_seconds=target_seconds)
-    except NarrationRunnerError as exc:
-        click.echo(f"⚠️  Narration skipped: {exc}", err=True)
-        return
-    _print_run_summary(run, include_target=False)
-
-
 @main.command()
 @click.option(
-    "--digest",
-    "digest_id",
-    default=None,
-    help="Digest id to narrate. Defaults to the latest digest.",
+    "--briefing",
+    "briefing_id",
+    required=True,
+    help="Briefing id to narrate (see the inbox briefing card or GET /api/briefings).",
 )
 @click.option(
     "--target-duration",
@@ -2703,7 +2266,7 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
 @click.option(
     "--slug",
     default="morning",
-    help="Output filename slug (data/narrations/YYYY-MM-DD-<slug>.{json,md}).",
+    help="Output filename slug (data/narrations/<briefing_id>-<slug>.{json,md}).",
 )
 @click.option(
     "--dry-run",
@@ -2714,17 +2277,17 @@ def _chain_narrate(ctx, *, digest_id: str, target_duration: Optional[str]) -> No
 @click.pass_context
 @require_config
 @log_command
-def narrate(ctx, digest_id, target_duration, slug, dry_run):
-    """Generate a narrated digest from a previous `thestill digest` run.
+def narrate(ctx, briefing_id, target_duration, slug, dry_run):
+    """Generate a narration for a briefing.
 
-    Reads the episode list from the digest record, runs theme clustering
+    Resolves the briefing's inbox-window episodes, runs theme clustering
     + anchor-prose script generation (spec #33), and writes:
 
-      data/narrations/YYYY-MM-DD-<slug>.json   (TTS-ready script)
-      data/narrations/YYYY-MM-DD-<slug>.md     (read-through markdown)
+      data/narrations/<briefing_id>-<slug>.json   (TTS-ready script)
+      data/narrations/<briefing_id>-<slug>.md     (read-through markdown)
 
-    On validation failure the briefing falls back to the link-index
-    digest with a "narration unavailable" banner; the JSON script still
+    On validation failure the narration falls back to the link-index
+    script with a "narration unavailable" banner; the JSON script still
     serialises with ``mode: "fallback"`` for diagnostics.
     """
     from .services.narration import NarrationRunnerError
@@ -2748,7 +2311,7 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     runner = _build_narration_runner(ctx, llm_provider=llm_provider)
     try:
         run = runner.run(
-            digest_id=digest_id,
+            briefing_id=briefing_id,
             target_duration_seconds=target_seconds,
             slug=slug,
         )
@@ -2761,214 +2324,8 @@ def narrate(ctx, digest_id, target_duration, slug, dry_run):
     _print_run_summary(run, include_target=True)
     # Fallback exits non-zero so the caller knows the LLM stage didn't
     # produce its intended output, even though the link-index artefact
-    # was still written. ``thestill digest`` ignores this in
-    # ``_chain_narrate`` since the digest itself already shipped.
+    # was still written.
     ctx.exit(0 if run.content.mode == "narrated" else 1)
-
-
-@main.command("digest-status")
-@click.argument("digest_id", required=False)
-@click.option("--list", "-l", "list_all", is_flag=True, help="List all digests")
-@click.option("--limit", type=int, default=10, help="Maximum digests to list (default: 10)")
-@click.option("--finalize", "-f", is_flag=True, help="Finalize an async digest (generate output file)")
-@click.pass_context
-@require_config
-@log_command
-def digest_status(ctx, digest_id, list_all, limit, finalize):
-    """Check status of digest generation or list all digests.
-
-    Without arguments, shows the status of the most recent digest.
-    With DIGEST_ID, shows status of that specific digest.
-    With --list, shows all digests.
-    With --finalize, generates the digest file for a completed async digest.
-
-    Examples:
-      thestill digest-status                    # Show latest digest status
-      thestill digest-status abc123             # Show specific digest
-      thestill digest-status --list             # List all digests
-      thestill digest-status abc123 --finalize  # Generate file for async digest
-    """
-    from .core.queue_manager import QueueManager, TaskStage, TaskStatus
-
-    config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    digest_repository = ctx.obj.digest_repository
-    repository = ctx.obj.repository
-
-    # List all digests mode
-    if list_all:
-        digests = digest_repository.get_all(limit=limit)
-
-        if not digests:
-            click.echo("No digests found.")
-            ctx.exit(0)
-
-        click.echo(f"📋 Digests (showing {len(digests)}):\n")
-        for d in digests:
-            status_icon = {
-                DigestStatus.PENDING: "⏳",
-                DigestStatus.IN_PROGRESS: "🔄",
-                DigestStatus.COMPLETED: "✓",
-                DigestStatus.PARTIAL: "⚠️",
-                DigestStatus.FAILED: "❌",
-            }.get(d.status, "?")
-
-            click.echo(f"{status_icon} {d.id[:8]}...")
-            click.echo(f"   Created: {d.created_at.strftime('%Y-%m-%d %H:%M')}")
-            click.echo(f"   Status: {d.status.value}")
-            click.echo(f"   Episodes: {d.episodes_completed}/{d.episodes_total}")
-            if d.file_path:
-                click.echo(f"   Output: {d.file_path}")
-            click.echo()
-        ctx.exit(0)
-
-    # Get specific or latest digest
-    if digest_id:
-        digest_model = digest_repository.get_by_id(digest_id)
-        if not digest_model:
-            click.echo(f"❌ Digest not found: {digest_id}", err=True)
-            ctx.exit(2)
-    else:
-        digest_model = digest_repository.get_latest()
-        if not digest_model:
-            click.echo("No digests found. Run 'thestill digest' to create one.")
-            ctx.exit(0)
-
-    # Show digest status
-    status_icon = {
-        DigestStatus.PENDING: "⏳",
-        DigestStatus.IN_PROGRESS: "🔄",
-        DigestStatus.COMPLETED: "✓",
-        DigestStatus.PARTIAL: "⚠️",
-        DigestStatus.FAILED: "❌",
-    }.get(digest_model.status, "?")
-
-    click.echo(f"\n{status_icon} Digest: {digest_model.id}")
-    click.echo(f"   Status: {digest_model.status.value}")
-    click.echo(f"   Created: {digest_model.created_at.strftime('%Y-%m-%d %H:%M')}")
-    click.echo(
-        f"   Period: {digest_model.period_start.strftime('%Y-%m-%d')} to {digest_model.period_end.strftime('%Y-%m-%d')}"
-    )
-
-    # For in-progress digests, check task queue status
-    if digest_model.status == DigestStatus.IN_PROGRESS:
-        queue_manager = make_queue_manager(config)
-
-        completed = 0
-        failed = 0
-        pending = 0
-
-        for episode_id in digest_model.episode_ids:
-            tasks = queue_manager.get_tasks_for_episode(episode_id)
-            if tasks:
-                latest_task = tasks[0]
-                if latest_task.status == TaskStatus.COMPLETED and latest_task.stage == TaskStage.SUMMARIZE:
-                    completed += 1
-                elif latest_task.status in (TaskStatus.FAILED, TaskStatus.DEAD):
-                    failed += 1
-                else:
-                    pending += 1
-            else:
-                pending += 1
-
-        click.echo(f"\n📊 Progress:")
-        click.echo(f"   Completed: {completed}/{digest_model.episodes_total}")
-        click.echo(f"   Failed: {failed}")
-        click.echo(f"   Pending: {pending}")
-
-        if pending == 0:
-            click.echo("\n💡 All episodes processed. Run with --finalize to generate the digest file.")
-
-    elif digest_model.status in (DigestStatus.COMPLETED, DigestStatus.PARTIAL):
-        click.echo(f"\n📊 Results:")
-        click.echo(f"   Completed: {digest_model.episodes_completed}/{digest_model.episodes_total}")
-        click.echo(f"   Failed: {digest_model.episodes_failed}")
-        if digest_model.processing_time_seconds:
-            click.echo(f"   Processing time: {format_duration(int(digest_model.processing_time_seconds))}")
-        if digest_model.file_path:
-            click.echo(f"   Output: {digest_model.file_path}")
-
-    elif digest_model.status == DigestStatus.FAILED:
-        click.echo(f"\n❌ Error: {digest_model.error_message or 'Unknown error'}")
-
-    # Finalize mode: generate digest file for async digest
-    if finalize:
-        if digest_model.status == DigestStatus.COMPLETED and digest_model.file_path:
-            click.echo("\n✓ Digest already finalized.")
-            ctx.exit(0)
-
-        if digest_model.status == DigestStatus.PENDING:
-            click.echo("\n❌ Cannot finalize: digest is still pending", err=True)
-            ctx.exit(1)
-
-        # Collect episode results from queue
-        click.echo("\n📝 Generating digest file...")
-        queue_manager = make_queue_manager(config)
-
-        successful_episodes = []
-        failed_episodes = []
-        missing_episode_ids = []
-
-        for episode_id in digest_model.episode_ids:
-            # Get episode and podcast from repository
-            episode_data = repository.get_episode_by_id(episode_id)
-            if not episode_data:
-                missing_episode_ids.append(episode_id)
-                click.echo(
-                    f"⚠️  Episode not found in database: {episode_id}",
-                    file=sys.stderr,
-                )
-                continue
-
-            podcast, episode = episode_data
-
-            tasks = queue_manager.get_tasks_for_episode(episode_id)
-            if tasks:
-                latest_task = tasks[0]
-                if latest_task.status == TaskStatus.COMPLETED and latest_task.stage == TaskStage.SUMMARIZE:
-                    successful_episodes.append((podcast, episode))
-                elif latest_task.status in (TaskStatus.FAILED, TaskStatus.DEAD):
-                    failed_episodes.append((podcast, episode, latest_task.error_message or "Unknown error"))
-            else:
-                # Check if episode is already summarized
-                if episode.state == EpisodeState.SUMMARIZED:
-                    successful_episodes.append((podcast, episode))
-
-        if not successful_episodes and not failed_episodes:
-            click.echo("❌ No processed episodes found", err=True)
-            ctx.exit(1)
-
-        # Generate digest
-        generator = DigestGenerator(path_manager, ctx.obj.config.file_storage)
-        digest_content = generator.generate(
-            episodes=successful_episodes,
-            processing_time_seconds=None,
-            failures=failed_episodes,
-        )
-
-        # Write output (store just filename since it's in default digests directory)
-        timestamp = now_utc().strftime("%Y-%m-%d_%H%M%S")
-        digest_filename = f"digest_{timestamp}.md"
-        output_path = path_manager.digest_file(digest_filename)
-        generator.write(digest_content, output_path)
-
-        # Update digest model
-        digest_model.mark_completed(
-            file_path=digest_filename,
-            episodes_completed=digest_content.stats.successful_episodes,
-            episodes_failed=digest_content.stats.failed_episodes,
-            processing_time_seconds=0,
-        )
-        digest_repository.save(digest_model)
-
-        click.echo(f"\n🎉 Digest finalized!")
-        click.echo(f"   Output: {output_path}")
-        click.echo(f"   Episodes: {digest_content.stats.successful_episodes}/{digest_content.stats.total_episodes}")
-        if missing_episode_ids:
-            click.echo(
-                f"   ⚠️  {len(missing_episode_ids)} episode(s) not found in database (may have been deleted)",
-                file=sys.stderr,
-            )
 
 
 @main.command("evaluate-raw-transcript")
@@ -4010,7 +3367,7 @@ def _date_range_from_since(since: Optional[str]):
 
     Returns ``None`` when ``since`` is None, leaving downstream queries
     unscoped. Reuses ``parse_time_window`` so the syntax matches the
-    existing CLI commands (``thestill digest --since 24h`` etc.).
+    existing CLI commands (``thestill refresh`` etc.).
     """
     if since is None:
         return None

@@ -27,8 +27,8 @@ from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.briefing_renderer import BriefingRenderer
+from thestill.services.briefing_script_generator import BriefingScriptGenerator
 from thestill.services.briefing_service import BriefingNotFoundError, BriefingService
-from thestill.services.digest_generator import DigestGenerator
 from thestill.utils.path_manager import PathManager
 
 # Six hours: matches the production default. Tests opt out of the throttle
@@ -86,7 +86,7 @@ def podcast_repo(db_path):
 @pytest.fixture
 def renderer(path_manager, file_storage, podcast_repo):
     return BriefingRenderer(
-        DigestGenerator(path_manager, file_storage),
+        BriefingScriptGenerator(path_manager, file_storage),
         podcast_repo,
         path_manager,
     )

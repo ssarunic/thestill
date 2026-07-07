@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import NarrationView from '../components/NarrationView'
 import {
   useBriefing,
   useBriefingScript,
@@ -61,23 +62,31 @@ export default function BriefingDetail() {
       </div>
 
       <div className="bg-white border border-gray-200 rounded-lg p-6">
-        {scriptQuery.isLoading && (
-          <div className="space-y-2">
-            <div className="animate-pulse h-4 w-3/4 bg-gray-100 rounded" />
-            <div className="animate-pulse h-4 w-2/3 bg-gray-100 rounded" />
-            <div className="animate-pulse h-4 w-5/6 bg-gray-100 rounded" />
-          </div>
-        )}
-        {scriptQuery.error && (
-          <p className="text-gray-500 italic">
-            Briefing script not available yet.
-          </p>
-        )}
-        {scriptQuery.data && (
-          <div className="prose prose-sm max-w-none">
-            <ReactMarkdown>{scriptQuery.data.markdown}</ReactMarkdown>
-          </div>
-        )}
+        <NarrationView
+          briefingId={briefing.id}
+          narrations={briefing.narrations ?? []}
+          linkIndexFallback={
+            <>
+              {scriptQuery.isLoading && (
+                <div className="space-y-2">
+                  <div className="animate-pulse h-4 w-3/4 bg-gray-100 rounded" />
+                  <div className="animate-pulse h-4 w-2/3 bg-gray-100 rounded" />
+                  <div className="animate-pulse h-4 w-5/6 bg-gray-100 rounded" />
+                </div>
+              )}
+              {scriptQuery.error && (
+                <p className="text-gray-500 italic">
+                  Briefing script not available yet.
+                </p>
+              )}
+              {scriptQuery.data && (
+                <div className="prose prose-sm max-w-none">
+                  <ReactMarkdown>{scriptQuery.data.markdown}</ReactMarkdown>
+                </div>
+              )}
+            </>
+          }
+        />
       </div>
 
       <div className="flex items-center justify-end">

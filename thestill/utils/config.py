@@ -87,6 +87,28 @@ def get_refresh_scheduler_tick_seconds() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Spec #50 — scheduled briefings knobs. Same standalone-getter pattern as the
+# #48 refresh scheduler; ships dark and flips per deployment via env.
+# ---------------------------------------------------------------------------
+def is_briefing_scheduler_enabled() -> bool:
+    """When true, the web server runs the background tick that generates
+    briefings at each user's scheduled hour. Default: off (ships dark)."""
+    return _env_bool("BRIEFING_SCHEDULER_ENABLED", False)
+
+
+def get_briefing_scheduler_tick_seconds() -> int:
+    """How often the scheduler scans for due briefing schedules (default
+    60s). Scheduling granularity, NOT the per-user cadence."""
+    return _env_int("BRIEFING_SCHEDULER_TICK_SECONDS", 60)
+
+
+def get_briefing_scheduler_max_per_tick() -> int:
+    """Due-fleet bound per tick (default 50). Generation runs on the tick
+    thread, so this caps worst-case tick latency."""
+    return _env_int("BRIEFING_SCHEDULER_MAX_PER_TICK", 50)
+
+
+# ---------------------------------------------------------------------------
 # Spec #49 — queue auto-healing. The worker auto-requeues infra-class
 # ``failed`` tasks (DNS / model-runtime / provider outages) once their
 # dependency recovers, bounded per-task by a heal-attempt cap. Ships ON for
@@ -330,11 +352,7 @@ class Config(BaseModel):
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
 
-    # Digest Configuration
-    digest_default_since_days: int = 7  # Default time window for digest (days)
-    digest_default_max_episodes: int = 10  # Default max episodes per digest
-
-    # Narrated Digest Configuration (spec #33). Default duration is the
+    # Narration Configuration (spec #33). Default duration is the
     # ``medium`` preset; flip ``narration_enabled`` on once fallback rates
     # are measured in production (spec #33 §"Migration Strategy").
     narration_enabled: bool = False
@@ -645,9 +663,6 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
-        # Digest
-        "digest_default_since_days": int(os.getenv("DIGEST_DEFAULT_SINCE_DAYS", "7")),
-        "digest_default_max_episodes": int(os.getenv("DIGEST_DEFAULT_MAX_EPISODES", "10")),
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),

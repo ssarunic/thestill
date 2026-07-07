@@ -165,7 +165,13 @@ class _PostgresEnv:
         podcast_id = str(uuid.uuid4())
         self._execute(
             "INSERT INTO podcasts (id, rss_url, title, slug, image_url) VALUES (%s, %s, %s, %s, %s)",
-            (podcast_id, f"https://example.com/{slug}.xml", f"Podcast {slug}", slug, "https://cdn.example.com/cover.jpg"),
+            (
+                podcast_id,
+                f"https://example.com/{slug}.xml",
+                f"Podcast {slug}",
+                slug,
+                "https://cdn.example.com/cover.jpg",
+            ),
         )
         return podcast_id
 
@@ -386,6 +392,52 @@ def test_update_state_invalid_state_hits_db_check(env):
 
     with pytest.raises(env.integrity_error):
         env.repo.update_state(user, ep, "archived", datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# mark_read_if_unread (guarded view-driven transition)
+# ---------------------------------------------------------------------------
+def test_mark_read_if_unread_transitions_and_stamps_changed_at(env):
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+    ep = env.add_episode(podcast, "ep1")
+    env.repo.insert_many([_entry(user, ep)])
+
+    now = datetime.now(timezone.utc)
+    assert env.repo.mark_read_if_unread(user, ep, now) is True
+
+    entry = env.repo.get(user, ep)
+    assert entry.state == "read"
+    assert entry.state_changed_at == now
+
+
+def test_mark_read_if_unread_missing_row_returns_false(env):
+    user = env.add_user("alice@example.com")
+    assert env.repo.mark_read_if_unread(user, MISSING_ID, datetime.now(timezone.utc)) is False
+
+
+def test_mark_read_if_unread_garbage_episode_id_is_noop(env):
+    """The episode id comes straight from the URL path — an unparseable id
+    must be a quiet no-op on both engines, not a 500 (Postgres would
+    otherwise raise on the ``uuid`` cast)."""
+    user = env.add_user("alice@example.com")
+    assert env.repo.mark_read_if_unread(user, "not-a-uuid", datetime.now(timezone.utc)) is False
+
+
+def test_mark_read_if_unread_leaves_non_unread_states_alone(env):
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+
+    for state in ("read", "saved", "dismissed"):
+        ep = env.add_episode(podcast, f"ep-{state}")
+        env.repo.insert_many([_entry(user, ep)])
+        stamped = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        env.repo.update_state(user, ep, state, stamped)
+
+        assert env.repo.mark_read_if_unread(user, ep, datetime.now(timezone.utc)) is False
+        entry = env.repo.get(user, ep)
+        assert entry.state == state
+        assert entry.state_changed_at == stamped  # untouched, not restamped
 
 
 # ---------------------------------------------------------------------------
@@ -631,9 +683,7 @@ def test_list_episode_ids_in_window_custom_states(env):
         ]
     )
 
-    ids = env.repo.list_episode_ids_in_window(
-        user, since=BASE, until=BASE + timedelta(hours=1), states=("read",)
-    )
+    ids = env.repo.list_episode_ids_in_window(user, since=BASE, until=BASE + timedelta(hours=1), states=("read",))
     assert ids == [ep_read]
 
 

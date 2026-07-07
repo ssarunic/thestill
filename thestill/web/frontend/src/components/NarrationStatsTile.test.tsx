@@ -33,8 +33,8 @@ function makeStats(overrides: Partial<NarrationDashboardStats> = {}): NarrationD
     avg_target_duration_seconds: 300,
     avg_latency_ms: 4280,
     latest: {
-      narration_id: 'digest-001-medium',
-      digest_id: 'digest-001',
+      narration_id: 'briefing-001-medium',
+      briefing_id: 'briefing-001',
       generated_at: '2026-05-08T07:00:00+00:00',
       mode: 'narrated',
       fallback_reason: null,
@@ -89,19 +89,19 @@ describe('NarrationStatsTile', () => {
     expect(screen.getByText('4.3s')).toBeInTheDocument() // avg_latency
   })
 
-  it('links to the digest viewer for the latest run', () => {
+  it('links to the briefing viewer for the latest run', () => {
     mockHook.mockReturnValue({ data: makeStats(), isLoading: false, error: null })
     render(withProviders(<NarrationStatsTile />))
     const link = screen.getByRole('link', { name: /View latest/ })
-    expect(link).toHaveAttribute('href', '/digests/digest-001')
+    expect(link).toHaveAttribute('href', '/briefings/briefing-001')
   })
 
   it('shows fallback note when latest run failed', () => {
     mockHook.mockReturnValue({
       data: makeStats({
         latest: {
-          narration_id: 'digest-002-short',
-          digest_id: 'digest-002',
+          narration_id: 'briefing-002-short',
+          briefing_id: 'briefing-002',
           generated_at: '2026-05-08T07:00:00+00:00',
           mode: 'fallback',
           fallback_reason: 'word_budget_high',
@@ -118,12 +118,12 @@ describe('NarrationStatsTile', () => {
     expect(screen.getByText(/word_budget_high/)).toBeInTheDocument()
   })
 
-  it('hides the deep-link when digest_id is missing (legacy artefact)', () => {
+  it('hides the deep-link when briefing_id is missing (legacy artefact)', () => {
     mockHook.mockReturnValue({
       data: makeStats({
         latest: {
           narration_id: 'legacy-medium',
-          digest_id: null,
+          briefing_id: null,
           generated_at: '2026-05-08T07:00:00+00:00',
           mode: 'narrated',
           fallback_reason: null,

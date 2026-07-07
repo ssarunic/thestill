@@ -15,10 +15,8 @@ thestill downloads your podcasts, transcribes them with speaker identification, 
 thestill add "https://lexfridman.com/feed/podcast/"
 thestill add "https://www.youtube.com/@hubermanlab"
 
-# Generate your morning briefing
-thestill digest
-
-# Or run the web UI
+# Run the web UI — episodes process continuously and your
+# morning briefing is generated from your inbox
 thestill server
 ```
 
@@ -76,16 +74,16 @@ pip install -e .
 # Configure (edit .env with your API keys)
 cp .env.example .env
 
-# Add a podcast and process it
+# Add a podcast and start the server (pipeline + briefings)
 thestill add "https://example.com/podcast/rss"
-thestill digest
+thestill server
 ```
 
 ## Features
 
 - **Web UI** - React dashboard for managing podcasts, viewing transcripts, monitoring queue
 - **Speaker Diarization** - Know who said what in multi-person conversations
-- **Morning Briefing** - Daily digest of new episodes with summaries
+- **Morning Briefing** - Per-user briefing of new inbox episodes, on your schedule
 - **MCP Server** - Natural language access to your podcast library via Claude Desktop
 - **Multi-user Auth** - Google OAuth for hosted deployments
 - **Failure Handling** - Automatic retries, dead letter queue for manual review
@@ -118,10 +116,6 @@ thestill transcribe         # Transcribe to JSON
 thestill clean-transcript   # Clean with LLM
 thestill summarize          # Generate summaries
 
-# Batch processing
-thestill digest             # Full pipeline + morning briefing
-thestill digest --dry-run   # Preview what would be processed
-
 # Web server
 thestill server             # Start on localhost:8000
 ```
@@ -137,7 +131,7 @@ data/
 ├── raw_transcripts/     # JSON with timestamps & speakers
 ├── clean_transcripts/   # Cleaned Markdown
 ├── summaries/           # Episode analysis
-├── digests/             # Morning briefings
+├── briefings/           # Per-user morning briefings
 └── podcasts.db          # SQLite database
 ```
 

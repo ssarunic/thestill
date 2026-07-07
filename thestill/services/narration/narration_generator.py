@@ -45,7 +45,7 @@ from ...core.llm_provider import LLMProvider
 from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager, _validate_slug
 from ...utils.url_generator import UrlGenerator
-from ..digest_generator import DigestGenerator, extract_gist
+from ..briefing_script_generator import BriefingScriptGenerator, extract_gist
 
 if TYPE_CHECKING:
     from ...utils.file_storage import FileStorage
@@ -92,14 +92,14 @@ class NarrationConfig:
     signoff_share: float = DEFAULT_SIGNOFF_SHARE
     slug: str = "morning"
     # Overrides the default ``YYYY-MM-DD-<slug>`` basename used for the
-    # JSON/Markdown artefacts. The runner sets this to ``<digest_id>-<slug>``
-    # so the digest record is the durable join key for narrations.
+    # JSON/Markdown artefacts. The runner sets this to ``<briefing_id>-<slug>``
+    # so the briefing record is the durable join key for narrations.
     basename: Optional[str] = None
     # Persisted in the JSON header so consumers (dashboard tile, future
     # TTS) read the join key explicitly instead of parsing the filename
     # — slugs may contain ``-`` (e.g. ``custom-450s``) so the filename
     # alone is ambiguous.
-    digest_id: Optional[str] = None
+    briefing_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Defence-in-depth: the slug ends up in a filename so a value
@@ -154,7 +154,7 @@ class NarrationGenerator:
         clusterer: Optional[ThemeClusterer] = None,
         script_writer: Optional[ScriptWriter] = None,
         markdown_renderer: Optional[NarrationMarkdownRenderer] = None,
-        digest_generator: Optional[DigestGenerator] = None,
+        script_generator: Optional[BriefingScriptGenerator] = None,
         url_generator: Optional[UrlGenerator] = None,
         anchor_prompt: Optional[str] = None,
     ):
@@ -169,8 +169,8 @@ class NarrationGenerator:
         # default to local when ``STORAGE_BACKEND=s3``. The earlier fallback
         # let production paths read summaries from the wrong backend
         # (reviewer P2). The provided storage is also threaded into the
-        # auto-constructed DigestGenerator.
-        self.digest_generator = digest_generator or DigestGenerator(
+        # auto-constructed BriefingScriptGenerator.
+        self.script_generator = script_generator or BriefingScriptGenerator(
             path_manager, file_storage, url_generator=self.url_generator
         )
         self.llm_provider = llm_provider
@@ -213,7 +213,7 @@ class NarrationGenerator:
         """Write the JSON-script artefact under ``data/narrations/``.
 
         Filename: ``<basename>.json``. The runner sets ``basename`` to
-        ``<digest_id>-<slug>`` so the digest record is the join key.
+        ``<briefing_id>-<slug>`` so the briefing record is the join key.
         Standalone callers fall back to ``YYYY-MM-DD-<slug>``.
         """
         cfg = config or NarrationConfig()
@@ -228,7 +228,7 @@ class NarrationGenerator:
             "mode": content.mode,
             "fallback_reason": content.stats.fallback_reason,
             "latency_ms": content.latency_ms,
-            "digest_id": cfg.digest_id,
+            "briefing_id": cfg.briefing_id,
             "slug": cfg.slug,
             "blocks": [self._block_to_dict(b, content.quotes) for b in content.blocks],
             "episodes_covered": list(content.episode_ids_covered),
@@ -389,7 +389,7 @@ class NarrationGenerator:
     def _build_fallback_narration(self, pipeline: _Pipeline) -> NarrationContent:
         all_quotes = [q for b in pipeline.buckets for q in b.picked]
         episode_ids_in_tail = [b.episode.id for b in pipeline.buckets]
-        digest_content = self.digest_generator.generate([(b.podcast, b.episode) for b in pipeline.buckets])
+        digest_content = self.script_generator.generate([(b.podcast, b.episode) for b in pipeline.buckets])
         markdown = (
             "> _Today's narration is unavailable; here is the link-index briefing"
             " instead._\n\n" + digest_content.markdown

@@ -287,10 +287,11 @@ Get tracked podcasts with pagination.
 
 **Query Parameters:**
 
-| Parameter | Type | Default | Description         |
-|-----------|------|---------|---------------------|
-| limit     | int  | 12      | Max items to return |
-| offset    | int  | 0       | Items to skip       |
+| Parameter | Type | Default | Description                                             |
+|-----------|------|---------|---------------------------------------------------------|
+| limit     | int  | 12      | Max items to return                                     |
+| offset    | int  | 0       | Items to skip                                           |
+| q         | str  | —       | Case-insensitive substring filter on title or author. Applied before pagination, so `total` reflects the filtered set. Blank/whitespace values are ignored. |
 
 **Response:**
 

@@ -12,25 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for ``NarrationRunner`` (spec #33 Phase 3)."""
+"""Tests for ``NarrationRunner`` (spec #33 Phase 3, rekeyed to briefings)."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pytest
-from pydantic import HttpUrl
 
-from thestill.models.digest import Digest
+from thestill.models.briefing import Briefing
 from thestill.models.podcast import Episode, Podcast
-from thestill.services.narration import (
-    NarrationConfig,
-    NarrationGenerator,
-    NarrationRunner,
-    NarrationRunnerError,
-    QuoteSelector,
-)
+from thestill.services.narration import NarrationGenerator, NarrationRunner, NarrationRunnerError, QuoteSelector
 from thestill.services.narration.models import ScriptBlock
 from thestill.services.narration.script_writer import ScriptResult
 from thestill.utils.path_manager import PathManager
@@ -45,25 +38,40 @@ from .test_narration_generator import (
     _StubScriptWriter,
 )
 
+_WINDOW_START = datetime(2026, 5, 5, 6, 0, tzinfo=timezone.utc)
+_WINDOW_END = datetime(2026, 5, 6, 6, 0, tzinfo=timezone.utc)
 
-class _DigestRepo:
-    """In-memory stub of ``DigestRepository`` for the runner tests."""
 
-    def __init__(self, digests: Optional[List[Digest]] = None) -> None:
-        self._by_id = {d.id: d for d in digests or []}
-        self._latest = digests[-1] if digests else None
+class _BriefingRepo:
+    """In-memory stub of ``BriefingRepository.get`` for the runner tests."""
 
-    def get_by_id(self, digest_id: str) -> Optional[Digest]:
-        return self._by_id.get(digest_id)
+    def __init__(self, briefings: Optional[List[Briefing]] = None) -> None:
+        self._by_id = {b.id: b for b in briefings or []}
 
-    def get_latest(self) -> Optional[Digest]:
-        return self._latest
+    def get(self, briefing_id: str) -> Optional[Briefing]:
+        return self._by_id.get(briefing_id)
+
+
+class _InboxRepo:
+    """In-memory stub of ``InboxRepository.list_episode_ids_in_window``.
+
+    Keyed per briefing window start so multi-briefing tests can vary the
+    episode set; falls back to a single default list.
+    """
+
+    def __init__(self, episode_ids: List[str]) -> None:
+        self._episode_ids = episode_ids
+        self.calls: List[dict] = []
+
+    def list_episode_ids_in_window(self, user_id, *, since, until, states=None) -> List[str]:
+        self.calls.append({"user_id": user_id, "since": since, "until": until, "states": states})
+        return list(self._episode_ids)
 
 
 class _PodcastRepo:
     """In-memory stub of ``PodcastRepository.get_episode``."""
 
-    def __init__(self, episodes: dict[str, tuple[Podcast, Episode]]) -> None:
+    def __init__(self, episodes: Dict[str, tuple[Podcast, Episode]]) -> None:
         self._episodes = episodes
 
     def get_episode(self, episode_id: str):
@@ -87,20 +95,18 @@ def file_storage(storage: PathManager):
     return LocalFileStorage(base_path=str(storage.storage_path))
 
 
-def _digest(*, id_: str, episode_ids: list[str]) -> Digest:
-    return Digest(
+def _briefing(*, id_: str, episode_count: int = 1) -> Briefing:
+    return Briefing(
         id=id_,
         user_id="user-1",
-        period_start=datetime(2026, 5, 6, tzinfo=timezone.utc),
-        period_end=datetime(2026, 5, 6, tzinfo=timezone.utc),
-        episode_ids=episode_ids,
-        episodes_total=len(episode_ids),
+        cursor_from=_WINDOW_START,
+        cursor_to=_WINDOW_END,
+        episode_count=episode_count,
+        created_at=_WINDOW_END,
     )
 
 
 def _generator(storage: PathManager, file_storage, plan, script_blocks):
-    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")  # noqa: F841
-
     loader = _StaticLoader(
         turns_by_episode={
             "e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex Anchor")],
@@ -126,7 +132,13 @@ def _good_blocks() -> list[ScriptBlock]:
     ]
 
 
-def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager, file_storage) -> None:
+def _empty_plan():
+    from thestill.services.narration.models import ThemePlan
+
+    return ThemePlan(segments=(), tail_ids=())
+
+
+def test_runner_resolves_briefing_and_writes_artefacts(storage: PathManager, file_storage) -> None:
     from thestill.services.narration.models import Segment, ThemePlan
 
     podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
@@ -135,28 +147,59 @@ def test_runner_resolves_latest_digest_and_writes_artefacts(storage: PathManager
         segments=(Segment(theme="Lead", angle="Lead angle", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
-    digest = _digest(id_="digest-001", episode_ids=["e1"])
+    briefing = _briefing(id_="briefing-001")
     runner = NarrationRunner(
         generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
+        inbox_repository=_InboxRepo(["e1"]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
-    run = runner.run(target_duration_seconds=300, slug="morning")
-    assert run.digest_id == "digest-001"
-    assert run.narration_id == "digest-001-morning"
+    run = runner.run(briefing_id="briefing-001", target_duration_seconds=300, slug="morning")
+    assert run.briefing_id == "briefing-001"
+    assert run.narration_id == "briefing-001-morning"
     assert run.json_path is not None and run.json_path.exists()
-    assert run.json_path.name == "digest-001-morning.json"
+    assert run.json_path.name == "briefing-001-morning.json"
     assert run.markdown_path is not None and run.markdown_path.exists()
-    assert run.markdown_path.name == "digest-001-morning.md"
+    assert run.markdown_path.name == "briefing-001-morning.md"
 
     payload = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert payload["mode"] == "narrated"
     assert payload["episodes_covered"] == ["e1"]
 
 
-def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_storage) -> None:
+def test_runner_resolves_episodes_from_briefing_cursor_window(storage: PathManager, file_storage) -> None:
+    """The episode set comes from the briefing's inbox cursor window,
+    including ``read`` rows (an episode read after generation still
+    narrates) but never ``dismissed``.
+    """
+    from thestill.services.narration.models import Segment, ThemePlan
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    plan = ThemePlan(
+        segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
+        tail_ids=(),
+    )
+    inbox = _InboxRepo(["e1"])
+    runner = NarrationRunner(
+        generator=_generator(storage, file_storage, plan, _good_blocks()),
+        briefing_repository=_BriefingRepo([_briefing(id_="b1")]),
+        inbox_repository=inbox,
+        podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
+    )
+    runner.run(briefing_id="b1", target_duration_seconds=300)
+
+    assert len(inbox.calls) == 1
+    call = inbox.calls[0]
+    assert call["user_id"] == "user-1"
+    assert call["since"] == _WINDOW_START
+    assert call["until"] == _WINDOW_END
+    assert call["states"] == ("unread", "saved", "read")
+
+
+def test_runner_captures_latency_ms_and_briefing_id(storage: PathManager, file_storage) -> None:
     """Phase 5 instrumentation: ``content.latency_ms`` is populated by
-    the runner around ``generate()``, and ``digest_id`` is persisted in
+    the runner around ``generate()``, and ``briefing_id`` is persisted in
     the JSON header so the dashboard tile doesn't have to parse the
     filename to recover the join key.
     """
@@ -168,13 +211,14 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_sto
         segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
         tail_ids=(),
     )
-    digest = _digest(id_="digest-uuid-001", episode_ids=["e1"])
+    briefing = _briefing(id_="briefing-uuid-001")
     runner = NarrationRunner(
         generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([digest]),
+        briefing_repository=_BriefingRepo([briefing]),
+        inbox_repository=_InboxRepo(["e1"]),
         podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
     )
-    run = runner.run(target_duration_seconds=300, slug="medium")
+    run = runner.run(briefing_id="briefing-uuid-001", target_duration_seconds=300, slug="medium")
 
     assert run.content.latency_ms is not None
     assert isinstance(run.content.latency_ms, int)
@@ -182,78 +226,27 @@ def test_runner_captures_latency_ms_and_digest_id(storage: PathManager, file_sto
 
     payload = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert payload["latency_ms"] == run.content.latency_ms
-    assert payload["digest_id"] == "digest-uuid-001"
+    assert payload["briefing_id"] == "briefing-uuid-001"
     assert payload["slug"] == "medium"
 
 
-def test_runner_resolves_specific_digest_id(storage: PathManager, file_storage) -> None:
-    from thestill.services.narration.models import Segment, ThemePlan
-
-    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
-    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
-    plan = ThemePlan(
-        segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
-        tail_ids=(),
-    )
-    older = _digest(id_="older", episode_ids=["e1"])
-    newer = _digest(id_="newer", episode_ids=["e1"])
+def test_runner_raises_when_unknown_briefing_id(storage: PathManager, file_storage) -> None:
     runner = NarrationRunner(
-        generator=_generator(storage, file_storage, plan, _good_blocks()),
-        digest_repository=_DigestRepo([older, newer]),
-        podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
-    )
-    run = runner.run(digest_id="older", target_duration_seconds=300)
-    assert run.digest_id == "older"
-
-
-def test_runner_raises_when_no_digest(storage: PathManager, file_storage) -> None:
-    runner = NarrationRunner(
-        generator=_generator(
-            storage,
-            file_storage,
-            __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
-                segments=(), tail_ids=()
-            ),
-            _good_blocks(),
-        ),
-        digest_repository=_DigestRepo([]),
+        generator=_generator(storage, file_storage, _empty_plan(), _good_blocks()),
+        briefing_repository=_BriefingRepo([_briefing(id_="known")]),
+        inbox_repository=_InboxRepo([]),
         podcast_repository=_PodcastRepo({}),
     )
     with pytest.raises(NarrationRunnerError):
-        runner.run()
-
-
-def test_runner_raises_when_unknown_digest_id(storage: PathManager, file_storage) -> None:
-    digest = _digest(id_="known", episode_ids=["e1"])
-    runner = NarrationRunner(
-        generator=_generator(
-            storage,
-            file_storage,
-            __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
-                segments=(), tail_ids=()
-            ),
-            _good_blocks(),
-        ),
-        digest_repository=_DigestRepo([digest]),
-        podcast_repository=_PodcastRepo({}),
-    )
-    with pytest.raises(NarrationRunnerError):
-        runner.run(digest_id="nope")
+        runner.run(briefing_id="nope")
 
 
 def test_runner_raises_when_all_episodes_missing(storage: PathManager, file_storage) -> None:
-    digest = _digest(id_="d1", episode_ids=["gone-1", "gone-2"])
     runner = NarrationRunner(
-        generator=_generator(
-            storage,
-            file_storage,
-            __import__("thestill.services.narration.models", fromlist=["ThemePlan"]).ThemePlan(
-                segments=(), tail_ids=()
-            ),
-            _good_blocks(),
-        ),
-        digest_repository=_DigestRepo([digest]),
+        generator=_generator(storage, file_storage, _empty_plan(), _good_blocks()),
+        briefing_repository=_BriefingRepo([_briefing(id_="b1", episode_count=2)]),
+        inbox_repository=_InboxRepo(["gone-1", "gone-2"]),
         podcast_repository=_PodcastRepo({}),
     )
     with pytest.raises(NarrationRunnerError):
-        runner.run(digest_id="d1")
+        runner.run(briefing_id="b1")

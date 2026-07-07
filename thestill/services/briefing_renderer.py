@@ -16,7 +16,7 @@
 Briefing script renderer (spec #36).
 
 Renders a briefing's ``script.md`` from the inbox-window episode IDs
-computed by ``BriefingService``, via the existing ``DigestGenerator``.
+computed by ``BriefingService``, via ``BriefingScriptGenerator``.
 """
 
 from pathlib import Path
@@ -28,7 +28,7 @@ from ..models.briefing import Briefing
 from ..models.podcast import Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.path_manager import PathManager
-from .digest_generator import DigestGenerator
+from .briefing_script_generator import BriefingScriptGenerator
 
 logger = get_logger(__name__)
 
@@ -42,11 +42,11 @@ class BriefingRenderer:
 
     def __init__(
         self,
-        digest_generator: DigestGenerator,
+        script_generator: BriefingScriptGenerator,
         podcast_repository: PodcastRepository,
         path_manager: PathManager,
     ) -> None:
-        self._generator = digest_generator
+        self._generator = script_generator
         self._repository = podcast_repository
         self._paths = path_manager
 

@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
@@ -85,6 +85,10 @@ export default function EpisodeDetail() {
   useReadingPosition(episodeData?.episode?.id)
 
   const episode = episodeData?.episode
+
+  // Spec #29 read tracking — viewing this page while a summary exists is
+  // what marks the inbox row read, regardless of how the user got here.
+  useMarkInboxReadOnView(episode?.id, summaryData?.available === true)
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.

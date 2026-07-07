@@ -39,7 +39,6 @@ from fastapi.testclient import TestClient
 from thestill.core.feed_manager import PodcastFeedManager
 from thestill.core.progress_store import ProgressStore
 from thestill.core.queue_manager import QueueManager
-from thestill.repositories.sqlite_digest_repository import SqliteDigestRepository
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -99,7 +98,6 @@ def app_state(app_config: Config) -> AppState:
         inbox_repository=inbox_repository,
         queue_manager=queue_manager,
     )
-    digest_repository = SqliteDigestRepository(db_path=app_config.database_path)
 
     from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
     from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
@@ -137,7 +135,6 @@ def app_state(app_config: Config) -> AppState:
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
         import_service=import_service,
-        digest_repository=digest_repository,
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
         entity_repository=entity_repository,

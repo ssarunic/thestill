@@ -197,3 +197,49 @@ def test_check_constraint_rejects_inverted_cursor(repo, user_repo, db_path):
                 ),
             )
             conn.commit()
+
+
+def test_list_for_user_returns_newest_first_paginated(repo, user_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    base = datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
+    for day in range(5):
+        repo.insert(
+            _make_briefing(
+                user.id,
+                cursor_from=base + timedelta(days=day - 1),
+                cursor_to=base + timedelta(days=day),
+                created_at=base + timedelta(days=day),
+            )
+        )
+
+    first_page = repo.list_for_user(user.id, limit=2, offset=0)
+    second_page = repo.list_for_user(user.id, limit=2, offset=2)
+
+    assert [b.created_at for b in first_page] == [
+        base + timedelta(days=4),
+        base + timedelta(days=3),
+    ]
+    assert [b.created_at for b in second_page] == [
+        base + timedelta(days=2),
+        base + timedelta(days=1),
+    ]
+    assert repo.count_for_user(user.id) == 5
+
+
+def test_list_for_user_isolates_users(repo, user_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    base = datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
+    repo.insert(_make_briefing(alice.id, cursor_from=base, cursor_to=base + timedelta(hours=1)))
+    repo.insert(_make_briefing(bob.id, cursor_from=base, cursor_to=base + timedelta(hours=1)))
+
+    listed = repo.list_for_user(alice.id, limit=10, offset=0)
+
+    assert [b.user_id for b in listed] == [alice.id]
+    assert repo.count_for_user(alice.id) == 1
+
+
+def test_list_for_user_empty(repo, user_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    assert repo.list_for_user(user.id, limit=10, offset=0) == []
+    assert repo.count_for_user(user.id) == 0

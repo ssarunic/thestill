@@ -1,18 +1,17 @@
 import { lazy, Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 
 // Lazy load pages for code splitting
-const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Status = lazy(() => import('./pages/Dashboard'))
 const Podcasts = lazy(() => import('./pages/Podcasts'))
 const PodcastDetail = lazy(() => import('./pages/PodcastDetail'))
 const EpisodeDetail = lazy(() => import('./pages/EpisodeDetail'))
 const Episodes = lazy(() => import('./pages/Episodes'))
 const Inbox = lazy(() => import('./pages/Inbox'))
-const Digests = lazy(() => import('./pages/Digests'))
-const DigestDetail = lazy(() => import('./pages/DigestDetail'))
+const Briefings = lazy(() => import('./pages/Briefings'))
 const BriefingDetail = lazy(() => import('./pages/BriefingDetail'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const QueueViewer = lazy(() => import('./pages/QueueViewer'))
@@ -47,10 +46,15 @@ function App() {
           <Layout />
         </ProtectedRoute>
       }>
-        <Route index element={
-          <Suspense fallback={<PageLoader />}>
-            <Dashboard />
-          </Suspense>
+        {/* Inbox is the daily entry point — the root redirects there. The
+            pipeline overview lives at /status (admin section). */}
+        <Route index element={<Navigate to="/inbox" replace />} />
+        <Route path="status" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <Status />
+            </Suspense>
+          </AdminRoute>
         } />
         <Route path="podcasts" element={
           <Suspense fallback={<PageLoader />}>
@@ -82,14 +86,9 @@ function App() {
             <Inbox />
           </Suspense>
         } />
-        <Route path="digests" element={
+        <Route path="briefings" element={
           <Suspense fallback={<PageLoader />}>
-            <Digests />
-          </Suspense>
-        } />
-        <Route path="digests/:digestId" element={
-          <Suspense fallback={<PageLoader />}>
-            <DigestDetail />
+            <Briefings />
           </Suspense>
         } />
         <Route path="briefings/:briefingId" element={

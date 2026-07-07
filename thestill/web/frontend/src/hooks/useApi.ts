@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import {
   useQuery,
   useInfiniteQuery,
@@ -39,17 +40,8 @@ import {
   cancelPipeline,
   followPodcast,
   unfollowPodcast,
-  getDigests,
-  getDigest,
-  getLatestDigest,
-  getDigestContent,
-  getDigestEpisodes,
-  previewDigest,
-  createDigest,
-  deleteDigest,
-  getMorningBriefing,
-  createMorningBriefing,
-  narrateDigest,
+  narrateBriefing,
+  getBriefings,
   getNarration,
   quickSearch,
   corpusSearch,
@@ -57,13 +49,14 @@ import {
   getRelatedEpisodes,
   getEntitySummary,
   getInbox,
+  markInboxRead,
   type GetInboxOptions,
   getLatestBriefing,
   getBriefing,
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, CreateDigestRequest, DigestStatus, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateDigestRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -105,10 +98,10 @@ export function usePodcasts() {
   })
 }
 
-export function usePodcastsInfinite(limit = 12) {
+export function usePodcastsInfinite(limit = 12, q?: string) {
   return useInfiniteQuery({
-    queryKey: ['podcasts', 'infinite', limit],
-    queryFn: ({ pageParam = 0 }) => getPodcasts(limit, pageParam),
+    queryKey: ['podcasts', 'infinite', limit, q ?? ''],
+    queryFn: ({ pageParam = 0 }) => getPodcasts(limit, pageParam, q),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
   })
@@ -541,119 +534,6 @@ export function useCancelPipeline() {
 }
 
 // ============================================================================
-// Digest hooks
-// ============================================================================
-
-export function useDigests(limit = 50, status?: DigestStatus) {
-  return useQuery({
-    queryKey: ['digests', limit, status],
-    queryFn: () => getDigests(limit, 0, status),
-    refetchInterval: (query) => {
-      // Poll every 3 seconds while there are pending or in_progress digests
-      const digests = query.state.data?.digests || []
-      const hasActiveDigest = digests.some(
-        (d) => d.status === 'pending' || d.status === 'in_progress'
-      )
-      return hasActiveDigest ? 3000 : false
-    },
-  })
-}
-
-export function useDigestsInfinite(limit = 20, status?: DigestStatus) {
-  return useInfiniteQuery({
-    queryKey: ['digests', 'infinite', limit, status],
-    queryFn: ({ pageParam = 0 }) => getDigests(limit, pageParam, status),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) => lastPage.next_offset,
-  })
-}
-
-export function useDigest(digestId: string | null) {
-  return useQuery({
-    queryKey: ['digests', digestId],
-    queryFn: () => getDigest(digestId!),
-    enabled: !!digestId,
-  })
-}
-
-export function useLatestDigest() {
-  return useQuery({
-    queryKey: ['digests', 'latest'],
-    queryFn: getLatestDigest,
-  })
-}
-
-export function useDigestContent(digestId: string | null) {
-  return useQuery({
-    queryKey: ['digests', digestId, 'content'],
-    queryFn: () => getDigestContent(digestId!),
-    enabled: !!digestId,
-    staleTime: 60000, // 1 minute
-  })
-}
-
-export function useDigestEpisodes(digestId: string | null) {
-  return useQuery({
-    queryKey: ['digests', digestId, 'episodes'],
-    queryFn: () => getDigestEpisodes(digestId!),
-    enabled: !!digestId,
-  })
-}
-
-export function usePreviewDigest() {
-  return useMutation({
-    mutationFn: (request: CreateDigestRequest) => previewDigest(request),
-  })
-}
-
-// Hook for fetching morning briefing count (uses server-configured defaults)
-export function useMorningBriefingCount() {
-  return useQuery({
-    queryKey: ['morning-briefing'],
-    queryFn: getMorningBriefing,
-    staleTime: 60000, // Cache for 1 minute
-  })
-}
-
-// Hook for creating morning briefing (uses server-configured defaults)
-export function useCreateMorningBriefing() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: createMorningBriefing,
-    onSuccess: () => {
-      // Invalidate digests list and morning briefing preview
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
-      queryClient.invalidateQueries({ queryKey: ['morning-briefing'] })
-    },
-  })
-}
-
-export function useCreateDigest() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (request: CreateDigestRequest) => createDigest(request),
-    onSuccess: () => {
-      // Invalidate digests list to show the new digest
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
-    },
-  })
-}
-
-export function useDeleteDigest() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (digestId: string) => deleteDigest(digestId),
-    onSuccess: () => {
-      // Invalidate digests list
-      queryClient.invalidateQueries({ queryKey: ['digests'] })
-    },
-  })
-}
-
-// ============================================================================
 // Narration hooks (spec #33)
 // ============================================================================
 
@@ -666,17 +546,17 @@ export function useNarration(narrationId: string | null) {
   })
 }
 
-export function useNarrateDigest() {
+export function useNarrateBriefing() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ digestId, request }: { digestId: string; request: NarrateDigestRequest }) =>
-      narrateDigest(digestId, request),
-    onSuccess: (data, { digestId }) => {
-      // Refresh the digest detail so the new variant appears in the
+    mutationFn: ({ briefingId, request }: { briefingId: string; request: NarrateBriefingRequest }) =>
+      narrateBriefing(briefingId, request),
+    onSuccess: (data, { briefingId }) => {
+      // Refresh the briefing detail so the new variant appears in the
       // ``narrations`` list, and the targeted narration query so the
       // reader picks up the new markdown if it was already cached.
-      queryClient.invalidateQueries({ queryKey: ['digests', digestId] })
+      queryClient.invalidateQueries({ queryKey: ['briefings', briefingId] })
       queryClient.invalidateQueries({
         queryKey: ['narrations', data.narration_id],
       })
@@ -770,6 +650,41 @@ export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) 
   })
 }
 
+export function useMarkInboxRead() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (episodeId: string) => markInboxRead(episodeId),
+    onSuccess: (data) => {
+      // ``marked: false`` means nothing changed server-side (no inbox row,
+      // or the row already left unread) — skip the refetch churn.
+      if (data.marked) {
+        queryClient.invalidateQueries({ queryKey: ['inbox'] })
+      }
+    },
+  })
+}
+
+/**
+ * View-driven read tracking (spec #29): mark the episode's inbox row read
+ * once per viewed episode, but only after a summary is actually available —
+ * glancing at a page that still says "Transcribing…" doesn't count as
+ * reading. Fire-and-forget: the server treats a missing inbox row as a
+ * no-op, and a network failure just leaves the row unread for a later view.
+ */
+export function useMarkInboxReadOnView(
+  episodeId: string | null | undefined,
+  summaryAvailable: boolean,
+) {
+  const { mutate } = useMarkInboxRead()
+  const markedEpisodeRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!episodeId || !summaryAvailable) return
+    if (markedEpisodeRef.current === episodeId) return
+    markedEpisodeRef.current = episodeId
+    mutate(episodeId)
+  }, [episodeId, summaryAvailable, mutate])
+}
+
 // Per-user briefings (spec #36). The "latest" endpoint lazy-generates,
 // so a 404 means "nothing eligible to brief about right now" — callers
 // should treat it as a hide-the-card signal rather than an error.
@@ -779,6 +694,15 @@ export function useLatestBriefing() {
     queryFn: getLatestBriefing,
     staleTime: 60_000,
     retry: false,
+  })
+}
+
+export function useBriefingsInfinite(limit = 20) {
+  return useInfiniteQuery({
+    queryKey: ['briefings', 'infinite', limit],
+    queryFn: ({ pageParam = 0 }) => getBriefings(limit, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset,
   })
 }
 

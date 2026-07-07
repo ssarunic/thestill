@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 interface MobileHeaderProps {
   onMenuClick: () => void
 }
@@ -26,8 +28,16 @@ export default function MobileHeader({ onMenuClick }: MobileHeaderProps) {
         </div>
       </div>
 
-      {/* Spacer to balance the hamburger button */}
-      <div className="w-10" />
+      {/* Search — balances the hamburger button and links to the full page */}
+      <Link
+        to="/search"
+        className="p-2 -mr-2 rounded-lg hover:bg-gray-100 transition-colors"
+        aria-label="Search"
+      >
+        <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+        </svg>
+      </Link>
     </header>
   )
 }

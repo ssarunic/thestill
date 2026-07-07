@@ -1,17 +1,18 @@
-# Narrated Digest
+# Briefing Narration
 
-Spec [#33](../specs/33-narrated-digest.md). The narrated digest is a
+Spec [#33](../specs/33-narrated-digest.md). The narration is a
 single-anchor, news-style readout of the day's processed episodes.
-The link-index digest still ships synchronously without an LLM; the
+The link-index briefing script still ships synchronously without an LLM; the
 narration is a progressive enhancement that arrives behind it on the
-same `digest_id`.
+same `briefing_id`.
 
 ## How it works
 
 ```text
-thestill digest
-  ├─► link-index digest written immediately (no LLM)        data/digests/digest_<ts>.md
-  └─► narration runs after, when narration_enabled=true     data/narrations/<digest_id>-<slug>.{json,md}
+briefing generated (inbox open / scheduler / spec #50)
+  ├─► link-index script written immediately (no LLM)        data/briefings/<user_id>/<briefing_id>/script.md
+  └─► narration on demand (POST /api/briefings/{id}/narrate
+      or `thestill narrate --briefing <id>`)                data/narrations/<briefing_id>-<slug>.{json,md}
        ├─► quote selection (deterministic)
        ├─► theme clustering   (LLM call #1)
        └─► script generation  (LLM call #2)
@@ -21,8 +22,8 @@ thestill digest
 When narration succeeds, the JSON script carries `mode: "narrated"` and a
 markdown read-through is written alongside it. When validation fails
 twice (or theme clustering errors out), the JSON carries `mode:
-"fallback"` and the markdown becomes the link-index digest with a
-"narration unavailable" banner — the user always gets a usable digest.
+"fallback"` and the markdown becomes the link-index script with a
+"narration unavailable" banner — the user always gets a usable briefing.
 
 ## Configuration
 
@@ -35,7 +36,7 @@ twice (or theme clustering errors out), the JSON carries `mode:
 The CLI also accepts `--no-narrate` to opt out per-run when you only
 want the link-index (e.g., offline testing). The `thestill narrate`
 standalone command always requires an LLM provider and a configured
-digest record.
+briefing record.
 
 ## Time-budget model
 
@@ -100,14 +101,14 @@ Three rules enforced after the script-generation LLM call:
 A failed run regenerates once with a tightened prompt that includes
 the failure tokens (`unknown_quote_id`, `verbatim_leak`,
 `word_budget_high`, `word_budget_low`). A second failure flips the
-run to fallback mode — the link-index digest renders behind a banner
+run to fallback mode — the link-index script renders behind a banner
 and the JSON still serialises with the failure reasons in
 `stats.fallback_reason` and a structured `narration.fallback` log
 event for ops dashboards.
 
 ## JSON script schema
 
-The on-disk JSON sidecar (`data/narrations/<digest_id>-<slug>.json`)
+The on-disk JSON sidecar (`data/narrations/<briefing_id>-<slug>.json`)
 is the canonical TTS contract. Schema version `phase2`:
 
 ```jsonc
@@ -120,7 +121,7 @@ is the canonical TTS contract. Schema version `phase2`:
   "mode": "narrated",            // "narrated" or "fallback"
   "fallback_reason": null,       // e.g. "word_budget_high,verbatim_leak" when mode=fallback
   "latency_ms": 4280,            // wall-clock around generate(), captured by NarrationRunner; null when generate() is called outside the runner (e.g. tests / programmatic callers / older artefacts)
-  "digest_id": "digest-uuid-…", // null when the artefact wasn't produced via the runner
+  "briefing_id": "briefing-uuid-…", // null when the artefact wasn't produced via the runner (or predates the digest retirement)
   "slug": "medium",              // matches the second half of the filename basename
   "blocks": [
     {

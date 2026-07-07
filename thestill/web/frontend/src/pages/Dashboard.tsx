@@ -4,7 +4,6 @@ import ActivityFeed from '../components/ActivityFeed'
 import PipelineStatus from '../components/PipelineStatus'
 import RefreshButton from '../components/RefreshButton'
 import MobileSummaryBar from '../components/MobileSummaryBar'
-import MorningBriefingWidget from '../components/MorningBriefingWidget'
 import NarrationStatsTile from '../components/NarrationStatsTile'
 
 export default function Dashboard() {
@@ -36,7 +35,7 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Status</h1>
           <p className="text-gray-500 mt-1">Overview of your podcast processing pipeline</p>
         </div>
         <RefreshButton />
@@ -99,7 +98,6 @@ export default function Dashboard() {
       </div>
 
       {/* Morning Briefing Widget */}
-      <MorningBriefingWidget />
 
       {/* Narration health (spec #33). Renders nothing when no
           narrations have run yet, so the tile only appears once the

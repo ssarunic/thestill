@@ -18,7 +18,7 @@ Single source of truth for the typed Postgres DDL, translated from the live
 SQLite schema with **native Postgres types** throughout:
 
 - ``uuid`` for every UUID-shaped key (podcasts/episodes/users/tasks/briefings/
-  digests/followers/inbox/jti). Entity ids are slugs (``company:01-advisors``)
+  followers/inbox/jti). Entity ids are slugs (``company:01-advisors``)
   and stay ``text``; provider-issued ``operation_id`` stays ``text``.
 - ``timestamptz`` for every timestamp (removes the SQLite text-timestamp
   foot-gun — spec #42 FM-3). Defaults use ``now()``.
@@ -198,7 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_transcript_links_episode ON episode_transcript_li
 CREATE INDEX IF NOT EXISTS idx_transcript_links_mime_type ON episode_transcript_links(mime_type);
 CREATE INDEX IF NOT EXISTS idx_transcript_links_not_downloaded ON episode_transcript_links(episode_id) WHERE downloaded_path IS NULL;
 
--- ===== follows / inbox / briefings / digests =============================
+-- ===== follows / inbox / briefings ========================================
 CREATE TABLE IF NOT EXISTS podcast_followers (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -222,58 +222,6 @@ CREATE TABLE IF NOT EXISTS user_episode_inbox (
 CREATE INDEX IF NOT EXISTS idx_inbox_user_state ON user_episode_inbox(user_id, state, delivered_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbox_episode ON user_episode_inbox(episode_id);
 
-CREATE TABLE IF NOT EXISTS digests (
-    id uuid PRIMARY KEY,
-    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    period_start timestamptz NOT NULL,
-    period_end timestamptz NOT NULL,
-    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','completed','partial','failed')),
-    file_path text NULL,
-    episodes_total bigint NOT NULL DEFAULT 0,
-    episodes_completed bigint NOT NULL DEFAULT 0,
-    episodes_failed bigint NOT NULL DEFAULT 0,
-    processing_time_seconds double precision NULL,
-    error_message text NULL
-);
-CREATE INDEX IF NOT EXISTS idx_digests_created_at ON digests(created_at);
-CREATE INDEX IF NOT EXISTS idx_digests_status ON digests(status);
-CREATE INDEX IF NOT EXISTS idx_digests_user_id ON digests(user_id);
-
-CREATE TABLE IF NOT EXISTS digest_episodes (
-    digest_id uuid NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
-    episode_id uuid NOT NULL,
-    PRIMARY KEY (digest_id, episode_id)
-);
-CREATE INDEX IF NOT EXISTS idx_digest_episodes_episode ON digest_episodes(episode_id);
-
-CREATE TABLE IF NOT EXISTS briefings (
-    id uuid PRIMARY KEY,
-    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    period_start timestamptz NOT NULL,
-    period_end timestamptz NOT NULL,
-    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','completed','partial','failed')),
-    file_path text NULL,
-    episodes_total bigint NOT NULL DEFAULT 0,
-    episodes_completed bigint NOT NULL DEFAULT 0,
-    episodes_failed bigint NOT NULL DEFAULT 0,
-    processing_time_seconds double precision NULL,
-    error_message text NULL
-);
-CREATE INDEX IF NOT EXISTS idx_briefings_created_at ON briefings(created_at);
-CREATE INDEX IF NOT EXISTS idx_briefings_status ON briefings(status);
-CREATE INDEX IF NOT EXISTS idx_briefings_user_id ON briefings(user_id);
-
-CREATE TABLE IF NOT EXISTS briefing_episodes (
-    briefing_id uuid NOT NULL REFERENCES briefings(id) ON DELETE CASCADE,
-    episode_id uuid NOT NULL,
-    PRIMARY KEY (briefing_id, episode_id)
-);
-CREATE INDEX IF NOT EXISTS idx_briefing_episodes_episode ON briefing_episodes(episode_id);
-
 CREATE TABLE IF NOT EXISTS user_briefings (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -287,6 +235,22 @@ CREATE TABLE IF NOT EXISTS user_briefings (
     CHECK (cursor_to > cursor_from)
 );
 CREATE INDEX IF NOT EXISTS idx_user_briefings_user ON user_briefings(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_briefing_schedules (
+    user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    frequency text NOT NULL DEFAULT 'daily' CHECK (frequency IN ('daily','weekly')),
+    hour_local bigint NOT NULL DEFAULT 8 CHECK (hour_local BETWEEN 0 AND 23),
+    weekday bigint NULL CHECK (weekday IS NULL OR weekday BETWEEN 0 AND 6),
+    timezone text NOT NULL,
+    enabled boolean NOT NULL DEFAULT true,
+    next_run_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK ((frequency = 'weekly') = (weekday IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_briefing_schedules_due
+    ON user_briefing_schedules(next_run_at)
+    WHERE enabled AND next_run_at IS NOT NULL;
 
 -- ===== task queue =========================================================
 CREATE TABLE IF NOT EXISTS tasks (

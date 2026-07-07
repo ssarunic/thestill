@@ -74,6 +74,20 @@ class InboxRepository(ABC):
         """
 
     @abstractmethod
+    def mark_read_if_unread(self, user_id: str, episode_id: str, state_changed_at: datetime) -> bool:
+        """
+        Transition the row to ``read`` only when it is currently ``unread``.
+
+        Guarded variant of ``update_state`` for view-driven read tracking
+        (spec #29): callers fire it without knowing whether an inbox row
+        exists or what state it holds, so it must never clobber ``saved``
+        or resurrect ``dismissed``.
+
+        Returns ``True`` if a row actually transitioned; ``False`` when the
+        row is absent or already in a non-``unread`` state.
+        """
+
+    @abstractmethod
     def list_items(
         self,
         user_id: str,

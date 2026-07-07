@@ -124,6 +124,7 @@ async def resolve_podcast(
 async def get_podcasts(
     limit: int = 12,
     offset: int = 0,
+    q: Optional[str] = None,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ) -> dict:
@@ -136,6 +137,7 @@ async def get_podcasts(
     Args:
         limit: Maximum number of podcasts to return (default 12)
         offset: Number of podcasts to skip for pagination (default 0)
+        q: Optional case-insensitive filter on podcast title or author
 
     Returns:
         List of followed podcasts with their metadata, episode counts, and pagination info.
@@ -148,6 +150,15 @@ async def get_podcasts(
 
     # Filter to only followed podcasts
     followed_podcasts = [p for p in all_podcasts if p.id in followed_podcast_ids]
+
+    # Filter must run before pagination so `total` reflects the filtered set
+    # and infinite scroll pages stay consistent with the query.
+    needle = (q or "").strip().lower()
+    if needle:
+        followed_podcasts = [
+            p for p in followed_podcasts if needle in p.title.lower() or needle in (p.author or "").lower()
+        ]
+
     total = len(followed_podcasts)
 
     # Apply pagination

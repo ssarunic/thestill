@@ -228,6 +228,30 @@ class PostgresInboxRepository(InboxRepository):
                 return None
             return self._row_to_entry(row)
 
+    def mark_read_if_unread(self, user_id: str, episode_id: str, state_changed_at: datetime) -> bool:
+        # The ``state = 'unread'`` guard is the whole point: callers fire
+        # this blindly from the episode view without holding the row, so it
+        # must not clobber saved / dismissed (see the interface docstring).
+        #
+        # ``episode_id`` comes straight from the URL path. On SQLite a
+        # garbage id just matches nothing; here the ``uuid`` cast would
+        # raise instead — pre-validate so an unparseable id stays a no-op.
+        try:
+            uuid.UUID(episode_id)
+        except ValueError:
+            return False
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                """
+                UPDATE user_episode_inbox
+                   SET state = 'read', state_changed_at = %s
+                 WHERE user_id = %s AND episode_id = %s AND state = 'unread'
+                RETURNING id
+                """,
+                (state_changed_at, user_id, episode_id),
+            ).fetchone()
+            return row is not None
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------

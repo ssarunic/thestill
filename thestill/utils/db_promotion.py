@@ -175,52 +175,6 @@ _PROMOTIONS: list[tuple[str, str]] = [
         """,
     ),
     (
-        "digests",
-        """
-        INSERT INTO digests (id, user_id, created_at, updated_at, period_start, period_end,
-            status, file_path, episodes_total, episodes_completed, episodes_failed,
-            processing_time_seconds, error_message)
-        SELECT id::uuid, user_id::uuid, NULLIF(created_at,'')::timestamptz,
-               NULLIF(updated_at,'')::timestamptz, NULLIF(period_start,'')::timestamptz,
-               NULLIF(period_end,'')::timestamptz, status, file_path,
-               COALESCE(NULLIF(episodes_total,'')::bigint,0),
-               COALESCE(NULLIF(episodes_completed,'')::bigint,0),
-               COALESCE(NULLIF(episodes_failed,'')::bigint,0),
-               NULLIF(processing_time_seconds,'')::double precision, error_message
-        FROM {m}.digests
-        """,
-    ),
-    (
-        "digest_episodes",
-        """
-        INSERT INTO digest_episodes (digest_id, episode_id)
-        SELECT digest_id::uuid, episode_id::uuid FROM {m}.digest_episodes
-        """,
-    ),
-    (
-        "briefings",
-        """
-        INSERT INTO briefings (id, user_id, created_at, updated_at, period_start, period_end,
-            status, file_path, episodes_total, episodes_completed, episodes_failed,
-            processing_time_seconds, error_message)
-        SELECT id::uuid, user_id::uuid, NULLIF(created_at,'')::timestamptz,
-               NULLIF(updated_at,'')::timestamptz, NULLIF(period_start,'')::timestamptz,
-               NULLIF(period_end,'')::timestamptz, status, file_path,
-               COALESCE(NULLIF(episodes_total,'')::bigint,0),
-               COALESCE(NULLIF(episodes_completed,'')::bigint,0),
-               COALESCE(NULLIF(episodes_failed,'')::bigint,0),
-               NULLIF(processing_time_seconds,'')::double precision, error_message
-        FROM {m}.briefings
-        """,
-    ),
-    (
-        "briefing_episodes",
-        """
-        INSERT INTO briefing_episodes (briefing_id, episode_id)
-        SELECT briefing_id::uuid, episode_id::uuid FROM {m}.briefing_episodes
-        """,
-    ),
-    (
         "user_briefings",
         """
         INSERT INTO user_briefings (id, user_id, cursor_from, cursor_to, episode_count,
@@ -453,8 +407,7 @@ def _promote_vectors(pconn, dim: int) -> dict[str, int]:
     """
     with pconn.cursor(name="mirror_ev") as read, pconn.cursor() as write:
         read.execute(
-            f"SELECT episode_id, embedding_model, chunk_count, centroid, computed_at "
-            f"FROM {MIRROR}.episode_vectors"
+            f"SELECT episode_id, embedding_model, chunk_count, centroid, computed_at " f"FROM {MIRROR}.episode_vectors"
         )
         n = 0
         batch = []

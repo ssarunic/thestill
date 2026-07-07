@@ -221,3 +221,233 @@ class TestMarkListened:
         response = client.post("/api/briefings/00000000-0000-0000-0000-000000000001/listened")
 
         assert response.status_code == 404
+
+
+# ============================================================================
+# GET /api/briefings (paginated history)
+# ============================================================================
+
+
+class TestListBriefings:
+    def test_lists_history_newest_first(self, client, mock_app_state):
+        rows = [
+            _briefing(briefing_id="00000000-0000-0000-0000-000000000002"),
+            _briefing(briefing_id="00000000-0000-0000-0000-000000000001"),
+        ]
+        mock_app_state.briefing_repository.list_for_user.return_value = rows
+        mock_app_state.briefing_repository.count_for_user.return_value = 5
+
+        response = client.get("/api/briefings?limit=2&offset=0")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert [b["id"] for b in body["briefings"]] == [
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000001",
+        ]
+        assert body["total"] == 5
+        assert body["has_more"] is True
+        assert body["next_offset"] == 2
+        kwargs = mock_app_state.briefing_repository.list_for_user.call_args
+        assert kwargs.args[0] == "user-1"
+        assert kwargs.kwargs == {"limit": 2, "offset": 0}
+
+    def test_clamps_limit_and_offset(self, client, mock_app_state):
+        mock_app_state.briefing_repository.list_for_user.return_value = []
+        mock_app_state.briefing_repository.count_for_user.return_value = 0
+
+        response = client.get("/api/briefings?limit=9999&offset=-5")
+
+        assert response.status_code == 200
+        kwargs = mock_app_state.briefing_repository.list_for_user.call_args.kwargs
+        assert kwargs == {"limit": 100, "offset": 0}
+
+    def test_empty_history(self, client, mock_app_state):
+        mock_app_state.briefing_repository.list_for_user.return_value = []
+        mock_app_state.briefing_repository.count_for_user.return_value = 0
+
+        response = client.get("/api/briefings")
+
+        body = response.json()
+        assert body["briefings"] == []
+        assert body["has_more"] is False
+        assert body["next_offset"] is None
+
+
+# ============================================================================
+# POST /api/briefings/{briefing_id}/narrate (spec #33, rekeyed on digest
+# retirement)
+# ============================================================================
+
+
+class TestNarrateBriefing:
+    def _run(self, briefing_id="00000000-0000-0000-0000-000000000001", slug="medium"):
+        run = MagicMock()
+        run.briefing_id = briefing_id
+        run.narration_id = f"{briefing_id}-{slug}"
+        run.content.mode = "narrated"
+        run.content.stats.target_duration_seconds = 300
+        run.content.stats.actual_duration_seconds = 290.0
+        run.content.stats.quote_count = 3
+        run.content.stats.fallback_reason = None
+        run.json_path = None
+        run.markdown_path = None
+        return run
+
+    def test_narrates_owned_briefing(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        mock_app_state.config.narration_default_duration_seconds = 300
+        mock_app_state.narration_runner.run.return_value = self._run()
+
+        response = client.post(
+            "/api/briefings/00000000-0000-0000-0000-000000000001/narrate",
+            json={"target_duration": "medium"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["briefing_id"] == "00000000-0000-0000-0000-000000000001"
+        assert body["narration_id"].endswith("-medium")
+        kwargs = mock_app_state.narration_runner.run.call_args.kwargs
+        assert kwargs["briefing_id"] == "00000000-0000-0000-0000-000000000001"
+
+    def test_503_when_narration_disabled(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        mock_app_state.narration_runner = None
+
+        response = client.post(
+            "/api/briefings/00000000-0000-0000-0000-000000000001/narrate",
+            json={},
+        )
+
+        assert response.status_code == 503
+
+    def test_404_for_other_users_briefing(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing(user_id="other-user")
+
+        response = client.post(
+            "/api/briefings/00000000-0000-0000-0000-000000000001/narrate",
+            json={},
+        )
+
+        assert response.status_code == 404
+        mock_app_state.narration_runner.run.assert_not_called()
+
+
+# ============================================================================
+# GET/PUT /api/briefings/schedule (spec #50)
+# ============================================================================
+
+
+def _schedule(**overrides):
+    from thestill.models.briefing_schedule import BriefingSchedule
+
+    defaults = dict(
+        user_id="user-1",
+        frequency="daily",
+        hour_local=8,
+        weekday=None,
+        timezone_name="Europe/Zagreb",
+        enabled=True,
+        next_run_at=datetime(2026, 7, 8, 6, 0, tzinfo=timezone.utc),
+    )
+    defaults.update(overrides)
+    return BriefingSchedule(**defaults)
+
+
+class TestGetSchedule:
+    def test_returns_schedule(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule()
+
+        response = client.get("/api/briefings/schedule")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["frequency"] == "daily"
+        assert body["hour_local"] == 8
+        assert body["timezone"] == "Europe/Zagreb"
+        assert body["next_run_at"] == "2026-07-08T06:00:00+00:00"
+
+    def test_404_when_never_configured(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+
+        response = client.get("/api/briefings/schedule")
+
+        assert response.status_code == 404
+
+    def test_schedule_path_not_swallowed_by_briefing_id_route(self, client, mock_app_state):
+        """Literal /schedule must win over /{briefing_id}."""
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule()
+
+        client.get("/api/briefings/schedule")
+
+        mock_app_state.briefing_repository.get.assert_not_called()
+
+
+class TestPutSchedule:
+    def test_upserts_and_echoes_next_run(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 8, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["next_run_at"] is not None
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.user_id == "user-1"
+        assert saved.next_run_at is not None
+
+    def test_weekly_requires_weekday(self, client, mock_app_state):
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "weekly", "hour_local": 8, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        assert response.status_code == 422
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+
+    def test_invalid_timezone_rejected(self, client, mock_app_state):
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 8, "timezone": "Mars/Olympus_Mons", "enabled": True},
+        )
+
+        assert response.status_code == 422
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+
+    def test_hour_out_of_range_rejected(self, client, mock_app_state):
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 24, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        assert response.status_code == 422
+
+    def test_disable_parks_next_run(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule()
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 8, "timezone": "Europe/Zagreb", "enabled": False},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["next_run_at"] is None
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.next_run_at is None
+
+    def test_update_preserves_created_at(self, client, mock_app_state):
+        existing = _schedule()
+        mock_app_state.briefing_schedule_repository.get.return_value = existing
+
+        client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "weekly", "hour_local": 7, "weekday": 0, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.created_at == existing.created_at

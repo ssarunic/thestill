@@ -43,13 +43,14 @@ from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
 from ..core.task_worker import TaskWorker
-from ..repositories.digest_repository import DigestRepository
+from ..repositories.briefing_repository import BriefingRepository
+from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
+from ..services.briefing_script_generator import BriefingScriptGenerator
 from ..services.briefing_service import BriefingService
-from ..services.digest_generator import DigestGenerator
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
@@ -61,7 +62,6 @@ from .routes import (
     api_briefings,
     api_commands,
     api_dashboard,
-    api_digests,
     api_entities,
     api_episodes,
     api_imports,
@@ -104,7 +104,8 @@ def _build_narration_runner(
     config: Config,
     path_manager: PathManager,
     podcast_repository: PodcastRepository,
-    digest_repository: DigestRepository,
+    briefing_repository: BriefingRepository,
+    inbox_repository: InboxRepository,
 ) -> Optional[NarrationRunner]:
     """Construct a ``NarrationRunner`` when narration is enabled (spec #33).
 
@@ -128,7 +129,8 @@ def _build_narration_runner(
     )
     return NarrationRunner(
         generator=generator,
-        digest_repository=digest_repository,
+        briefing_repository=briefing_repository,
+        inbox_repository=inbox_repository,
         podcast_repository=podcast_repository,
     )
 
@@ -202,9 +204,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         feed_manager=feed_manager,
     )
 
-    # Initialize digest repository
-    digest_repository = repos.digest
-
     # Spec #40 — pending transcription operations (backend-resolved).
     pending_ops_repository = repos.pending_ops
 
@@ -212,8 +211,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # production briefings get a script.md on disk; tests/CLIs that
     # only need the state machine can still pass renderer=None.
     briefing_repository = repos.briefing
+    briefing_schedule_repository = repos.briefing_schedule
     briefing_renderer = BriefingRenderer(
-        DigestGenerator(path_manager, config.file_storage),
+        BriefingScriptGenerator(path_manager, config.file_storage),
         repository,
         path_manager,
     )
@@ -256,14 +256,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         inbox_repository=inbox_repository,
         inbox_service=inbox_service,
         import_service=import_service,
-        digest_repository=digest_repository,
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
+        briefing_schedule_repository=briefing_schedule_repository,
         pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
         embedding_model=embedding_model,
-        narration_runner=_build_narration_runner(config, path_manager, repository, digest_repository),
+        narration_runner=_build_narration_runner(
+            config, path_manager, repository, briefing_repository, inbox_repository
+        ),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -399,6 +401,33 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         else:
             logger.info("refresh_scheduler_disabled")
 
+        # Spec #50 — start the briefing scheduler when enabled. It generates
+        # each user's briefing at their scheduled hour via the same
+        # BriefingService the lazy /api/briefings/latest path uses; the
+        # min-interval throttle keeps the two triggers from double-running.
+        # Ships dark, mirroring the refresh scheduler.
+        from ..utils.config import (
+            get_briefing_scheduler_max_per_tick,
+            get_briefing_scheduler_tick_seconds,
+            is_briefing_scheduler_enabled,
+        )
+
+        briefing_scheduler = None
+        if is_briefing_scheduler_enabled():
+            from ..core.briefing_scheduler import BriefingScheduler
+
+            briefing_scheduler = BriefingScheduler(
+                schedule_repository=briefing_schedule_repository,
+                briefing_service=briefing_service,
+                tick_seconds=get_briefing_scheduler_tick_seconds(),
+                max_per_tick=get_briefing_scheduler_max_per_tick(),
+            )
+            briefing_scheduler.start()
+            app_state.briefing_scheduler = briefing_scheduler
+            logger.info("briefing_scheduler_enabled")
+        else:
+            logger.info("briefing_scheduler_disabled")
+
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s
         # cold-load (model deserialization, plus the HuggingFace
@@ -420,7 +449,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # Cleanup on shutdown
         logger.info("shutting_down_web_server")
 
-        # Stop the refresh scheduler (if running) before the worker.
+        # Stop the schedulers (if running) before the worker.
+        if briefing_scheduler is not None:
+            briefing_scheduler.stop()
         if refresh_scheduler is not None:
             refresh_scheduler.stop()
             logger.info("refresh_scheduler_stopped")
@@ -536,7 +567,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(api_entities.router, prefix="/api", tags=["entities"])
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
     app.include_router(api_search.router, prefix="/api/search", tags=["search"])
-    app.include_router(api_digests.router, prefix="/api/digests", tags=["digests"])
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
     app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
     app.include_router(api_narrations.router, prefix="/api/narrations", tags=["narrations"])

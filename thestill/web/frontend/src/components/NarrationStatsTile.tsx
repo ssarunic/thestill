@@ -49,18 +49,18 @@ export default function NarrationStatsTile() {
     return null
   }
 
-  const latestDigestId = data.latest?.digest_id ?? null
+  const latestBriefingId = data.latest?.briefing_id ?? null
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Narration health</h2>
-          <p className="text-sm text-gray-500">Spec #33 narrated digest, on-disk aggregates</p>
+          <p className="text-sm text-gray-500">Spec #33 briefing narration, on-disk aggregates</p>
         </div>
-        {latestDigestId && (
+        {latestBriefingId && (
           <Link
-            to={`/digests/${latestDigestId}`}
+            to={`/briefings/${latestBriefingId}`}
             className="text-sm text-primary-600 hover:underline"
           >
             View latest →

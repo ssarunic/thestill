@@ -36,16 +36,8 @@ import type {
   RunPipelineResponse,
   CancelPipelineResponse,
   ExtendedEpisodeTasksResponse,
-  DigestsResponse,
-  DigestDetailResponse,
-  DigestContentResponse,
-  DigestEpisodesResponse,
-  CreateDigestRequest,
-  CreateDigestResponse,
-  DigestPreviewResponse,
-  DigestStatus,
-  NarrateDigestRequest,
-  NarrateDigestResponse,
+  NarrateBriefingRequest,
+  NarrateBriefingResponse,
   NarrationDetail,
   TopPodcastsResponse,
   ResolvePodcastRequest,
@@ -59,8 +51,12 @@ import type {
   EntitySummaryResponse,
   EntityType,
   BriefingResponse,
+  BriefingsListResponse,
+  BriefingScheduleResponse,
+  BriefingScheduleUpdate,
   BriefingScriptResponse,
   InboxListResponse,
+  InboxMarkReadResponse,
   InboxState,
   InboxStateResponse,
   InboxUnreadCountResponse,
@@ -94,8 +90,10 @@ export async function getRecentActivity(limit = 10, offset = 0): Promise<Activit
 }
 
 // Podcasts API
-export async function getPodcasts(limit = 12, offset = 0): Promise<PodcastsResponse> {
-  return fetchApi<PodcastsResponse>(`/podcasts?limit=${limit}&offset=${offset}`)
+export async function getPodcasts(limit = 12, offset = 0, q?: string): Promise<PodcastsResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (q) params.set('q', q)
+  return fetchApi<PodcastsResponse>(`/podcasts?${params.toString()}`)
 }
 
 // Top Podcasts API
@@ -518,112 +516,14 @@ export async function getEpisodeTasksExtended(episodeId: string): Promise<Extend
 }
 
 // ============================================================================
-// Digest API
+// Narration API (spec #33, keyed by briefing)
 // ============================================================================
 
-export async function getDigests(
-  limit: number = 50,
-  offset: number = 0,
-  status?: DigestStatus
-): Promise<DigestsResponse> {
-  const params = new URLSearchParams()
-  params.set('limit', limit.toString())
-  params.set('offset', offset.toString())
-  if (status) params.set('status', status)
-
-  return fetchApi<DigestsResponse>(`/digests?${params.toString()}`)
-}
-
-export async function getDigest(digestId: string): Promise<DigestDetailResponse> {
-  return fetchApi<DigestDetailResponse>(`/digests/${digestId}`)
-}
-
-export async function getLatestDigest(): Promise<DigestDetailResponse> {
-  return fetchApi<DigestDetailResponse>('/digests/latest')
-}
-
-export async function getDigestContent(digestId: string): Promise<DigestContentResponse> {
-  return fetchApi<DigestContentResponse>(`/digests/${digestId}/content`)
-}
-
-export async function getDigestEpisodes(digestId: string): Promise<DigestEpisodesResponse> {
-  return fetchApi<DigestEpisodesResponse>(`/digests/${digestId}/episodes`)
-}
-
-export async function previewDigest(request: CreateDigestRequest): Promise<DigestPreviewResponse> {
-  const response = await fetch(`${API_BASE}/digests/preview`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
-    throw new Error(message)
-  }
-
-  return response.json()
-}
-
-export async function createDigest(request: CreateDigestRequest): Promise<CreateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
-    throw new Error(message)
-  }
-
-  return response.json()
-}
-
-export async function deleteDigest(digestId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/digests/${digestId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
-    throw new Error(message)
-  }
-}
-
-// ============================================================================
-// Morning Briefing API (uses server-configured defaults)
-// ============================================================================
-
-export async function getMorningBriefing(): Promise<DigestPreviewResponse> {
-  return fetchApi<DigestPreviewResponse>('/digests/morning-briefing')
-}
-
-// ============================================================================
-// Narration API (spec #33)
-// ============================================================================
-
-export async function narrateDigest(
-  digestId: string,
-  request: NarrateDigestRequest = {},
-): Promise<NarrateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests/${digestId}/narrate`, {
+export async function narrateBriefing(
+  briefingId: string,
+  request: NarrateBriefingRequest = {},
+): Promise<NarrateBriefingResponse> {
+  const response = await fetch(`${API_BASE}/briefings/${briefingId}/narrate`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -703,22 +603,6 @@ export async function corpusSearch(
   return response.json()
 }
 
-export async function createMorningBriefing(): Promise<CreateDigestResponse> {
-  const response = await fetch(`${API_BASE}/digests/morning-briefing`, {
-    method: 'POST',
-    credentials: 'include',
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
-    throw new Error(message)
-  }
-
-  return response.json()
-}
 
 // Spec #28 §5.2 — episode-page entity UX. Two endpoints, both wrap
 // existing repository methods on the backend.
@@ -781,6 +665,22 @@ export async function getInboxUnreadCount(): Promise<InboxUnreadCountResponse> {
   return fetchApi<InboxUnreadCountResponse>('/inbox/unread-count')
 }
 
+// View-driven read tracking: only ever transitions unread → read, and a
+// missing inbox row is a quiet no-op server-side — safe to fire for any
+// episode view without checking whether the episode was ever delivered.
+export async function markInboxRead(
+  episodeId: string,
+): Promise<InboxMarkReadResponse> {
+  const response = await fetch(`${API_BASE}/inbox/${episodeId}/read`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function setInboxState(
   episodeId: string,
   state: InboxState,
@@ -812,6 +712,16 @@ export async function getLatestBriefing(): Promise<BriefingResponse> {
   return fetchApi<BriefingResponse>('/briefings/latest')
 }
 
+export async function getBriefings(
+  limit: number = 20,
+  offset: number = 0,
+): Promise<BriefingsListResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', limit.toString())
+  params.set('offset', offset.toString())
+  return fetchApi<BriefingsListResponse>(`/briefings?${params.toString()}`)
+}
+
 export async function getBriefing(briefingId: string): Promise<BriefingResponse> {
   return fetchApi<BriefingResponse>(`/briefings/${briefingId}`)
 }
@@ -824,6 +734,36 @@ export async function markBriefingListened(briefingId: string): Promise<Briefing
   const response = await fetch(`${API_BASE}/briefings/${briefingId}/listened`, {
     method: 'POST',
     credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+// Briefing schedule (spec #50). ``getBriefingSchedule`` 404s when the user
+// has never configured one — callers should treat that as "scheduling off,
+// show defaults".
+export async function getBriefingSchedule(): Promise<BriefingScheduleResponse> {
+  return fetchApi<BriefingScheduleResponse>('/briefings/schedule')
+}
+
+export async function putBriefingSchedule(
+  update: BriefingScheduleUpdate,
+): Promise<BriefingScheduleResponse> {
+  const response = await fetch(`${API_BASE}/briefings/schedule`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(update),
   })
 
   if (!response.ok) {

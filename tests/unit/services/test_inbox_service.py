@@ -282,6 +282,69 @@ def test_mark_state_missing_row_raises(service, user_repo):
 
 
 # ============================================================================
+# mark_read (view-driven, guarded unread → read)
+# ============================================================================
+
+
+def test_mark_read_transitions_unread_row(service, db_path, user_repo, podcast_repo, inbox_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+    inbox_repo.insert_many([InboxEntry(user_id=alice.id, episode_id=ep_id, source="follow_new")])
+
+    assert service.mark_read(alice.id, ep_id) is True
+    entry = inbox_repo.get(alice.id, ep_id)
+    assert entry.state == "read"
+    assert entry.state_changed_at is not None
+
+
+def test_mark_read_missing_row_is_noop(service, user_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    assert service.mark_read(alice.id, "never-delivered-episode") is False
+
+
+def test_mark_read_never_clobbers_saved_or_dismissed(service, db_path, user_repo, podcast_repo, inbox_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    for state in ("saved", "dismissed"):
+        ep_id = _make_published_episode(db_path, podcast.id, f"ep-{state}", datetime.now(timezone.utc))
+        inbox_repo.insert_many([InboxEntry(user_id=alice.id, episode_id=ep_id, source="follow_new")])
+        service.mark_state(alice.id, ep_id, state)
+
+        assert service.mark_read(alice.id, ep_id) is False
+        assert inbox_repo.get(alice.id, ep_id).state == state
+
+
+def test_mark_read_is_idempotent(service, db_path, user_repo, podcast_repo, inbox_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+    inbox_repo.insert_many([InboxEntry(user_id=alice.id, episode_id=ep_id, source="follow_new")])
+
+    assert service.mark_read(alice.id, ep_id) is True
+    # Second view: already read → no transition, state stays read.
+    assert service.mark_read(alice.id, ep_id) is False
+    assert inbox_repo.get(alice.id, ep_id).state == "read"
+
+
+def test_mark_read_is_per_user(service, db_path, user_repo, podcast_repo, inbox_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep1", datetime.now(timezone.utc))
+    inbox_repo.insert_many(
+        [
+            InboxEntry(user_id=alice.id, episode_id=ep_id, source="follow_new"),
+            InboxEntry(user_id=bob.id, episode_id=ep_id, source="follow_new"),
+        ]
+    )
+
+    assert service.mark_read(alice.id, ep_id) is True
+    assert inbox_repo.get(alice.id, ep_id).state == "read"
+    assert inbox_repo.get(bob.id, ep_id).state == "unread"
+
+
+# ============================================================================
 # list + unread_count
 # ============================================================================
 

@@ -25,7 +25,7 @@ export interface DashboardStats {
 
 export interface NarrationLatestSummary {
   narration_id: string
-  digest_id: string | null
+  briefing_id: string | null
   generated_at: string | null
   mode: 'narrated' | 'fallback' | null
   fallback_reason: string | null
@@ -775,41 +775,8 @@ export interface ExtendedEpisodeTasksResponse {
 }
 
 // ============================================================================
-// Digest Types
+// Narration Types (spec #33, keyed by briefing since digest retirement)
 // ============================================================================
-
-export type DigestStatus = 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed'
-
-export interface Digest {
-  id: string
-  user_id: string
-  created_at: string
-  updated_at: string
-  period_start: string
-  period_end: string
-  status: DigestStatus
-  file_path: string | null
-  episode_ids: string[]
-  episodes_total: number
-  episodes_completed: number
-  episodes_failed: number
-  processing_time_seconds: number | null
-  error_message: string | null
-  success_rate: number
-  is_complete: boolean
-}
-
-export interface DigestsResponse {
-  status: string
-  timestamp: string
-  digests: Digest[]
-  count: number
-  total: number
-  offset: number
-  limit: number
-  has_more: boolean
-  next_offset: number | null
-}
 
 export type NarrationMode = 'narrated' | 'fallback'
 
@@ -826,16 +793,16 @@ export interface NarrationSummary {
   markdown_path: string | null
 }
 
-export interface NarrateDigestRequest {
+export interface NarrateBriefingRequest {
   target_duration?: number | string
   slug?: string
 }
 
-export interface NarrateDigestResponse {
+export interface NarrateBriefingResponse {
   status: string
   timestamp: string
   narration_id: string
-  digest_id: string
+  briefing_id: string
   slug: string
   mode: NarrationMode
   target_duration_seconds: number
@@ -852,70 +819,6 @@ export interface NarrationDetail {
   id: string
   script: Record<string, unknown>
   markdown: string | null
-}
-
-export interface DigestDetailResponse {
-  status: string
-  timestamp: string
-  digest: Digest
-  narrations: NarrationSummary[]
-}
-
-export interface DigestContentResponse {
-  status: string
-  timestamp: string
-  digest_id: string
-  content: string | null
-  available: boolean
-  error?: string
-}
-
-export interface DigestEpisodeInfo {
-  episode_id: string
-  episode_title: string
-  episode_slug: string
-  podcast_id: string
-  podcast_title: string
-  podcast_slug: string
-  state: string
-  pub_date: string | null
-  duration: number | null
-  image_url: string | null
-}
-
-export interface DigestEpisodesResponse {
-  status: string
-  timestamp: string
-  digest_id: string
-  episodes: DigestEpisodeInfo[]
-  count: number
-}
-
-export interface CreateDigestRequest {
-  since_days?: number
-  max_episodes?: number
-  podcast_id?: string
-  ready_only?: boolean
-  exclude_digested?: boolean
-}
-
-export interface CreateDigestResponse {
-  status: string
-  timestamp: string
-  message: string
-  digest_id: string | null
-  episodes_selected: number
-}
-
-export interface DigestPreviewEpisode {
-  episode_id: string
-  episode_title: string
-  episode_slug: string
-  podcast_id: string
-  podcast_title: string
-  podcast_slug: string
-  state: string
-  pub_date: string | null
 }
 
 // ============================================================================
@@ -1062,20 +965,6 @@ export interface QuickSearchOptions {
   date_from?: string
   date_to?: string
   has_entity?: string[]
-}
-
-export interface DigestPreviewResponse {
-  status: string
-  timestamp: string
-  episodes: DigestPreviewEpisode[]
-  total_matching: number
-  criteria: {
-    since_days: number
-    max_episodes: number
-    podcast_id: string | null
-    ready_only: boolean
-    exclude_digested: boolean
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,6 +1169,15 @@ export interface InboxStateResponse {
   entry: InboxEntry
 }
 
+// View-driven read tracking. ``marked`` is false when the episode has no
+// inbox row for this user or the row already left ``unread`` — both are
+// normal, not errors.
+export interface InboxMarkReadResponse {
+  status: string
+  timestamp: string
+  marked: boolean
+}
+
 // Per-user briefings (spec #36)
 // ============================================================================
 //
@@ -1303,12 +1201,53 @@ export interface Briefing {
 export interface BriefingResponse extends Briefing {
   status: string
   timestamp: string
+  narrations: NarrationSummary[]
+}
+
+// Paginated briefing history (GET /api/briefings), newest first.
+export interface BriefingsListResponse {
+  status: string
+  timestamp: string
+  briefings: Briefing[]
+  count: number
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+  next_offset: number | null
 }
 
 export interface BriefingScriptResponse {
   status: string
   timestamp: string
   markdown: string
+}
+
+// Briefing schedule (spec #50): when (hour_local in timezone) and how often
+// (frequency, weekday for weekly) the user's briefing is auto-generated.
+export type BriefingFrequency = 'daily' | 'weekly'
+
+export interface BriefingSchedule {
+  frequency: BriefingFrequency
+  hour_local: number
+  weekday: number | null // 0=Mon … 6=Sun; set iff weekly
+  timezone: string // IANA name
+  enabled: boolean
+  next_run_at: string | null // UTC; null while disabled
+  updated_at: string
+}
+
+export interface BriefingScheduleResponse extends BriefingSchedule {
+  status: string
+  timestamp: string
+}
+
+export interface BriefingScheduleUpdate {
+  frequency: BriefingFrequency
+  hour_local: number
+  weekday?: number | null
+  timezone: string
+  enabled: boolean
 }
 
 // ============================================================================

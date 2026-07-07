@@ -22,7 +22,7 @@ Cursor math, throttle windows, and inbox composition live in
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from ..models.briefing import Briefing
 
@@ -41,6 +41,14 @@ class BriefingRepository(ABC):
     @abstractmethod
     def latest_for_user(self, user_id: str) -> Optional[Briefing]:
         """Return the user's most recently-created briefing, or ``None``."""
+
+    @abstractmethod
+    def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
+        """Return the user's briefings, newest first (paginated history)."""
+
+    @abstractmethod
+    def count_for_user(self, user_id: str) -> int:
+        """Total briefings for the user (pagination metadata)."""
 
     @abstractmethod
     def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:

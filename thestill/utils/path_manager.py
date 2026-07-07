@@ -130,7 +130,6 @@ class PathManager:
         self._debug_feeds = "debug_feeds"
         self._pending_operations = "pending_operations"
         self._external_transcripts = "external_transcripts"
-        self._digests = "digests"
         self._briefings = "briefings"
         self._narrations = "narrations"
         # Spec #28 — corpus holds the Obsidian-friendly per-entity
@@ -212,10 +211,6 @@ class PathManager:
         """Get path to external transcripts directory (stores downloaded RSS transcripts)"""
         return self.storage_path / self._external_transcripts
 
-    def digests_dir(self) -> Path:
-        """Get path to digests directory (stores generated digest markdown files)"""
-        return self.storage_path / self._digests
-
     def briefings_dir(self) -> Path:
         """Per-user briefing artifacts root (spec #36).
 
@@ -233,7 +228,7 @@ class PathManager:
         return self._assert_inside_root(self.briefings_dir() / user_id / briefing_id)
 
     def narrations_dir(self) -> Path:
-        """Narrated-digest artefacts root (spec #33).
+        """Narration artefacts root (spec #33).
 
         Stores ``YYYY-MM-DD-<slug>.json`` (TTS-ready script) and the
         Phase 2 ``.md`` read-through alongside it.
@@ -393,18 +388,6 @@ class PathManager:
             Full path to the summary file in summaries directory
         """
         return self.summaries_dir() / filename
-
-    def digest_file(self, filename: str) -> Path:
-        """
-        Get full path to a digest file.
-
-        Args:
-            filename: Name of the digest file (e.g., "digest_2025-01-26_120000.md")
-
-        Returns:
-            Full path to the digest file in digests directory
-        """
-        return self.digests_dir() / filename
 
     def external_transcript_file(self, podcast_slug: str, episode_slug: str, extension: str) -> Path:
         """
@@ -587,7 +570,6 @@ class PathManager:
             self.episode_facts_dir(),
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
-            self.digests_dir(),
             self.narrations_dir(),
             # Spec #28 corpus tree — entity pages only (Phase 2.10
             # removed the per-episode rendered Markdown projection).
@@ -666,7 +648,7 @@ class PathManager:
         storage-root-relative forward-slash string.
 
         Spec #35 — the bridge between PathManager (absolute paths) and
-        ``FileStorage`` (relative forward-slash keys). Hot path: digest
+        ``FileStorage`` (relative forward-slash keys). Hot path: briefing
         generation calls this once per episode. The fast path skips
         ``Path.resolve()`` (one ``stat`` per call) when the un-resolved
         path is already relative to the cached resolved root — which is

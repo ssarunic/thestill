@@ -1302,7 +1302,11 @@ is validated.
   — three tabs (All / Quotes / Entities), inline play through the
   existing `MiniPlayer`/`PlayerProvider`. Quote rows deeplink with
   `?t=<sec>`. Entity hit chips (PR #67) and `/search` slug routes +
-  lexical fallback (PR #57) shipped.
+  lexical fallback (PR #57) shipped. As of 2026-07-07, `/search` is the
+  primary search surface: the sidebar Search item and the mobile-header
+  search icon both navigate to it directly; ⌘K remains the quick-jump
+  overlay. Per-page local filters (e.g. `?q=` on `/api/podcasts`) narrow
+  visible lists by metadata only — corpus/content search stays here.
 - **4.3** ✅ Empty / error states wired through `useCorpusSearch` +
   `useQuickSearch`.
 - **Tests:** `cmdk-typeahead.spec.ts` is the only Playwright spec

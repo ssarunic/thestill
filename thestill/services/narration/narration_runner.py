@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""End-to-end runner for narrated-digest generation (spec #33 Phase 3).
+"""End-to-end runner for briefing narration (spec #33 Phase 3, rekeyed to
+per-user briefings on digest retirement).
 
-Resolves a digest reference (id or "latest") into the underlying
-``(Podcast, Episode)`` tuples, hands them to ``NarrationGenerator``,
-writes the JSON + Markdown artefacts to disk, and returns the
-``NarrationContent`` plus the resolved digest id. Shared by the CLI
-``thestill narrate`` command and the ``POST /api/narrations`` route so
-both surfaces produce identical artefacts.
+Resolves a briefing id into the underlying ``(Podcast, Episode)`` tuples
+(via the briefing's inbox cursor window), hands them to
+``NarrationGenerator``, writes the JSON + Markdown artefacts to disk, and
+returns the ``NarrationContent`` plus the briefing id. Shared by the CLI
+``thestill narrate`` command and the ``POST /api/briefings/{id}/narrate``
+route so both surfaces produce identical artefacts.
 """
 
 import time
@@ -29,18 +30,27 @@ from typing import List, Optional, Tuple
 
 from structlog import get_logger
 
-from ...models.digest import Digest
+from ...models.briefing import Briefing
+from ...models.inbox import InboxState
 from ...models.podcast import Episode, Podcast
-from ...repositories.digest_repository import DigestRepository
+from ...repositories.briefing_repository import BriefingRepository
+from ...repositories.inbox_repository import InboxRepository
 from ...repositories.podcast_repository import PodcastRepository
 from .models import NarrationContent
 from .narration_generator import NarrationConfig, NarrationGenerator
 
 logger = get_logger(__name__)
 
+# States considered when re-resolving a briefing's episodes for narration.
+# The briefing was generated over ``unread``/``saved`` rows; ``read`` is
+# included here so an episode the user read *after* generation still
+# narrates (the briefing covered it). ``dismissed`` stays excluded — a
+# negative signal (spec #36).
+_NARRATION_STATES: tuple[InboxState, ...] = ("unread", "saved", "read")
+
 
 class NarrationRunnerError(Exception):
-    """Raised when the runner cannot resolve the requested digest."""
+    """Raised when the runner cannot resolve the requested briefing."""
 
 
 @dataclass(frozen=True)
@@ -53,13 +63,13 @@ class NarrationRun:
     callers that want them directly.
     """
 
-    digest_id: str
+    briefing_id: str
     slug: str
     content: NarrationContent
 
     @property
     def narration_id(self) -> str:
-        return f"{self.digest_id}-{self.slug}"
+        return f"{self.briefing_id}-{self.slug}"
 
     @property
     def json_path(self) -> Optional[Path]:
@@ -71,39 +81,41 @@ class NarrationRun:
 
 
 class NarrationRunner:
-    """Convert a digest reference into a written narration artefact."""
+    """Convert a briefing reference into a written narration artefact."""
 
     def __init__(
         self,
         generator: NarrationGenerator,
-        digest_repository: DigestRepository,
+        briefing_repository: BriefingRepository,
+        inbox_repository: InboxRepository,
         podcast_repository: PodcastRepository,
     ):
         self.generator = generator
-        self.digest_repository = digest_repository
+        self.briefing_repository = briefing_repository
+        self.inbox_repository = inbox_repository
         self.podcast_repository = podcast_repository
 
     def run(
         self,
         *,
-        digest_id: Optional[str] = None,
+        briefing_id: str,
         target_duration_seconds: int = 300,
         slug: str = "morning",
         wpm: float = 150.0,
         max_quote_share: float = 0.40,
     ) -> NarrationRun:
-        digest = self._resolve_digest(digest_id)
-        episodes = self._resolve_episodes(digest)
+        briefing = self._resolve_briefing(briefing_id)
+        episodes = self._resolve_episodes(briefing)
         if not episodes:
-            raise NarrationRunnerError(f"digest {digest.id} contains no resolvable episodes")
+            raise NarrationRunnerError(f"briefing {briefing.id} contains no resolvable episodes")
         try:
             cfg = NarrationConfig(
                 target_duration_seconds=target_duration_seconds,
                 wpm=wpm,
                 max_quote_share=max_quote_share,
                 slug=slug,
-                basename=f"{digest.id}-{slug}",
-                digest_id=digest.id,
+                basename=f"{briefing.id}-{slug}",
+                briefing_id=briefing.id,
             )
         except ValueError as exc:
             # ``NarrationConfig.__post_init__`` rejects slugs with path
@@ -116,10 +128,10 @@ class NarrationRunner:
         content.latency_ms = int((time.perf_counter() - started) * 1000)
         self.generator.write_json_script(content, cfg)
         self.generator.write_markdown(content, cfg)
-        run = NarrationRun(digest_id=digest.id, slug=slug, content=content)
+        run = NarrationRun(briefing_id=briefing.id, slug=slug, content=content)
         logger.info(
             "narration.run",
-            digest_id=digest.id,
+            briefing_id=briefing.id,
             narration_id=run.narration_id,
             mode=content.mode,
             target_seconds=cfg.target_duration_seconds,
@@ -130,25 +142,26 @@ class NarrationRunner:
         )
         return run
 
-    def _resolve_digest(self, digest_id: Optional[str]) -> Digest:
-        if digest_id is None or digest_id == "latest":
-            digest = self.digest_repository.get_latest()
-            if digest is None:
-                raise NarrationRunnerError("no digests found — run `thestill digest` before `thestill narrate`")
-            return digest
-        digest = self.digest_repository.get_by_id(digest_id)
-        if digest is None:
-            raise NarrationRunnerError(f"digest not found: {digest_id}")
-        return digest
+    def _resolve_briefing(self, briefing_id: str) -> Briefing:
+        briefing = self.briefing_repository.get(briefing_id)
+        if briefing is None:
+            raise NarrationRunnerError(f"briefing not found: {briefing_id}")
+        return briefing
 
-    def _resolve_episodes(self, digest: Digest) -> List[Tuple[Podcast, Episode]]:
+    def _resolve_episodes(self, briefing: Briefing) -> List[Tuple[Podcast, Episode]]:
+        episode_ids = self.inbox_repository.list_episode_ids_in_window(
+            briefing.user_id,
+            since=briefing.cursor_from,
+            until=briefing.cursor_to,
+            states=_NARRATION_STATES,
+        )
         resolved: List[Tuple[Podcast, Episode]] = []
-        for episode_id in digest.episode_ids:
+        for episode_id in episode_ids:
             pair = self.podcast_repository.get_episode(episode_id)
             if pair is None:
                 logger.debug(
-                    "narration.run: episode missing from digest",
-                    digest_id=digest.id,
+                    "narration.run: episode missing from briefing window",
+                    briefing_id=briefing.id,
                     episode_id=episode_id,
                 )
                 continue

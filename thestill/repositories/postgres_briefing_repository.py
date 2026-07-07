@@ -22,7 +22,7 @@ round-trips), ``%s`` placeholders. Schema in ``postgres_schema.py``.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from structlog import get_logger
 
@@ -86,6 +86,28 @@ class PostgresBriefingRepository(BriefingRepository):
                 (user_id,),
             ).fetchone()
             return self._row_to_briefing(row) if row else None
+
+    def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_COLS}
+                  FROM user_briefings
+                 WHERE user_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT %s OFFSET %s
+                """,
+                (user_id, limit, offset),
+            ).fetchall()
+            return [self._row_to_briefing(row) for row in rows]
+
+    def count_for_user(self, user_id: str) -> int:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM user_briefings WHERE user_id = %s",
+                (user_id,),
+            ).fetchone()
+            return int(row["n"])
 
     def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:
         with connect(self.dsn) as conn:

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import BriefingScheduleSettings from '../components/BriefingScheduleSettings'
 
 // Region dropdown options. Today the data layer only ships top-podcast
 // rankings for "us" and "gb"; the rest are listed as common markets so
@@ -58,9 +59,13 @@ export default function Settings() {
   }
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">Settings</h1>
-      <p className="text-gray-600 mb-8">Manage your account preferences.</p>
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Settings</h1>
+        <p className="text-gray-600">Manage your account preferences.</p>
+      </div>
+
+      <BriefingScheduleSettings />
 
       <form
         onSubmit={handleSubmit}

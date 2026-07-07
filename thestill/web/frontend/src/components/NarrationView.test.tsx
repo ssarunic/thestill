@@ -7,13 +7,13 @@ import type { NarrationSummary } from '../api/types'
 
 vi.mock('../hooks/useApi', () => ({
   useNarration: vi.fn(),
-  useNarrateDigest: vi.fn(),
+  useNarrateBriefing: vi.fn(),
 }))
 
-import { useNarration, useNarrateDigest } from '../hooks/useApi'
+import { useNarration, useNarrateBriefing } from '../hooks/useApi'
 
 const mockUseNarration = useNarration as ReturnType<typeof vi.fn>
-const mockUseNarrateDigest = useNarrateDigest as ReturnType<typeof vi.fn>
+const mockUseNarrateDigest = useNarrateBriefing as ReturnType<typeof vi.fn>
 
 function withQueryClient(ui: React.ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -22,7 +22,7 @@ function withQueryClient(ui: React.ReactNode) {
 
 function makeSummary(overrides: Partial<NarrationSummary> = {}): NarrationSummary {
   return {
-    narration_id: 'digest-1-medium',
+    narration_id: 'briefing-1-medium',
     slug: 'medium',
     target_duration_seconds: 300,
     actual_duration_seconds: 290,
@@ -30,8 +30,8 @@ function makeSummary(overrides: Partial<NarrationSummary> = {}): NarrationSummar
     fallback_reason: null,
     generated_at: '2026-05-08T07:00:00+00:00',
     schema_version: 'phase2',
-    script_path: 'data/narrations/digest-1-medium.json',
-    markdown_path: 'data/narrations/digest-1-medium.md',
+    script_path: 'data/narrations/briefing-1-medium.json',
+    markdown_path: 'data/narrations/briefing-1-medium.md',
     ...overrides,
   }
 }
@@ -51,7 +51,7 @@ describe('NarrationView', () => {
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
+          briefingId="briefing-1"
           narrations={[]}
           linkIndexFallback={<div>LINK INDEX</div>}
         />,
@@ -64,13 +64,13 @@ describe('NarrationView', () => {
 
   it('renders narrated markdown when a variant exists', () => {
     mockUseNarration.mockReturnValue({
-      data: { id: 'digest-1-medium', script: {}, markdown: '# Briefing\n\nHello.' },
+      data: { id: 'briefing-1-medium', script: {}, markdown: '# Briefing\n\nHello.' },
       isLoading: false,
     })
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
+          briefingId="briefing-1"
           narrations={[makeSummary()]}
           linkIndexFallback={<div>LINK INDEX</div>}
         />,
@@ -85,7 +85,7 @@ describe('NarrationView', () => {
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
+          briefingId="briefing-1"
           narrations={[
             makeSummary({ mode: 'fallback', fallback_reason: 'word_budget_high' }),
           ]}
@@ -101,13 +101,13 @@ describe('NarrationView', () => {
   it('toggles between narrated view and link-index when the user clicks "Show link-index"', async () => {
     const user = userEvent.setup()
     mockUseNarration.mockReturnValue({
-      data: { id: 'digest-1-medium', script: {}, markdown: '# Briefing\n' },
+      data: { id: 'briefing-1-medium', script: {}, markdown: '# Briefing\n' },
       isLoading: false,
     })
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
+          briefingId="briefing-1"
           narrations={[makeSummary()]}
           linkIndexFallback={<div>LINK INDEX</div>}
         />,
@@ -122,8 +122,8 @@ describe('NarrationView', () => {
   it('clicking a length chip that already exists swaps the displayed variant', async () => {
     const user = userEvent.setup()
     const markdownByNarrationId: Record<string, string> = {
-      'digest-1-medium': '# Medium briefing',
-      'digest-1-short': '# Short briefing',
+      'briefing-1-medium': '# Medium briefing',
+      'briefing-1-short': '# Short briefing',
     }
     mockUseNarration.mockImplementation((id: string | null) => ({
       data: id ? { id, script: {}, markdown: markdownByNarrationId[id] ?? '' } : null,
@@ -132,10 +132,10 @@ describe('NarrationView', () => {
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
+          briefingId="briefing-1"
           narrations={[
-            makeSummary({ slug: 'short', narration_id: 'digest-1-short' }),
-            makeSummary({ slug: 'medium', narration_id: 'digest-1-medium' }),
+            makeSummary({ slug: 'short', narration_id: 'briefing-1-short' }),
+            makeSummary({ slug: 'medium', narration_id: 'briefing-1-medium' }),
           ]}
           linkIndexFallback={<div>LINK INDEX</div>}
         />,
@@ -143,7 +143,7 @@ describe('NarrationView', () => {
     )
     // Default is medium (preferred preset).
     expect(screen.getByRole('heading', { name: 'Medium briefing' })).toBeInTheDocument()
-    expect(mockUseNarration).toHaveBeenCalledWith('digest-1-medium')
+    expect(mockUseNarration).toHaveBeenCalledWith('briefing-1-medium')
     await user.click(screen.getByRole('button', { name: /^Short/ }))
     expect(mockUseNarrateDigest().mutateAsync).not.toHaveBeenCalled()
     expect(
@@ -151,10 +151,10 @@ describe('NarrationView', () => {
     ).toBeInTheDocument()
   })
 
-  it('clicking a length chip that does not exist triggers narrateDigest', async () => {
+  it('clicking a length chip that does not exist triggers narrateBriefing', async () => {
     const user = userEvent.setup()
     const mutateAsync = vi.fn().mockResolvedValue({
-      narration_id: 'digest-1-long',
+      narration_id: 'briefing-1-long',
       digest_id: 'digest-1',
       slug: 'long',
       mode: 'narrated',
@@ -162,19 +162,19 @@ describe('NarrationView', () => {
       actual_duration_seconds: 580,
       quote_count: 4,
       fallback_reason: null,
-      script_path: 'data/narrations/digest-1-long.json',
-      markdown_path: 'data/narrations/digest-1-long.md',
+      script_path: 'data/narrations/briefing-1-long.json',
+      markdown_path: 'data/narrations/briefing-1-long.md',
     })
     mockUseNarrateDigest.mockReturnValue({ mutateAsync, isPending: false, error: null })
     mockUseNarration.mockReturnValue({
-      data: { id: 'digest-1-medium', script: {}, markdown: '# m' },
+      data: { id: 'briefing-1-medium', script: {}, markdown: '# m' },
       isLoading: false,
     })
     render(
       withQueryClient(
         <NarrationView
-          digestId="digest-1"
-          narrations={[makeSummary({ slug: 'medium', narration_id: 'digest-1-medium' })]}
+          briefingId="briefing-1"
+          narrations={[makeSummary({ slug: 'medium', narration_id: 'briefing-1-medium' })]}
           linkIndexFallback={<div>LINK INDEX</div>}
         />,
       ),
@@ -182,7 +182,7 @@ describe('NarrationView', () => {
     await user.click(screen.getByRole('button', { name: /^Long/ }))
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith({
-        digestId: 'digest-1',
+        briefingId: 'briefing-1',
         request: { target_duration: 'long' },
       })
     })

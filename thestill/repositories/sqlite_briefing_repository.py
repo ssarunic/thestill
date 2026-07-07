@@ -18,7 +18,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 
 from structlog import get_logger
 
@@ -92,6 +92,29 @@ class SqliteBriefingRepository(BriefingRepository):
                 (user_id,),
             ).fetchone()
             return self._row_to_briefing(row) if row else None
+
+    def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, cursor_from, cursor_to, episode_count,
+                       script_path, audio_path, created_at, listened_at
+                  FROM user_briefings
+                 WHERE user_id = ?
+                 ORDER BY created_at DESC
+                 LIMIT ? OFFSET ?
+                """,
+                (user_id, limit, offset),
+            ).fetchall()
+            return [self._row_to_briefing(row) for row in rows]
+
+    def count_for_user(self, user_id: str) -> int:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM user_briefings WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            return int(row[0])
 
     def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:
         with self._get_connection() as conn:

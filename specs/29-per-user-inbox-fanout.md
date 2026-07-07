@@ -360,7 +360,8 @@ In `FollowerService.follow`, after the follow row commits. See [Service Layer Ch
 |--------|------|-------------|
 | `GET`  | `/api/inbox` | List current user's inbox. Query: `state`, `limit`, `before` (cursor by `delivered_at`). Returns `InboxItem[]` in the standard envelope. |
 | `GET`  | `/api/inbox/unread-count` | Lightweight unread count for badge rendering. |
-| `POST` | `/api/inbox/{episode_id}/state` | Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. Returns updated `InboxEntry`. |
+| `POST` | `/api/inbox/{episode_id}/state` | Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. Returns updated `InboxEntry`. 404 when no row exists. |
+| `POST` | `/api/inbox/{episode_id}/read` | View-driven read tracking: transitions the row `unread → read` and nothing else — never clobbers `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op (`marked: false`), so the episode page fires it blindly on every summary view. |
 
 All endpoints require authentication. No admin-only inbox endpoints in v1.
 
@@ -496,7 +497,8 @@ The Substack analogy is the dominant mental model. If a future contributor is co
 ### Phase 3 — API + frontend
 
 - [ ] Routes: `GET /api/inbox`, `GET /api/inbox/unread-count`, `POST /api/inbox/{episode_id}/state`.
-- [ ] Frontend page: Inbox view with read/save/dismiss actions and unread filter.
+- [x] Route: `POST /api/inbox/{episode_id}/read` (guarded `unread → read`) + `useMarkInboxReadOnView` firing from the episode page once a summary is available (2026-07-07).
+- [ ] Frontend page: Inbox view with read/save/dismiss actions and unread filter. *(Read/save/dismiss action buttons now planned as [spec #52](52-inbox-reader-overlay.md) Phase 2 — reader-overlay header.)*
 - [ ] Layout badge: unread count.
 - [ ] Cypress/E2E test for the follow → publish → delivered → mark-read flow.
 
@@ -512,6 +514,7 @@ The Substack analogy is the dominant mental model. If a future contributor is co
 
 1. **Inbox vs. archive on the home page.** Should the home page *replace* the current "recent episodes from followed podcasts" view with the inbox, or show both side-by-side initially? Recommendation: replace, with a "Browse all" link to the archive view.
 2. **What does "read" mean operationally?** Two reasonable definitions: (a) explicitly clicked the episode, (b) listened past some threshold (e.g., 30 seconds). v1 should pick (a) for simplicity; (b) can be layered later via a media-player hook into [thestill/web/frontend/src/components/](../thestill/web/frontend/src/components/) PlayerContext.
+   **Resolved (2026-07-07):** a refinement of (a) — *viewed the episode page while a summary existed*, regardless of how the user navigated there. The gate on summary presence means an episode still working through the pipeline is never marked read by a premature click. Implemented as `POST /api/inbox/{episode_id}/read` (guarded `unread → read`, no-op without a row) fired by `useMarkInboxReadOnView` on the episode page; (b) remains a possible later refinement.
 3. **`saved` vs `read` orthogonality.** Should `saved` be a separate axis (a flag) instead of a state, so an episode can be both `read` and `saved`? Probably yes, but introduces UI complexity. v1 treats them as mutually exclusive states; revisit if users complain.
 4. **Should `dismissed` deliveries be counted somewhere for analytics?** Useful signal for "what kinds of episodes do users skip" recommendations later. Not blocking v1.
 5. **Cross-device read state.** Trivially handled by the server-authoritative state column. No client-side reconciliation needed.

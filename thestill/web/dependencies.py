@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
+    from ..core.briefing_scheduler import BriefingScheduler
     from ..core.embedding_model import EmbeddingModel
     from ..core.entity_enricher import EntityEnricher
     from ..core.entity_extractor import EntityExtractor
@@ -44,11 +45,11 @@ if TYPE_CHECKING:
     from ..core.task_worker import TaskWorker
     from ..models.user import User
     from ..repositories.briefing_repository import BriefingRepository
-    from ..repositories.digest_repository import DigestRepository
+    from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
     from ..repositories.inbox_repository import InboxRepository
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
-    from ..repositories.pending_operations_repository import PendingOperationsRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
@@ -87,7 +88,7 @@ class AppState:
         auth_service: Authentication service
         follower_repository: Podcast follower relationship repository
         follower_service: Follower management service
-        digest_repository: Digest persistence repository
+        briefing_repository: Per-user briefing persistence repository
     """
 
     config: "Config"
@@ -108,7 +109,6 @@ class AppState:
     inbox_repository: "InboxRepository"
     inbox_service: "InboxService"
     import_service: "ImportService"
-    digest_repository: "DigestRepository"
     briefing_repository: "BriefingRepository"
     briefing_service: "BriefingService"
     # Spec #28 — entity layer. Repository is always available; the
@@ -123,6 +123,11 @@ class AppState:
     pending_ops_repository: "Optional[PendingOperationsRepository]" = None
     # Spec #48 — background refresh scheduler (set at startup when enabled).
     refresh_scheduler: "Optional[RefreshScheduler]" = None
+    # Spec #50 — briefing schedules. ``Optional`` only so legacy test
+    # fixtures that construct AppState by hand don't have to update;
+    # production wiring always passes the repository.
+    briefing_schedule_repository: "Optional[BriefingScheduleRepository]" = None
+    briefing_scheduler: "Optional[BriefingScheduler]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the
@@ -138,7 +143,7 @@ class AppState:
     # semantic/hybrid query or first REINDEX task).
     search_backend: "Optional[SearchBackend]" = None
     embedding_model: "Optional[EmbeddingModel]" = None
-    # Spec #33 Phase 3 — narrated-digest runner. ``None`` when
+    # Spec #33 Phase 3 — briefing narration runner. ``None`` when
     # ``narration_enabled`` is False; the API surface returns 503 in
     # that mode so callers can handle the rollout gate cleanly.
     narration_runner: "Optional[NarrationRunner]" = None

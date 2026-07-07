@@ -13,10 +13,13 @@
 # limitations under the License.
 
 """
-Digest generator for creating morning briefing documents.
+Briefing script generator.
 
-Implements THES-27: Generates a markdown digest from processed episodes,
-grouping them by podcast with brief descriptions extracted from summaries.
+Generates the markdown "morning briefing" link-index from processed
+episodes, grouping them by podcast with brief descriptions extracted from
+summaries. Formerly ``digest_generator.BriefingScriptGenerator`` (THES-27); renamed
+on digest retirement — briefings (spec #36) are the only consumer-facing
+concept, and this module renders their scripts.
 """
 
 import re
@@ -37,8 +40,8 @@ logger = get_logger(__name__)
 
 
 @dataclass
-class DigestEpisodeInfo:
-    """Information about an episode for digest generation."""
+class BriefingEpisodeInfo:
+    """Information about an episode for briefing script generation."""
 
     podcast: Podcast
     episode: Episode
@@ -49,8 +52,8 @@ class DigestEpisodeInfo:
 
 
 @dataclass
-class DigestStats:
-    """Statistics for the digest."""
+class BriefingScriptStats:
+    """Statistics for the briefing script."""
 
     total_episodes: int = 0
     successful_episodes: int = 0
@@ -67,11 +70,11 @@ class DigestStats:
 
 
 @dataclass
-class DigestContent:
-    """Generated digest content."""
+class BriefingScriptContent:
+    """Generated briefing script content."""
 
     markdown: str
-    stats: DigestStats
+    stats: BriefingScriptStats
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     output_path: Optional[Path] = None
 
@@ -79,9 +82,9 @@ class DigestContent:
 def extract_gist(summary_text: str) -> Optional[str]:
     """Extract 2–3 sentences from the ``The Gist`` section of a summary.
 
-    Public so the narrated-digest theme clusterer (spec #33) can feed
-    the same compact episode synopsis into its LLM input that the
-    link-index digest renders into per-episode rows.
+    Public so the narration theme clusterer (spec #33) can feed the same
+    compact episode synopsis into its LLM input that the link-index
+    briefing script renders into per-episode rows.
 
     The Gist section has this structure:
 
@@ -121,11 +124,11 @@ def _split_sentences(text: str) -> List[str]:
     return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
 
 
-class DigestGenerator:
+class BriefingScriptGenerator:
     """
-    Generates markdown digest documents from processed episodes.
+    Generates markdown briefing scripts from processed episodes.
 
-    The digest provides a "morning briefing" view of recently processed
+    The script provides a "morning briefing" view of recently processed
     podcast episodes, with:
     - Header with timestamp and summary statistics
     - Episodes grouped by podcast
@@ -134,7 +137,7 @@ class DigestGenerator:
     - Failure section if any episodes failed
 
     Usage:
-        generator = DigestGenerator(path_manager, file_storage)
+        generator = BriefingScriptGenerator(path_manager, file_storage)
         content = generator.generate(episodes, stats)
         generator.write(content, output_path)
     """
@@ -146,11 +149,11 @@ class DigestGenerator:
         url_generator: UrlGenerator | None = None,
     ):
         """
-        Initialize digest generator.
+        Initialize the briefing script generator.
 
         Args:
             path_manager: PathManager for resolving file paths.
-            file_storage: Spec #35 backend for digest writes + summary reads.
+            file_storage: Spec #35 backend for script writes + summary reads.
             url_generator: UrlGenerator for creating web URLs (optional, creates default if not provided).
         """
         self.path_manager = path_manager
@@ -162,9 +165,9 @@ class DigestGenerator:
         episodes: List[Tuple[Podcast, Episode]],
         processing_time_seconds: Optional[float] = None,
         failures: Optional[List[Tuple[Podcast, Episode, str]]] = None,
-    ) -> DigestContent:
+    ) -> BriefingScriptContent:
         """
-        Generate a digest from processed episodes.
+        Generate a briefing script from processed episodes.
 
         Args:
             episodes: List of (Podcast, Episode) tuples that were processed
@@ -172,7 +175,7 @@ class DigestGenerator:
             failures: Optional list of (Podcast, Episode, reason) for failed episodes
 
         Returns:
-            DigestContent with markdown and statistics
+            BriefingScriptContent with markdown and statistics
         """
         failures = failures or []
 
@@ -185,7 +188,7 @@ class DigestGenerator:
 
         # Add failures
         for podcast, episode, reason in failures:
-            info = DigestEpisodeInfo(
+            info = BriefingEpisodeInfo(
                 podcast=podcast,
                 episode=episode,
                 failed=True,
@@ -194,7 +197,7 @@ class DigestGenerator:
             episode_infos.append(info)
 
         # Calculate stats
-        stats = DigestStats(
+        stats = BriefingScriptStats(
             total_episodes=len(episode_infos),
             successful_episodes=sum(1 for e in episode_infos if not e.failed),
             failed_episodes=sum(1 for e in episode_infos if e.failed),
@@ -206,21 +209,21 @@ class DigestGenerator:
         markdown = self._generate_markdown(episode_infos, stats)
 
         logger.info(
-            "Digest generated",
+            "Briefing script generated",
             total_episodes=stats.total_episodes,
             successful=stats.successful_episodes,
             failed=stats.failed_episodes,
             podcasts=stats.podcasts_count,
         )
 
-        return DigestContent(markdown=markdown, stats=stats)
+        return BriefingScriptContent(markdown=markdown, stats=stats)
 
-    def write(self, content: DigestContent, output_path: Path) -> Path:
+    def write(self, content: BriefingScriptContent, output_path: Path) -> Path:
         """
-        Write digest content to a file.
+        Write briefing script content to a file.
 
         Args:
-            content: DigestContent to write
+            content: BriefingScriptContent to write
             output_path: Path to write to (absolute; converted to a
                 storage-relative key via PathManager.to_relative).
 
@@ -232,16 +235,16 @@ class DigestGenerator:
 
         content.output_path = output_path
 
-        logger.info("Digest written", path=str(output_path), backend_key=relative)
+        logger.info("Briefing script written", path=str(output_path), backend_key=relative)
 
         return output_path
 
     # Cap parallel summary reads to keep the S3 connection pool happy without
     # over-subscribing — 8 in flight is enough to amortize latency on a
-    # 50-episode digest, well under botocore's default 10-connection pool.
+    # 50-episode briefing, well under botocore's default 10-connection pool.
     _SUMMARY_READ_PARALLELISM = 8
 
-    def _build_episode_infos_parallel(self, episodes: List[Tuple[Podcast, Episode]]) -> List[DigestEpisodeInfo]:
+    def _build_episode_infos_parallel(self, episodes: List[Tuple[Podcast, Episode]]) -> List[BriefingEpisodeInfo]:
         if not episodes:
             return []
         # Skip the thread pool overhead for the single-episode case.
@@ -252,9 +255,9 @@ class DigestGenerator:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             return list(pool.map(lambda pe: self._build_episode_info(*pe), episodes))
 
-    def _build_episode_info(self, podcast: Podcast, episode: Episode) -> DigestEpisodeInfo:
+    def _build_episode_info(self, podcast: Podcast, episode: Episode) -> BriefingEpisodeInfo:
         """Build episode info with description extracted from summary."""
-        info = DigestEpisodeInfo(podcast=podcast, episode=episode)
+        info = BriefingEpisodeInfo(podcast=podcast, episode=episode)
 
         # Try to read and extract description from summary. Spec #35 — go
         # via FileStorage so the backend (local or S3) is transparent.
@@ -283,13 +286,13 @@ class DigestGenerator:
         # Filter out empty strings and very short fragments
         return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
 
-    def _generate_markdown(self, episode_infos: List[DigestEpisodeInfo], stats: DigestStats) -> str:
-        """Generate the markdown content for the digest."""
+    def _generate_markdown(self, episode_infos: List[BriefingEpisodeInfo], stats: BriefingScriptStats) -> str:
+        """Generate the markdown content for the briefing script."""
         lines = []
 
         # Header
         now = datetime.now(timezone.utc)
-        lines.append("# Podcast Digest")
+        lines.append("# Morning Briefing")
         lines.append(f"Generated: {now.strftime('%Y-%m-%d %H:%M')} UTC")
         lines.append("")
 
@@ -312,8 +315,8 @@ class DigestGenerator:
         lines.append("")
 
         # Group episodes by podcast
-        successful_by_podcast: Dict[str, List[DigestEpisodeInfo]] = {}
-        failed_episodes: List[DigestEpisodeInfo] = []
+        successful_by_podcast: Dict[str, List[BriefingEpisodeInfo]] = {}
+        failed_episodes: List[BriefingEpisodeInfo] = []
 
         for info in episode_infos:
             if info.failed:
@@ -352,7 +355,7 @@ class DigestGenerator:
 
         return "\n".join(lines)
 
-    def _format_episode(self, info: DigestEpisodeInfo) -> List[str]:
+    def _format_episode(self, info: BriefingEpisodeInfo) -> List[str]:
         """Format a single episode entry."""
         lines = []
         episode = info.episode

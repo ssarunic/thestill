@@ -24,10 +24,7 @@ from fastapi.testclient import TestClient
 from thestill.models.inbox import InboxEntry, InboxItem, PodcastInboxSummary
 from thestill.models.podcast import Episode
 from thestill.models.user import User
-from thestill.services.inbox_service import (
-    InboxEntryNotFoundError,
-    InvalidInboxStateError,
-)
+from thestill.services.inbox_service import InboxEntryNotFoundError, InvalidInboxStateError
 from thestill.web.routes import api_inbox
 
 
@@ -184,6 +181,32 @@ class TestUnreadCount:
         assert response.status_code == 200
         assert response.json()["unread_count"] == 7
         mock_app_state.inbox_service.unread_count.assert_called_once_with("user-1")
+
+
+# ============================================================================
+# POST /api/inbox/{episode_id}/read
+# ============================================================================
+
+
+class TestMarkInboxRead:
+    def test_marks_and_returns_true_when_row_transitioned(self, client, mock_app_state):
+        mock_app_state.inbox_service.mark_read.return_value = True
+
+        response = client.post("/api/inbox/ep-1/read")
+
+        assert response.status_code == 200
+        assert response.json()["marked"] is True
+        mock_app_state.inbox_service.mark_read.assert_called_once_with("user-1", "ep-1")
+
+    def test_no_row_or_non_unread_returns_200_with_marked_false(self, client, mock_app_state):
+        # The episode page fires this blindly for every summary view; a
+        # missing inbox row must be a quiet no-op, not a 404.
+        mock_app_state.inbox_service.mark_read.return_value = False
+
+        response = client.post("/api/inbox/never-delivered/read")
+
+        assert response.status_code == 200
+        assert response.json()["marked"] is False
 
 
 # ============================================================================

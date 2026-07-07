@@ -173,6 +173,22 @@ class SqliteInboxRepository(InboxRepository):
                 return None
             return self._row_to_entry(row)
 
+    def mark_read_if_unread(self, user_id: str, episode_id: str, state_changed_at: datetime) -> bool:
+        # The ``state = 'unread'`` guard is the whole point: callers fire
+        # this blindly from the episode view without holding the row, so it
+        # must not clobber saved / dismissed (see the interface docstring).
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                UPDATE user_episode_inbox
+                   SET state = 'read', state_changed_at = ?
+                 WHERE user_id = ? AND episode_id = ? AND state = 'unread'
+                RETURNING id
+                """,
+                (state_changed_at.isoformat(), user_id, episode_id),
+            ).fetchone()
+            return row is not None
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------

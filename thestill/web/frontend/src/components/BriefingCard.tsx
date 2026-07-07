@@ -26,10 +26,18 @@ export default function BriefingCard() {
   }
 
   // 404 means "nothing eligible to brief about" — a normal empty state,
-  // not a UI error. Hide the card silently.
-  if (error || !data) return null
+  // not a UI error. Hide the card silently but keep the history link so
+  // past briefings stay reachable on quiet days.
+  if (error || !data) {
+    return (
+      <div className="flex justify-end">
+        <PastBriefingsLink />
+      </div>
+    )
+  }
 
   return (
+    <div className="space-y-1">
     <Link
       to={`/briefings/${data.id}`}
       className="group flex items-center gap-4 p-4 bg-gradient-to-br from-primary-50 to-white border border-primary-200 rounded-lg hover:border-primary-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-all"
@@ -59,6 +67,21 @@ export default function BriefingCard() {
       <span className="text-sm font-medium text-primary-700 group-hover:text-primary-800">
         Read →
       </span>
+    </Link>
+      <div className="flex justify-end">
+        <PastBriefingsLink />
+      </div>
+    </div>
+  )
+}
+
+function PastBriefingsLink() {
+  return (
+    <Link
+      to="/briefings"
+      className="text-xs text-gray-500 hover:text-primary-700 hover:underline"
+    >
+      Past briefings →
     </Link>
   )
 }

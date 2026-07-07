@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 from .briefing_repository import BriefingRepository
-from .digest_repository import DigestRepository
+from .briefing_schedule_repository import BriefingScheduleRepository
 from .inbox_repository import InboxRepository
 from .podcast_follower_repository import PodcastFollowerRepository
 from .user_repository import UserRepository
@@ -84,8 +84,8 @@ class RepositoryBundle:
     user: UserRepository
     follower: PodcastFollowerRepository
     inbox: InboxRepository
-    digest: DigestRepository
     briefing: BriefingRepository
+    briefing_schedule: BriefingScheduleRepository
     pending_ops: Any
     entity: Any
     queue_manager: Any
@@ -99,7 +99,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
 
         from ..core.postgres_queue_manager import PostgresQueueManager
         from .postgres_briefing_repository import PostgresBriefingRepository
-        from .postgres_digest_repository import PostgresDigestRepository
+        from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
         from .postgres_entity_repository import PostgresEntityRepository
         from .postgres_inbox_repository import PostgresInboxRepository
         from .postgres_pending_operations_repository import PostgresPendingOperationsRepository
@@ -113,8 +113,8 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             user=PostgresUserRepository(dsn),
             follower=PostgresPodcastFollowerRepository(dsn),
             inbox=PostgresInboxRepository(dsn),
-            digest=PostgresDigestRepository(dsn),
             briefing=PostgresBriefingRepository(dsn),
+            briefing_schedule=PostgresBriefingScheduleRepository(dsn),
             pending_ops=PostgresPendingOperationsRepository(dsn),
             entity=PostgresEntityRepository(dsn),
             queue_manager=PostgresQueueManager(dsn),
@@ -123,7 +123,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     db_path = str(config.database_path)
     from ..core.queue_manager import QueueManager
     from .sqlite_briefing_repository import SqliteBriefingRepository
-    from .sqlite_digest_repository import SqliteDigestRepository
+    from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
     from .sqlite_entity_repository import SqliteEntityRepository
     from .sqlite_inbox_repository import SqliteInboxRepository
     from .sqlite_pending_operations_repository import SqlitePendingOperationsRepository
@@ -137,8 +137,8 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         user=SqliteUserRepository(db_path=db_path),
         follower=SqlitePodcastFollowerRepository(db_path=db_path),
         inbox=SqliteInboxRepository(db_path=db_path),
-        digest=SqliteDigestRepository(db_path=db_path),
         briefing=SqliteBriefingRepository(db_path=db_path),
+        briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
         pending_ops=SqlitePendingOperationsRepository(db_path=db_path),
         entity=SqliteEntityRepository(db_path=db_path),
         queue_manager=QueueManager(db_path),

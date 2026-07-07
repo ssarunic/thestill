@@ -298,6 +298,24 @@ class InboxService:
         logger.info("inbox_state_changed", user_id=user_id, episode_id=episode_id, state=state)
         return entry
 
+    def mark_read(self, user_id: str, episode_id: str) -> bool:
+        """
+        View-driven read tracking (spec #29): transition ``unread`` → ``read``
+        and nothing else.
+
+        Unlike ``mark_state`` this is safe to fire blindly — a missing row
+        (episode never delivered to this inbox) and a row already in
+        ``read`` / ``saved`` / ``dismissed`` are both quiet no-ops, so the
+        episode page can call it on every summary view without first
+        checking whether an inbox row exists.
+
+        Returns ``True`` when a row actually transitioned.
+        """
+        marked = self._repository.mark_read_if_unread(user_id, episode_id, datetime.now(timezone.utc))
+        if marked:
+            logger.info("inbox_state_changed", user_id=user_id, episode_id=episode_id, state="read")
+        return marked
+
     # ------------------------------------------------------------------
     # Read paths
     # ------------------------------------------------------------------

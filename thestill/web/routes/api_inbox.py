@@ -27,10 +27,7 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.inbox_service import (
-    InboxEntryNotFoundError,
-    InvalidInboxStateError,
-)
+from ...services.inbox_service import InboxEntryNotFoundError, InvalidInboxStateError
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found, parse_iso_datetime
 
@@ -85,6 +82,24 @@ async def get_unread_count(
 ):
     """Lightweight unread count for badge rendering."""
     return api_response({"unread_count": app_state.inbox_service.unread_count(user.id)})
+
+
+@router.post("/{episode_id}/read")
+async def mark_inbox_read(
+    episode_id: str,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """
+    View-driven read tracking: transition the row to ``read`` only if it is
+    currently ``unread``.
+
+    Always returns 200 — the episode page fires this for every summary view,
+    including episodes that were never delivered to this user's inbox, so a
+    missing row is a no-op (``marked: false``) rather than a 404.
+    """
+    marked = app_state.inbox_service.mark_read(user.id, episode_id)
+    return api_response({"marked": marked})
 
 
 @router.post("/{episode_id}/state")

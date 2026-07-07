@@ -27,7 +27,7 @@ thestill server --workers 4        # Multiple worker processes
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/podcasts` | GET | List all podcasts |
+| `/api/podcasts` | GET | List followed podcasts (paginated; `?q=` filters by title/author) |
 | `/api/podcasts` | POST | Add new podcast `{url}` |
 | `/api/podcasts/{slug}` | GET | Get podcast details |
 | `/api/podcasts/{slug}` | DELETE | Remove podcast |
@@ -53,18 +53,29 @@ thestill server --workers 4        # Multiple worker processes
 | `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
 | `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
 
-### Digests (`/api/digests`)
+### Briefings (`/api/briefings`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/digests` | GET | List digests (filterable by status) |
-| `/api/digests` | POST | Create new digest |
-| `/api/digests/latest` | GET | Get most recent digest |
-| `/api/digests/preview` | POST | Preview episode selection |
-| `/api/digests/{digest_id}` | GET | Get digest details |
-| `/api/digests/{digest_id}` | DELETE | Delete digest |
-| `/api/digests/{digest_id}/content` | GET | Get digest markdown content |
-| `/api/digests/{digest_id}/episodes` | GET | Get episodes in digest |
+| `/api/briefings` | GET | Paginated briefing history for the current user, newest first |
+| `/api/briefings/latest` | GET | Latest briefing for the current user (lazy-generates when eligible) |
+| `/api/briefings/schedule` | GET | Current user's briefing schedule (spec #50) |
+| `/api/briefings/schedule` | PUT | Upsert schedule (frequency, hour, weekday, timezone, enabled) |
+| `/api/briefings/{briefing_id}` | GET | Briefing metadata + narration variants |
+| `/api/briefings/{briefing_id}/script` | GET | Rendered script markdown |
+| `/api/briefings/{briefing_id}/narrate` | POST | Generate a narration variant (spec #33) |
+| `/api/briefings/{briefing_id}/listened` | POST | Mark briefing listened |
+
+### Inbox (`/api/inbox`)
+
+Per-user episode deliveries (spec #29). All endpoints operate on the authenticated user's rows.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`) |
+| `/api/inbox/unread-count` | GET | Lightweight unread count for badge rendering |
+| `/api/inbox/{episode_id}/state` | POST | Set row state explicitly. Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. 404 when no row exists |
+| `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available |
 
 ### Authentication (`/auth`)
 
@@ -99,7 +110,6 @@ thestill/web/
 │   ├── api_podcasts.py      # Podcast CRUD endpoints
 │   ├── api_episodes.py      # Episode content endpoints
 │   ├── api_commands.py      # Processing commands (pipeline, DLQ)
-│   ├── api_digests.py       # Digest CRUD and content endpoints
 │   └── auth.py              # Authentication endpoints (OAuth, JWT)
 ├── frontend/                # React SPA
 │   ├── src/
@@ -109,8 +119,7 @@ thestill/web/
 │   │   │   ├── Podcasts.tsx
 │   │   │   ├── Episodes.tsx
 │   │   │   ├── EpisodeDetail.tsx
-│   │   │   ├── Digests.tsx          # Digest list with create modal
-│   │   │   ├── DigestDetail.tsx     # Digest content and episodes
+│   │   │   ├── BriefingDetail.tsx   # Briefing script + narration reader
 │   │   │   ├── FailedTasks.tsx
 │   │   │   └── Login.tsx            # Google OAuth login page
 │   │   ├── contexts/
@@ -121,7 +130,6 @@ thestill/web/
 │   │   │   ├── PipelineActionButton.tsx
 │   │   │   ├── FailureBanner.tsx
 │   │   │   ├── FailureDetailsModal.tsx
-│   │   │   ├── MorningBriefingWidget.tsx  # Dashboard digest widget
 │   │   │   ├── ProtectedRoute.tsx   # Route protection wrapper
 │   │   │   └── UserMenu.tsx         # User avatar dropdown
 │   │   └── api/
@@ -223,67 +231,29 @@ When "Run Full Pipeline" is triggered from the Web UI:
 3. Pipeline continues until summarization or failure
 4. Progress is tracked in real-time via polling
 
-## Digest Interface
+## Briefing Interface
 
-The web UI provides a full interface for creating and viewing digests - consolidated summaries of multiple podcast episodes.
+Briefings are per-user readouts of the inbox (spec #36): each briefing covers
+everything that landed in your inbox since the previous one. Generation is
+lazy (opening the inbox creates one when eligible) or scheduled per user
+(spec #50 — daily/weekly at a chosen hour and timezone, configured in
+Settings).
 
-### Dashboard Widget
+### Inbox Card
 
-The **Morning Briefing Widget** on the dashboard provides quick access to digest functionality:
+The top of `/inbox` shows a "Today's briefing" card when a briefing with
+unread coverage exists. It links to the briefing detail page.
 
-- Shows count of episodes ready to summarize
-- Displays status of the latest digest
-- **Quick Catch-Up** button creates a digest with default settings:
-  - Last 7 days of episodes
-  - Maximum 10 episodes
-  - Only already-summarized episodes (`ready_only=true`)
-  - Excludes previously digested episodes
+### Briefing Detail Page (`/briefings/{id}`)
 
-### Digests Page (`/digests`)
+- **Script reader**: the rendered morning-briefing markdown
+- **Narration variants** (spec #33): short/medium/long length switcher;
+  generating a missing length calls `POST /api/briefings/{id}/narrate`
+- **Mark listened**: advances the read state (the next briefing's window
+  is cursor-based either way)
 
-The digests page provides:
+### Schedule Settings
 
-- **Stats cards**: Total digests, completed count, partial count
-- **Digest list**: All digests with status badges and episode counts
-- **Progress indicators**: Active digests show real-time progress with polling
-- **Create modal**: Configure and create new digests
-
-### Creating a Digest
-
-1. Click "New Digest" button
-2. Configure options:
-   - **Time range**: Episodes from last N days (1-365)
-   - **Max episodes**: Limit number of episodes (1-100)
-   - **Podcast filter**: Optional - limit to specific podcast
-   - **Ready only**: Only include already-summarized episodes
-   - **Exclude digested**: Skip episodes already in other digests
-3. Click "Preview" to see which episodes would be included
-4. Click "Create Digest" to generate
-
-**Digest Status Values**:
-
-| Status | Description |
-|--------|-------------|
-| `pending` | Digest created, episodes being processed |
-| `in_progress` | Actively generating digest content |
-| `completed` | Successfully generated with all episodes |
-| `partial` | Completed with some episode failures |
-| `failed` | Generation failed |
-
-### Digest Detail Page (`/digests/{id}`)
-
-Shows complete digest information:
-
-- **Header**: Creation date, period covered, status badge
-- **Stats**: Episode counts (total/completed/failed), success rate, processing time
-- **Content tab**: Rendered markdown digest document
-- **Episodes tab**: List of included episodes with links to episode details
-- **Delete action**: Remove digest with confirmation
-
-### Real-Time Progress
-
-When a digest is being processed (status `pending` or `in_progress`):
-
-- Digest list automatically polls every 3 seconds
-- Progress bar shows episodes completed vs total
-- Status updates as processing progresses
+The Settings page configures per-user scheduled generation: enable toggle,
+daily/weekly frequency (with weekday), hour, and IANA timezone. The server
+must run with `BRIEFING_SCHEDULER_ENABLED=true` for schedules to fire.
