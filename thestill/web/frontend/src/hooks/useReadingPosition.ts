@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, type RefObject } from 'react'
 import { useLocation } from 'react-router-dom'
 
 interface ReadingPositionData {
@@ -16,22 +16,56 @@ const POSITION_EXPIRY_DAYS = 30
  * Position is only restored when navigating back (browser back/forward),
  * not when clicking a link to navigate to the page fresh.
  * Scroll position is saved with debouncing to avoid excessive writes.
+ *
+ * Spec #52 — the reader can render inside an overlay that scrolls its own
+ * div rather than the window. Pass `scrollContainerRef` to track/restore
+ * against that element; omitted, the window remains the scroll container
+ * (standalone episode page behavior, unchanged).
  */
-export function useReadingPosition(episodeId: string | undefined) {
+export function useReadingPosition(
+  episodeId: string | undefined,
+  scrollContainerRef?: RefObject<HTMLElement | null>,
+) {
   const location = useLocation()
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
   const hasRestoredRef = useRef<string | null>(null)
+
+  // The three scroll primitives, branched once on container-vs-window so
+  // the save/restore logic below stays container-agnostic.
+  const getScrollTop = useCallback(() => {
+    const el = scrollContainerRef?.current
+    return el ? el.scrollTop : window.scrollY
+  }, [scrollContainerRef])
+
+  const getMaxScroll = useCallback(() => {
+    const el = scrollContainerRef?.current
+    return el
+      ? el.scrollHeight - el.clientHeight
+      : document.documentElement.scrollHeight - window.innerHeight
+  }, [scrollContainerRef])
+
+  const scrollToTop = useCallback(
+    (top: number) => {
+      const el = scrollContainerRef?.current
+      if (el) {
+        el.scrollTo({ top, behavior: 'instant' })
+      } else {
+        window.scrollTo({ top, behavior: 'instant' })
+      }
+    },
+    [scrollContainerRef],
+  )
 
   // Save position to localStorage
   const savePosition = useCallback(() => {
     if (!episodeId || isRestoringRef.current) return
 
     const key = `${STORAGE_PREFIX}${episodeId}`
-    const scrollHeight = document.documentElement.scrollHeight - window.innerHeight
+    const scrollHeight = getMaxScroll()
     if (scrollHeight <= 0) return
 
-    const scrollPercent = window.scrollY / scrollHeight
+    const scrollPercent = getScrollTop() / scrollHeight
 
     // Only save if user has scrolled past initial position
     if (scrollPercent < 0.01) return
@@ -46,7 +80,7 @@ export function useReadingPosition(episodeId: string | undefined) {
     } catch {
       // localStorage might be full or unavailable
     }
-  }, [episodeId])
+  }, [episodeId, getMaxScroll, getScrollTop])
 
   // Clear saved position
   const clearPosition = useCallback(() => {
@@ -57,6 +91,8 @@ export function useReadingPosition(episodeId: string | undefined) {
   // Set up debounced scroll listener
   useEffect(() => {
     if (!episodeId) return
+
+    const target: HTMLElement | Window = scrollContainerRef?.current ?? window
 
     const handleScroll = () => {
       // Clear any pending save
@@ -70,15 +106,15 @@ export function useReadingPosition(episodeId: string | undefined) {
       }, 500)
     }
 
-    window.addEventListener('scroll', handleScroll, { passive: true })
+    target.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
-      window.removeEventListener('scroll', handleScroll)
+      target.removeEventListener('scroll', handleScroll)
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
       }
     }
-  }, [episodeId, savePosition])
+  }, [episodeId, savePosition, scrollContainerRef])
 
   // Auto-restore position only when navigating back (POP navigation)
   // Fresh navigations (clicking links) should start at the top
@@ -96,7 +132,7 @@ export function useReadingPosition(episodeId: string | undefined) {
 
     if (!isBackNavigation) {
       // Fresh navigation - scroll to top and don't restore
-      window.scrollTo({ top: 0, behavior: 'instant' })
+      scrollToTop(0)
       hasRestoredRef.current = episodeId
       return
     }
@@ -123,13 +159,10 @@ export function useReadingPosition(episodeId: string | undefined) {
       // Small delay to ensure content has rendered
       const timer = setTimeout(() => {
         requestAnimationFrame(() => {
-          const scrollHeight = document.documentElement.scrollHeight - window.innerHeight
+          const scrollHeight = getMaxScroll()
           if (scrollHeight > 0) {
             const targetScroll = data.scrollPercent * scrollHeight
-            window.scrollTo({
-              top: targetScroll,
-              behavior: 'instant',
-            })
+            scrollToTop(targetScroll)
           }
 
           // Allow saving again after restoration completes
@@ -143,7 +176,7 @@ export function useReadingPosition(episodeId: string | undefined) {
     } catch {
       // Invalid stored data
     }
-  }, [episodeId, location.state])
+  }, [episodeId, location.state, getMaxScroll, scrollToTop])
 
   return {
     clearPosition,

@@ -1,8 +1,10 @@
 import { lazy, Suspense } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
+import { PlayerProvider } from './contexts/PlayerContext'
+import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 
 // Lazy load pages for code splitting
 const Status = lazy(() => import('./pages/Dashboard'))
@@ -20,6 +22,7 @@ const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
+const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 
 // Loading fallback for page transitions
 function PageLoader() {
@@ -31,8 +34,19 @@ function PageLoader() {
 }
 
 function App() {
+  const location = useLocation()
+
+  // Spec #52 — background-location pattern. An inbox row click pushes the
+  // canonical episode URL with the inbox location stashed in navigation
+  // state; while that state is present the page routes keep rendering the
+  // inbox (still mounted, scroll/poll/cache intact) and the episode renders
+  // in a reader overlay above it. Refresh/direct links have no state and
+  // fall through to the standalone EpisodeDetail route as before.
+  const backgroundLocation = useBackgroundLocation()
+
   return (
-    <Routes>
+    <PlayerProvider>
+    <Routes location={backgroundLocation ?? location}>
       {/* Login page - outside protected routes */}
       <Route path="/login" element={
         <Suspense fallback={<PageLoader />}>
@@ -129,6 +143,24 @@ function App() {
         } />
       </Route>
     </Routes>
+
+    {/* Overlay pass — only mounted while navigation state carries a
+        background location. PlayerProvider sits above both passes so
+        playback continues across overlay open/close (spec #22 / #52). */}
+    {backgroundLocation && (
+      <Routes>
+        <Route path="podcasts/:podcastSlug/episodes/:episodeSlug" element={
+          <ProtectedRoute>
+            <Suspense fallback={null}>
+              <EpisodeReaderOverlay />
+            </Suspense>
+          </ProtectedRoute>
+        } />
+        {/* Any other URL carrying background state: no overlay to draw. */}
+        <Route path="*" element={null} />
+      </Routes>
+    )}
+    </PlayerProvider>
   )
 }
 

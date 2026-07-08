@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { EpisodeEntity, EntityType, RelatedEpisode } from '../../api/types'
 import { entityHref, entityStyle } from '../../utils/entityColors'
+import { useBackgroundLocation } from '../../hooks/useBackgroundLocation'
 
 // Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
 // "Companies mentioned", "Related episodes". Hosts/guests/recurring
@@ -161,6 +162,11 @@ interface RelatedEpisodesSectionProps {
 }
 
 function RelatedEpisodesSection({ episodes, loading }: RelatedEpisodesSectionProps) {
+  // Spec #52 — inside the reader overlay, related-episode clicks stay in
+  // the overlay: preserve the background location and replace the history
+  // entry so a single Esc/back still closes back to the inbox. On the
+  // standalone page (no background) this is a plain navigation.
+  const backgroundLocation = useBackgroundLocation()
   // Nothing in flight and nothing found — omit the section entirely so
   // we don't render a bare header with no body.
   if (!loading && episodes.length === 0) return null
@@ -177,6 +183,8 @@ function RelatedEpisodesSection({ episodes, loading }: RelatedEpisodesSectionPro
               <li key={ep.episode_id} className="rounded-md px-2 py-1 text-sm hover:bg-gray-50">
                 <Link
                   to={`/podcasts/${ep.podcast_slug}/episodes/${ep.episode_slug}`}
+                  state={backgroundLocation ? { backgroundLocation } : undefined}
+                  replace={backgroundLocation != null}
                   className="block min-w-0 font-medium text-gray-800 hover:text-primary-700"
                 >
                   <span className="block truncate">{ep.episode_title}</span>

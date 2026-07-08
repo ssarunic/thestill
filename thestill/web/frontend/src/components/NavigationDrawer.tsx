@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM } from '../constants/navigation'
+import { useIsNavActive } from '../hooks/useBackgroundLocation'
 
 interface NavItemProps {
   to: string
@@ -11,17 +12,17 @@ interface NavItemProps {
 }
 
 function NavItem({ to, icon, label, onClick }: NavItemProps) {
+  // Spec #52 — same background-location-aware derivation as the sidebar.
+  const isActive = useIsNavActive(to)
   return (
     <NavLink
       to={to}
       onClick={onClick}
-      className={({ isActive }) =>
-        `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-          isActive
-            ? 'bg-primary-900 text-white'
-            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-        }`
-      }
+      className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+        isActive
+          ? 'bg-primary-900 text-white'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+      }`}
     >
       {icon}
       <span className="text-base">{label}</span>

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useInbox } from '../hooks/useApi'
 import type { Episode, InboxItem, InboxState } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
@@ -86,6 +86,10 @@ function ProgressPill({ status }: { status: ProgressStatus }) {
 
 function InboxRow({ item }: { item: InboxItem }) {
   const { entry, episode, podcast } = item
+  // Spec #52 — carrying the inbox location in navigation state makes App
+  // render the episode in the reader overlay above the still-mounted list.
+  // Cmd/middle-click opens a new tab with no state → standalone page.
+  const location = useLocation()
   const episodeHref = `/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`
   const progress = deriveProgress(episode)
   // Only surface the progress pill while the row hasn't reached the inbox's
@@ -96,6 +100,7 @@ function InboxRow({ item }: { item: InboxItem }) {
     <li>
       <Link
         to={episodeHref}
+        state={{ backgroundLocation: location }}
         className="group flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
       >
         {podcast.image_url ? (

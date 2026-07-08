@@ -1,8 +1,8 @@
 # Inbox Reader Overlay Specification
 
-> **Status:** 📝 Draft
+> **Status:** ✅ Phase 1 implemented (2026-07-08) — Phases 2–3 pending
 > **Created:** 2026-07-07
-> **Updated:** 2026-07-07
+> **Updated:** 2026-07-08
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#22 floating-media-player](22-floating-media-player.md), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md), [#38 karaoke-word-highlighting](38-karaoke-word-highlighting.md)
 
@@ -168,10 +168,13 @@ Consequences worth stating explicitly:
 - **History shape is natural.** Open = one pushed entry; close = one
   `history.back()`. Deep back-stacks (open → close → open another) behave the
   way browsers users expect.
-- **Layout still wraps everything.** The overlay routes render inside the
-  existing `<Layout>` tree, so `PlayerProvider` / `MiniPlayer`
-  ([Layout.tsx](../thestill/web/frontend/src/components/Layout.tsx), spec #22)
-  are untouched and playback continues across open/close.
+- **Playback still wraps everything.** As implemented, the overlay `<Routes>`
+  pass renders as a sibling of the page pass (outside `<Layout>`, exactly as
+  sketched above), and `PlayerProvider` was lifted from `Layout` into `App`
+  so it spans both passes — `MiniPlayer` stays in `Layout` and playback
+  continues across open/close. (The alternative — nesting the overlay routes
+  inside `Layout` — would have relied on subtler descendant-`Routes`
+  matching semantics for no benefit.)
 
 ### Sidebar highlight
 
@@ -291,17 +294,28 @@ the user is still reading — visible the instant the overlay closes.
 
 ## Implementation Phases
 
-### Phase 1 — Overlay core
+### Phase 1 — Overlay core ✅ (shipped 2026-07-08)
 
-- [ ] `EpisodeReader` extraction from `EpisodeDetail` (no behavior change to
-      the standalone page; vitest snapshot of both modes).
-- [ ] Background-location split in `App.tsx`; `state={{ backgroundLocation }}`
-      on `InboxRow`'s link.
-- [ ] `EpisodeReaderOverlay` chrome: scrim, panel, Esc/scrim/`← Inbox` close,
+- [x] `EpisodeReader` extraction from `EpisodeDetail` (no behavior change to
+      the standalone page; behavioral parity tests of both modes — the repo
+      has no snapshot-test convention, so `EpisodeReader.test.tsx` asserts
+      the same DOM in page and overlay mode instead).
+- [x] Background-location split in `App.tsx`; `state={{ backgroundLocation }}`
+      on `InboxRow`'s link. `useBackgroundLocation` / `useIsNavActive` live in
+      `hooks/useBackgroundLocation.ts`.
+- [x] `EpisodeReaderOverlay` chrome: scrim, panel, Esc/scrim/`← Inbox` close,
       focus trap + restore, body scroll lock, mobile full-screen variant.
-- [ ] Sidebar active-state derives from background location when present.
-- [ ] `useReadingPosition` (+ transcript follow if affected) accept a scroll
-      container ref.
+      Esc is guarded: it defers to layered surfaces that own focus or have
+      already claimed the event (e.g. the ⌘K command bar).
+- [x] Sidebar active-state derives from background location when present
+      (shared `useIsNavActive` consumed by both `Layout` and
+      `NavigationDrawer`, per the nav-sync convention).
+- [x] `useReadingPosition` accepts a scroll container ref. Transcript follow
+      (`useAutoScrollFollow`, spec #38) needed no change — it scrolls via
+      `scrollIntoView`, which is container-agnostic.
+- [x] Related-episode clicks inside the overlay stay in the overlay
+      (preserve `backgroundLocation`, `replace` semantics — Open Question 1
+      resolved as proposed).
 
 ### Phase 2 — Triage affordances
 
@@ -336,19 +350,27 @@ the user is still reading — visible the instant the overlay closes.
 
 ## Open Questions
 
-1. **Related-episode clicks inside the overlay** — stay in the overlay
-   (proposed: yes, with `replace` so back still closes in one step) or jump to
-   the standalone page? Staying matches the "one continuous activity" model;
-   replacing avoids Esc having to unwind N episodes.
-2. **Should Esc-close be suppressed while audio is playing from the overlay's
-   episode?** Proposed: no — playback is global (spec #22) and survives close;
-   nothing is lost.
-3. **Overlay width vs entity rail** — if `max-w-4xl` proves too narrow for the
-   two-column `lg` grid, either widen the panel or collapse the rail into the
-   strip in overlay mode. Decide with real content during Phase 1.
+1. ~~**Related-episode clicks inside the overlay**~~ **Resolved (Phase 1):**
+   they stay in the overlay with `replace` semantics — back/Esc still closes
+   in one step. Implemented in `EntityRail`'s related-episodes section, which
+   forwards `backgroundLocation` when present and does a plain navigation on
+   the standalone page.
+2. ~~**Should Esc-close be suppressed while audio is playing from the
+   overlay's episode?**~~ **Resolved (Phase 1): no** — playback is global
+   (spec #22) and survives close; nothing is lost.
+3. **Overlay width vs entity rail** — shipped at `lg:max-w-4xl`; the
+   two-column `lg` grid engages inside the panel. If real content proves it
+   too narrow, either widen the panel or collapse the rail into the strip in
+   overlay mode.
 4. **Does the split pane (alternative 3) ever happen?** If yes, `EpisodeReader`
    is the component both futures share — which is an argument for doing the
    extraction carefully rather than minimally.
+5. **MiniPlayer under the scrim.** The overlay sits at `z-50` (matching every
+   other modal); `MiniPlayer` (`z-30`) and the mention-density timeline
+   (`z-10`) render beneath the scrim while the overlay is open. Playback
+   itself is unaffected and the reader has its own play/pause control, but
+   the transport for a *different* currently-playing episode is unreachable
+   until the overlay closes. Acceptable for v1; revisit if it annoys.
 
 ---
 
@@ -367,3 +389,4 @@ the user is still reading — visible the instant the overlay closes.
 | Date | Decision |
 |------|----------|
 | 2026-07-07 | Spec created. Overlay-over-inbox chosen over breadcrumb-only fix (doesn't solve context loss) and `/inbox/{episode}` route (duplicate URLs). Canonical-URL + background-location pattern selected. |
+| 2026-07-08 | Phase 1 implemented. `PlayerProvider` lifted from `Layout` to `App` so it spans both route passes (resolves the sketch-vs-prose ambiguity about where the overlay routes mount). Overlay chrome hand-rolled at `z-50` per the codebase's existing modal conventions (no dialog library). Esc handler guarded against layered surfaces (⌘K command bar) via `defaultPrevented` + focus containment. Open Questions 1 & 2 resolved as proposed. Behavioral parity tests instead of snapshots (repo has none). `useAutoScrollFollow` confirmed container-agnostic — only `useReadingPosition` needed the ref parameter. |

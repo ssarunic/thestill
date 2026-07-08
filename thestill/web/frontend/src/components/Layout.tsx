@@ -5,9 +5,10 @@ import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
 import CommandBar from './CommandBar'
-import { PlayerProvider, usePlayer } from '../contexts/PlayerContext'
+import { usePlayer } from '../contexts/PlayerContext'
 import { useAuth } from '../contexts/AuthContext'
 import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM } from '../constants/navigation'
+import { useIsNavActive } from '../hooks/useBackgroundLocation'
 
 interface NavItemProps {
   to: string
@@ -17,18 +18,19 @@ interface NavItemProps {
 }
 
 function NavItem({ to, icon, label, showLabel }: NavItemProps) {
+  // Spec #52 — active state derives from the background location while the
+  // reader overlay is open, so Inbox stays highlighted while reading.
+  const isActive = useIsNavActive(to)
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-3 rounded-lg transition-colors ${
-          showLabel ? 'justify-start' : 'justify-center'
-        } ${
-          isActive
-            ? 'bg-primary-900 text-white'
-            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-        }`
-      }
+      className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-colors ${
+        showLabel ? 'justify-start' : 'justify-center'
+      } ${
+        isActive
+          ? 'bg-primary-900 text-white'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+      }`}
       title={!showLabel ? label : undefined}
     >
       {icon}
@@ -88,6 +90,7 @@ function LayoutContent() {
   }, [])
 
   const showLabels = isSidebarExpanded || screenSize === 'desktop'
+  const isSearchActive = useIsNavActive('/search')
 
   const searchIcon = (
     <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -173,15 +176,13 @@ function LayoutContent() {
               <NavLink
                 to="/search"
                 title={!showLabels ? 'Search' : undefined}
-                className={({ isActive }) =>
-                  `flex w-full items-center gap-3 rounded-lg px-3 py-3 transition-colors ${
-                    showLabels ? 'justify-start' : 'justify-center'
-                  } ${
-                    isActive
-                      ? 'bg-primary-900 text-white'
-                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                  }`
-                }
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 transition-colors ${
+                  showLabels ? 'justify-start' : 'justify-center'
+                } ${
+                  isSearchActive
+                    ? 'bg-primary-900 text-white'
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                }`}
                 data-testid="search-nav"
               >
                 {searchIcon}
@@ -274,10 +275,9 @@ function LayoutContent() {
   )
 }
 
+// PlayerProvider moved up to App (spec #52): it must also wrap the reader
+// overlay pass, which renders outside the Layout route tree, so playback
+// survives overlay open/close.
 export default function Layout() {
-  return (
-    <PlayerProvider>
-      <LayoutContent />
-    </PlayerProvider>
-  )
+  return <LayoutContent />
 }
