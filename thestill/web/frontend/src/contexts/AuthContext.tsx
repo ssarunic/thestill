@@ -18,6 +18,9 @@ interface AuthStatus {
   multi_user: boolean
   authenticated: boolean
   user: User | null
+  // Spec #51 capability flag: false when EMAIL_PROVIDER=none, hiding the
+  // briefing email-delivery checkbox in settings.
+  email_delivery_available?: boolean
 }
 
 interface AuthContextType {
@@ -26,6 +29,7 @@ interface AuthContextType {
   isMultiUser: boolean
   isAuthenticated: boolean
   isAdmin: boolean
+  emailDeliveryAvailable: boolean
   login: () => void
   logout: () => Promise<void>
   refreshAuth: () => Promise<void>
@@ -40,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isMultiUser, setIsMultiUser] = useState(false)
+  const [emailDeliveryAvailable, setEmailDeliveryAvailable] = useState(false)
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -51,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setIsMultiUser(authStatus.multi_user)
       setUser(authStatus.user)
+      setEmailDeliveryAvailable(authStatus.email_delivery_available === true)
     } catch (error) {
       console.error('Auth status check failed:', error)
       setUser(null)
@@ -113,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isMultiUser,
         isAuthenticated,
         isAdmin,
+        emailDeliveryAvailable,
         login,
         logout,
         refreshAuth,

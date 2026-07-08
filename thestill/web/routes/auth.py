@@ -178,6 +178,9 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             "multi_user": multi_user,
             "authenticated": user is not None,
             "user": user.model_dump(exclude={"google_id"}) if user else None,
+            # Spec #51 capability flag: the settings UI only shows the
+            # briefing email-delivery checkbox when a provider is configured.
+            "email_delivery_available": state.briefing_delivery_service is not None,
         }
     )
 

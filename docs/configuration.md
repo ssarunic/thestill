@@ -165,6 +165,42 @@ When `MULTI_USER=true`:
 3. Add authorized redirect URI: `http://localhost:8000/auth/google/callback`
 4. Copy Client ID and Secret to `.env`
 
+## Briefing Email Delivery (spec #51)
+
+Scheduled briefings can be emailed to each user when their slot fires.
+Delivery is opt-in per user (an "Email each briefing to me" checkbox on
+the briefing schedule in Settings) and disabled globally until an email
+provider is configured. The delivery pass runs inside the briefing
+scheduler tick, so `BRIEFING_SCHEDULER_ENABLED=true` is required for
+sends to happen.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `EMAIL_PROVIDER` | `smtp`, `ses`, or `none` (delivery off globally) | `none` |
+| `EMAIL_FROM` | From address, display form allowed (`Thestill <briefings@example.com>`) | - |
+| `SMTP_HOST` | SMTP relay host (required for `smtp`) | - |
+| `SMTP_PORT` | SMTP relay port | `587` |
+| `SMTP_USERNAME` | SMTP auth username (empty = no auth) | - |
+| `SMTP_PASSWORD` | SMTP auth password | - |
+| `SMTP_STARTTLS` | Upgrade the connection with STARTTLS | `true` |
+| `SES_REGION` | AWS SES region (required for `ses`; uses the ambient AWS credential chain) | - |
+| `BRIEFING_EMAIL_MAX_ATTEMPTS` | Send attempts before a delivery parks as `failed` | `3` |
+| `BRIEFING_EMAIL_BACKOFF_SECONDS` | First-retry delay, doubled per attempt | `300` |
+
+Also required when a provider is configured:
+
+- `PUBLIC_BASE_URL` — email bodies link back to episodes, the in-app
+  briefing, and the unsubscribe page with absolute URLs.
+- `JWT_SECRET_KEY` — signs the one-click unsubscribe token
+  (`/unsubscribe/briefings?token=…`, honored without login per
+  CAN-SPAM/RFC 8058).
+
+A misconfigured provider (e.g. `EMAIL_PROVIDER=smtp` without
+`SMTP_HOST`) fails at server startup rather than silently at send time.
+Each briefing is emailed at most once — deliveries are tracked in the
+`briefing_deliveries` table with bounded retries, and a failed send never
+blocks briefing generation.
+
 ## Corpus Search (sqlite-vec)
 
 Hybrid lexical + semantic search over transcript chunks lives in the

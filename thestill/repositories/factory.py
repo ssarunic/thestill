@@ -31,6 +31,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from .briefing_delivery_repository import BriefingDeliveryRepository
 from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
 from .inbox_repository import InboxRepository
@@ -86,6 +87,7 @@ class RepositoryBundle:
     inbox: InboxRepository
     briefing: BriefingRepository
     briefing_schedule: BriefingScheduleRepository
+    briefing_delivery: BriefingDeliveryRepository
     pending_ops: Any
     entity: Any
     queue_manager: Any
@@ -98,6 +100,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         _ensure_pg_schema(dsn, config)
 
         from ..core.postgres_queue_manager import PostgresQueueManager
+        from .postgres_briefing_delivery_repository import PostgresBriefingDeliveryRepository
         from .postgres_briefing_repository import PostgresBriefingRepository
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
         from .postgres_entity_repository import PostgresEntityRepository
@@ -115,6 +118,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             inbox=PostgresInboxRepository(dsn),
             briefing=PostgresBriefingRepository(dsn),
             briefing_schedule=PostgresBriefingScheduleRepository(dsn),
+            briefing_delivery=PostgresBriefingDeliveryRepository(dsn),
             pending_ops=PostgresPendingOperationsRepository(dsn),
             entity=PostgresEntityRepository(dsn),
             queue_manager=PostgresQueueManager(dsn),
@@ -122,6 +126,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
 
     db_path = str(config.database_path)
     from ..core.queue_manager import QueueManager
+    from .sqlite_briefing_delivery_repository import SqliteBriefingDeliveryRepository
     from .sqlite_briefing_repository import SqliteBriefingRepository
     from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
     from .sqlite_entity_repository import SqliteEntityRepository
@@ -139,6 +144,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         inbox=SqliteInboxRepository(db_path=db_path),
         briefing=SqliteBriefingRepository(db_path=db_path),
         briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
+        briefing_delivery=SqliteBriefingDeliveryRepository(db_path=db_path),
         pending_ops=SqlitePendingOperationsRepository(db_path=db_path),
         entity=SqliteEntityRepository(db_path=db_path),
         queue_manager=QueueManager(db_path),

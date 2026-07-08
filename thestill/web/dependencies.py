@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from ..core.refresh_scheduler import RefreshScheduler
     from ..core.task_worker import TaskWorker
     from ..models.user import User
+    from ..repositories.briefing_delivery_repository import BriefingDeliveryRepository
     from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
     from ..repositories.inbox_repository import InboxRepository
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.auth_service import AuthService
+    from ..services.briefing_delivery_service import BriefingDeliveryService
     from ..services.briefing_service import BriefingService
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
@@ -128,6 +130,11 @@ class AppState:
     # production wiring always passes the repository.
     briefing_schedule_repository: "Optional[BriefingScheduleRepository]" = None
     briefing_scheduler: "Optional[BriefingScheduler]" = None
+    # Spec #51 — briefing email delivery. The repository is always wired in
+    # production; the service is ``None`` when EMAIL_PROVIDER=none (the
+    # capability flag the API/UI key off).
+    briefing_delivery_repository: "Optional[BriefingDeliveryRepository]" = None
+    briefing_delivery_service: "Optional[BriefingDeliveryService]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the

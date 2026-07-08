@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { getBriefingSchedule, putBriefingSchedule } from '../api/client'
+import { useAuth } from '../contexts/AuthContext'
 import type { BriefingFrequency } from '../api/types'
 
 // Briefing schedule editor (spec #50): when (hour in timezone) and how
 // often (daily / weekly + weekday) the morning briefing is generated.
 // Never configured (API 404) renders as disabled defaults seeded with the
 // browser's timezone; saving creates the row.
+// Spec #51: an "email it to me" checkbox, shown only when the server has
+// an email provider configured (auth-status capability flag).
 
 const WEEKDAYS = [
   'Monday',
@@ -37,6 +40,7 @@ interface Draft {
   hourLocal: number
   weekday: number
   timezone: string
+  emailEnabled: boolean
 }
 
 const DEFAULT_DRAFT: Draft = {
@@ -45,9 +49,11 @@ const DEFAULT_DRAFT: Draft = {
   hourLocal: 8,
   weekday: 0,
   timezone: browserTimezone,
+  emailEnabled: false,
 }
 
 export default function BriefingScheduleSettings() {
+  const { emailDeliveryAvailable } = useAuth()
   const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT)
   const [saved, setSaved] = useState<Draft | null>(null)
   const [nextRunAt, setNextRunAt] = useState<string | null>(null)
@@ -67,6 +73,7 @@ export default function BriefingScheduleSettings() {
           hourLocal: schedule.hour_local,
           weekday: schedule.weekday ?? 0,
           timezone: schedule.timezone,
+          emailEnabled: schedule.email_enabled ?? false,
         }
         setDraft(loaded)
         setSaved(loaded)
@@ -89,7 +96,8 @@ export default function BriefingScheduleSettings() {
     draft.frequency !== saved.frequency ||
     draft.hourLocal !== saved.hourLocal ||
     (draft.frequency === 'weekly' && draft.weekday !== saved.weekday) ||
-    draft.timezone !== saved.timezone
+    draft.timezone !== saved.timezone ||
+    draft.emailEnabled !== saved.emailEnabled
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -102,6 +110,7 @@ export default function BriefingScheduleSettings() {
         hour_local: draft.hourLocal,
         weekday: draft.frequency === 'weekly' ? draft.weekday : null,
         timezone: draft.timezone,
+        email_enabled: emailDeliveryAvailable ? draft.emailEnabled : false,
       })
       setSaved({ ...draft })
       setNextRunAt(schedule.next_run_at)
@@ -215,6 +224,21 @@ export default function BriefingScheduleSettings() {
           </select>
         </label>
       </div>
+
+      {emailDeliveryAvailable && (
+        <label className={`flex items-center gap-2 ${draft.enabled ? '' : 'opacity-50'}`}>
+          <input
+            type="checkbox"
+            checked={draft.emailEnabled}
+            disabled={!draft.enabled}
+            onChange={(e) => setDraft({ ...draft, emailEnabled: e.target.checked })}
+            className="rounded border-gray-300 text-primary-900 focus:ring-primary-500"
+          />
+          <span className="text-sm font-medium text-gray-700">
+            Email each briefing to me when it&apos;s ready
+          </span>
+        </label>
+      )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
       {savedAt && !error && <p className="text-sm text-green-600">Saved.</p>}

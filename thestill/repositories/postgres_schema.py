@@ -243,6 +243,7 @@ CREATE TABLE IF NOT EXISTS user_briefing_schedules (
     weekday bigint NULL CHECK (weekday IS NULL OR weekday BETWEEN 0 AND 6),
     timezone text NOT NULL,
     enabled boolean NOT NULL DEFAULT true,
+    email_enabled boolean NOT NULL DEFAULT false,
     next_run_at timestamptz NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -251,6 +252,31 @@ CREATE TABLE IF NOT EXISTS user_briefing_schedules (
 CREATE INDEX IF NOT EXISTS idx_briefing_schedules_due
     ON user_briefing_schedules(next_run_at)
     WHERE enabled AND next_run_at IS NOT NULL;
+-- Spec #51 — converge databases bootstrapped before email delivery landed
+-- (CREATE TABLE IF NOT EXISTS skips existing tables, so the new column
+-- needs an explicit idempotent ALTER).
+ALTER TABLE user_briefing_schedules
+    ADD COLUMN IF NOT EXISTS email_enabled boolean NOT NULL DEFAULT false;
+
+-- Spec #51 — briefing email deliveries. One row per (briefing, channel):
+-- the UNIQUE constraint is the send-once anchor. ``next_attempt_at``
+-- drives the due-scan while pending and acts as the claim lease while
+-- sending; NULL once terminal.
+CREATE TABLE IF NOT EXISTS briefing_deliveries (
+    id uuid PRIMARY KEY,
+    briefing_id uuid NOT NULL REFERENCES user_briefings(id) ON DELETE CASCADE,
+    channel text NOT NULL DEFAULT 'email' CHECK (channel IN ('email')),
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','failed')),
+    attempts bigint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NULL,
+    sent_at timestamptz NULL,
+    last_error text NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (briefing_id, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_briefing_deliveries_due
+    ON briefing_deliveries(next_attempt_at)
+    WHERE status IN ('pending','sending');
 
 -- ===== task queue =========================================================
 CREATE TABLE IF NOT EXISTS tasks (

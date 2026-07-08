@@ -369,6 +369,20 @@ class Config(BaseModel):
     # avoid double-coverage from accidental double-runs.
     briefing_min_interval_seconds: int = 6 * 60 * 60
 
+    # Briefing email delivery (spec #51). ``none`` short-circuits the
+    # delivery pass entirely: no delivery rows, no sends, checkbox hidden
+    # in the UI — #50 deployments without email config pay zero overhead.
+    email_provider: str = "none"  # smtp | ses | none
+    email_from: str = ""  # e.g. "Thestill <briefings@example.com>"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    ses_region: str = ""  # SES uses the ambient AWS credential chain (#43)
+    briefing_email_max_attempts: int = 3
+    briefing_email_backoff_seconds: int = 300  # doubled per attempt
+
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
     google_client_id: str = ""  # Google OAuth client ID (required for multi-user)
@@ -682,6 +696,17 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
         "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
+        # Briefing email delivery (spec #51)
+        "email_provider": os.getenv("EMAIL_PROVIDER", "none").lower(),
+        "email_from": os.getenv("EMAIL_FROM", ""),
+        "smtp_host": os.getenv("SMTP_HOST", ""),
+        "smtp_port": int(os.getenv("SMTP_PORT", "587")),
+        "smtp_username": os.getenv("SMTP_USERNAME", ""),
+        "smtp_password": os.getenv("SMTP_PASSWORD", ""),
+        "smtp_starttls": os.getenv("SMTP_STARTTLS", "true").lower() == "true",
+        "ses_region": os.getenv("SES_REGION", ""),
+        "briefing_email_max_attempts": int(os.getenv("BRIEFING_EMAIL_MAX_ATTEMPTS", "3")),
+        "briefing_email_backoff_seconds": int(os.getenv("BRIEFING_EMAIL_BACKOFF_SECONDS", "300")),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

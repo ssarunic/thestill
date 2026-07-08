@@ -74,6 +74,7 @@ from .routes import (
     api_transcript_words,
     auth,
     health,
+    unsubscribe,
     webhooks,
 )
 from .task_manager import get_task_manager
@@ -224,6 +225,33 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         renderer=briefing_renderer,
     )
 
+    # Spec #51 — briefing email delivery. ``make_email_sender`` returns
+    # ``None`` for EMAIL_PROVIDER=none (the default), which switches the
+    # whole delivery stack off: no service, no delivery pass, checkbox
+    # hidden in the UI via the capability flag. Misconfigured providers
+    # fail here, at boot, not silently at 8am.
+    from ..services.briefing_delivery_service import BriefingDeliveryService
+    from ..services.briefing_email_renderer import BriefingEmailRenderer
+    from ..services.email_sender import make_email_sender
+
+    briefing_delivery_repository = repos.briefing_delivery
+    briefing_delivery_service = None
+    email_sender = make_email_sender(config)
+    if email_sender is not None:
+        briefing_delivery_service = BriefingDeliveryService(
+            briefing_delivery_repository,
+            briefing_repository,
+            briefing_schedule_repository,
+            user_repository,
+            BriefingEmailRenderer(
+                public_base_url=config.public_base_url,
+                secret=config.jwt_secret_key,
+            ),
+            email_sender,
+            max_attempts=config.briefing_email_max_attempts,
+            backoff_seconds=config.briefing_email_backoff_seconds,
+        )
+
     # Spec #28 — entity-layer repository + search backend, backend-resolved
     # (spec #44): sqlite-vec locally, pgvector when DATABASE_URL is set.
     from ..core.embedding_model import EmbeddingModel
@@ -259,6 +287,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
         briefing_schedule_repository=briefing_schedule_repository,
+        briefing_delivery_repository=briefing_delivery_repository,
+        briefing_delivery_service=briefing_delivery_service,
         pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
         search_backend=search_backend,
@@ -425,12 +455,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 max_per_tick=get_briefing_scheduler_max_per_tick(),
                 narration_runner=app_state.narration_runner,
                 narration_target_seconds=config.narration_default_duration_seconds,
+                delivery_service=briefing_delivery_service,
             )
             briefing_scheduler.start()
             app_state.briefing_scheduler = briefing_scheduler
             logger.info(
                 "briefing_scheduler_enabled",
                 narration_chained=app_state.narration_runner is not None,
+                email_delivery=briefing_delivery_service is not None,
             )
         else:
             logger.info("briefing_scheduler_disabled")
@@ -555,6 +587,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Register routes
     # Health check at root level (infrastructure convention for load balancers)
     app.include_router(health.router, tags=["health"])
+    # Spec #51 — signed one-click unsubscribe. No /api prefix: the URL
+    # lives in email bodies and List-Unsubscribe headers.
+    app.include_router(unsubscribe.router, tags=["unsubscribe"])
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
 
     # API routes for web UI (all under /api prefix)

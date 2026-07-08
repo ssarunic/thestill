@@ -132,6 +132,9 @@ class ScheduleUpdateRequest(BaseModel):
     weekday: Optional[int] = Field(default=None, ge=0, le=6)
     timezone: str
     enabled: bool = True
+    # Spec #51 — email the briefing when the scheduled slot fires. Rejected
+    # with 422 when no EMAIL_PROVIDER is configured.
+    email_enabled: bool = False
 
 
 def _require_owned(briefing: Briefing, user: User) -> None:
@@ -186,6 +189,7 @@ def _serialize_schedule(schedule: BriefingSchedule) -> dict:
         "weekday": schedule.weekday,
         "timezone": schedule.timezone_name,
         "enabled": schedule.enabled,
+        "email_enabled": schedule.email_enabled,
         "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         "updated_at": schedule.updated_at.isoformat(),
     }
@@ -218,6 +222,13 @@ async def put_briefing_schedule(
     …". Disabling parks the schedule (``next_run_at = NULL``).
     """
     now = datetime.now(timezone.utc)
+    if body.email_enabled and app_state.briefing_delivery_service is None:
+        # Spec #51: no EMAIL_PROVIDER configured — the checkbox is hidden
+        # in the UI, so this only fires for hand-built requests.
+        raise HTTPException(
+            status_code=422,
+            detail="Email delivery is not configured on this server (EMAIL_PROVIDER=none)",
+        )
     existing = app_state.briefing_schedule_repository.get(user.id)
     try:
         schedule = BriefingSchedule(
@@ -227,6 +238,7 @@ async def put_briefing_schedule(
             weekday=body.weekday,
             timezone_name=body.timezone,
             enabled=body.enabled,
+            email_enabled=body.email_enabled,
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )
@@ -244,6 +256,7 @@ async def put_briefing_schedule(
         weekday=schedule.weekday,
         tz=schedule.timezone_name,
         enabled=schedule.enabled,
+        email_enabled=schedule.email_enabled,
         next_run_at=schedule.next_run_at.isoformat() if schedule.next_run_at else None,
     )
     return api_response(_serialize_schedule(schedule))

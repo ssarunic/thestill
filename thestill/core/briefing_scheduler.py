@@ -36,6 +36,14 @@ artefact — not just the script — exists by ``hour_local``. Narration is
 best-effort and idempotent per ``(briefing, slug)``: a failure never fails
 the run, and an already-narrated briefing (e.g. throttle-returned after a
 lazy open + manual narrate) isn't re-spent.
+
+Spec #51: when a ``BriefingDeliveryService`` is provided, a slot firing
+with ``email_enabled`` ensures a delivery row exists for the briefing —
+whether generation returned a fresh briefing or the throttled existing one
+("send if this briefing hasn't been emailed yet", never "send if a new
+briefing was generated"). The tick then runs a second phase, the delivery
+pass, which sends every claimable delivery. Email failure retries on the
+delivery row's own cadence and never touches the schedule cursor.
 """
 
 import threading
@@ -50,6 +58,7 @@ from ..utils.duration import slug_for_duration_seconds
 if TYPE_CHECKING:
     from ..models.briefing import Briefing
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
+    from ..services.briefing_delivery_service import BriefingDeliveryService
     from ..services.briefing_service import BriefingService
     from ..services.narration import NarrationRunner
 
@@ -68,6 +77,7 @@ class BriefingScheduler:
         max_per_tick: int = 50,
         narration_runner: "Optional[NarrationRunner]" = None,
         narration_target_seconds: int = 300,
+        delivery_service: "Optional[BriefingDeliveryService]" = None,
     ) -> None:
         self.schedule_repository = schedule_repository
         self.briefing_service = briefing_service
@@ -75,6 +85,7 @@ class BriefingScheduler:
         self.max_per_tick = max_per_tick
         self.narration_runner = narration_runner
         self.narration_target_seconds = narration_target_seconds
+        self.delivery_service = delivery_service
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -161,8 +172,32 @@ class BriefingScheduler:
                 next_run_at=next_run.isoformat(),
             )
             self._chain_narration(schedule.user_id, briefing)
+            # Spec #51: queue the email off the slot fire. ``briefing`` may
+            # be the throttle-returned existing one (7:30 lazy open, 8:00
+            # slot) — ensure_pending's send-once anchor still emails it
+            # exactly once. A ``None`` briefing (empty window) was skipped
+            # above: honest silence, no delivery row.
+            if schedule.email_enabled and self.delivery_service is not None:
+                try:
+                    self.delivery_service.ensure_pending(briefing.id, now=clock_now)
+                except Exception:
+                    # FM-1: a delivery-queueing blow-up (e.g. DB hiccup)
+                    # must not fail the user's generation or the fleet.
+                    logger.exception(
+                        "briefing_delivery_queue_failed",
+                        user_id=schedule.user_id,
+                        briefing_id=briefing.id,
+                    )
         if due:
             logger.info("briefing_scheduler_ticked", due=len(due), generated=generated)
+        # Second phase (spec #51): the delivery pass. Runs every tick so
+        # backoff retries fire on their own cadence even when no slot is
+        # due. Absent when EMAIL_PROVIDER=none — zero overhead.
+        if self.delivery_service is not None:
+            try:
+                self.delivery_service.deliver_due(clock_now)
+            except Exception:
+                logger.exception("briefing_delivery_pass_failed")
         return generated
 
     def _chain_narration(self, user_id: str, briefing: "Briefing") -> None:
