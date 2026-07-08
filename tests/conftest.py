@@ -49,6 +49,13 @@ def _stub_llm_credentials(monkeypatch):
     # missing in CI.
     if not os.getenv("JWT_SECRET_KEY"):
         monkeypatch.setenv("JWT_SECRET_KEY", "test-stub-jwt-secret-32-bytes-min")
+    # Spec #44 — DATABASE_URL selects the Postgres backend. Ambient values
+    # (a developer's shell, or a prior test that loaded the real .env into
+    # this process) must never steer tests at the developer's live
+    # database. Postgres-backed tests opt in explicitly via
+    # TEST_DATABASE_URL (integration contract suites) or by constructing
+    # a Config with database_url directly.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
 
 # TypeVar for generic structured output return type

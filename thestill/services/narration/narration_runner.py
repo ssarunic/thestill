@@ -95,6 +95,16 @@ class NarrationRunner:
         self.inbox_repository = inbox_repository
         self.podcast_repository = podcast_repository
 
+    def artifact_exists(self, *, briefing_id: str, slug: str) -> bool:
+        """True when a narration artefact for ``(briefing, slug)`` is on disk.
+
+        Lets idempotent callers (the briefing scheduler, spec #50 Phase 4)
+        skip re-narrating a briefing that already has this variant instead
+        of re-spending the LLM call.
+        """
+        narrations_dir = self.generator.path_manager.narrations_dir()
+        return (narrations_dir / f"{briefing_id}-{slug}.json").exists()
+
     def run(
         self,
         *,

@@ -207,6 +207,89 @@ class TestTick:
         assert scheduler.tick(now=SLOT) == 1
 
 
+class TestNarrationChaining:
+    """Phase 4 (#33 interlock): scheduled runs chain narration."""
+
+    @pytest.fixture
+    def narration_runner(self):
+        runner = MagicMock()
+        runner.artifact_exists.return_value = False
+        run = MagicMock()
+        run.narration_id = "b1-medium"
+        run.content.mode = "narrated"
+        runner.run.return_value = run
+        return runner
+
+    @pytest.fixture
+    def scheduler(self, schedule_repo, briefing_service, narration_runner):
+        return BriefingScheduler(
+            schedule_repo,
+            briefing_service,
+            tick_seconds=60,
+            max_per_tick=50,
+            narration_runner=narration_runner,
+            narration_target_seconds=300,
+        )
+
+    def test_successful_generation_chains_narration(
+        self, scheduler, user_repo, schedule_repo, briefing_service, narration_runner
+    ):
+        _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+
+        assert scheduler.tick(now=SLOT) == 1
+
+        narration_runner.run.assert_called_once()
+        kwargs = narration_runner.run.call_args.kwargs
+        assert kwargs["briefing_id"]
+        assert kwargs["target_duration_seconds"] == 300
+        assert kwargs["slug"] == "medium"  # 300s preset
+
+    def test_empty_window_does_not_narrate(
+        self, scheduler, user_repo, schedule_repo, briefing_service, narration_runner
+    ):
+        _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: None
+
+        assert scheduler.tick(now=SLOT) == 0
+        narration_runner.run.assert_not_called()
+
+    def test_existing_artifact_skips_renarration(self, scheduler, user_repo, schedule_repo, narration_runner):
+        # Throttle-returned briefing already narrated (lazy open at 7:30 +
+        # manual narrate) — the scheduled slot must not re-spend the LLM.
+        _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        narration_runner.artifact_exists.return_value = True
+
+        assert scheduler.tick(now=SLOT) == 1
+        narration_runner.run.assert_not_called()
+
+    def test_narration_failure_is_isolated(
+        self, scheduler, user_repo, schedule_repo, briefing_service, narration_runner
+    ):
+        # A narration blow-up must not fail the run (the script exists) nor
+        # block the next due user's generation + narration.
+        first = _add_user_with_schedule(user_repo, schedule_repo, email="a@example.com", next_run_at=SLOT)
+        second = _add_user_with_schedule(
+            user_repo, schedule_repo, email="b@example.com", next_run_at=SLOT + timedelta(minutes=1)
+        )
+        narration_runner.run.side_effect = [RuntimeError("LLM provider down"), MagicMock()]
+
+        now = SLOT + timedelta(minutes=2)
+        assert scheduler.tick(now=now) == 2
+        assert narration_runner.run.call_count == 2
+        called_users = [call.args[0] for call in briefing_service.generate_for_user.call_args_list]
+        assert called_users == [first.id, second.id]
+        assert schedule_repo.get(first.id).next_run_at > now
+        assert schedule_repo.get(second.id).next_run_at > now
+
+    def test_no_runner_means_no_chaining(self, schedule_repo, briefing_service, user_repo):
+        # Narration disabled (NARRATION_ENABLED=false) — generation-only
+        # scheduling keeps working exactly as before Phase 4.
+        _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        scheduler = BriefingScheduler(schedule_repo, briefing_service, tick_seconds=60, max_per_tick=50)
+
+        assert scheduler.tick(now=SLOT) == 1
+
+
 class TestLifecycle:
     def test_start_stop(self, scheduler):
         scheduler.start()

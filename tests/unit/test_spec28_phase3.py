@@ -184,10 +184,14 @@ class TestRebuildEntitiesCommand:
         """Spin up a config + repos pointing at a tmp DB and patch
         ``CLIContext`` construction so the command sees them."""
         db_path = str(tmp_path / "podcasts.db")
-        # Clean env so config doesn't pick up real OPENAI_API_KEY etc.
+        # Isolation pattern from tests/unit/cli: STORAGE_PATH points config
+        # at the tmp dir, THESTILL_ENV_FILE is poisoned so the CLI's env-file
+        # load can't pull the developer's real .env (DATABASE_URL would
+        # silently steer the command at the live Postgres).
         monkeypatch.setenv("DATABASE_PATH", db_path)
+        monkeypatch.setenv("STORAGE_PATH", str(tmp_path))
+        monkeypatch.setenv("THESTILL_ENV_FILE", str(tmp_path / ".no-such-env"))
         monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
-        monkeypatch.setenv("THESTILL_DATA_DIR", str(tmp_path))
         return {"db_path": db_path, "tmp_path": tmp_path}
 
     def test_dry_run_writes_nothing(self, cli_setup):
