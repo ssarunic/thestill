@@ -29,6 +29,13 @@ is "next occurrence after now", never a replay of missed slots.
 
 Generation itself is ``BriefingService.generate_for_user`` — cursor math,
 the min-interval throttle, and the empty-window no-op all apply unchanged.
+
+Phase 4 (#33 interlock): when a ``NarrationRunner`` is provided, each
+scheduled run chains narration after script generation, so the listenable
+artefact — not just the script — exists by ``hour_local``. Narration is
+best-effort and idempotent per ``(briefing, slug)``: a failure never fails
+the run, and an already-narrated briefing (e.g. throttle-returned after a
+lazy open + manual narrate) isn't re-spent.
 """
 
 import threading
@@ -38,10 +45,13 @@ from typing import TYPE_CHECKING, Optional
 from structlog import get_logger
 
 from ..utils.briefing_cadence import next_run_for
+from ..utils.duration import slug_for_duration_seconds
 
 if TYPE_CHECKING:
+    from ..models.briefing import Briefing
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
     from ..services.briefing_service import BriefingService
+    from ..services.narration import NarrationRunner
 
 logger = get_logger(__name__)
 
@@ -56,11 +66,15 @@ class BriefingScheduler:
         *,
         tick_seconds: int = 60,
         max_per_tick: int = 50,
+        narration_runner: "Optional[NarrationRunner]" = None,
+        narration_target_seconds: int = 300,
     ) -> None:
         self.schedule_repository = schedule_repository
         self.briefing_service = briefing_service
         self.tick_seconds = max(5, tick_seconds)
         self.max_per_tick = max_per_tick
+        self.narration_runner = narration_runner
+        self.narration_target_seconds = narration_target_seconds
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -146,6 +160,48 @@ class BriefingScheduler:
                 episode_count=briefing.episode_count,
                 next_run_at=next_run.isoformat(),
             )
+            self._chain_narration(schedule.user_id, briefing)
         if due:
             logger.info("briefing_scheduler_ticked", due=len(due), generated=generated)
         return generated
+
+    def _chain_narration(self, user_id: str, briefing: "Briefing") -> None:
+        """Phase 4 (#33 interlock): narrate the scheduled briefing.
+
+        The throttle-returned case (a 7:30 lazy open followed by the 8:00
+        scheduled slot) hands us a briefing that may already have a
+        narration for this slug — the artefact existence check makes the
+        chain idempotent instead of re-spending the LLM call. A briefing
+        that was lazily *generated* but never narrated still gets its
+        narration here, which is the "ready by morning" promise.
+
+        Best-effort: a narration failure is logged (FM-1 isolation) and
+        never fails the run — the script exists, only the readout is
+        missing, and the next cadence slot narrates a fresh briefing.
+        """
+        if self.narration_runner is None:
+            return
+        slug = slug_for_duration_seconds(self.narration_target_seconds)
+        if self.narration_runner.artifact_exists(briefing_id=briefing.id, slug=slug):
+            return
+        try:
+            run = self.narration_runner.run(
+                briefing_id=briefing.id,
+                target_duration_seconds=self.narration_target_seconds,
+                slug=slug,
+            )
+        except Exception:
+            logger.exception(
+                "briefing_scheduled_narration_failed",
+                user_id=user_id,
+                briefing_id=briefing.id,
+                slug=slug,
+            )
+            return
+        logger.info(
+            "briefing_scheduled_narrated",
+            user_id=user_id,
+            briefing_id=briefing.id,
+            narration_id=run.narration_id,
+            mode=run.content.mode,
+        )

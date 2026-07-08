@@ -405,6 +405,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # each user's briefing at their scheduled hour via the same
         # BriefingService the lazy /api/briefings/latest path uses; the
         # min-interval throttle keeps the two triggers from double-running.
+        # Scheduled runs chain narration (#33) when it's enabled, so the
+        # readout — not just the script — is ready by the scheduled hour.
         # Ships dark, mirroring the refresh scheduler.
         from ..utils.config import (
             get_briefing_scheduler_max_per_tick,
@@ -421,10 +423,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 briefing_service=briefing_service,
                 tick_seconds=get_briefing_scheduler_tick_seconds(),
                 max_per_tick=get_briefing_scheduler_max_per_tick(),
+                narration_runner=app_state.narration_runner,
+                narration_target_seconds=config.narration_default_duration_seconds,
             )
             briefing_scheduler.start()
             app_state.briefing_scheduler = briefing_scheduler
-            logger.info("briefing_scheduler_enabled")
+            logger.info(
+                "briefing_scheduler_enabled",
+                narration_chained=app_state.narration_runner is not None,
+            )
         else:
             logger.info("briefing_scheduler_disabled")
 

@@ -1,6 +1,6 @@
 # Scheduled Briefings
 
-> **Status:** 🚧 Implemented — Phases 1–3 (2026-07-07); Phase 4 pending #34
+> **Status:** 🚧 Implemented — Phases 1–3 (2026-07-07), Phase 4 narration chaining (2026-07-08); audio chaining pending #34
 > **Created:** 2026-07-07
 > **Author:** Product & Engineering
 > **Related:** [#36 per-user-digest-from-inbox](36-per-user-digest-from-inbox.md), [#48 refresh-feed-stage](48-refresh-feed-stage.md), [#33 narrated-digest](33-narrated-digest.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
@@ -309,9 +309,16 @@ Test/rehearsal servers set `BRIEFING_SCHEDULER_ENABLED=false` alongside
 
 ### Phase 4 — Ready-by-morning interlock (#33/#34)
 
-- [ ] Scheduled runs chain narration (and audio, once #34 lands) after
-      script generation, so the listenable artifact — not just the
-      script — exists by `hour_local`.
+- [x] Scheduled runs chain narration (#33) after script generation
+      (2026-07-08): `BriefingScheduler` takes an optional
+      `NarrationRunner` (wired from `app_state.narration_runner` when
+      `NARRATION_ENABLED`) and narrates each generated briefing at the
+      default duration. Idempotent per `(briefing, slug)` via an
+      artefact-existence check — a throttle-returned, already-narrated
+      briefing isn't re-spent — and best-effort: narration failure is
+      logged (FM-1) without failing the run or blocking other users.
+- [ ] Chain audio rendering once #34 lands, so the listenable artifact —
+      not just the script + readout — exists by `hour_local`.
 
 ---
 
@@ -361,3 +368,4 @@ Test/rehearsal servers set `BRIEFING_SCHEDULER_ENABLED=false` alongside
 | 2026-07-07 | Scheduled run honors `BRIEFING_MIN_INTERVAL` | Lazy + scheduled coexistence for free; prevents sliver briefings after a 7:30 manual open |
 | 2026-07-07 | Generation on the tick thread in v1, queue stage as escape hatch | Fleet = user count; rendering is cheap until #34 audio; avoids premature queue plumbing |
 | 2026-07-07 | Scheduling is opt-in (no default row) | Preserves #36 lazy behavior as the zero-config default; no surprise LLM spend |
+| 2026-07-08 | Scheduled narration chains in-process, idempotent per `(briefing, slug)`, best-effort | Ready-by-morning needs the readout, not just the script; existence check prevents double LLM spend after a lazy open + manual narrate; a narration failure must not fail the run (the script exists) |

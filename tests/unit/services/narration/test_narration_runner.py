@@ -167,6 +167,30 @@ def test_runner_resolves_briefing_and_writes_artefacts(storage: PathManager, fil
     assert payload["episodes_covered"] == ["e1"]
 
 
+def test_artifact_exists_tracks_written_narrations(storage: PathManager, file_storage) -> None:
+    """``artifact_exists`` flips once ``run`` writes the JSON artefact —
+    the idempotency check the briefing scheduler (spec #50 Phase 4) uses
+    to avoid re-narrating a throttle-returned briefing."""
+    from thestill.services.narration.models import Segment, ThemePlan
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    plan = ThemePlan(
+        segments=(Segment(theme="Lead", angle="ang", episode_ids=("e1",), rank=1),),
+        tail_ids=(),
+    )
+    runner = NarrationRunner(
+        generator=_generator(storage, file_storage, plan, _good_blocks()),
+        briefing_repository=_BriefingRepo([_briefing(id_="b1")]),
+        inbox_repository=_InboxRepo(["e1"]),
+        podcast_repository=_PodcastRepo({"e1": (podcast, ep1)}),
+    )
+    assert not runner.artifact_exists(briefing_id="b1", slug="medium")
+    runner.run(briefing_id="b1", target_duration_seconds=300, slug="medium")
+    assert runner.artifact_exists(briefing_id="b1", slug="medium")
+    assert not runner.artifact_exists(briefing_id="b1", slug="long")
+
+
 def test_runner_resolves_episodes_from_briefing_cursor_window(storage: PathManager, file_storage) -> None:
     """The episode set comes from the briefing's inbox cursor window,
     including ``read`` rows (an episode read after generation still
