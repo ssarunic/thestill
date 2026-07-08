@@ -16,14 +16,15 @@
 
 ``recover_interrupted_tasks`` splits interrupted ``processing`` rows by stage
 idempotency: the user chain (download→summarize) + REFRESH_FEED RESUME to
-``pending``; the entity branch stays the conservative ``failed``; explicitly
-excluded stages are left untouched in ``processing``.
+``pending``; the entity branch stays the conservative ``failed`` but is stamped
+``error_class='infra'`` so the L3 healer loop requeues it after its cooldown;
+explicitly excluded stages are left untouched in ``processing``.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,27 @@ class TestRecoverInterruptedTasks:
         qm.recover_interrupted_tasks(excluded_stages=[TaskStage.TRANSCRIBE])
 
         assert _status_by_stage(qm)["transcribe"] == "processing"
+
+    def test_entity_fail_is_stamped_infra_and_healable(self, qm):
+        # A restart is a shared-infrastructure event: the entity-branch row it
+        # fails must carry error_class='infra' so the healer loop requeues it
+        # instead of stranding it in the DLQ (Retries 0/3, forever).
+        qm.add_task(episode_id=EPISODE_ID, stage=TaskStage.COMPUTE_RELATED)
+        _mark_all_processing(qm)
+
+        qm.recover_interrupted_tasks()
+
+        con = sqlite3.connect(qm.db_path)
+        row = con.execute("SELECT status, error_class FROM tasks WHERE stage='compute-related'").fetchone()
+        con.close()
+        assert row == ("failed", "infra")
+
+        healable = qm.find_healable_tasks(cooldown=timedelta(seconds=0), max_heal_attempts=3)
+        assert [t.stage for t in healable] == [TaskStage.COMPUTE_RELATED]
+
+        healed = qm.heal_task(healable[0].id, max_heal_attempts=3)
+        assert healed is not None
+        assert healed.status == TaskStatus.PENDING
 
     def test_resumed_task_is_dequeued_again(self, qm):
         qm.add_task(episode_id=EPISODE_ID, stage=TaskStage.DOWNLOAD)

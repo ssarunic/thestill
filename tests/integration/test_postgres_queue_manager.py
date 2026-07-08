@@ -505,6 +505,8 @@ class TestStaleAndRecovery:
         assert qm.get_task(user_task.id).status == TaskStatus.PENDING
         assert qm.get_task(entity_task.id).status == TaskStatus.FAILED
         assert qm.get_task(entity_task.id).error_message == "Task interrupted by server restart"
+        # Restart-failed rows are infra-class so the healer loop requeues them.
+        assert qm.get_task(entity_task.id).error_class == "infra"
         # Excluded stage left untouched (remote job may still be running).
         assert qm.get_task(excluded_task.id).status == TaskStatus.PROCESSING
 
