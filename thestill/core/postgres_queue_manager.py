@@ -829,7 +829,10 @@ class PostgresQueueManager:
           stranding re-runnable work in the DLQ for a human to retry.
         - **Non-idempotent stages** (currently the entity branch) are marked
           ``failed`` — the conservative legacy behaviour, preserved where
-          auto-resume isn't clearly safe.
+          auto-resume isn't clearly safe. They are stamped
+          ``error_class='infra'``: a restart is a shared-infrastructure event
+          by definition, so the L3 healer loop requeues them after its
+          cooldown instead of stranding them in the DLQ for a human to retry.
         - **Excluded stages** are left untouched in ``processing`` (e.g. a cloud
           transcribe whose remote job may still be running); excluding a stage
           overrides its idempotent auto-resume.
@@ -864,12 +867,15 @@ class PostgresQueueManager:
                 )
                 resumed = cursor.rowcount
 
+            # error_class='infra' makes these rows healable: the restart, not
+            # the item, killed them, so the healer loop may requeue them.
             if skip_fail_values:
                 cursor = conn.execute(
                     """
                     UPDATE tasks
                     SET status = 'failed',
                         error_message = 'Task interrupted by server restart',
+                        error_class = 'infra',
                         completed_at = %s,
                         updated_at = %s
                     WHERE status = 'processing'
@@ -883,6 +889,7 @@ class PostgresQueueManager:
                     UPDATE tasks
                     SET status = 'failed',
                         error_message = 'Task interrupted by server restart',
+                        error_class = 'infra',
                         completed_at = %s,
                         updated_at = %s
                     WHERE status = 'processing'
