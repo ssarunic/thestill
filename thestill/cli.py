@@ -152,10 +152,14 @@ def require_config(f):
 @click.pass_context
 def main(ctx, config, quiet):
     """Thestill - Automated podcast transcription and summarization"""
-    # Load .env file first so LOG_* environment variables are available
-    from dotenv import load_dotenv
+    # Load .env first so LOG_* variables are available to configure_structlog.
+    # Must go through the shared resolver (not a bare ``load_dotenv()``) so
+    # ``--config`` and the ``THESTILL_ENV_FILE`` escape hatch are honored —
+    # a CWD walk here would leak the developer's real DATABASE_URL into
+    # isolated runs (notably the CliRunner test harness).
+    from .utils.config import load_env_file
 
-    load_dotenv()
+    load_env_file(config)
 
     # Configure structlog for backend logging (logs go to stderr)
     configure_structlog()

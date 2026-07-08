@@ -519,14 +519,29 @@ def _resolve_env_file(explicit: Optional[str]) -> Optional[str]:
     return _find_dotenv_from_package() or _find_dotenv_from_cwd()
 
 
-def load_config(env_file: Optional[str] = None) -> Config:
-    """Load configuration from environment variables and .env file"""
+def load_env_file(env_file: Optional[str] = None) -> Optional[str]:
+    """Resolve (see ``_resolve_env_file``) and load the ``.env`` file into
+    the process environment. Returns the resolved path, or ``None`` when no
+    file was found.
+
+    This is the only sanctioned way to load a ``.env`` — a bare
+    ``load_dotenv()`` walks from CWD and bypasses the ``THESTILL_ENV_FILE``
+    escape hatch, which lets a developer's real ``DATABASE_URL`` leak into
+    isolated contexts (the CLI test harness runs against the production
+    Postgres — FM-4 silent degradation, in reverse).
+    """
     resolved_env_file = _resolve_env_file(env_file)
     if resolved_env_file:
         load_dotenv(resolved_env_file)
         logger.info("config_env_file_loaded", path=resolved_env_file)
     else:
         logger.info("config_env_file_not_found", note="using process environment only")
+    return resolved_env_file
+
+
+def load_config(env_file: Optional[str] = None) -> Config:
+    """Load configuration from environment variables and .env file"""
+    load_env_file(env_file)
 
     # Get LLM provider
     llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
