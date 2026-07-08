@@ -28,7 +28,7 @@ Features:
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from structlog import get_logger
 
@@ -38,6 +38,9 @@ from thestill.utils.path_manager import PathManager
 
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from ..repositories.pending_operations_repository import PendingOperationsRepository
 
 logger = get_logger(__name__)
 
@@ -73,6 +76,7 @@ class DalstonTranscriber(Transcriber):
         num_speakers: Optional[int] = None,
         language: Optional[str] = None,
         path_manager: Optional[PathManager] = None,
+        pending_ops_repository: Optional["PendingOperationsRepository"] = None,
     ):
         """
         Initialize Dalston transcriber.
@@ -86,6 +90,10 @@ class DalstonTranscriber(Transcriber):
             num_speakers: Expected number of speakers (None = auto-detect).
             language: Language code (e.g., "en"). None = auto-detect.
             path_manager: PathManager for storing pending operations.
+            pending_ops_repository: Spec #40 — persists submitted job ids so a
+                retry after a restart reattaches to the in-flight Dalston job
+                instead of submitting a duplicate. When absent, every attempt
+                submits fresh (the pre-#40 behavior).
         """
         import os
 
@@ -97,6 +105,7 @@ class DalstonTranscriber(Transcriber):
         self.num_speakers = num_speakers
         self.language = language
         self.path_manager = path_manager
+        self.pending_ops_repository = pending_ops_repository
 
         self._client = None
 
@@ -200,16 +209,28 @@ class DalstonTranscriber(Transcriber):
             if self.model:
                 transcribe_kwargs["model"] = self.model
 
-            # Submit transcription job via URL or file upload
-            if use_url:
-                transcribe_kwargs["audio_url"] = options.audio_url
-                job = self._client.transcribe(**transcribe_kwargs)
-            else:
-                with open(audio_path, "rb") as f:
-                    transcribe_kwargs["file"] = f
+            # Reattach to an in-flight job from a previous attempt (spec #40)
+            # before submitting — a restart mid-poll leaves the job running
+            # server-side; resubmitting would orphan it and double the GPU work.
+            job_id = self._find_resumable_job_id(options)
+            if job_id is None:
+                # Submit transcription job via URL or file upload
+                if use_url:
+                    transcribe_kwargs["audio_url"] = options.audio_url
                     job = self._client.transcribe(**transcribe_kwargs)
-
-            logger.info("Transcription job submitted", job_id=job.id)
+                else:
+                    with open(audio_path, "rb") as f:
+                        transcribe_kwargs["file"] = f
+                        job = self._client.transcribe(**transcribe_kwargs)
+                job_id = str(job.id)
+                self._save_pending_operation(job_id, audio_path, effective_language, options)
+                logger.info("Transcription job submitted", job_id=job_id)
+            else:
+                logger.info(
+                    "Resumed in-flight Dalston job",
+                    job_id=job_id,
+                    episode_id=options.episode_id,
+                )
 
             # Report transcription in progress
             if options.progress_callback:
@@ -233,10 +254,17 @@ class DalstonTranscriber(Transcriber):
                     )
 
             completed_job = self._client.wait_for_completion(
-                job.id,
+                job_id,
                 poll_interval=POLL_INTERVAL,
                 on_progress=on_progress,
             )
+
+            # The job reached a terminal state — the pending op has served
+            # its purpose. On a poll *failure* (network cut, restart) the op
+            # is deliberately kept: the next attempt verifies the job with
+            # the server and either reattaches (still running / completed)
+            # or prunes it (failed / cancelled / unknown) before resubmitting.
+            self._remove_pending_operation(job_id)
 
             # Format the response. Spec #35 — persistence is now the caller's
             # responsibility (via ``config.file_storage``), so we return the
@@ -258,6 +286,90 @@ class DalstonTranscriber(Transcriber):
                 exc_info=True,
             )
             raise
+
+    # ------------------------------------------------------------------
+    # Pending-operation persistence (spec #40) — restart-safe polling.
+    # Same table Google/ElevenLabs use; ``operation_id`` is the Dalston
+    # job id, so reattach needs nothing beyond the row itself.
+    # ------------------------------------------------------------------
+
+    def _find_resumable_job_id(self, options: TranscribeOptions) -> Optional[str]:
+        """Return an in-flight Dalston job id for this episode, if any.
+
+        Verifies each persisted op against the server: pending / running /
+        completed jobs are reattached (completed just means the poll died
+        after the work finished — the result is fetched, not recomputed);
+        failed / cancelled / unknown jobs are pruned so the caller submits
+        fresh. Transient errors (connection, timeout, 5xx) propagate with
+        the op intact — the next retry resolves it.
+        """
+        if not self.pending_ops_repository or not options.episode_id:
+            return None
+        from dalston_sdk import JobStatus, NotFoundError
+
+        resumable = (JobStatus.PENDING, JobStatus.RUNNING, JobStatus.COMPLETED)
+        for op in self.pending_ops_repository.list_by_episode(options.episode_id):
+            if op.provider != "dalston":
+                continue
+            try:
+                job = self._client.get_job(op.operation_id)
+            except NotFoundError:
+                # The server no longer knows the job (restarted, purged) —
+                # prune the row and keep scanning.
+                self._remove_pending_operation(op.operation_id)
+                continue
+            if job.status in resumable:
+                return op.operation_id
+            logger.info(
+                "Pruning terminal Dalston job",
+                job_id=op.operation_id,
+                status=str(job.status),
+                episode_id=options.episode_id,
+            )
+            self._remove_pending_operation(op.operation_id)
+        return None
+
+    def _save_pending_operation(
+        self,
+        job_id: str,
+        audio_path: str,
+        language: str,
+        options: TranscribeOptions,
+    ) -> None:
+        """Persist a freshly-submitted job so a restarted worker reattaches."""
+        if not self.pending_ops_repository or not options.episode_id:
+            logger.debug(
+                "Skipping pending-op persistence",
+                has_repository=self.pending_ops_repository is not None,
+                episode_id=options.episode_id,
+            )
+            return
+        payload = {
+            "provider": "dalston",
+            "job_id": job_id,
+            "audio_path": audio_path,
+            "audio_url": options.audio_url,
+            "language": language,
+            "episode_id": options.episode_id,
+            "podcast_slug": options.podcast_slug,
+            "episode_slug": options.episode_slug,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "state": "pending",
+        }
+        self.pending_ops_repository.create(
+            operation_id=job_id,
+            provider="dalston",
+            episode_id=options.episode_id,
+            payload=payload,
+        )
+        logger.debug("Saved pending operation", job_id=job_id)
+
+    def _remove_pending_operation(self, job_id: str) -> None:
+        """Idempotent — repo's delete swallows missing rows."""
+        if not self.pending_ops_repository:
+            return
+        self.pending_ops_repository.delete(job_id)
+        logger.debug("Removed pending operation", job_id=job_id)
 
     def _format_response(
         self,
