@@ -30,6 +30,7 @@ SECRET = "test-secret"
 def mock_app_state():
     state = MagicMock()
     state.config.jwt_secret_key = SECRET
+    state.config.unsubscribe_secret = ""
     state.briefing_schedule_repository.set_email_enabled.return_value = True
     return state
 
@@ -42,30 +43,25 @@ def client(mock_app_state):
     return TestClient(app)
 
 
-class TestUnsubscribe:
-    def test_valid_token_flips_flag_and_confirms(self, client, mock_app_state):
+class TestUnsubscribeGet:
+    def test_valid_token_renders_confirmation_without_mutating(self, client, mock_app_state):
+        # Mail gateways (SafeLinks, Proofpoint) prefetch every GET in an
+        # email body — the flag must only flip on the POST.
         token = make_unsubscribe_token("user-1", SECRET)
 
         response = client.get("/unsubscribe/briefings", params={"token": token})
 
         assert response.status_code == 200
-        assert "unsubscribed" in response.text.lower()
-        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_called_once_with("user-1", False)
+        assert "unsubscribe" in response.text.lower()
+        assert '<form method="post"' in response.text
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_not_called()
 
-    def test_one_click_post_works_without_login(self, client, mock_app_state):
-        # RFC 8058: mail providers POST to the List-Unsubscribe URL.
+    def test_confirmation_form_posts_the_same_token(self, client):
         token = make_unsubscribe_token("user-1", SECRET)
 
-        response = client.post(f"/unsubscribe/briefings?token={token}")
+        response = client.get("/unsubscribe/briefings", params={"token": token})
 
-        assert response.status_code == 200
-        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_called_once_with("user-1", False)
-
-    def test_is_idempotent(self, client, mock_app_state):
-        token = make_unsubscribe_token("user-1", SECRET)
-
-        assert client.get("/unsubscribe/briefings", params={"token": token}).status_code == 200
-        assert client.get("/unsubscribe/briefings", params={"token": token}).status_code == 200
+        assert f"/unsubscribe/briefings?token={token}" in response.text
 
     def test_tampered_token_rejected_without_touching_state(self, client, mock_app_state):
         token = make_unsubscribe_token("user-1", "some-other-secret")
@@ -81,12 +77,51 @@ class TestUnsubscribe:
         assert response.status_code == 400
         mock_app_state.briefing_schedule_repository.set_email_enabled.assert_not_called()
 
+
+class TestUnsubscribePost:
+    def test_one_click_post_works_without_login(self, client, mock_app_state):
+        # RFC 8058: mail providers POST to the List-Unsubscribe URL; the
+        # confirm page's button posts here too.
+        token = make_unsubscribe_token("user-1", SECRET)
+
+        response = client.post(f"/unsubscribe/briefings?token={token}")
+
+        assert response.status_code == 200
+        assert "unsubscribed" in response.text.lower()
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_called_once_with("user-1", False)
+
+    def test_is_idempotent(self, client):
+        token = make_unsubscribe_token("user-1", SECRET)
+
+        assert client.post(f"/unsubscribe/briefings?token={token}").status_code == 200
+        assert client.post(f"/unsubscribe/briefings?token={token}").status_code == 200
+
+    def test_tampered_token_rejected_without_touching_state(self, client, mock_app_state):
+        token = make_unsubscribe_token("user-1", "some-other-secret")
+
+        response = client.post(f"/unsubscribe/briefings?token={token}")
+
+        assert response.status_code == 400
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_not_called()
+
     def test_no_schedule_row_still_confirms(self, client, mock_app_state):
         # Goal state ("no more emails") already holds; a distinct error
         # would leak account state to token guessers.
         mock_app_state.briefing_schedule_repository.set_email_enabled.return_value = False
         token = make_unsubscribe_token("user-1", SECRET)
 
-        response = client.get("/unsubscribe/briefings", params={"token": token})
+        response = client.post(f"/unsubscribe/briefings?token={token}")
 
         assert response.status_code == 200
+
+    def test_dedicated_unsubscribe_secret_wins_over_jwt_key(self, client, mock_app_state):
+        # A rotated auth secret must not dead-link delivered emails: the
+        # route verifies with UNSUBSCRIBE_SECRET when it is set.
+        mock_app_state.config.unsubscribe_secret = "dedicated-secret"
+        mock_app_state.config.jwt_secret_key = "rotated-away"
+        token = make_unsubscribe_token("user-1", "dedicated-secret")
+
+        response = client.post(f"/unsubscribe/briefings?token={token}")
+
+        assert response.status_code == 200
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_called_once_with("user-1", False)

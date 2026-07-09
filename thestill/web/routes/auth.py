@@ -179,8 +179,13 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             "authenticated": user is not None,
             "user": user.model_dump(exclude={"google_id"}) if user else None,
             # Spec #51 capability flag: the settings UI only shows the
-            # briefing email-delivery checkbox when a provider is configured.
-            "email_delivery_available": state.briefing_delivery_service is not None,
+            # briefing email-delivery checkbox when a provider is
+            # configured AND the briefing scheduler is running — the
+            # delivery pass lives on the scheduler tick, so without it an
+            # opt-in would be accepted but nothing would ever send.
+            "email_delivery_available": (
+                state.briefing_delivery_service is not None and state.briefing_scheduler is not None
+            ),
         }
     )
 

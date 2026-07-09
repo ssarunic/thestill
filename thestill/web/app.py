@@ -245,9 +245,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             user_repository,
             BriefingEmailRenderer(
                 public_base_url=config.public_base_url,
-                secret=config.jwt_secret_key,
+                # Dedicated secret so an auth-key rotation can't dead-link
+                # already-delivered unsubscribe URLs (CAN-SPAM).
+                secret=config.unsubscribe_secret or config.jwt_secret_key,
             ),
             email_sender,
+            # Scripts are written through FileStorage (spec #35): read
+            # them back the same way so S3 deployments can send email.
+            path_manager=path_manager,
+            file_storage=config.file_storage,
             max_attempts=config.briefing_email_max_attempts,
             backoff_seconds=config.briefing_email_backoff_seconds,
         )
@@ -466,6 +472,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             )
         else:
             logger.info("briefing_scheduler_disabled")
+            if briefing_delivery_service is not None:
+                # The delivery pass only runs from the scheduler tick, so
+                # a configured provider without the scheduler can never
+                # send anything. The capability flag keys off
+                # ``briefing_scheduler`` too, so the UI hides the checkbox
+                # rather than accepting opt-ins that would silently never
+                # deliver (FM: silent degradation).
+                logger.warning(
+                    "briefing_email_delivery_inert",
+                    reason="EMAIL_PROVIDER is configured but BRIEFING_SCHEDULER_ENABLED=false; "
+                    "briefing emails will not be sent",
+                )
 
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s

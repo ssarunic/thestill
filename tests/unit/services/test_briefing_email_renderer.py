@@ -73,6 +73,17 @@ class TestRender:
         email = renderer.render(briefing, SCRIPT)
         assert "1 new episode (" in email.subject
 
+    def test_subject_date_localized_to_schedule_timezone(self, renderer, briefing):
+        # created_at is UTC; an Auckland morning slot generates on the
+        # previous UTC calendar day — the subject must show the local date.
+        briefing.created_at = datetime(2026, 7, 9, 20, 0, tzinfo=timezone.utc)
+        email = renderer.render(briefing, SCRIPT, timezone_name="Pacific/Auckland")
+        assert "(Jul 10)" in email.subject
+
+    def test_unknown_timezone_falls_back_to_utc_date(self, renderer, briefing):
+        email = renderer.render(briefing, SCRIPT, timezone_name="Mars/Olympus_Mons")
+        assert "(Jul 8)" in email.subject
+
     def test_relative_links_become_absolute_in_both_parts(self, renderer, briefing):
         email = renderer.render(briefing, SCRIPT)
         assert 'href="https://app.example.com/podcasts/some-show/episodes/first"' in email.html

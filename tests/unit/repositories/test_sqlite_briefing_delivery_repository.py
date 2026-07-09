@@ -138,6 +138,16 @@ class TestClaim:
         assert claimed.status == DeliveryStatus.SENDING
         assert claimed.next_attempt_at == NOW + timedelta(seconds=600)
 
+    def test_claim_increments_attempts(self, repo, briefing_id):
+        # Budget burns at claim time — a crash before settling must not
+        # reset the counter, or a crash-looping send retries forever.
+        repo.ensure_pending(briefing_id, "email", now=NOW)
+        delivery = repo.get_for_briefing(briefing_id, "email")
+
+        repo.claim(delivery.id, now=NOW, lease_seconds=600)
+
+        assert repo.get_for_briefing(briefing_id, "email").attempts == 1
+
     def test_second_claim_within_lease_loses(self, repo, briefing_id):
         # Multi-instance contention: only one delivery pass wins the row.
         repo.ensure_pending(briefing_id, "email", now=NOW)

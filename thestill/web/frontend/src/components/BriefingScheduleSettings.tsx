@@ -110,7 +110,11 @@ export default function BriefingScheduleSettings() {
         hour_local: draft.hourLocal,
         weekday: draft.frequency === 'weekly' ? draft.weekday : null,
         timezone: draft.timezone,
-        email_enabled: emailDeliveryAvailable ? draft.emailEnabled : false,
+        // Only send the field when the checkbox was actually shown — the
+        // capability flag is also false while /auth/status is unresolved
+        // or failed, and an omitted field preserves the stored opt-in
+        // server-side instead of silently wiping it.
+        ...(emailDeliveryAvailable ? { email_enabled: draft.emailEnabled } : {}),
       })
       setSaved({ ...draft })
       setNextRunAt(schedule.next_run_at)

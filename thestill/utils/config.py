@@ -382,6 +382,12 @@ class Config(BaseModel):
     ses_region: str = ""  # SES uses the ambient AWS credential chain (#43)
     briefing_email_max_attempts: int = 3
     briefing_email_backoff_seconds: int = 300  # doubled per attempt
+    # Signs unsubscribe links. Falls back to jwt_secret_key when unset,
+    # but a dedicated secret keeps the no-expiry unsubscribe guarantee
+    # alive across an auth-secret rotation (rotating JWT_SECRET_KEY is the
+    # standard response to a session-token leak; it must not dead-link
+    # every already-delivered email).
+    unsubscribe_secret: str = ""
 
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
@@ -707,6 +713,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "ses_region": os.getenv("SES_REGION", ""),
         "briefing_email_max_attempts": int(os.getenv("BRIEFING_EMAIL_MAX_ATTEMPTS", "3")),
         "briefing_email_backoff_seconds": int(os.getenv("BRIEFING_EMAIL_BACKOFF_SECONDS", "300")),
+        "unsubscribe_secret": os.getenv("UNSUBSCRIBE_SECRET", ""),
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

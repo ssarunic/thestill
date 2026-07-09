@@ -88,12 +88,15 @@ class SqliteBriefingDeliveryRepository(BriefingDeliveryRepository):
             return [self._row_to_delivery(row) for row in rows]
 
     def claim(self, delivery_id: str, *, now: datetime, lease_seconds: int) -> bool:
+        # attempts is consumed at claim time, not settle time: a process
+        # crash between claim and settle must still burn retry budget, or
+        # a send that reproducibly kills the worker re-claims forever.
         lease_until = now + timedelta(seconds=lease_seconds)
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE briefing_deliveries
-                   SET status = 'sending', next_attempt_at = ?
+                   SET status = 'sending', next_attempt_at = ?, attempts = attempts + 1
                  WHERE id = ?
                    AND status IN ('pending','sending')
                    AND next_attempt_at IS NOT NULL

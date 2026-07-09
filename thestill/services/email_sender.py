@@ -158,7 +158,13 @@ class SesEmailSender(EmailSender):
             raise ValueError("SES_REGION is required when EMAIL_PROVIDER=ses")
         if not from_addr:
             raise ValueError("EMAIL_FROM is required when EMAIL_PROVIDER=ses")
-        import boto3  # lazy: only an SES deployment pays the import
+        try:
+            import boto3  # lazy: only an SES deployment pays the import
+        except ImportError as exc:
+            # boto3 lives in the optional extras, not the base install.
+            raise ValueError(
+                "EMAIL_PROVIDER=ses requires boto3 — install it with: pip install 'thestill[ses]'"
+            ) from exc
 
         self._client = boto3.client("ses", region_name=region)
         self._from = from_addr

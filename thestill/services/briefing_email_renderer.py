@@ -33,15 +33,12 @@ slot is reserved for #34.
 import html
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 from urllib.parse import quote
-
-from structlog import get_logger
+from zoneinfo import ZoneInfo
 
 from ..models.briefing import Briefing
 from ..utils.unsubscribe_token import make_unsubscribe_token
-
-logger = get_logger(__name__)
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
@@ -86,12 +83,29 @@ class BriefingEmailRenderer:
         self._base_url = public_base_url.rstrip("/")
         self._secret = secret
 
-    def render(self, briefing: Briefing, script_markdown: str) -> RenderedEmail:
-        """Render the briefing script into (subject, html, text, headers)."""
+    def render(
+        self,
+        briefing: Briefing,
+        script_markdown: str,
+        *,
+        timezone_name: Optional[str] = None,
+    ) -> RenderedEmail:
+        """Render the briefing script into (subject, html, text, headers).
+
+        ``timezone_name`` (the schedule's IANA zone) localizes the subject
+        date — ``created_at`` is UTC, and a UTC calendar date is yesterday
+        for a morning slot east of Greenwich.
+        """
+        subject_date = briefing.created_at
+        if timezone_name:
+            try:
+                subject_date = briefing.created_at.astimezone(ZoneInfo(timezone_name))
+            except (KeyError, ValueError):
+                pass  # Unknown zone: fall back to the UTC date.
         episode_word = "episode" if briefing.episode_count == 1 else "episodes"
         subject = (
             f"Your briefing — {briefing.episode_count} new {episode_word}"
-            f" ({briefing.created_at.strftime('%b')} {briefing.created_at.day})"
+            f" ({subject_date.strftime('%b')} {subject_date.day})"
         )
 
         absolute_markdown = self._absolutize_links(script_markdown)

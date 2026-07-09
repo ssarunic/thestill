@@ -88,6 +88,11 @@ class BriefingScheduler:
         self.delivery_service = delivery_service
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # Briefings whose ensure_pending blew up (e.g. a DB hiccup at slot
+        # time). The slot has already advanced, so without a retry the
+        # scheduled email is lost until the next cadence — re-attempt the
+        # (idempotent) queueing on every tick until it lands.
+        self._unqueued_deliveries: set[str] = set()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -171,34 +176,59 @@ class BriefingScheduler:
                 episode_count=briefing.episode_count,
                 next_run_at=next_run.isoformat(),
             )
-            self._chain_narration(schedule.user_id, briefing)
-            # Spec #51: queue the email off the slot fire. ``briefing`` may
-            # be the throttle-returned existing one (7:30 lazy open, 8:00
-            # slot) — ensure_pending's send-once anchor still emails it
-            # exactly once. A ``None`` briefing (empty window) was skipped
-            # above: honest silence, no delivery row.
+            # Spec #51: queue the email off the slot fire — before the
+            # (slow) narration chain, so a crash there can't drop the
+            # send. ``briefing`` may be the throttle-returned existing one
+            # (7:30 lazy open, 8:00 slot) — ensure_pending's send-once
+            # anchor still emails it exactly once. A ``None`` briefing
+            # (empty window) was skipped above: honest silence, no
+            # delivery row.
             if schedule.email_enabled and self.delivery_service is not None:
-                try:
-                    self.delivery_service.ensure_pending(briefing.id, now=clock_now)
-                except Exception:
-                    # FM-1: a delivery-queueing blow-up (e.g. DB hiccup)
-                    # must not fail the user's generation or the fleet.
-                    logger.exception(
-                        "briefing_delivery_queue_failed",
-                        user_id=schedule.user_id,
-                        briefing_id=briefing.id,
-                    )
+                self._queue_delivery(briefing.id, schedule.user_id, clock_now)
+            self._chain_narration(schedule.user_id, briefing)
         if due:
             logger.info("briefing_scheduler_ticked", due=len(due), generated=generated)
         # Second phase (spec #51): the delivery pass. Runs every tick so
         # backoff retries fire on their own cadence even when no slot is
         # due. Absent when EMAIL_PROVIDER=none — zero overhead.
         if self.delivery_service is not None:
+            self._retry_unqueued_deliveries(clock_now)
             try:
                 self.delivery_service.deliver_due(clock_now)
             except Exception:
                 logger.exception("briefing_delivery_pass_failed")
         return generated
+
+    def _queue_delivery(self, briefing_id: str, user_id: str, now) -> None:
+        """Ensure a delivery row exists; buffer the id for retry on failure.
+
+        FM-1: a queueing blow-up (e.g. a DB hiccup at slot time) must not
+        fail the user's generation or the fleet — but the slot has already
+        advanced, so simply logging would lose the scheduled email until
+        the next cadence. The id is retried each tick (ensure_pending is
+        idempotent) until the row lands.
+        """
+        try:
+            self.delivery_service.ensure_pending(briefing_id, now=now)
+            self._unqueued_deliveries.discard(briefing_id)
+        except Exception:
+            self._unqueued_deliveries.add(briefing_id)
+            logger.exception(
+                "briefing_delivery_queue_failed",
+                user_id=user_id,
+                briefing_id=briefing_id,
+                will_retry_next_tick=True,
+            )
+
+    def _retry_unqueued_deliveries(self, now) -> None:
+        for briefing_id in list(self._unqueued_deliveries):
+            try:
+                self.delivery_service.ensure_pending(briefing_id, now=now)
+            except Exception:
+                logger.exception("briefing_delivery_queue_retry_failed", briefing_id=briefing_id)
+                continue
+            self._unqueued_deliveries.discard(briefing_id)
+            logger.info("briefing_delivery_queue_recovered", briefing_id=briefing_id)
 
     def _chain_narration(self, user_id: str, briefing: "Briefing") -> None:
         """Phase 4 (#33 interlock): narrate the scheduled briefing.

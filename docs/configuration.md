@@ -184,16 +184,23 @@ sends to happen.
 | `SMTP_PASSWORD` | SMTP auth password | - |
 | `SMTP_STARTTLS` | Upgrade the connection with STARTTLS | `true` |
 | `SES_REGION` | AWS SES region (required for `ses`; uses the ambient AWS credential chain) | - |
+
+The `ses` provider needs `boto3`, which is not in the base install —
+install it with `pip install "thestill[ses]"` (already present if the
+deployment uses the `[s3]` storage extra).
 | `BRIEFING_EMAIL_MAX_ATTEMPTS` | Send attempts before a delivery parks as `failed` | `3` |
 | `BRIEFING_EMAIL_BACKOFF_SECONDS` | First-retry delay, doubled per attempt | `300` |
+| `UNSUBSCRIBE_SECRET` | Signs unsubscribe tokens; falls back to `JWT_SECRET_KEY` | - |
 
 Also required when a provider is configured:
 
 - `PUBLIC_BASE_URL` — email bodies link back to episodes, the in-app
   briefing, and the unsubscribe page with absolute URLs.
-- `JWT_SECRET_KEY` — signs the one-click unsubscribe token
-  (`/unsubscribe/briefings?token=…`, honored without login per
-  CAN-SPAM/RFC 8058).
+- `UNSUBSCRIBE_SECRET` (recommended) — signs the one-click unsubscribe
+  token (`/unsubscribe/briefings?token=…`, honored without login per
+  CAN-SPAM/RFC 8058). Unset, it falls back to `JWT_SECRET_KEY`; set it
+  explicitly so rotating the auth secret never dead-links the
+  unsubscribe URLs in already-delivered email.
 
 A misconfigured provider (e.g. `EMAIL_PROVIDER=smtp` without
 `SMTP_HOST`) fails at server startup rather than silently at send time.

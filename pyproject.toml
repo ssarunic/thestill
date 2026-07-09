@@ -104,6 +104,12 @@ s3 = [
     # keys baked into the image.
     "boto3>=1.34",
 ]
+ses = [
+    # Spec #51 — EMAIL_PROVIDER=ses. Same credential-chain rules as [s3];
+    # a separate extra so a non-S3 deployment using SES doesn't have to
+    # install a storage backend it isn't using.
+    "boto3>=1.34",
+]
 web = [
     # Web server dependencies (FastAPI and uvicorn are in main deps)
     # Add future web-specific deps here (Jinja2, python-multipart, etc.)

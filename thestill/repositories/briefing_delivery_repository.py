@@ -57,9 +57,11 @@ class BriefingDeliveryRepository(ABC):
 
     @abstractmethod
     def claim(self, delivery_id: str, *, now: datetime, lease_seconds: int) -> bool:
-        """Atomically take a due delivery: ``status → 'sending'`` and
-        ``next_attempt_at → now + lease`` iff the row is still claimable
-        (same conditional-UPDATE idiom as the #50 slot claim).
+        """Atomically take a due delivery: ``status → 'sending'``,
+        ``next_attempt_at → now + lease`` and ``attempts → attempts + 1``
+        iff the row is still claimable (same conditional-UPDATE idiom as
+        the #50 slot claim). Incrementing at claim time — not settle time
+        — means a crash between claim and settle still burns retry budget.
 
         Returns True when this caller won the row; multi-instance
         deployments can't double-send within the lease.

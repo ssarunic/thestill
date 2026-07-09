@@ -302,9 +302,7 @@ class TestEmailDelivery:
     @pytest.fixture
     def delivery_stack(self, db_path, tmp_path):
         """Real delivery service over the shared SQLite db + a fake sender."""
-        from thestill.repositories.sqlite_briefing_delivery_repository import (
-            SqliteBriefingDeliveryRepository,
-        )
+        from thestill.repositories.sqlite_briefing_delivery_repository import SqliteBriefingDeliveryRepository
         from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
         from thestill.services.briefing_delivery_service import BriefingDeliveryService
         from thestill.services.briefing_email_renderer import BriefingEmailRenderer
@@ -330,6 +328,9 @@ class TestEmailDelivery:
             return briefing
 
         def make_service(schedule_repo, user_repo):
+            from thestill.utils.file_storage import LocalFileStorage
+            from thestill.utils.path_manager import PathManager
+
             return BriefingDeliveryService(
                 delivery_repo,
                 briefing_repo,
@@ -337,6 +338,8 @@ class TestEmailDelivery:
                 user_repo,
                 BriefingEmailRenderer(public_base_url="https://app.example.com", secret="test-secret"),
                 sender,
+                path_manager=PathManager(str(tmp_path)),
+                file_storage=LocalFileStorage(str(tmp_path)),
             )
 
         return {"sender": sender, "persist": persist_briefing, "make_service": make_service}
@@ -436,6 +439,37 @@ class TestEmailDelivery:
 
         assert scheduler.tick(now=SLOT) == 1  # generation unaffected
         assert schedule_repo.get(user.id).next_run_at > SLOT
+
+    def test_transient_queue_failure_recovers_next_tick(
+        self, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        # The slot has already advanced when ensure_pending blows up, so
+        # without a retry the scheduled email would be lost until the next
+        # cadence. The scheduler buffers the briefing id and re-queues it
+        # (idempotently) on the following tick.
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        briefing = delivery_stack["persist"](user.id)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: briefing
+        flaky = MagicMock()
+        flaky.ensure_pending.side_effect = [RuntimeError("db hiccup"), True]
+        scheduler = BriefingScheduler(
+            schedule_repo,
+            briefing_service,
+            tick_seconds=60,
+            max_per_tick=50,
+            delivery_service=flaky,
+        )
+
+        assert scheduler.tick(now=SLOT) == 1  # queueing failed, swallowed
+        scheduler.tick(now=SLOT + timedelta(minutes=1))  # no due slot: retry phase only
+
+        assert flaky.ensure_pending.call_count == 2
+        assert flaky.ensure_pending.call_args.args[0] == briefing.id
+        # Recovered: later ticks don't re-queue.
+        scheduler.tick(now=SLOT + timedelta(minutes=2))
+        assert flaky.ensure_pending.call_count == 2
 
 
 class TestLifecycle:

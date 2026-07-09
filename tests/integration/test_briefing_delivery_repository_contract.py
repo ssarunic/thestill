@@ -77,9 +77,7 @@ def backend(request, tmp_path):
             pytest.skip("Postgres not reachable — set TEST_DATABASE_URL to include this backend")
         import psycopg
 
-        from thestill.repositories.postgres_briefing_delivery_repository import (
-            PostgresBriefingDeliveryRepository,
-        )
+        from thestill.repositories.postgres_briefing_delivery_repository import PostgresBriefingDeliveryRepository
         from thestill.repositories.postgres_briefing_repository import PostgresBriefingRepository
         from thestill.repositories.postgres_schema import ensure_schema
         from thestill.repositories.postgres_user_repository import PostgresUserRepository
@@ -174,6 +172,21 @@ def test_expired_lease_is_reclaimable(backend):
     after_lease = NOW + timedelta(seconds=601)
     assert [d.id for d in repo.due(after_lease, limit=10)] == [delivery.id]
     assert repo.claim(delivery.id, now=after_lease, lease_seconds=600) is True
+
+
+def test_claim_increments_attempts(backend):
+    # Budget burns at claim time, so a crash between claim and settle
+    # still counts against max_attempts on every backend.
+    repo, make_briefing = backend
+    briefing_id = make_briefing()
+    repo.ensure_pending(briefing_id, "email", now=NOW)
+    delivery = repo.get_for_briefing(briefing_id, "email")
+
+    assert repo.claim(delivery.id, now=NOW, lease_seconds=600)
+    assert repo.get_for_briefing(briefing_id, "email").attempts == 1
+
+    assert repo.claim(delivery.id, now=NOW + timedelta(seconds=601), lease_seconds=600)
+    assert repo.get_for_briefing(briefing_id, "email").attempts == 2
 
 
 # ---------------------------------------------------------------------------

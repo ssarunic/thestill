@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
     from ..repositories.user_repository import UserRepository
+    from ..utils.file_storage import FileStorage
+    from ..utils.path_manager import PathManager
     from .briefing_email_renderer import BriefingEmailRenderer
     from .email_sender import EmailSender
 
@@ -64,6 +66,8 @@ class BriefingDeliveryService:
         renderer: "BriefingEmailRenderer",
         sender: "EmailSender",
         *,
+        path_manager: "PathManager",
+        file_storage: "FileStorage",
         max_attempts: int = 3,
         backoff_seconds: int = 300,
         max_per_pass: int = 50,
@@ -79,6 +83,8 @@ class BriefingDeliveryService:
         self._users = user_repository
         self._renderer = renderer
         self._sender = sender
+        self._path_manager = path_manager
+        self._file_storage = file_storage
         self._max_attempts = max_attempts
         self._backoff = backoff_seconds
         self._max_per_pass = max_per_pass
@@ -120,7 +126,29 @@ class BriefingDeliveryService:
         due = self._deliveries.due(clock_now, limit=self._max_per_pass)
         sent = 0
         for delivery in due:
-            if not self._deliveries.claim(delivery.id, now=clock_now, lease_seconds=self._claim_lease):
+            if delivery.attempts >= self._max_attempts:
+                # A claim increments attempts (repository-side), so a row
+                # at the budget with an unsettled claim crashed mid-send
+                # on its final attempt. Park it — re-claiming would retry
+                # a crash loop forever, past the budget max_attempts exists
+                # to enforce.
+                error = delivery.last_error or "send did not settle; retry budget exhausted"
+                self._deliveries.mark_failed(delivery.id, attempts=delivery.attempts, error=error)
+                logger.error(
+                    "briefing_delivery_failed",
+                    delivery_id=delivery.id,
+                    briefing_id=delivery.briefing_id,
+                    attempts=delivery.attempts,
+                    error=error,
+                )
+                continue
+            # Fresh clock per claim: sends earlier in the pass take real
+            # time, and a lease anchored at pass start could already be
+            # expired when written — inviting a double-send from a second
+            # instance. (An injected `now` stays fixed for deterministic
+            # tests.)
+            claim_now = now or datetime.now(timezone.utc)
+            if not self._deliveries.claim(delivery.id, now=claim_now, lease_seconds=self._claim_lease):
                 # Another instance took it, or it settled mid-scan.
                 continue
             attempts = delivery.attempts + 1
@@ -134,11 +162,12 @@ class BriefingDeliveryService:
                     briefing_id=delivery.briefing_id,
                     attempts=attempts,
                     error=str(exc),
+                    exc_info=True,
                 )
             except Exception as exc:
-                self._settle_retryable(delivery, attempts, str(exc), clock_now)
+                self._settle_retryable(delivery, attempts, str(exc), now or datetime.now(timezone.utc))
             else:
-                self._deliveries.mark_sent(delivery.id, sent_at=clock_now)
+                self._deliveries.mark_sent(delivery.id, sent_at=now or datetime.now(timezone.utc))
                 sent += 1
                 logger.info(
                     "briefing_delivery_sent",
@@ -172,11 +201,24 @@ class BriefingDeliveryService:
 
         if not briefing.script_path:
             raise _PermanentDeliveryError("briefing has no rendered script")
-        script_path = Path(briefing.script_path)
-        if not script_path.exists():
-            raise _PermanentDeliveryError(f"briefing script missing on disk: {script_path}")
+        # Scripts are written through FileStorage (spec #35), so read them
+        # back the same way — with STORAGE_BACKEND=s3 the absolute path is
+        # never materialized on local disk. Missing object = permanent;
+        # transient storage errors propagate and retry with backoff.
+        try:
+            script_key = self._path_manager.to_relative(Path(briefing.script_path))
+        except ValueError as exc:
+            raise _PermanentDeliveryError(f"briefing script path outside storage root: {briefing.script_path}") from exc
+        try:
+            script_markdown = self._file_storage.read_text(script_key)
+        except FileNotFoundError as exc:
+            raise _PermanentDeliveryError(f"briefing script missing in storage: {script_key}") from exc
 
-        email = self._renderer.render(briefing, script_path.read_text(encoding="utf-8"))
+        email = self._renderer.render(
+            briefing,
+            script_markdown,
+            timezone_name=schedule.timezone_name,
+        )
         self._sender.send(
             to=user.email,
             subject=email.subject,
@@ -194,6 +236,7 @@ class BriefingDeliveryService:
                 briefing_id=delivery.briefing_id,
                 attempts=attempts,
                 error=error,
+                exc_info=True,
             )
             return
         # Exponential backoff: backoff, 2×backoff, 4×backoff, …

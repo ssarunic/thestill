@@ -22,7 +22,9 @@ resolution at send time. Real SQLite repositories, fake sender.
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -38,6 +40,8 @@ from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.briefing_delivery_service import BriefingDeliveryService
 from thestill.services.briefing_email_renderer import BriefingEmailRenderer
 from thestill.services.email_sender import EmailSender, EmailSendError
+from thestill.utils.file_storage import LocalFileStorage, StorageError
+from thestill.utils.path_manager import PathManager
 
 NOW = datetime(2026, 7, 8, 6, 0, tzinfo=timezone.utc)
 
@@ -79,12 +83,19 @@ def sender():
 
 
 @pytest.fixture
-def service(repos, sender):
-    return _make_service(repos, sender)
+def service(repos, sender, tmp_path):
+    return _make_service(repos, sender, tmp_path)
 
 
-def _make_service(repos, sender, **overrides) -> BriefingDeliveryService:
-    kwargs = {"max_attempts": 3, "backoff_seconds": 300}
+def _make_service(repos, sender, tmp_path, **overrides) -> BriefingDeliveryService:
+    kwargs = {
+        "max_attempts": 3,
+        "backoff_seconds": 300,
+        # Scripts are read back through FileStorage (spec #35) — root both
+        # at tmp_path, where _seed_user writes them.
+        "path_manager": PathManager(str(tmp_path)),
+        "file_storage": LocalFileStorage(str(tmp_path)),
+    }
     kwargs.update(overrides)
     return BriefingDeliveryService(
         repos["delivery"],
@@ -194,7 +205,7 @@ class TestEmailContent:
 class TestRetryAndParking:
     def test_failed_send_backs_off_exponentially(self, repos, tmp_path):
         sender = FakeSender(fail_times=2)
-        service = _make_service(repos, sender)
+        service = _make_service(repos, sender, tmp_path)
         briefing = _seed_user(repos, tmp_path)
         service.ensure_pending(briefing.id, now=NOW)
 
@@ -220,7 +231,7 @@ class TestRetryAndParking:
 
     def test_parks_failed_after_max_attempts(self, repos, tmp_path):
         sender = FakeSender(fail_times=99)
-        service = _make_service(repos, sender)
+        service = _make_service(repos, sender, tmp_path)
         briefing = _seed_user(repos, tmp_path)
         service.ensure_pending(briefing.id, now=NOW)
 
@@ -236,12 +247,33 @@ class TestRetryAndParking:
         # Parked: never claimed again (FM-1 — doesn't burn every tick).
         assert service.deliver_due(now=now) == 0
 
+    def test_crash_looping_send_parks_after_budget(self, repos, tmp_path):
+        # A process crash between claim and settle (claimed rows that
+        # never settled) must still burn retry budget — otherwise a send
+        # that reproducibly kills the worker re-claims forever.
+        sender = FakeSender()
+        service = _make_service(repos, sender, tmp_path)
+        briefing = _seed_user(repos, tmp_path)
+        service.ensure_pending(briefing.id, now=NOW)
+        delivery = repos["delivery"].get_for_briefing(briefing.id, "email")
+
+        now = NOW
+        for _ in range(3):
+            assert repos["delivery"].claim(delivery.id, now=now, lease_seconds=600)
+            now += timedelta(seconds=601)  # lease expires without a settle
+
+        assert service.deliver_due(now=now) == 0
+
+        parked = repos["delivery"].get_for_briefing(briefing.id, "email")
+        assert parked.status == DeliveryStatus.FAILED
+        assert sender.sent == []
+
     def test_one_failing_delivery_does_not_block_others(self, repos, tmp_path):
         # FM-1 per-delivery isolation inside a single pass.
         failing = _seed_user(repos, tmp_path, script=False)  # permanent failure
         healthy = _seed_user(repos, tmp_path, email="bob@example.com")
         sender = FakeSender()
-        service = _make_service(repos, sender)
+        service = _make_service(repos, sender, tmp_path)
         service.ensure_pending(failing.id, now=NOW)
         service.ensure_pending(healthy.id, now=NOW + timedelta(seconds=1))
 
@@ -289,3 +321,51 @@ class TestPermanentFailures:
 
         assert service.deliver_due(now=NOW) == 0
         assert repos["delivery"].get_for_briefing(briefing.id, "email").status == DeliveryStatus.FAILED
+
+
+class TestStorageBackedScripts:
+    """Spec #35 × #51: scripts are written through FileStorage, so the
+    delivery pass must read them the same way — with STORAGE_BACKEND=s3
+    the absolute path never exists on local disk."""
+
+    def test_sends_when_script_exists_only_in_storage(self, repos, tmp_path):
+        sender = FakeSender()
+        briefing = _seed_user(repos, tmp_path)
+        content = Path(briefing.script_path).read_text(encoding="utf-8")
+        Path(briefing.script_path).unlink()  # S3-like: nothing on local disk
+        storage = MagicMock()
+        storage.read_text.return_value = content
+        service = _make_service(repos, sender, tmp_path, file_storage=storage)
+        service.ensure_pending(briefing.id, now=NOW)
+
+        assert service.deliver_due(now=NOW) == 1
+        storage.read_text.assert_called_once_with(f"script-{briefing.user_id}.md")
+        assert len(sender.sent) == 1
+
+    def test_missing_storage_object_parks_permanently(self, repos, tmp_path):
+        sender = FakeSender()
+        briefing = _seed_user(repos, tmp_path)
+        storage = MagicMock()
+        storage.read_text.side_effect = FileNotFoundError("gone")
+        service = _make_service(repos, sender, tmp_path, file_storage=storage)
+        service.ensure_pending(briefing.id, now=NOW)
+
+        assert service.deliver_due(now=NOW) == 0
+        delivery = repos["delivery"].get_for_briefing(briefing.id, "email")
+        assert delivery.status == DeliveryStatus.FAILED
+        assert sender.sent == []
+
+    def test_transient_storage_error_retries(self, repos, tmp_path):
+        # An S3 flake is retryable — it must back off, not park.
+        sender = FakeSender()
+        briefing = _seed_user(repos, tmp_path)
+        storage = MagicMock()
+        storage.read_text.side_effect = StorageError("s3 get_object failed: throttled")
+        service = _make_service(repos, sender, tmp_path, file_storage=storage)
+        service.ensure_pending(briefing.id, now=NOW)
+
+        assert service.deliver_due(now=NOW) == 0
+        delivery = repos["delivery"].get_for_briefing(briefing.id, "email")
+        assert delivery.status == DeliveryStatus.PENDING
+        assert delivery.attempts == 1
+        assert delivery.next_attempt_at == NOW + timedelta(seconds=300)
