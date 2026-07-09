@@ -1351,6 +1351,49 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_briefing_schedules table created")
 
+        # Email delivery opt-in (spec #51). Boolean flag on the schedule row;
+        # default off — email is opt-in per user.
+        cursor = conn.execute("PRAGMA table_info(user_briefing_schedules)")
+        schedule_columns = {row["name"] for row in cursor.fetchall()}
+        if "email_enabled" not in schedule_columns:
+            logger.info("Migrating database: adding user_briefing_schedules.email_enabled column")
+            conn.execute("ALTER TABLE user_briefing_schedules ADD COLUMN email_enabled INTEGER NOT NULL DEFAULT 0")
+
+        # Briefing deliveries (spec #51). One row per (briefing, channel):
+        # the UNIQUE constraint is the send-once anchor — racing triggers
+        # collapse to one delivery via INSERT ... ON CONFLICT DO NOTHING.
+        # ``next_attempt_at`` drives the due-scan while pending and acts as
+        # the claim lease while sending; NULL once terminal.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='briefing_deliveries'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating briefing_deliveries")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS briefing_deliveries (
+                    id              TEXT PRIMARY KEY NOT NULL,
+                    briefing_id     TEXT NOT NULL,
+                    channel         TEXT NOT NULL DEFAULT 'email',
+                    status          TEXT NOT NULL DEFAULT 'pending',
+                    attempts        INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TIMESTAMP NULL,
+                    sent_at         TIMESTAMP NULL,
+                    last_error      TEXT NULL,
+                    created_at      TIMESTAMP NOT NULL
+                                    DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    FOREIGN KEY (briefing_id) REFERENCES user_briefings(id) ON DELETE CASCADE,
+                    UNIQUE (briefing_id, channel),
+                    CHECK (channel IN ('email')),
+                    CHECK (status IN ('pending','sending','sent','failed')),
+                    CHECK (attempts >= 0)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_briefing_deliveries_due
+                    ON briefing_deliveries(next_attempt_at)
+                    WHERE status IN ('pending','sending');
+                """
+            )
+            logger.info("Migration complete: briefing_deliveries table created")
+
         # Imports + auto-add columns. Indexes are created unconditionally
         # (IF NOT EXISTS) so fresh databases (columns came from _create_schema)
         # and legacy databases (columns just added below) end up identical.

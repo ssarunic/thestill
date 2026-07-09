@@ -451,3 +451,132 @@ class TestPutSchedule:
 
         saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
         assert saved.created_at == existing.created_at
+
+
+class TestScheduleEmailDelivery:
+    """Spec #51: the ``email_enabled`` flag on GET/PUT /schedule."""
+
+    def test_get_includes_email_enabled(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(email_enabled=True)
+
+        response = client.get("/api/briefings/schedule")
+
+        assert response.status_code == 200
+        assert response.json()["email_enabled"] is True
+
+    def test_put_round_trips_email_enabled(self, client, mock_app_state):
+        # mock_app_state's briefing_delivery_service is a MagicMock — i.e.
+        # a provider is configured — so opting in is allowed.
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={
+                "frequency": "daily",
+                "hour_local": 8,
+                "timezone": "Europe/Zagreb",
+                "enabled": True,
+                "email_enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["email_enabled"] is True
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.email_enabled is True
+
+    def test_email_enabled_defaults_false(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 8, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["email_enabled"] is False
+
+    def test_opt_in_rejected_when_provider_none(self, client, mock_app_state):
+        mock_app_state.briefing_delivery_service = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={
+                "frequency": "daily",
+                "hour_local": 8,
+                "timezone": "Europe/Zagreb",
+                "enabled": True,
+                "email_enabled": True,
+            },
+        )
+
+        assert response.status_code == 422
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+
+    def test_opt_out_allowed_when_provider_none(self, client, mock_app_state):
+        mock_app_state.briefing_delivery_service = None
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={
+                "frequency": "daily",
+                "hour_local": 8,
+                "timezone": "Europe/Zagreb",
+                "enabled": True,
+                "email_enabled": False,
+            },
+        )
+
+        assert response.status_code == 200
+
+    def test_omitted_email_enabled_preserves_stored_opt_in(self, client, mock_app_state):
+        # A pre-#51 client (or a UI whose capability probe failed) PUTs
+        # without the field — that must not wipe the user's opt-in.
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(email_enabled=True)
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={"frequency": "daily", "hour_local": 9, "timezone": "Europe/Zagreb", "enabled": True},
+        )
+
+        assert response.status_code == 200
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.email_enabled is True
+
+    def test_explicit_false_overrides_stored_opt_in(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(email_enabled=True)
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={
+                "frequency": "daily",
+                "hour_local": 8,
+                "timezone": "Europe/Zagreb",
+                "enabled": True,
+                "email_enabled": False,
+            },
+        )
+
+        assert response.status_code == 200
+        saved = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert saved.email_enabled is False
+
+    def test_opt_in_rejected_when_scheduler_off(self, client, mock_app_state):
+        # The delivery pass runs on the briefing scheduler tick; without
+        # it an accepted opt-in would silently never send.
+        mock_app_state.briefing_scheduler = None
+
+        response = client.put(
+            "/api/briefings/schedule",
+            json={
+                "frequency": "daily",
+                "hour_local": 8,
+                "timezone": "Europe/Zagreb",
+                "enabled": True,
+                "email_enabled": True,
+            },
+        )
+
+        assert response.status_code == 422
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()

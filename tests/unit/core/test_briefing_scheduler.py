@@ -17,6 +17,10 @@
 Tick semantics against a real SQLite schedule repository and a mocked
 ``BriefingService``: due-selection, claim-before-generate, per-user
 failure isolation (FM-1), and single-fire downtime catch-up.
+
+Spec #51 (``TestEmailDelivery``): the slot-fire → ensure_pending →
+delivery-pass chain, including the lazy-then-scheduled throttle case that
+must still email exactly once.
 """
 
 import uuid
@@ -84,6 +88,7 @@ def _add_user_with_schedule(
     next_run_at: datetime | None,
     enabled: bool = True,
     hour_local: int = 8,
+    email_enabled: bool = False,
 ) -> User:
     user = User(id=str(uuid.uuid4()), email=email, name=email.split("@")[0])
     user_repo.save(user)
@@ -94,6 +99,7 @@ def _add_user_with_schedule(
             hour_local=hour_local,
             timezone_name="Europe/Zagreb",
             enabled=enabled,
+            email_enabled=email_enabled,
             next_run_at=next_run_at,
         )
     )
@@ -288,6 +294,182 @@ class TestNarrationChaining:
         scheduler = BriefingScheduler(schedule_repo, briefing_service, tick_seconds=60, max_per_tick=50)
 
         assert scheduler.tick(now=SLOT) == 1
+
+
+class TestEmailDelivery:
+    """Spec #51: slot fire → ensure_pending → delivery pass, exactly once."""
+
+    @pytest.fixture
+    def delivery_stack(self, db_path, tmp_path):
+        """Real delivery service over the shared SQLite db + a fake sender."""
+        from thestill.repositories.sqlite_briefing_delivery_repository import SqliteBriefingDeliveryRepository
+        from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
+        from thestill.services.briefing_delivery_service import BriefingDeliveryService
+        from thestill.services.briefing_email_renderer import BriefingEmailRenderer
+        from thestill.services.email_sender import EmailSender
+
+        class FakeSender(EmailSender):
+            def __init__(self):
+                self.sent = []
+
+            def send(self, *, to, subject, html, text, headers=None):
+                self.sent.append(to)
+
+        sender = FakeSender()
+        briefing_repo = SqliteBriefingRepository(db_path)
+        delivery_repo = SqliteBriefingDeliveryRepository(db_path)
+
+        def persist_briefing(user_id: str) -> Briefing:
+            script = tmp_path / f"script-{uuid.uuid4().hex}.md"
+            script.write_text("# Morning Briefing\n\nHello.\n", encoding="utf-8")
+            briefing = _briefing(user_id)
+            briefing.script_path = str(script)
+            briefing_repo.insert(briefing)
+            return briefing
+
+        def make_service(schedule_repo, user_repo):
+            from thestill.utils.file_storage import LocalFileStorage
+            from thestill.utils.path_manager import PathManager
+
+            return BriefingDeliveryService(
+                delivery_repo,
+                briefing_repo,
+                schedule_repo,
+                user_repo,
+                BriefingEmailRenderer(public_base_url="https://app.example.com", secret="test-secret"),
+                sender,
+                path_manager=PathManager(str(tmp_path)),
+                file_storage=LocalFileStorage(str(tmp_path)),
+            )
+
+        return {"sender": sender, "persist": persist_briefing, "make_service": make_service}
+
+    @pytest.fixture
+    def email_scheduler(self, schedule_repo, user_repo, briefing_service, delivery_stack):
+        return BriefingScheduler(
+            schedule_repo,
+            briefing_service,
+            tick_seconds=60,
+            max_per_tick=50,
+            delivery_service=delivery_stack["make_service"](schedule_repo, user_repo),
+        )
+
+    def test_slot_fire_emails_exactly_once(
+        self, email_scheduler, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        briefing = delivery_stack["persist"](user.id)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: briefing
+
+        assert email_scheduler.tick(now=SLOT) == 1
+        assert delivery_stack["sender"].sent == ["alice@example.com"]
+        # Subsequent ticks (retry pass runs every tick) never re-send.
+        email_scheduler.tick(now=SLOT + timedelta(minutes=1))
+        assert delivery_stack["sender"].sent == ["alice@example.com"]
+
+    def test_lazy_then_scheduled_still_emails_exactly_once(
+        self, email_scheduler, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        # 7:30 lazy open generated the briefing; the 8:00 slot gets the
+        # throttle-returned existing one. The delivery is keyed on "this
+        # briefing hasn't been emailed yet", so it still goes out — once.
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        existing = delivery_stack["persist"](user.id)  # the 7:30 lazy briefing
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: existing
+
+        assert email_scheduler.tick(now=SLOT) == 1
+        # A later manual tick touching the same briefing again (e.g. next
+        # slot throttled to the same row) adds no second email.
+        schedule_repo.upsert(
+            BriefingSchedule(
+                user_id=user.id,
+                timezone_name="Europe/Zagreb",
+                email_enabled=True,
+                next_run_at=SLOT + timedelta(hours=1),
+            )
+        )
+        email_scheduler.tick(now=SLOT + timedelta(hours=1))
+        assert delivery_stack["sender"].sent == ["alice@example.com"]
+
+    def test_email_disabled_schedule_sends_nothing(
+        self, email_scheduler, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=False
+        )
+        briefing = delivery_stack["persist"](user.id)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: briefing
+
+        assert email_scheduler.tick(now=SLOT) == 1  # generation still happens
+        assert delivery_stack["sender"].sent == []
+
+    def test_empty_window_produces_no_delivery(
+        self, email_scheduler, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: None
+
+        assert email_scheduler.tick(now=SLOT) == 0
+        assert delivery_stack["sender"].sent == []
+
+    def test_delivery_pass_failure_never_fails_the_tick(
+        self, schedule_repo, user_repo, briefing_service, delivery_stack
+    ):
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        briefing = delivery_stack["persist"](user.id)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: briefing
+        exploding = MagicMock()
+        exploding.ensure_pending.side_effect = RuntimeError("db hiccup")
+        exploding.deliver_due.side_effect = RuntimeError("db hiccup")
+        scheduler = BriefingScheduler(
+            schedule_repo,
+            briefing_service,
+            tick_seconds=60,
+            max_per_tick=50,
+            delivery_service=exploding,
+        )
+
+        assert scheduler.tick(now=SLOT) == 1  # generation unaffected
+        assert schedule_repo.get(user.id).next_run_at > SLOT
+
+    def test_transient_queue_failure_recovers_next_tick(
+        self, user_repo, schedule_repo, briefing_service, delivery_stack
+    ):
+        # The slot has already advanced when ensure_pending blows up, so
+        # without a retry the scheduled email would be lost until the next
+        # cadence. The scheduler buffers the briefing id and re-queues it
+        # (idempotently) on the following tick.
+        user = _add_user_with_schedule(
+            user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT, email_enabled=True
+        )
+        briefing = delivery_stack["persist"](user.id)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: briefing
+        flaky = MagicMock()
+        flaky.ensure_pending.side_effect = [RuntimeError("db hiccup"), True]
+        scheduler = BriefingScheduler(
+            schedule_repo,
+            briefing_service,
+            tick_seconds=60,
+            max_per_tick=50,
+            delivery_service=flaky,
+        )
+
+        assert scheduler.tick(now=SLOT) == 1  # queueing failed, swallowed
+        scheduler.tick(now=SLOT + timedelta(minutes=1))  # no due slot: retry phase only
+
+        assert flaky.ensure_pending.call_count == 2
+        assert flaky.ensure_pending.call_args.args[0] == briefing.id
+        # Recovered: later ticks don't re-queue.
+        scheduler.tick(now=SLOT + timedelta(minutes=2))
+        assert flaky.ensure_pending.call_count == 2
 
 
 class TestLifecycle:

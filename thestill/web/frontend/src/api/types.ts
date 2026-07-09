@@ -1233,6 +1233,7 @@ export interface BriefingSchedule {
   weekday: number | null // 0=Mon … 6=Sun; set iff weekly
   timezone: string // IANA name
   enabled: boolean
+  email_enabled: boolean // spec #51 — email the briefing when the slot fires
   next_run_at: string | null // UTC; null while disabled
   updated_at: string
 }
@@ -1248,6 +1249,7 @@ export interface BriefingScheduleUpdate {
   weekday?: number | null
   timezone: string
   enabled: boolean
+  email_enabled?: boolean // spec #51; 422 when the server has no EMAIL_PROVIDER
 }
 
 // ============================================================================

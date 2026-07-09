@@ -36,6 +36,7 @@ from . import (
     api_top_podcasts,
     auth,
     health,
+    unsubscribe,
     webhooks,
 )
 
@@ -49,4 +50,5 @@ __all__ = [
     "api_episodes",
     "api_commands",
     "api_top_podcasts",
+    "unsubscribe",
 ]

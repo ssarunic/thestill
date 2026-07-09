@@ -132,6 +132,12 @@ class ScheduleUpdateRequest(BaseModel):
     weekday: Optional[int] = Field(default=None, ge=0, le=6)
     timezone: str
     enabled: bool = True
+    # Spec #51 — email the briefing when the scheduled slot fires. Rejected
+    # with 422 when no EMAIL_PROVIDER is configured. ``None`` (field omitted)
+    # preserves the stored value: clients that predate the field — or a UI
+    # whose capability probe failed — must not wipe a user's opt-in as a
+    # side effect of an unrelated schedule edit.
+    email_enabled: Optional[bool] = None
 
 
 def _require_owned(briefing: Briefing, user: User) -> None:
@@ -186,6 +192,7 @@ def _serialize_schedule(schedule: BriefingSchedule) -> dict:
         "weekday": schedule.weekday,
         "timezone": schedule.timezone_name,
         "enabled": schedule.enabled,
+        "email_enabled": schedule.email_enabled,
         "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         "updated_at": schedule.updated_at.isoformat(),
     }
@@ -219,6 +226,23 @@ async def put_briefing_schedule(
     """
     now = datetime.now(timezone.utc)
     existing = app_state.briefing_schedule_repository.get(user.id)
+    if body.email_enabled is None:
+        email_enabled = existing.email_enabled if existing else False
+    else:
+        email_enabled = body.email_enabled
+    delivery_available = app_state.briefing_delivery_service is not None and app_state.briefing_scheduler is not None
+    if email_enabled and body.email_enabled is not None and not delivery_available:
+        # Spec #51: no EMAIL_PROVIDER configured (or the briefing
+        # scheduler that runs the delivery pass is off) — matches the
+        # auth-status capability flag, so the checkbox is hidden in the
+        # UI and this only fires for hand-built requests. A preserved
+        # (omitted) value is exempt so an operator turning the provider
+        # off doesn't brick every schedule edit.
+        raise HTTPException(
+            status_code=422,
+            detail="Email delivery is not available on this server "
+            "(EMAIL_PROVIDER=none or briefing scheduler disabled)",
+        )
     try:
         schedule = BriefingSchedule(
             user_id=user.id,
@@ -227,6 +251,7 @@ async def put_briefing_schedule(
             weekday=body.weekday,
             timezone_name=body.timezone,
             enabled=body.enabled,
+            email_enabled=email_enabled,
             created_at=existing.created_at if existing else now,
             updated_at=now,
         )
@@ -244,6 +269,7 @@ async def put_briefing_schedule(
         weekday=schedule.weekday,
         tz=schedule.timezone_name,
         enabled=schedule.enabled,
+        email_enabled=schedule.email_enabled,
         next_run_at=schedule.next_run_at.isoformat() if schedule.next_run_at else None,
     )
     return api_response(_serialize_schedule(schedule))

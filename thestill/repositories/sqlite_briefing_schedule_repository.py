@@ -28,7 +28,7 @@ from .briefing_schedule_repository import BriefingScheduleRepository
 
 logger = get_logger(__name__)
 
-_COLS = "user_id, frequency, hour_local, weekday, timezone, enabled, next_run_at, created_at, updated_at"
+_COLS = "user_id, frequency, hour_local, weekday, timezone, enabled, email_enabled, next_run_at, created_at, updated_at"
 
 
 class SqliteBriefingScheduleRepository(BriefingScheduleRepository):
@@ -64,16 +64,17 @@ class SqliteBriefingScheduleRepository(BriefingScheduleRepository):
                 """
                 INSERT INTO user_briefing_schedules
                     (user_id, frequency, hour_local, weekday, timezone,
-                     enabled, next_run_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     enabled, email_enabled, next_run_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
-                    frequency   = excluded.frequency,
-                    hour_local  = excluded.hour_local,
-                    weekday     = excluded.weekday,
-                    timezone    = excluded.timezone,
-                    enabled     = excluded.enabled,
-                    next_run_at = excluded.next_run_at,
-                    updated_at  = excluded.updated_at
+                    frequency     = excluded.frequency,
+                    hour_local    = excluded.hour_local,
+                    weekday       = excluded.weekday,
+                    timezone      = excluded.timezone,
+                    enabled       = excluded.enabled,
+                    email_enabled = excluded.email_enabled,
+                    next_run_at   = excluded.next_run_at,
+                    updated_at    = excluded.updated_at
                 """,
                 (
                     schedule.user_id,
@@ -82,6 +83,7 @@ class SqliteBriefingScheduleRepository(BriefingScheduleRepository):
                     schedule.weekday,
                     schedule.timezone_name,
                     int(schedule.enabled),
+                    int(schedule.email_enabled),
                     schedule.next_run_at.isoformat() if schedule.next_run_at else None,
                     schedule.created_at.isoformat(),
                     schedule.updated_at.isoformat(),
@@ -119,6 +121,14 @@ class SqliteBriefingScheduleRepository(BriefingScheduleRepository):
             )
             return cursor.rowcount == 1
 
+    def set_email_enabled(self, user_id: str, enabled: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE user_briefing_schedules SET email_enabled = ? WHERE user_id = ?",
+                (int(enabled), user_id),
+            )
+            return cursor.rowcount == 1
+
     @staticmethod
     def _row_to_schedule(row: sqlite3.Row) -> BriefingSchedule:
         return BriefingSchedule(
@@ -128,6 +138,7 @@ class SqliteBriefingScheduleRepository(BriefingScheduleRepository):
             weekday=row["weekday"],
             timezone_name=row["timezone"],
             enabled=bool(row["enabled"]),
+            email_enabled=bool(row["email_enabled"]),
             next_run_at=(datetime.fromisoformat(row["next_run_at"]) if row["next_run_at"] else None),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),

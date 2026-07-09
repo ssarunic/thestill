@@ -52,3 +52,12 @@ class BriefingScheduleRepository(ABC):
         makes the scheduler tick safe under multiple server instances and
         guarantees a crashed generation doesn't re-fire every tick.
         """
+
+    @abstractmethod
+    def set_email_enabled(self, user_id: str, enabled: bool) -> bool:
+        """Flip only the email opt-in flag (spec #51 unsubscribe path).
+
+        A targeted UPDATE rather than a full upsert so it can't race the
+        scheduler's ``claim`` (which rewrites ``next_run_at``). Returns True
+        when a schedule row existed and was updated.
+        """

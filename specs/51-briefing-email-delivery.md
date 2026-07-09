@@ -1,6 +1,6 @@
 # Briefing Email Delivery
 
-> **Status:** 📝 Draft (2026-07-07)
+> **Status:** 🚧 Implemented Phases 1–3 (2026-07-08); Phase 4 (SES bounce hardening) pending #43
 > **Created:** 2026-07-07
 > **Author:** Product & Engineering
 > **Related:** [#50 scheduled-briefings](50-scheduled-briefings.md), [#36 per-user-digest-from-inbox](36-per-user-digest-from-inbox.md), [#43 aws-hosting](43-aws-hosting.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
@@ -243,34 +243,38 @@ existing status/config endpoint).
 
 ### Phase 1 — Delivery records + transport
 
-- [ ] Schema: `email_enabled` column + `briefing_deliveries` table
-      (SQLite block, `postgres_schema.py`, Alembic `0003`).
-- [ ] `BriefingDeliveryRepository` (ensure_pending / due-scan / claim /
+- [x] Schema: `email_enabled` column + `briefing_deliveries` table
+      (SQLite block, `postgres_schema.py`, Alembic `0004` — `0003` was
+      taken by the digest-table retirement).
+- [x] `BriefingDeliveryRepository` (ensure_pending / due-scan / claim /
       settle) for both backends.
-- [ ] `EmailSender` ABC + `SmtpEmailSender`; config knobs; provider factory.
-- [ ] Unit tests: send-once under racing ensure_pending, backoff/parking,
-      claim contention.
+- [x] `EmailSender` ABC + `SmtpEmailSender`; config knobs; provider factory.
+- [x] Unit tests: send-once under racing ensure_pending, backoff/parking,
+      claim contention (plus a dual-backend contract suite).
 
 ### Phase 2 — Rendering + scheduler integration
 
-- [ ] `BriefingEmailRenderer` (HTML + text, absolute links, unsubscribe
+- [x] `BriefingEmailRenderer` (HTML + text, absolute links, unsubscribe
       footer, List-Unsubscribe headers).
-- [ ] Scheduler tick: ensure_pending on slot fire + delivery pass.
-- [ ] Integration test: scheduled slot → briefing generated → exactly one
+- [x] Scheduler tick: ensure_pending on slot fire + delivery pass.
+- [x] Integration test: scheduled slot → briefing generated → exactly one
       email captured by a fake sender; lazy-then-scheduled → still exactly
       one.
 
 ### Phase 3 — Settings + unsubscribe
 
-- [ ] `email_enabled` in PUT /schedule + settings UI checkbox (hidden when
-      provider is `none`).
-- [ ] Signed unsubscribe route + confirmation page.
-- [ ] E2E: enable email → slot fires → email contains working script link
+- [x] `email_enabled` in PUT /schedule + settings UI checkbox (hidden when
+      provider is `none`; capability flag on `GET /api/auth/status`).
+- [x] Signed unsubscribe route + confirmation page (GET for humans, POST
+      for RFC 8058 one-click).
+- [x] E2E: enable email → slot fires → email contains working script link
       and unsubscribe; unsubscribe link flips the flag.
 
 ### Phase 4 — Hosted hardening (interlocks with #43)
 
-- [ ] `SesEmailSender` + SES identity/DKIM setup notes in the #43 runbook.
+- [x] `SesEmailSender` (lazy boto3, `send_raw_email` so List-Unsubscribe
+      headers survive). SES identity/DKIM setup notes in the #43 runbook
+      still pending.
 - [ ] Bounce/complaint SNS webhook → auto-disable `email_enabled` (spam-
       trap protection).
 

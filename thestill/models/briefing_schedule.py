@@ -46,6 +46,10 @@ class BriefingSchedule(BaseModel):
     weekday: Optional[int] = Field(default=None, ge=0, le=6)  # 0=Mon … 6=Sun
     timezone_name: str
     enabled: bool = True
+    # Spec #51 — email the briefing when the scheduled slot fires. Opt-in;
+    # requires an enabled schedule (no schedule, no sends) and a configured
+    # EMAIL_PROVIDER (checkbox hidden in the UI otherwise).
+    email_enabled: bool = False
     next_run_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

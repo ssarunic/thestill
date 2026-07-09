@@ -34,7 +34,7 @@ from .briefing_schedule_repository import BriefingScheduleRepository
 
 logger = get_logger(__name__)
 
-_COLS = "user_id, frequency, hour_local, weekday, timezone, enabled, next_run_at, created_at, updated_at"
+_COLS = "user_id, frequency, hour_local, weekday, timezone, enabled, email_enabled, next_run_at, created_at, updated_at"
 
 
 class PostgresBriefingScheduleRepository(BriefingScheduleRepository):
@@ -58,16 +58,17 @@ class PostgresBriefingScheduleRepository(BriefingScheduleRepository):
                 """
                 INSERT INTO user_briefing_schedules
                     (user_id, frequency, hour_local, weekday, timezone,
-                     enabled, next_run_at, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     enabled, email_enabled, next_run_at, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE SET
-                    frequency   = excluded.frequency,
-                    hour_local  = excluded.hour_local,
-                    weekday     = excluded.weekday,
-                    timezone    = excluded.timezone,
-                    enabled     = excluded.enabled,
-                    next_run_at = excluded.next_run_at,
-                    updated_at  = excluded.updated_at
+                    frequency     = excluded.frequency,
+                    hour_local    = excluded.hour_local,
+                    weekday       = excluded.weekday,
+                    timezone      = excluded.timezone,
+                    enabled       = excluded.enabled,
+                    email_enabled = excluded.email_enabled,
+                    next_run_at   = excluded.next_run_at,
+                    updated_at    = excluded.updated_at
                 """,
                 (
                     schedule.user_id,
@@ -76,6 +77,7 @@ class PostgresBriefingScheduleRepository(BriefingScheduleRepository):
                     schedule.weekday,
                     schedule.timezone_name,
                     schedule.enabled,
+                    schedule.email_enabled,
                     schedule.next_run_at,
                     schedule.created_at,
                     schedule.updated_at,
@@ -113,6 +115,14 @@ class PostgresBriefingScheduleRepository(BriefingScheduleRepository):
             )
             return cursor.rowcount == 1
 
+    def set_email_enabled(self, user_id: str, enabled: bool) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                "UPDATE user_briefing_schedules SET email_enabled = %s WHERE user_id = %s",
+                (enabled, user_id),
+            )
+            return cursor.rowcount == 1
+
     @staticmethod
     def _row_to_schedule(row: dict) -> BriefingSchedule:
         return BriefingSchedule(
@@ -122,6 +132,7 @@ class PostgresBriefingScheduleRepository(BriefingScheduleRepository):
             weekday=row["weekday"],
             timezone_name=row["timezone"],
             enabled=row["enabled"],
+            email_enabled=row["email_enabled"],
             next_run_at=row["next_run_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
