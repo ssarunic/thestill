@@ -1,8 +1,8 @@
 # Related Episodes — Scaling to a Large Corpus
 
-> **Status:** 🚧 In progress (2026-05-30)
+> **Status:** 🚧 In progress (2026-05-30) — Tier 3's incremental path is superseded by [#56 related-episodes-constant-time](56-related-episodes-constant-time.md) (2026-07-10: at corpus 1,455 < candidate cap 2,000, "incremental" degenerates to a ~19-min near-full rebuild per summarize batch)
 > **Created:** 2026-05-30
-> **Updated:** 2026-05-30
+> **Updated:** 2026-07-10
 > **Author:** Engineering
 > **Related:** [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (owns the "Related episodes" rail, §5.2; this spec scales it), [#43 aws-hosting](43-aws-hosting.md) / [#44 postgres-migration](44-postgres-migration.md) (the hosted, multi-thousand-episode future this unblocks), [#42 robustness](42-robustness-and-failure-mode-hardening.md) (staleness ≠ failure; degrade visibly)
 
