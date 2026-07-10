@@ -22,11 +22,17 @@ from typing import Iterator, List, Optional
 
 from structlog import get_logger
 
+from ..core.queue_manager import USER_CHAIN_STAGE_VALUES
 from ..models.briefing import Briefing
 from ..utils.sqlite_ext import connect
 from .briefing_repository import BriefingRepository
 
 logger = get_logger(__name__)
+
+# Values come from our own enum, never user input — safe to inline. The
+# wait-set tracks only the user chain (download → summarize); entity/corpus
+# post-processing never holds a briefing (spec #55, decision 2026-07-10).
+_USER_CHAIN_SQL = ", ".join(f"'{v}'" for v in USER_CHAIN_STAGE_VALUES)
 
 
 class SqliteBriefingRepository(BriefingRepository):
@@ -101,9 +107,14 @@ class SqliteBriefingRepository(BriefingRepository):
         cutoff: datetime,
     ) -> int:
         """Return the spec #55 wait-set size for ``user_id``."""
+        # Two guards keep the gate honest about what can still *arrive*:
+        # the stage filter ignores post-summarize entity/corpus work, and
+        # ``published_at IS NULL`` ignores already-published episodes whose
+        # user-chain re-runs would otherwise stall a briefing for content
+        # that will never (re-)deliver.
         with self._get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT e.id)
                   FROM tasks t
                   JOIN episodes e
@@ -113,6 +124,8 @@ class SqliteBriefingRepository(BriefingRepository):
                    AND pf.user_id = ?
                  WHERE e.pub_date >= ?
                    AND e.pub_date < ?
+                   AND e.published_at IS NULL
+                   AND t.stage IN ({_USER_CHAIN_SQL})
                    AND NOT EXISTS (
                        SELECT 1
                          FROM user_episode_inbox i

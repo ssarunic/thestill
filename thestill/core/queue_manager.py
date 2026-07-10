@@ -277,6 +277,12 @@ _ENTITY_BRANCH_ORDER: List[TaskStage] = [
     TaskStage.ENRICH_ENTITIES,
 ]
 
+# Public, SQL-ready view of the user chain: the stages a user is actually
+# waiting on before an episode can publish into inboxes (spec #55). The
+# entity/corpus branch above is post-summarize enrichment — it must never
+# gate user-facing readiness (briefings, delivery).
+USER_CHAIN_STAGE_VALUES: tuple = tuple(s.value for s in _USER_CHAIN_ORDER)
+
 
 def stages_at_or_before(stage: TaskStage) -> List[TaskStage]:
     """Stages in the same branch up to and including ``stage``.

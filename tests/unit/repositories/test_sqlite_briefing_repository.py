@@ -266,13 +266,25 @@ def test_count_pending_for_user_uses_real_wait_set_rows(repo, user_repo, db_path
             (str(uuid.uuid4()), other.id, unfollowed_podcast, since.isoformat()),
         )
 
-        def add_case(name, *, status, pub_date, podcast_id=followed_podcast, retry=0, maximum=3, retry_at=None):
+        def add_case(
+            name,
+            *,
+            status,
+            pub_date,
+            podcast_id=followed_podcast,
+            retry=0,
+            maximum=3,
+            retry_at=None,
+            stage="summarize",
+            published_at=None,
+        ):
             episode_id = str(uuid.uuid4())
             conn.execute(
                 """
                 INSERT INTO episodes
-                    (id, podcast_id, external_id, title, slug, description, description_html, audio_url, pub_date)
-                VALUES (?, ?, ?, ?, ?, '', '', ?, ?)
+                    (id, podcast_id, external_id, title, slug, description, description_html,
+                     audio_url, pub_date, published_at)
+                VALUES (?, ?, ?, ?, ?, '', '', ?, ?, ?)
                 """,
                 (
                     episode_id,
@@ -282,6 +294,7 @@ def test_count_pending_for_user_uses_real_wait_set_rows(repo, user_repo, db_path
                     name,
                     f"https://example.com/{name}.mp3",
                     pub_date.isoformat(),
+                    published_at.isoformat() if published_at else None,
                 ),
             )
             conn.execute(
@@ -289,11 +302,12 @@ def test_count_pending_for_user_uses_real_wait_set_rows(repo, user_repo, db_path
                 INSERT INTO tasks
                     (id, episode_id, stage, status, retry_count, max_retries,
                      next_retry_at, created_at, updated_at)
-                VALUES (?, ?, 'summarize', ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid.uuid4()),
                     episode_id,
+                    stage,
                     status,
                     retry,
                     maximum,
@@ -336,6 +350,19 @@ def test_count_pending_for_user_uses_real_wait_set_rows(repo, user_repo, db_path
         add_case("unfollowed", status="pending", pub_date=in_window, podcast_id=unfollowed_podcast)
         add_case("post-cutoff", status="pending", pub_date=cutoff + timedelta(minutes=1))
         add_case("pre-window", status="pending", pub_date=since - timedelta(minutes=1))
+        # Post-summarize enrichment never holds the gate (decision 2026-07-10):
+        # only user-chain stages (download → summarize) count as "still coming".
+        add_case("entity-branch-only", status="pending", pub_date=in_window, stage="compute-related")
+        add_case("entity-branch-reindex", status="processing", pub_date=in_window, stage="reindex")
+        # Already published (summarize done, fan-out fired) — a user-chain
+        # re-run can't deliver anything new, so it must not stall the cut
+        # even though this user has no inbox row (followed after publish).
+        add_case(
+            "published-rerun",
+            status="pending",
+            pub_date=in_window,
+            published_at=in_window + timedelta(minutes=10),
+        )
         delivered = add_case("already-delivered", status="pending", pub_date=in_window)
         conn.execute(
             """
