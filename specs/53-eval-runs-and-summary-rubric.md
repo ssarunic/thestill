@@ -1,6 +1,6 @@
 # Eval Runs and Summary Rubric
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Implemented — Phases 1–3 (2026-07-10); Phase 4 (provenance capture, briefing rubric, CI gate) future
 > **Created:** 2026-07-07
 > **Author:** Product & Engineering
 > **Related:** [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (§1.12 harness-eval), [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md), [#41 llm-prohibited-content-fallback](41-llm-prohibited-content-fallback.md)

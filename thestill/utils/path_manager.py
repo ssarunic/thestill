@@ -63,6 +63,22 @@ def _validate_slug(slug: str, *, name: str) -> str:
     return slug
 
 
+_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[a-z0-9][a-z0-9-]{0,120}$")
+
+
+def _validate_run_id(run_id: str) -> str:
+    """Refuse anything that isn't an eval run id (spec #53).
+
+    Run ids are ``<UTC yyyymmdd-HHMMSS>-<rubric>[-<label-slug>]`` — built
+    by ``EvalRunner.build_run_id`` from a timestamp plus slug-shaped
+    parts, so this validator is belt-and-braces against caller-supplied
+    ids (CLI arguments) escaping ``evaluations/runs/``.
+    """
+    if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id):
+        raise ValueError(f"invalid run_id={run_id!r}: must match YYYYMMDD-HHMMSS-<slug>")
+    return run_id
+
+
 def _validate_episode_id(episode_id: str) -> str:
     """Refuse anything that isn't a UUID4-shaped string.
 
@@ -447,6 +463,23 @@ class PathManager:
         """
         _validate_slug(podcast_slug, name="podcast_slug")
         return self._assert_inside_root(self.evaluations_dir() / "raw" / podcast_slug / episode_filename)
+
+    def evaluation_runs_dir(self) -> Path:
+        """Get path to the append-only eval runs directory (spec #53)."""
+        return self.evaluations_dir() / "runs"
+
+    def evaluation_run_dir(self, run_id: str) -> Path:
+        """
+        Get full path to one eval run's directory.
+
+        Args:
+            run_id: Run identifier (``YYYYMMDD-HHMMSS-<rubric>[-<label>]``)
+
+        Returns:
+            Full path: evaluations/runs/{run_id}
+        """
+        _validate_run_id(run_id)
+        return self._assert_inside_root(self.evaluation_runs_dir() / run_id)
 
     def clean_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
         """
