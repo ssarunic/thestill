@@ -36,6 +36,7 @@ from thestill.models.user import User
 from thestill.repositories.sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
+from thestill.services.briefing_service import Deferred
 
 # Tuesday 08:00 CEST = 06:00 UTC — a daily-8am Zagreb slot.
 SLOT = datetime(2026, 7, 7, 6, 0, tzinfo=timezone.utc)
@@ -120,7 +121,46 @@ class TestTick:
         generated = scheduler.tick(now=SLOT)
 
         assert generated == 1
-        briefing_service.generate_for_user.assert_called_once_with(due.id, now=SLOT)
+        briefing_service.generate_for_user.assert_called_once_with(due.id, now=SLOT, cutoff=SLOT)
+
+    def test_deferred_slot_rechecks_with_original_cutoff_until_ready(
+        self, scheduler, user_repo, schedule_repo, briefing_service
+    ):
+        user = _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        deadline = SLOT + timedelta(hours=1)
+        briefing_service.generate_for_user.side_effect = [
+            Deferred(pending_count=2, deadline=deadline),
+            Deferred(pending_count=1, deadline=deadline),
+            _briefing(user.id),
+        ]
+
+        assert scheduler.tick(now=SLOT) == 0
+        assert schedule_repo.get(user.id).next_run_at == SLOT + timedelta(days=1)
+        assert scheduler.tick(now=SLOT + timedelta(minutes=1)) == 0
+        assert scheduler.tick(now=deadline) == 1
+
+        retry_kwargs = briefing_service.generate_for_user.call_args_list[-1].kwargs
+        assert retry_kwargs == {
+            "now": deadline,
+            "cutoff": SLOT,
+            "readiness_deadline": deadline,
+        }
+        assert scheduler._pending_briefings == {}
+
+    def test_restart_loses_in_memory_deferred_slot(self, scheduler, user_repo, schedule_repo, briefing_service):
+        user = _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        briefing_service.generate_for_user.side_effect = lambda *a, **k: Deferred(
+            pending_count=1,
+            deadline=SLOT + timedelta(hours=1),
+        )
+
+        assert scheduler.tick(now=SLOT) == 0
+        restarted_service = MagicMock()
+        restarted = BriefingScheduler(schedule_repo, restarted_service, tick_seconds=60, max_per_tick=50)
+
+        assert restarted.tick(now=SLOT + timedelta(minutes=1)) == 0
+        restarted_service.generate_for_user.assert_not_called()
+        assert schedule_repo.get(user.id).next_run_at == SLOT + timedelta(days=1)
 
     def test_each_user_fires_at_their_own_hour(self, scheduler, user_repo, schedule_repo, briefing_service):
         early = _add_user_with_schedule(
@@ -157,7 +197,28 @@ class TestTick:
         assert scheduler.tick(now=restart) == 1
         assert scheduler.tick(now=restart + timedelta(minutes=1)) == 0
         briefing_service.generate_for_user.assert_called_once()
+        assert briefing_service.generate_for_user.call_args.kwargs["cutoff"] == datetime(
+            2026, 7, 10, 6, 0, tzinfo=timezone.utc
+        )
         assert schedule_repo.get(user.id).next_run_at == SLOT + timedelta(days=4)  # Sat 08:00 CEST
+
+    def test_failing_deferred_retry_is_evicted_at_deadline(self, scheduler, user_repo, schedule_repo, briefing_service):
+        user = _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)
+        deadline = SLOT + timedelta(hours=1)
+        briefing_service.generate_for_user.side_effect = [
+            Deferred(pending_count=1, deadline=deadline),
+            RuntimeError("disk full"),
+        ]
+
+        assert scheduler.tick(now=SLOT) == 0
+        assert scheduler.tick(now=deadline) == 0
+
+        assert user.id not in scheduler._pending_briefings
+
+        # Tomorrow's slot is claimable again rather than skipped by a stale
+        # pending-map guard.
+        briefing_service.generate_for_user.side_effect = lambda user_id, **kwargs: _briefing(user_id)
+        assert scheduler.tick(now=SLOT + timedelta(days=1)) == 1
 
     def test_empty_window_advances_slot_without_counting(self, scheduler, user_repo, schedule_repo, briefing_service):
         user = _add_user_with_schedule(user_repo, schedule_repo, email="alice@example.com", next_run_at=SLOT)

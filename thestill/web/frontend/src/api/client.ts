@@ -51,6 +51,7 @@ import type {
   EntitySummaryResponse,
   EntityType,
   BriefingResponse,
+  LatestBriefingResponse,
   BriefingsListResponse,
   BriefingScheduleResponse,
   BriefingScheduleUpdate,
@@ -706,10 +707,22 @@ export async function setInboxState(
 }
 
 // Per-user briefings (spec #36). ``getLatestBriefing`` lazy-generates a
-// fresh briefing if the throttle has elapsed and inbox items are eligible;
-// callers should treat 404 as "no briefing for now, hide the card".
-export async function getLatestBriefing(): Promise<BriefingResponse> {
-  return fetchApi<BriefingResponse>('/briefings/latest')
+// fresh briefing if the throttle has elapsed and inbox items are eligible.
+// Spec #55 adds a 202 pending response and ``force=true`` escape hatch;
+// callers should still treat 404 as "no briefing for now, hide the card".
+export async function getLatestBriefing(force = false): Promise<LatestBriefingResponse> {
+  if (!force) return fetchApi<LatestBriefingResponse>('/briefings/latest')
+
+  const response = await fetch(`${API_BASE}/briefings/latest?force=true`, {
+    credentials: 'include',
+  })
+  if (response.status === 404) {
+    throw new Error('No episodes are ready yet. Your briefing is still catching up.')
+  }
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
 }
 
 export async function getBriefings(

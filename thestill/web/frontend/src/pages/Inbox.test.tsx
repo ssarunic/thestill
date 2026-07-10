@@ -12,11 +12,14 @@ vi.mock('../hooks/useApi', () => ({
   // a 404 ("no briefing yet") is the no-op state so the component returns
   // null and stays out of the way of the inbox-list assertions below.
   useLatestBriefing: vi.fn(() => ({ data: undefined, isLoading: false, error: { status: 404 } })),
+  useGenerateBriefingNow: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }))
 
-import { useInbox } from '../hooks/useApi'
+import { useGenerateBriefingNow, useInbox, useLatestBriefing } from '../hooks/useApi'
 
 const mockUseInbox = useInbox as ReturnType<typeof vi.fn>
+const mockUseLatestBriefing = useLatestBriefing as ReturnType<typeof vi.fn>
+const mockUseGenerateBriefingNow = useGenerateBriefingNow as ReturnType<typeof vi.fn>
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -164,5 +167,68 @@ describe('Inbox empty state + import button', () => {
     expect(screen.queryByRole('heading', { name: /import episode/i })).toBeNull()
     await user.click(screen.getByRole('button', { name: /^Import$/ }))
     expect(screen.getByRole('heading', { name: /import episode/i })).toBeInTheDocument()
+  })
+})
+
+describe('Briefing readiness gate', () => {
+  it('shows pending count and lets the user force generation', async () => {
+    const mutate = vi.fn()
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([]),
+      isLoading: false,
+      error: null,
+    })
+    mockUseLatestBriefing.mockReturnValue({
+      data: {
+        status: 'ok',
+        timestamp: '2026-07-10T08:00:00Z',
+        briefing_pending: {
+          pending_count: 3,
+          deadline: '2026-07-10T09:00:00Z',
+        },
+      },
+      isLoading: false,
+      error: null,
+    })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate, isPending: false })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByText('Your briefing is catching up')).toBeInTheDocument()
+    expect(screen.getByText('3 episodes still processing')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Generate now' }))
+    expect(mutate).toHaveBeenCalledOnce()
+  })
+
+  it('shows a useful message when a forced cut has nothing ready', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([]),
+      isLoading: false,
+      error: null,
+    })
+    mockUseLatestBriefing.mockReturnValue({
+      data: {
+        status: 'ok',
+        timestamp: '2026-07-10T08:00:00Z',
+        briefing_pending: {
+          pending_count: 3,
+          deadline: '2026-07-10T09:00:00Z',
+        },
+      },
+      isLoading: false,
+      error: null,
+    })
+    mockUseGenerateBriefingNow.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      isError: true,
+      error: new Error('No episodes are ready yet. Your briefing is still catching up.'),
+    })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No episodes are ready yet. Your briefing is still catching up.',
+    )
   })
 })

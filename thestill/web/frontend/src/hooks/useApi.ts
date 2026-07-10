@@ -691,9 +691,20 @@ export function useMarkInboxReadOnView(
 export function useLatestBriefing() {
   return useQuery({
     queryKey: ['briefings', 'latest'],
-    queryFn: getLatestBriefing,
+    queryFn: () => getLatestBriefing(),
     staleTime: 60_000,
     retry: false,
+  })
+}
+
+export function useGenerateBriefingNow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => getLatestBriefing(true),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['briefings', 'latest'], data)
+      queryClient.invalidateQueries({ queryKey: ['briefings', 'infinite'] })
+    },
   })
 }
 

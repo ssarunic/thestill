@@ -25,7 +25,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from thestill.models.briefing_schedule import BriefingFrequency, BriefingSchedule
-from thestill.utils.briefing_cadence import next_occurrence, next_run_for
+from thestill.utils.briefing_cadence import (
+    latest_occurrence_at_or_before,
+    latest_run_for,
+    next_occurrence,
+    next_run_for,
+)
 
 UTC = timezone.utc
 ZAGREB = ZoneInfo("Europe/Zagreb")  # CEST (+2) in July, CET (+1) in winter
@@ -38,6 +43,16 @@ def _daily(hour: int, tz, after: datetime) -> datetime:
 
 def _weekly(hour: int, weekday: int, tz, after: datetime) -> datetime:
     return next_occurrence(frequency=BriefingFrequency.WEEKLY, hour_local=hour, weekday=weekday, tz=tz, after=after)
+
+
+def _latest_daily(hour: int, tz, at: datetime) -> datetime:
+    return latest_occurrence_at_or_before(
+        frequency=BriefingFrequency.DAILY,
+        hour_local=hour,
+        weekday=None,
+        tz=tz,
+        at=at,
+    )
 
 
 # ============================================================================
@@ -74,6 +89,14 @@ class TestDaily:
     def test_midnight_hour(self):
         after = datetime(2026, 7, 7, 23, 30, tzinfo=UTC)  # 01:30 CEST July 8
         assert _daily(0, ZAGREB, after) == datetime(2026, 7, 8, 22, 0, tzinfo=UTC)  # 00:00 CEST July 9
+
+    def test_latest_occurrence_uses_most_recent_slot_after_multiday_downtime(self):
+        monday_wake = datetime(2026, 7, 13, 7, 30, tzinfo=UTC)  # 09:30 CEST
+        assert _latest_daily(8, ZAGREB, monday_wake) == datetime(2026, 7, 13, 6, 0, tzinfo=UTC)
+
+    def test_latest_occurrence_uses_previous_day_before_local_hour(self):
+        monday_early = datetime(2026, 7, 13, 5, 30, tzinfo=UTC)  # 07:30 CEST
+        assert _latest_daily(8, ZAGREB, monday_early) == datetime(2026, 7, 12, 6, 0, tzinfo=UTC)
 
 
 # ============================================================================
@@ -170,3 +193,14 @@ class TestContract:
         )
         after = datetime(2026, 7, 7, 12, 0, tzinfo=UTC)
         assert next_run_for(schedule, after=after) == datetime(2026, 7, 13, 6, 0, tzinfo=UTC)
+
+    def test_latest_run_for_reads_schedule_fields(self):
+        schedule = BriefingSchedule(
+            user_id="00000000-0000-0000-0000-000000000001",
+            frequency=BriefingFrequency.WEEKLY,
+            hour_local=8,
+            weekday=0,
+            timezone_name="Europe/Zagreb",
+        )
+        monday_late = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+        assert latest_run_for(schedule, at=monday_late) == datetime(2026, 7, 13, 6, 0, tzinfo=UTC)

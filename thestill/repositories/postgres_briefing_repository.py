@@ -87,6 +87,45 @@ class PostgresBriefingRepository(BriefingRepository):
             ).fetchone()
             return self._row_to_briefing(row) if row else None
 
+    def count_pending_for_user(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        cutoff: datetime,
+    ) -> int:
+        """Return the spec #55 wait-set size for ``user_id``."""
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT e.id) AS n
+                  FROM tasks t
+                  JOIN episodes e
+                    ON e.id = t.episode_id
+                  JOIN podcast_followers pf
+                    ON pf.podcast_id = e.podcast_id
+                   AND pf.user_id = %s
+                 WHERE e.pub_date >= %s
+                   AND e.pub_date < %s
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM user_episode_inbox i
+                        WHERE i.user_id = %s
+                          AND i.episode_id = e.id
+                   )
+                   AND (
+                       t.status IN ('pending', 'processing')
+                       OR (
+                           t.status = 'retry_scheduled'
+                           AND t.retry_count < t.max_retries
+                           AND t.next_retry_at IS NOT NULL
+                       )
+                   )
+                """,
+                (user_id, since, cutoff, user_id),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
     def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
         with connect(self.dsn) as conn:
             rows = conn.execute(

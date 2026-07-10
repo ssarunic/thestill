@@ -85,5 +85,50 @@ def next_run_for(schedule: BriefingSchedule, *, after: datetime) -> datetime:
     )
 
 
+def latest_occurrence_at_or_before(
+    *,
+    frequency: BriefingFrequency,
+    hour_local: int,
+    weekday: Optional[int],
+    tz: ZoneInfo,
+    at: datetime,
+) -> datetime:
+    """Most recent nominal schedule occurrence at or before ``at``, in UTC.
+
+    Used by spec #55 catch-up readiness: an overdue row may point at the
+    oldest missed slot, while the wait-set cutoff must cover releases through
+    the latest slot that elapsed before the machine woke.
+    """
+    if at.tzinfo is None:
+        raise ValueError("`at` must be timezone-aware (FM-3)")
+    if not 0 <= hour_local <= 23:
+        raise ValueError(f"hour_local out of range: {hour_local}")
+    if (frequency == BriefingFrequency.WEEKLY) != (weekday is not None):
+        raise ValueError("weekday is required iff frequency is weekly")
+
+    local_at = at.astimezone(tz)
+    candidate_date = local_at.date()
+    if weekday is not None:
+        candidate_date -= timedelta(days=(candidate_date.weekday() - weekday) % 7)
+    step = timedelta(days=7 if frequency == BriefingFrequency.WEEKLY else 1)
+
+    candidate = _at_local_hour(candidate_date, hour_local, tz)
+    while candidate > at:
+        candidate_date -= step
+        candidate = _at_local_hour(candidate_date, hour_local, tz)
+    return candidate.astimezone(timezone.utc)
+
+
+def latest_run_for(schedule: BriefingSchedule, *, at: datetime) -> datetime:
+    """``latest_occurrence_at_or_before`` over a schedule row's fields."""
+    return latest_occurrence_at_or_before(
+        frequency=schedule.frequency,
+        hour_local=schedule.hour_local,
+        weekday=schedule.weekday,
+        tz=schedule.tzinfo,
+        at=at,
+    )
+
+
 def _at_local_hour(day: date, hour: int, tz: ZoneInfo) -> datetime:
     return datetime.combine(day, time(hour=hour), tzinfo=tz)

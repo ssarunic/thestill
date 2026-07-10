@@ -25,14 +25,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from structlog import get_logger
 
 from ...models.briefing import Briefing
 from ...models.briefing_schedule import BriefingFrequency, BriefingSchedule
 from ...models.user import User
-from ...services.briefing_service import BriefingNotFoundError
+from ...services.briefing_service import BriefingNotFoundError, Deferred
 from ...services.narration import NarrationRunnerError, read_narration_header
 from ...utils.briefing_cadence import next_run_for
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
@@ -171,15 +171,28 @@ async def list_briefings(
 
 @router.get("/latest")
 async def get_latest_briefing(
+    response: Response,
+    force: bool = False,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """Return the user's most recent briefing, generating one if eligible.
 
-    Returns 404 when the inbox has no eligible items in the open window —
-    callers should hide the briefing card.
+    Returns 202 while followed, pre-cutoff episodes are still processing,
+    unless ``force=true`` skips the readiness gate. Returns 404 when the inbox
+    has no eligible items in the open window.
     """
-    briefing = app_state.briefing_service.generate_for_user(user.id)
+    briefing = app_state.briefing_service.generate_for_user(user.id, force=force)
+    if isinstance(briefing, Deferred):
+        response.status_code = 202
+        return api_response(
+            {
+                "briefing_pending": {
+                    "pending_count": briefing.pending_count,
+                    "deadline": briefing.deadline.isoformat(),
+                }
+            }
+        )
     if briefing is None:
         not_found("Briefing", "latest")
     return api_response(_serialize(briefing))
