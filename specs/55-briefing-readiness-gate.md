@@ -87,11 +87,22 @@ but unprocessed.
    - the episode row exists (**discovered** — we cannot wait for what no
      feed refresh has seen yet; see Accepted Limitations);
    - no `user_episode_inbox` row for (*U*, episode) yet;
+   - it is **not yet published** (`published_at IS NULL`) — a published
+     episode already fanned out; user-chain re-runs on it can never deliver
+     anything new to this user (added 2026-07-10);
    - it has an **active** pipeline task: status `pending` or `processing`,
      or `retry_scheduled` with retries remaining
      (`retry_count < max_retries` and a `next_retry_at`). In the queue state
      machine, `failed` already means retries are exhausted; `failed`, `dead`,
-     `completed`, and `superseded` tasks are therefore *not* waited for.
+     `completed`, and `superseded` tasks are therefore *not* waited for;
+   - the active task is a **user-chain stage** (`download` → `summarize`,
+     the `_USER_CHAIN_ORDER` in
+     [queue_manager.py](../thestill/core/queue_manager.py)). Post-summarize
+     entity/corpus stages (`extract-entities`, `resolve-entities`,
+     `reindex`, `rebuild-cooccurrences`, `compute-related`,
+     `enrich-entities`) are enrichment — an episode is briefing-ready the
+     moment it is summarised, so post-processing never holds the cut
+     (decision 2026-07-10).
 4. **Grace deadline.** If the wait-set is non-empty, defer and re-check.
    Deadline = **actual fire time** + `BRIEFING_READINESS_GRACE_MINUTES`
    (default 60). Anchoring at fire time, not the nominal slot, is
@@ -276,3 +287,11 @@ of a bare count. Punt until the fixed grace proves insufficient.
 2. Should email delivery (#51) hold until grace resolution even if the
    user's schedule fires earlier? Current answer: yes trivially — delivery
    keys off the briefing row, which doesn't exist until the gate opens.
+
+---
+
+## Decision Log
+
+| Date | Decision |
+|------|----------|
+| 2026-07-10 | Wait-set narrowed to **user-chain stages only** (`download` → `summarize`) plus a `published_at IS NULL` guard. Rationale (user direction): an episode is briefing-ready when summarised; entity/corpus post-processing (`compute-related` etc.) is enrichment and must never defer a cut. The publish guard additionally stops user-chain *re-runs* on already-published episodes from stalling briefings for users who followed after publish (fan-out never re-fires). |

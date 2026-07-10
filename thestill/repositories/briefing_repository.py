@@ -51,8 +51,14 @@ class BriefingRepository(ABC):
         cutoff: datetime,
     ) -> int:
         """Count followed, pre-cutoff episodes in the open briefing window
-        that have not reached ``user_id``'s inbox and still have active queue
-        work (spec #55)."""
+        that have not reached ``user_id``'s inbox and still have active
+        *user-chain* queue work (download → summarize, spec #55).
+
+        Episodes whose only active tasks are post-summarize entity/corpus
+        stages, and episodes already published (``published_at`` set), are
+        excluded — neither can deliver anything new to the inbox, so waiting
+        on them would only delay the briefing (decision 2026-07-10).
+        """
 
     @abstractmethod
     def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:

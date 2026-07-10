@@ -26,11 +26,17 @@ from typing import List, Optional
 
 from structlog import get_logger
 
+from ..core.queue_manager import USER_CHAIN_STAGE_VALUES
 from ..models.briefing import Briefing
 from ..utils.postgres_ext import as_str, connect
 from .briefing_repository import BriefingRepository
 
 logger = get_logger(__name__)
+
+# Values come from our own enum, never user input — safe to inline. The
+# wait-set tracks only the user chain (download → summarize); entity/corpus
+# post-processing never holds a briefing (spec #55, decision 2026-07-10).
+_USER_CHAIN_SQL = ", ".join(f"'{v}'" for v in USER_CHAIN_STAGE_VALUES)
 
 _COLS = "id, user_id, cursor_from, cursor_to, episode_count, script_path, audio_path, created_at, listened_at"
 
@@ -95,9 +101,14 @@ class PostgresBriefingRepository(BriefingRepository):
         cutoff: datetime,
     ) -> int:
         """Return the spec #55 wait-set size for ``user_id``."""
+        # Two guards keep the gate honest about what can still *arrive*:
+        # the stage filter ignores post-summarize entity/corpus work, and
+        # ``published_at IS NULL`` ignores already-published episodes whose
+        # user-chain re-runs would otherwise stall a briefing for content
+        # that will never (re-)deliver.
         with connect(self.dsn) as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT e.id) AS n
                   FROM tasks t
                   JOIN episodes e
@@ -107,6 +118,8 @@ class PostgresBriefingRepository(BriefingRepository):
                    AND pf.user_id = %s
                  WHERE e.pub_date >= %s
                    AND e.pub_date < %s
+                   AND e.published_at IS NULL
+                   AND t.stage IN ({_USER_CHAIN_SQL})
                    AND NOT EXISTS (
                        SELECT 1
                          FROM user_episode_inbox i
