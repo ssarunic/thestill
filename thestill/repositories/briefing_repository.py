@@ -43,6 +43,18 @@ class BriefingRepository(ABC):
         """Return the user's most recently-created briefing, or ``None``."""
 
     @abstractmethod
+    def count_pending_for_user(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        cutoff: datetime,
+    ) -> int:
+        """Count followed, pre-cutoff episodes in the open briefing window
+        that have not reached ``user_id``'s inbox and still have active queue
+        work (spec #55)."""
+
+    @abstractmethod
     def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
         """Return the user's briefings, newest first (paginated history)."""
 

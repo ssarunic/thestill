@@ -1215,6 +1215,19 @@ export interface BriefingResponse extends Briefing {
   narrations: NarrationSummary[]
 }
 
+// Spec #55: a lazy latest request can be accepted but deferred while the
+// followed-podcast pipeline drains. The same endpoint returns either shape.
+export interface BriefingPendingResponse {
+  status: string
+  timestamp: string
+  briefing_pending: {
+    pending_count: number
+    deadline: string
+  }
+}
+
+export type LatestBriefingResponse = BriefingResponse | BriefingPendingResponse
+
 // Paginated briefing history (GET /api/briefings), newest first.
 export interface BriefingsListResponse {
   status: string

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from thestill.core.queue_manager import QueueManager
 from thestill.models.briefing import Briefing
 from thestill.models.user import User
 from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
@@ -31,6 +32,7 @@ from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 def db_path(tmp_path):
     path = tmp_path / "briefing_repo.db"
     SqlitePodcastRepository(str(path))
+    QueueManager(str(path))
     return str(path)
 
 
@@ -237,6 +239,122 @@ def test_list_for_user_isolates_users(repo, user_repo):
 
     assert [b.user_id for b in listed] == [alice.id]
     assert repo.count_for_user(alice.id) == 1
+
+
+def test_count_pending_for_user_uses_real_wait_set_rows(repo, user_repo, db_path):
+    """Spec #55 FM-5 matrix: exercise actual follower/inbox/task rows."""
+    user = _make_user(user_repo, "alice@example.com")
+    other = _make_user(user_repo, "bob@example.com")
+    since = datetime(2026, 7, 10, 6, 0, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 10, 8, 5, tzinfo=timezone.utc)
+    followed_podcast = str(uuid.uuid4())
+    unfollowed_podcast = str(uuid.uuid4())
+
+    with sqlite3.connect(db_path) as conn:
+        for podcast_id, slug in ((followed_podcast, "followed"), (unfollowed_podcast, "unfollowed")):
+            conn.execute(
+                "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (?, ?, ?, ?)",
+                (podcast_id, f"https://example.com/{slug}.xml", slug, slug),
+            )
+        conn.execute(
+            "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), user.id, followed_podcast, since.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), other.id, unfollowed_podcast, since.isoformat()),
+        )
+
+        def add_case(name, *, status, pub_date, podcast_id=followed_podcast, retry=0, maximum=3, retry_at=None):
+            episode_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO episodes
+                    (id, podcast_id, external_id, title, slug, description, description_html, audio_url, pub_date)
+                VALUES (?, ?, ?, ?, ?, '', '', ?, ?)
+                """,
+                (
+                    episode_id,
+                    podcast_id,
+                    f"ext-{name}",
+                    name,
+                    name,
+                    f"https://example.com/{name}.mp3",
+                    pub_date.isoformat(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO tasks
+                    (id, episode_id, stage, status, retry_count, max_retries,
+                     next_retry_at, created_at, updated_at)
+                VALUES (?, ?, 'summarize', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    episode_id,
+                    status,
+                    retry,
+                    maximum,
+                    retry_at.isoformat() if retry_at else None,
+                    since.isoformat(),
+                    since.isoformat(),
+                ),
+            )
+            return episode_id
+
+        in_window = since + timedelta(minutes=30)
+        pending = add_case("pending", status="pending", pub_date=in_window)
+        # Multiple active rows for one episode still count as one wait-set item.
+        conn.execute(
+            """
+            INSERT INTO tasks
+                (id, episode_id, stage, status, retry_count, max_retries, created_at, updated_at)
+            VALUES (?, ?, 'clean', 'pending', 0, 3, ?, ?)
+            """,
+            (str(uuid.uuid4()), pending, since.isoformat(), since.isoformat()),
+        )
+        add_case("processing", status="processing", pub_date=in_window)
+        add_case(
+            "retrying",
+            status="retry_scheduled",
+            pub_date=in_window,
+            retry=1,
+            maximum=3,
+            retry_at=now + timedelta(minutes=5),
+        )
+        add_case(
+            "failed-terminal",
+            status="failed",
+            pub_date=in_window,
+            retry=1,
+            maximum=3,
+            retry_at=now + timedelta(minutes=5),
+        )
+        add_case("exhausted", status="failed", pub_date=in_window, retry=3, maximum=3)
+        add_case("unfollowed", status="pending", pub_date=in_window, podcast_id=unfollowed_podcast)
+        add_case("post-cutoff", status="pending", pub_date=cutoff + timedelta(minutes=1))
+        add_case("pre-window", status="pending", pub_date=since - timedelta(minutes=1))
+        delivered = add_case("already-delivered", status="pending", pub_date=in_window)
+        conn.execute(
+            """
+            INSERT INTO user_episode_inbox
+                (id, user_id, episode_id, source, state, delivered_at)
+            VALUES (?, ?, ?, 'follow_new', 'unread', ?)
+            """,
+            (str(uuid.uuid4()), user.id, delivered, now.isoformat()),
+        )
+        conn.commit()
+
+    assert (
+        repo.count_pending_for_user(
+            user.id,
+            since=since,
+            cutoff=cutoff,
+        )
+        == 3
+    )
 
 
 def test_list_for_user_empty(repo, user_repo):

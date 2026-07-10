@@ -1,6 +1,6 @@
 # Briefing Readiness Gate
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Implemented — Phases 1–2 (2026-07-10); Phase 3 remains optional
 > **Created:** 2026-07-10
 > **Author:** Product & Engineering
 > **Related:** [#36 per-user-digest-from-inbox](36-per-user-digest-from-inbox.md), [#50 scheduled-briefings](50-scheduled-briefings.md), [#51 briefing-email-delivery](51-briefing-email-delivery.md), [#48 refresh-feed-stage](48-refresh-feed-stage.md), [#42 failure-mode catalogue](42-robustness-and-failure-mode-hardening.md)
@@ -72,9 +72,12 @@ but unprocessed.
    published after the cutoff that happens to finish processing before the
    cut rides along one briefing early — accepted, and it preserves the
    no-loss cursor invariant without new bookkeeping.
-2. **Cutoff.** Scheduled run: the slot's nominal local time (e.g. today
-   08:00 in the user's `timezone_name`, converted to UTC). Lazy run:
-   `now()` at the moment the inbox open triggers generation.
+2. **Cutoff.** Scheduled run: the most recent nominal local slot at or
+   before the actual fire time (e.g. today 08:00 in the user's
+   `timezone_name`, converted to UTC). This matters for downtime catch-up:
+   a Monday wake must wait for work published through Monday's slot, not use
+   the oldest overdue `next_run_at` left from Saturday. Lazy run: `now()` at
+   the moment the inbox open triggers generation.
 3. **Wait-set scope.** Episode is in user *U*'s wait-set iff **all** of:
    - its podcast has a `podcast_followers` row for *U*
      (same scope [`fanout_on_publish`](../thestill/services/inbox_service.py)
@@ -85,8 +88,10 @@ but unprocessed.
      feed refresh has seen yet; see Accepted Limitations);
    - no `user_episode_inbox` row for (*U*, episode) yet;
    - it has an **active** pipeline task: status `pending` or `processing`,
-     or failed-with-retries-remaining (`retry_count < max_retries` with a
-     `next_retry_at`). Permanently failed chains are *not* waited for.
+     or `retry_scheduled` with retries remaining
+     (`retry_count < max_retries` and a `next_retry_at`). In the queue state
+     machine, `failed` already means retries are exhausted; `failed`, `dead`,
+     `completed`, and `superseded` tasks are therefore *not* waited for.
 4. **Grace deadline.** If the wait-set is non-empty, defer and re-check.
    Deadline = **actual fire time** + `BRIEFING_READINESS_GRACE_MINUTES`
    (default 60). Anchoring at fire time, not the nominal slot, is
@@ -107,24 +112,27 @@ but unprocessed.
 ### Readiness check
 
 One new query, owned by the briefing side (repository method
-`count_pending_for_user(user_id, cutoff, now)`), conceptually:
+`count_pending_for_user(user_id, since, cutoff)`), conceptually:
 
 ```sql
-SELECT COUNT(*)
-FROM episodes e
+SELECT COUNT(DISTINCT e.id)
+FROM tasks t
+JOIN episodes e ON e.id = t.episode_id
 JOIN podcast_followers pf
   ON pf.podcast_id = e.podcast_id AND pf.user_id = :user_id
 WHERE e.pub_date < :cutoff
+  AND e.pub_date >= :since
   AND NOT EXISTS (SELECT 1 FROM user_episode_inbox i
                   WHERE i.user_id = :user_id AND i.episode_id = e.id)
-  AND EXISTS (SELECT 1 FROM tasks t
-              WHERE t.episode_id = e.id
-                AND t.stage != 'refresh-feed'
-                AND (t.status IN ('pending', 'processing')
-                     OR (t.status = 'failed'
-                         AND t.retry_count < t.max_retries
-                         AND t.next_retry_at IS NOT NULL)))
+  AND (t.status IN ('pending', 'processing')
+       OR (t.status = 'retry_scheduled'
+           AND t.retry_count < t.max_retries
+           AND t.next_retry_at IS NOT NULL))
 ```
+
+Task-first execution keeps a first briefing bounded by active queue depth
+instead of range-scanning the user's entire followed back catalogue, while
+distinctness protects against duplicate active rows for one episode.
 
 Bound `pub_date` below by the briefing's `cursor_from` as well — episodes
 older than the window's start were already someone's business in a prior
@@ -144,12 +152,19 @@ The [#50](50-scheduled-briefings.md) tick uses advance-before-generate:
 deferral must not orphan the slot. Reuse the pattern the scheduler already
 has for narration retries (in-memory retry set,
 [briefing_scheduler.py:92–94](../thestill/core/briefing_scheduler.py#L92)):
-on `Deferred`, park `(user_id, fire_time, deadline)` in an in-memory
+on `Deferred`, park `user_id → (cutoff, deadline)` in an in-memory
 pending map and re-attempt on each subsequent tick (tick cadence, 60 s, is the
-re-check interval — no new poll loop). On success or deadline expiry the
-entry is dropped. Server restart mid-grace loses the map — acceptable: the
-schedule row's cursor is untouched, the #50 catch-up fires the slot again
-on boot, and the grace clock restarts from the new fire time.
+re-check interval — no new poll loop). `cutoff` remains the most recent
+nominal UTC slot while `deadline` already encodes the actual fire-time anchor.
+On success the entry is dropped. If generation itself raises, retain the entry
+only while grace remains; at/after the deadline, evict it so the parked slot
+cannot block every future cadence for that user. Server restart mid-grace
+loses the map — acceptable under the no-schema-change constraint:
+`next_run_at` was already advanced by #50's claim-before-generate flow, so
+that scheduled slot is abandoned rather than re-fired on boot. The briefing
+cursor is untouched, which guarantees the episodes roll into the next lazy or
+scheduled generation window, but that day's scheduled briefing/email may be
+skipped.
 
 ### Lazy path (inbox open)
 
@@ -163,13 +178,26 @@ on boot, and the grace clock restarts from the new fire time.
 - **Generate now** → same endpoint with `?force=true`, which skips the
   gate and cuts immediately (today's behavior, but now it's an explicit
   user choice instead of a silent race).
+- If Generate now finds zero delivered episodes, the existing no-briefing
+  path still returns 404. The UI surfaces "No episodes are ready yet" rather
+  than silently ignoring the action, and the current wait-set remains
+  explicitly bypassed instead of starting a fresh grace window on the next
+  poll.
 - The frontend may re-poll on its normal inbox cadence; each poll
   re-evaluates the gate, so the briefing appears as soon as the queue
   drains or the grace expires.
 
 The lazy grace deadline is anchored at the *first* deferred request for
-the current cursor window (persisting it in memory keyed by user is
-enough; worst case after a restart the grace restarts).
+the current cursor window (persisting it in memory keyed by user is enough;
+worst case after a restart the grace restarts). Once a request actually
+observes deadline expiry — or the user forces generation — mark that anchor
+exhausted and do not re-arm it while its original wait-set remains active.
+If an unobserved anchor has sat more than one grace interval past its deadline
+(for example the user returns the next day), treat the open as a new session
+and re-anchor cutoff and deadline at the new request so fresh backlog is not
+hidden behind a stale cutoff. The extra interval is a polling tolerance: a
+request arriving seconds after the deadline must observe expiry, not mint a
+new grace window.
 
 ### Configuration
 
@@ -233,9 +261,12 @@ of a bare count. Punt until the fixed grace proves insufficient.
    07:55 won't transcribe in any reasonable grace window; it rolls over.
    By design — the deadline exists precisely so one whale doesn't sink the
    briefing.
-3. **In-memory deferral state.** A restart mid-grace restarts the grace
-   clock. Harmless (cursor untouched, #50 catch-up re-fires) and not worth
-   a table.
+3. **In-memory deferral state.** A restart mid-grace loses the deferred
+   scheduled slot because #50 already advanced `next_run_at`; the cursor is
+   untouched, so coverage rolls into the next lazy or scheduled generation,
+   but that slot's briefing/email may be skipped. Durable same-slot recovery
+   would require persisted deferral state (or a claim-flow redesign) and is
+   explicitly out of scope for the no-schema-change version.
 
 ## Open questions
 

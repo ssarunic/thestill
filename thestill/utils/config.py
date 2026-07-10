@@ -369,6 +369,10 @@ class Config(BaseModel):
     # avoid double-coverage from accidental double-runs.
     briefing_min_interval_seconds: int = 6 * 60 * 60
 
+    # Spec #55 — defer a briefing while followed, pre-cutoff episodes still
+    # have active pipeline work. Zero preserves the pre-gate behavior.
+    briefing_readiness_grace_minutes: int = 60
+
     # Briefing email delivery (spec #51). ``none`` short-circuits the
     # delivery pass entirely: no delivery rows, no sends, checkbox hidden
     # in the UI — #50 deployments without email config pay zero overhead.
@@ -702,6 +706,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
         "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
+        "briefing_readiness_grace_minutes": int(os.getenv("BRIEFING_READINESS_GRACE_MINUTES", "60")),
         # Briefing email delivery (spec #51)
         "email_provider": os.getenv("EMAIL_PROVIDER", "none").lower(),
         "email_from": os.getenv("EMAIL_FROM", ""),

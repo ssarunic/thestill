@@ -17,6 +17,7 @@
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,7 +29,7 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.briefing_renderer import BriefingRenderer
 from thestill.services.briefing_script_generator import BriefingScriptGenerator
-from thestill.services.briefing_service import BriefingNotFoundError, BriefingService
+from thestill.services.briefing_service import BriefingNotFoundError, BriefingService, Deferred
 from thestill.utils.path_manager import PathManager
 
 # Six hours: matches the production default. Tests opt out of the throttle
@@ -60,7 +61,12 @@ def briefing_repo(db_path):
 
 @pytest.fixture
 def service(briefing_repo, inbox_repo):
-    return BriefingService(briefing_repo, inbox_repo, min_interval_seconds=THROTTLE_SECONDS)
+    return BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=THROTTLE_SECONDS,
+        readiness_grace_minutes=0,
+    )
 
 
 @pytest.fixture
@@ -98,6 +104,7 @@ def service_with_rendering(briefing_repo, inbox_repo, renderer):
         briefing_repo,
         inbox_repo,
         min_interval_seconds=THROTTLE_SECONDS,
+        readiness_grace_minutes=0,
         renderer=renderer,
     )
 
@@ -193,6 +200,171 @@ def test_first_run_covers_inbox_from_epoch(service, db_path, user_repo, inbox_re
 def test_returns_none_when_inbox_empty(service, user_repo):
     user = _make_user(user_repo, "alice@example.com")
     assert service.generate_for_user(user.id) is None
+
+
+def test_readiness_gate_defers_without_advancing_cursor_and_reuses_lazy_cutoff():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.side_effect = [2, 0]
+    inbox_repo.list_episode_ids_in_window.return_value = ["episode-1"]
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=60,
+    )
+    opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc)
+
+    first = service.generate_for_user("user-1", now=opened_at)
+
+    assert first == Deferred(pending_count=2, deadline=opened_at + timedelta(hours=1))
+    briefing_repo.insert.assert_not_called()
+
+    generated = service.generate_for_user("user-1", now=opened_at + timedelta(minutes=5))
+    assert generated is not None
+    assert not isinstance(generated, Deferred)
+    calls = briefing_repo.count_pending_for_user.call_args_list
+    assert calls[0].kwargs["cutoff"] == opened_at
+    assert calls[1].kwargs["cutoff"] == opened_at
+    assert generated.cursor_from.year == 1970
+
+
+def test_readiness_gate_cuts_at_deadline_with_pending_work():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.return_value = 1
+    inbox_repo.list_episode_ids_in_window.return_value = ["episode-1"]
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=10,
+    )
+    opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc)
+
+    assert isinstance(service.generate_for_user("user-1", now=opened_at), Deferred)
+    generated = service.generate_for_user("user-1", now=opened_at + timedelta(minutes=10))
+
+    assert generated is not None
+    assert not isinstance(generated, Deferred)
+    briefing_repo.insert.assert_called_once()
+
+
+def test_stale_unobserved_lazy_deadline_reanchors_next_open():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.return_value = 2
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=60,
+    )
+    first_open = datetime(2026, 7, 9, 8, 0, tzinfo=timezone.utc)
+    next_day_open = datetime(2026, 7, 10, 10, 16, tzinfo=timezone.utc)
+
+    assert isinstance(service.generate_for_user("user-1", now=first_open), Deferred)
+    result = service.generate_for_user("user-1", now=next_day_open)
+
+    assert result == Deferred(pending_count=2, deadline=next_day_open + timedelta(hours=1))
+    calls = briefing_repo.count_pending_for_user.call_args_list
+    assert calls[0].kwargs["cutoff"] == first_open
+    assert calls[1].kwargs["cutoff"] == next_day_open
+
+
+def test_observed_empty_expiry_does_not_rearm_same_wait_set():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.return_value = 1
+    inbox_repo.list_episode_ids_in_window.return_value = []
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=10,
+    )
+    opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc)
+
+    assert isinstance(service.generate_for_user("user-1", now=opened_at), Deferred)
+    assert service.generate_for_user("user-1", now=opened_at + timedelta(minutes=10)) is None
+    assert service.generate_for_user("user-1", now=opened_at + timedelta(minutes=11)) is None
+
+    anchor = service._lazy_deferrals["user-1"]
+    assert anchor.deadline == opened_at + timedelta(minutes=10)
+    assert anchor.grace_exhausted is True
+
+
+def test_forced_empty_cut_bypasses_original_wait_set_without_rearming():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.return_value = 3
+    inbox_repo.list_episode_ids_in_window.return_value = []
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=60,
+    )
+    opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc)
+
+    assert isinstance(service.generate_for_user("user-1", now=opened_at), Deferred)
+    assert service.generate_for_user("user-1", force=True, now=opened_at + timedelta(minutes=1)) is None
+    follow_up = service.generate_for_user("user-1", now=opened_at + timedelta(minutes=2))
+
+    assert follow_up is None
+    assert service._lazy_deferrals["user-1"].grace_exhausted is True
+    # Normal open + normal follow-up query readiness; the forced attempt skips it.
+    assert briefing_repo.count_pending_for_user.call_count == 2
+
+
+def test_readiness_query_failure_fails_open():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    briefing_repo.count_pending_for_user.side_effect = RuntimeError("database unavailable")
+    inbox_repo.list_episode_ids_in_window.return_value = ["episode-1"]
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=60,
+    )
+
+    generated = service.generate_for_user(
+        "user-1",
+        now=datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    assert generated is not None
+    assert not isinstance(generated, Deferred)
+    briefing_repo.insert.assert_called_once()
+
+
+def test_force_skips_readiness_gate():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.latest_for_user.return_value = None
+    inbox_repo.list_episode_ids_in_window.return_value = ["episode-1"]
+    service = BriefingService(
+        briefing_repo,
+        inbox_repo,
+        min_interval_seconds=0,
+        readiness_grace_minutes=60,
+    )
+
+    generated = service.generate_for_user(
+        "user-1",
+        force=True,
+        now=datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc),
+    )
+
+    assert generated is not None
+    briefing_repo.count_pending_for_user.assert_not_called()
 
 
 def test_excludes_read_and_dismissed_items(service, db_path, user_repo, inbox_repo):
@@ -444,9 +616,21 @@ def test_constructor_rejects_negative_min_interval(briefing_repo, inbox_repo):
         BriefingService(briefing_repo, inbox_repo, min_interval_seconds=-1)
 
 
+def test_constructor_rejects_negative_readiness_grace(briefing_repo, inbox_repo):
+    with pytest.raises(ValueError):
+        BriefingService(
+            briefing_repo,
+            inbox_repo,
+            min_interval_seconds=0,
+            readiness_grace_minutes=-1,
+        )
+
+
 def test_from_config_pulls_min_interval(briefing_repo, inbox_repo):
     class _StubConfig:
         briefing_min_interval_seconds = 3600
+        briefing_readiness_grace_minutes = 15
 
     service = BriefingService.from_config(_StubConfig(), briefing_repo, inbox_repo)
     assert service._min_interval == timedelta(seconds=3600)
+    assert service._readiness_grace == timedelta(minutes=15)

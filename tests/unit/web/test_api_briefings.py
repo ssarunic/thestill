@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from thestill.models.briefing import Briefing
 from thestill.models.user import User
-from thestill.services.briefing_service import BriefingNotFoundError
+from thestill.services.briefing_service import BriefingNotFoundError, Deferred
 from thestill.web.routes import api_briefings
 
 
@@ -104,7 +104,27 @@ class TestGetLatest:
 
         client.get("/api/briefings/latest")
 
-        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id)
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
+
+    def test_202_when_readiness_gate_defers(self, client, mock_app_state):
+        deadline = datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc)
+        mock_app_state.briefing_service.generate_for_user.return_value = Deferred(3, deadline)
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 202
+        assert response.json()["briefing_pending"] == {
+            "pending_count": 3,
+            "deadline": deadline.isoformat(),
+        }
+
+    def test_force_query_skips_gate(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest?force=true")
+
+        assert response.status_code == 200
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=True)
 
 
 # ============================================================================

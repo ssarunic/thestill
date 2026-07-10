@@ -93,6 +93,50 @@ class SqliteBriefingRepository(BriefingRepository):
             ).fetchone()
             return self._row_to_briefing(row) if row else None
 
+    def count_pending_for_user(
+        self,
+        user_id: str,
+        *,
+        since: datetime,
+        cutoff: datetime,
+    ) -> int:
+        """Return the spec #55 wait-set size for ``user_id``."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT e.id)
+                  FROM tasks t
+                  JOIN episodes e
+                    ON e.id = t.episode_id
+                  JOIN podcast_followers pf
+                    ON pf.podcast_id = e.podcast_id
+                   AND pf.user_id = ?
+                 WHERE e.pub_date >= ?
+                   AND e.pub_date < ?
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM user_episode_inbox i
+                        WHERE i.user_id = ?
+                          AND i.episode_id = e.id
+                   )
+                   AND (
+                       t.status IN ('pending', 'processing')
+                       OR (
+                           t.status = 'retry_scheduled'
+                           AND t.retry_count < t.max_retries
+                           AND t.next_retry_at IS NOT NULL
+                       )
+                   )
+                """,
+                (
+                    user_id,
+                    since.isoformat(),
+                    cutoff.isoformat(),
+                    user_id,
+                ),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
     def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
         with self._get_connection() as conn:
             rows = conn.execute(

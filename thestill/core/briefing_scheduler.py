@@ -47,12 +47,14 @@ delivery row's own cadence and never touches the schedule cursor.
 """
 
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from structlog import get_logger
 
-from ..utils.briefing_cadence import next_run_for
+from ..services.briefing_service import Deferred
+from ..utils.briefing_cadence import latest_run_for, next_run_for
 from ..utils.duration import slug_for_duration_seconds
 
 if TYPE_CHECKING:
@@ -63,6 +65,14 @@ if TYPE_CHECKING:
     from ..services.narration import NarrationRunner
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class _PendingBriefing:
+    """One claimed schedule slot parked by the spec #55 readiness gate."""
+
+    cutoff: datetime
+    deadline: datetime
 
 
 class BriefingScheduler:
@@ -93,6 +103,9 @@ class BriefingScheduler:
         # scheduled email is lost until the next cadence — re-attempt the
         # (idempotent) queueing on every tick until it lands.
         self._unqueued_deliveries: set[str] = set()
+        # Spec #55: #50 advances the schedule row before generation, so a
+        # deferred slot must remain reachable in memory until it resolves.
+        self._pending_briefings: dict[str, _PendingBriefing] = {}
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -133,10 +146,19 @@ class BriefingScheduler:
         """One scheduling pass. Returns the number of briefings generated."""
         clock_now = now or datetime.now(timezone.utc)
         due = self.schedule_repository.due(clock_now, limit=self.max_per_tick)
-        generated = 0
+        generated = self._retry_pending_briefings(clock_now)
         for schedule in due:
+            # A grace longer than the schedule cadence is unusual but valid.
+            # Do not claim a second slot for the same user while the first is
+            # still parked; leaving it due makes the next tick reconsider it.
+            if schedule.user_id in self._pending_briefings:
+                continue
             # ``next_run_at`` can't be None on a due row; assert for mypy.
             assert schedule.next_run_at is not None
+            # A due row can be days stale after downtime. Readiness must cover
+            # releases through the latest nominal slot that elapsed before the
+            # wake, not stop at the oldest missed ``next_run_at``.
+            cutoff = latest_run_for(schedule, at=clock_now)
             next_run = next_run_for(schedule, after=clock_now)
             claimed = self.schedule_repository.claim(
                 schedule.user_id,
@@ -152,12 +174,22 @@ class BriefingScheduler:
             # so a persistent failure surfaces in logs once per cadence
             # instead of burning every tick.
             try:
-                briefing = self.briefing_service.generate_for_user(schedule.user_id, now=clock_now)
+                briefing = self.briefing_service.generate_for_user(
+                    schedule.user_id,
+                    now=clock_now,
+                    cutoff=cutoff,
+                )
             except Exception:
                 logger.exception(
                     "briefing_scheduled_generation_failed",
                     user_id=schedule.user_id,
                     next_run_at=next_run.isoformat(),
+                )
+                continue
+            if isinstance(briefing, Deferred):
+                self._pending_briefings[schedule.user_id] = _PendingBriefing(
+                    cutoff=cutoff,
+                    deadline=briefing.deadline,
                 )
                 continue
             if briefing is None:
@@ -169,23 +201,14 @@ class BriefingScheduler:
                 )
                 continue
             generated += 1
-            logger.info(
-                "briefing_scheduled_generated",
-                user_id=schedule.user_id,
-                briefing_id=briefing.id,
-                episode_count=briefing.episode_count,
-                next_run_at=next_run.isoformat(),
+            self._finish_generation(
+                schedule.user_id,
+                briefing,
+                now=clock_now,
+                next_run_at=next_run,
+                email_enabled=schedule.email_enabled,
+                from_deferral=False,
             )
-            # Spec #51: queue the email off the slot fire — before the
-            # (slow) narration chain, so a crash there can't drop the
-            # send. ``briefing`` may be the throttle-returned existing one
-            # (7:30 lazy open, 8:00 slot) — ensure_pending's send-once
-            # anchor still emails it exactly once. A ``None`` briefing
-            # (empty window) was skipped above: honest silence, no
-            # delivery row.
-            if schedule.email_enabled and self.delivery_service is not None:
-                self._queue_delivery(briefing.id, schedule.user_id, clock_now)
-            self._chain_narration(schedule.user_id, briefing)
         if due:
             logger.info("briefing_scheduler_ticked", due=len(due), generated=generated)
         # Second phase (spec #51): the delivery pass. Runs every tick so
@@ -198,6 +221,92 @@ class BriefingScheduler:
             except Exception:
                 logger.exception("briefing_delivery_pass_failed")
         return generated
+
+    def _retry_pending_briefings(self, now: datetime) -> int:
+        """Re-check every spec #55 deferral once per scheduler tick."""
+        generated = 0
+        for user_id, pending in list(self._pending_briefings.items()):
+            try:
+                briefing = self.briefing_service.generate_for_user(
+                    user_id,
+                    now=now,
+                    cutoff=pending.cutoff,
+                    readiness_deadline=pending.deadline,
+                )
+            except Exception:
+                logger.exception(
+                    "briefing_deferred_generation_failed",
+                    user_id=user_id,
+                    cutoff=pending.cutoff.isoformat(),
+                    deadline=pending.deadline.isoformat(),
+                )
+                if now >= pending.deadline:
+                    # The slot already advanced when it first deferred. Do not
+                    # let a failing retry leave this user in the pending map
+                    # forever and suppress every future cadence.
+                    self._pending_briefings.pop(user_id, None)
+                    logger.error(
+                        "briefing_deferred_abandoned_after_failure",
+                        user_id=user_id,
+                        cutoff=pending.cutoff.isoformat(),
+                        deadline=pending.deadline.isoformat(),
+                    )
+                continue
+            if isinstance(briefing, Deferred):
+                if now >= pending.deadline:
+                    # Defensive contract guard: the service should cut at the
+                    # deadline, but a bad/mocked implementation must not park
+                    # the user's future schedule indefinitely.
+                    self._pending_briefings.pop(user_id, None)
+                    logger.error(
+                        "briefing_deferred_returned_after_deadline",
+                        user_id=user_id,
+                        deadline=pending.deadline.isoformat(),
+                    )
+                continue
+
+            self._pending_briefings.pop(user_id, None)
+            if briefing is None:
+                logger.info("briefing_scheduled_skipped_empty_after_deferral", user_id=user_id)
+                continue
+
+            schedule = self.schedule_repository.get(user_id)
+            generated += 1
+            self._finish_generation(
+                user_id,
+                briefing,
+                now=now,
+                next_run_at=schedule.next_run_at if schedule else None,
+                email_enabled=bool(schedule and schedule.email_enabled),
+                from_deferral=True,
+            )
+        return generated
+
+    def _finish_generation(
+        self,
+        user_id: str,
+        briefing: "Briefing",
+        *,
+        now: datetime,
+        next_run_at: Optional[datetime],
+        email_enabled: bool,
+        from_deferral: bool,
+    ) -> None:
+        """Run logging, delivery queueing, and narration for a resolved slot."""
+        logger.info(
+            "briefing_scheduled_generated",
+            user_id=user_id,
+            briefing_id=briefing.id,
+            episode_count=briefing.episode_count,
+            next_run_at=next_run_at.isoformat() if next_run_at else None,
+            from_deferral=from_deferral,
+        )
+        # Spec #51: queue email before the slow narration chain so a crash
+        # there cannot drop delivery. Current schedule state is respected
+        # when a deferred slot resolves (a user can opt out during grace).
+        if email_enabled and self.delivery_service is not None:
+            self._queue_delivery(briefing.id, user_id, now)
+        self._chain_narration(user_id, briefing)
 
     def _queue_delivery(self, briefing_id: str, user_id: str, now) -> None:
         """Ensure a delivery row exists; buffer the id for retry on failure.

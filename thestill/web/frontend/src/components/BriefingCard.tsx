@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useLatestBriefing } from '../hooks/useApi'
+import { useGenerateBriefingNow, useLatestBriefing } from '../hooks/useApi'
 
 function formatRelative(iso: string): string {
   const created = new Date(iso).getTime()
@@ -18,6 +18,7 @@ function formatRelative(iso: string): string {
 // `/api/briefings/latest` GET inside `useLatestBriefing`.
 export default function BriefingCard() {
   const { data, isLoading, error } = useLatestBriefing()
+  const generateNow = useGenerateBriefingNow()
 
   if (isLoading) {
     return (
@@ -32,6 +33,41 @@ export default function BriefingCard() {
     return (
       <div className="flex justify-end">
         <PastBriefingsLink />
+      </div>
+    )
+  }
+
+  if ('briefing_pending' in data) {
+    const count = data.briefing_pending.pending_count
+    return (
+      <div className="space-y-1">
+        <div
+          role="status"
+          className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg"
+        >
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-950">Your briefing is catching up</p>
+            <p className="text-sm text-amber-800">
+              {count} episode{count === 1 ? '' : 's'} still processing
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => generateNow.mutate()}
+            disabled={generateNow.isPending}
+            className="self-start sm:self-auto px-3 py-2 text-sm font-medium text-amber-950 bg-white border border-amber-300 rounded-md hover:bg-amber-100 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {generateNow.isPending ? 'Generating…' : 'Generate now'}
+          </button>
+        </div>
+        {generateNow.isError && (
+          <p role="alert" className="text-sm text-red-700">
+            {generateNow.error.message}
+          </p>
+        )}
+        <div className="flex justify-end">
+          <PastBriefingsLink />
+        </div>
       </div>
     )
   }
