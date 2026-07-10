@@ -22,7 +22,28 @@ export default function EpisodeReaderOverlay() {
   const panelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const close = useCallback(() => navigate(-1), [navigate])
+  // Captured at mount: the history index of the entry the reader opened on.
+  // Every close affordance pops back to the entry *before* it (the inbox) in
+  // one step, skipping any in-reader entries pushed since — e.g. a
+  // summary→transcript citation jump (spec #54). Browser Back still steps
+  // through those entries individually. Falls back to a single pop if the
+  // router does not expose an index.
+  const openIdxRef = useRef<number | null>(null)
+  useEffect(() => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx
+    openIdxRef.current = typeof idx === 'number' ? idx : null
+  }, [])
+
+  const close = useCallback(() => {
+    const openIdx = openIdxRef.current
+    const currentIdx = (window.history.state as { idx?: number } | null)?.idx
+    if (openIdx != null && typeof currentIdx === 'number') {
+      const delta = openIdx - 1 - currentIdx
+      navigate(delta < 0 ? delta : -1)
+      return
+    }
+    navigate(-1)
+  }, [navigate])
 
   // Esc closes — unless a surface layered above the overlay (e.g. the ⌘K
   // command bar, which autofocuses its input) owns the keypress. Two guards:

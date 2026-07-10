@@ -2032,6 +2032,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         ctx.exit(1)
 
     summarizer = TranscriptSummarizer(llm_provider, console=ctx.obj.console)
+    from .core.summary_citations import resolve_and_persist_summary_citations
 
     # If transcript_path provided, summarize that specific file
     if transcript_path:
@@ -2042,6 +2043,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         # Try to look up episode metadata from the database
         metadata = None
         podcast_slug = None
+        matched_episode = None
         clean_transcripts_dir = path_manager.clean_transcripts_dir().resolve()
         try:
             relative_path = transcript_path_obj.relative_to(clean_transcripts_dir)
@@ -2063,6 +2065,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                     if podcast.slug == podcast_slug:
                         for episode in podcast.episodes:
                             if episode.slug == episode_slug:
+                                matched_episode = episode
                                 metadata = EpisodeMetadata(
                                     title=episode.title,
                                     pub_date=episode.pub_date,
@@ -2088,9 +2091,21 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
         try:
             summary_text = summarizer.summarize(transcript_text, metadata=metadata)
-            # Spec #35 — persist via FileStorage so STORAGE_BACKEND=s3
-            # routes the artefact to the right destination.
-            ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
+            if matched_episode is not None:
+                resolve_and_persist_summary_citations(
+                    summary_markdown=summary_text,
+                    episode=matched_episode,
+                    summary_path=output_path,
+                    path_manager=path_manager,
+                    file_storage=ctx.obj.config.file_storage,
+                )
+            else:
+                # Spec #35 — persist via FileStorage so STORAGE_BACKEND=s3
+                # routes the artefact to the right destination. Explicit
+                # transcript files outside the managed clean-transcripts tree
+                # have no episode row, so spec #54 citation resolution cannot
+                # load an annotated sidecar for them.
+                ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
             click.echo("Summarization complete!")
             click.echo(f"Output saved to: {output_path}")
         except Exception as e:
@@ -2185,7 +2200,13 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
             summary_text = summarizer.summarize(transcript_text, metadata=metadata)
-            ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
+            resolve_and_persist_summary_citations(
+                summary_markdown=summary_text,
+                episode=episode,
+                summary_path=output_path,
+                path_manager=path_manager,
+                file_storage=ctx.obj.config.file_storage,
+            )
 
             # Update feed manager
             feed_manager.mark_episode_processed(
@@ -2206,6 +2227,90 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     total_time = time.time() - start_time
     click.echo("\n🎉 Summarization complete!")
     click.echo(f"✓ {total_processed} episode(s) summarized in {total_time:.1f} seconds")
+
+
+@main.command("resolve-summary-citations")
+@click.option("--podcast", "podcast_slug", help="Limit to one podcast slug.")
+@click.option("--episode", "episode_slug", help="Limit to one episode slug.")
+@click.option("--limit", type=int, default=None, help="Maximum number of candidate episodes to process.")
+@click.option("--only-missing", is_flag=True, help="Skip episodes that already have a citations sidecar.")
+@click.option("--write", "write_changes", is_flag=True, help="Persist rewritten summaries and citation sidecars.")
+@click.option("--force", is_flag=True, help="Re-resolve even when an existing sidecar matches the summary hash.")
+@click.pass_context
+@require_config
+@log_command
+def resolve_summary_citations(ctx, podcast_slug, episode_slug, limit, only_missing, write_changes, force):
+    """Backfill summary citation sidecars without calling an LLM."""
+    path_manager = ctx.obj.path_manager
+    feed_manager = ctx.obj.feed_manager
+    file_storage = ctx.obj.config.file_storage
+
+    from .core.summary_citations import backfill_summary_citations_for_episode, summary_citations_key
+
+    candidates = []
+    for podcast in feed_manager.list_podcasts():
+        if podcast_slug and podcast.slug != podcast_slug:
+            continue
+        for episode in podcast.episodes:
+            if episode_slug and episode.slug != episode_slug:
+                continue
+            if not episode.summary_path or not episode.clean_transcript_json_path:
+                continue
+            if only_missing:
+                summary_key = path_manager.to_relative(path_manager.summary_file(episode.summary_path))
+                if file_storage.exists(summary_citations_key(summary_key)):
+                    continue
+            candidates.append((podcast, episode))
+            if limit is not None and len(candidates) >= limit:
+                break
+        if limit is not None and len(candidates) >= limit:
+            break
+
+    if not candidates:
+        click.echo("No summary citation candidates found.")
+        return
+
+    mode = "write" if write_changes else "dry-run"
+    click.echo(f"Resolving summary citations for {len(candidates)} episode(s) ({mode})...")
+
+    processed = 0
+    written = 0
+    changed = 0
+    skipped = 0
+    resolved_total = 0
+    unresolved_total = 0
+
+    for podcast, episode in candidates:
+        result = backfill_summary_citations_for_episode(
+            episode=episode,
+            path_manager=path_manager,
+            file_storage=file_storage,
+            write=write_changes,
+            force=force,
+        )
+        processed += 1
+        if result.skipped:
+            skipped += 1
+        if result.changed:
+            changed += 1
+        if result.written:
+            written += 1
+        resolved_total += result.resolved_count
+        unresolved_total += result.unresolved_count
+
+        status = "skipped" if result.skipped else "changed" if result.changed else "current"
+        if result.written:
+            status = "written"
+        click.echo(
+            f"  {podcast.slug}/{episode.slug}: {status} "
+            f"({result.resolved_count} resolved, {result.unresolved_count} unresolved; {result.reason})"
+        )
+
+    click.echo(
+        "✓ summary citation backfill: "
+        f"{processed} processed, {changed} changed, {written} written, {skipped} skipped, "
+        f"{resolved_total} resolved citation(s), {unresolved_total} unresolved"
+    )
 
 
 def _resolve_target_seconds_or_warn(config, target_duration: Optional[str], *, prefix: str) -> Optional[int]:

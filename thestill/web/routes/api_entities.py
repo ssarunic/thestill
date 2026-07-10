@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import List, Literal, Optional
+from datetime import datetime
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 from structlog import get_logger
 
 from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
@@ -48,6 +49,25 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Wire types
 # ---------------------------------------------------------------------------
+
+
+def _coerce_iso_timestamp(value: object) -> Optional[str]:
+    """Coerce a datetime to an ISO string for string-typed response fields.
+
+    Backends differ: Postgres (spec #44) returns ``timestamptz`` as a tz-aware
+    datetime, and SQLite with type detection can too, while other columns come
+    back as strings. Normalizing here lets the string-typed timestamp fields
+    validate regardless of the active backend.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
+# String timestamp field that also accepts a datetime (see above).
+IsoTimestamp = Annotated[Optional[str], BeforeValidator(_coerce_iso_timestamp)]
 
 
 class EntityRef(BaseModel):
@@ -162,7 +182,7 @@ def _compute_salience(
 class EntityCooccurrenceRef(BaseModel):
     entity: EntityRef
     episode_count: int
-    last_seen_at: Optional[str] = None
+    last_seen_at: IsoTimestamp = None
 
 
 class CitationRow(BaseModel):
@@ -174,7 +194,7 @@ class CitationRow(BaseModel):
     episode_slug: Optional[str] = None
     podcast_title: str
     episode_title: str
-    published_at: Optional[str] = None
+    published_at: IsoTimestamp = None
     start_ms: int
     end_ms: int
     speaker: Optional[str] = None
@@ -207,7 +227,7 @@ class GuestEpisodeRef(BaseModel):
     podcast_id: str
     podcast_slug: Optional[str] = None
     podcast_title: str
-    published_at: Optional[str] = None
+    published_at: IsoTimestamp = None
 
 
 class EntityEnrichmentWire(BaseModel):

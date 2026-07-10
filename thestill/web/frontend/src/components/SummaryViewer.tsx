@@ -1,11 +1,16 @@
+import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { SummaryCitation } from '../api/types'
 
 interface SummaryViewerProps {
   content: string
   isLoading?: boolean
   available?: boolean
   episodeState?: string
+  citations?: SummaryCitation[] | null
+  onCite?: (citation: SummaryCitation) => void
 }
 
 // Get status message based on episode state
@@ -50,7 +55,61 @@ function getSummaryStatus(state?: string): { title: string; description: string;
   }
 }
 
-export default function SummaryViewer({ content, isLoading, available, episodeState }: SummaryViewerProps) {
+function getCitationId(href: string | undefined): string | null {
+  if (!href?.startsWith('?')) return null
+  return new URLSearchParams(href.slice(1)).get('cite')
+}
+
+export default function SummaryViewer({
+  content,
+  isLoading,
+  available,
+  episodeState,
+  citations,
+  onCite,
+}: SummaryViewerProps) {
+  const citationById = useMemo(() => {
+    const out = new Map<string, SummaryCitation>()
+    for (const citation of citations ?? []) {
+      out.set(citation.id, citation)
+    }
+    return out
+  }, [citations])
+
+  const markdownComponents = useMemo<Components>(() => ({
+    a({ href, children }) {
+      const citationId = getCitationId(href)
+      if (citationId) {
+        const citation = citationById.get(citationId)
+        if (!citation || !onCite) return <>{children}</>
+        return (
+          <button
+            type="button"
+            onClick={() => onCite(citation)}
+            title={`Play from ${citation.raw_label}`}
+            aria-label={`Play summary citation at ${citation.raw_label}`}
+            className="not-prose inline items-baseline rounded font-mono text-[0.82em] text-primary-600 align-baseline hover:text-primary-800 hover:underline decoration-primary-300 underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:rounded-sm"
+          >
+            <span aria-hidden="true" className="text-primary-300">[</span>
+            {children}
+            <span aria-hidden="true" className="text-primary-300">]</span>
+          </button>
+        )
+      }
+
+      const external = typeof href === 'string' && /^https?:\/\//i.test(href)
+      return (
+        <a
+          href={href}
+          target={external ? '_blank' : undefined}
+          rel={external ? 'noreferrer' : undefined}
+        >
+          {children}
+        </a>
+      )
+    },
+  }), [citationById, onCite])
+
   if (isLoading) {
     return (
       <div className="space-y-6 min-h-[300px]">
@@ -89,7 +148,7 @@ export default function SummaryViewer({ content, isLoading, available, episodeSt
 
   return (
     <div className="prose prose-gray max-w-none prose-headings:text-primary-900 prose-h1:text-xl prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-base prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {content}
       </ReactMarkdown>
     </div>

@@ -417,12 +417,17 @@ async def get_episode_summary_by_slugs(
     if summary is None:
         not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
+    citations = None
+    if not summary.startswith("N/A"):
+        citations = state.podcast_service.get_summary_citations_for_episode(episode, summary)
+
     return api_response(
         {
             "episode_id": episode.id,
             "episode_title": episode.title,
             "content": summary,
             "available": not summary.startswith("N/A"),
+            "citations": citations,
         }
     )
 

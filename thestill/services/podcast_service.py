@@ -24,6 +24,7 @@ from pydantic import BaseModel, computed_field
 from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
+from ..core.summary_citations import load_valid_citations_for_api
 from ..models.annotated_transcript import AnnotatedTranscript, WordSpan
 from ..models.podcast import Episode, Podcast
 from ..models.transcript import Segment as RawSegment
@@ -843,3 +844,26 @@ class PodcastService:
             return f"N/A - Error reading summary: {e}"
         logger.info(f"Retrieved summary for: {episode.title}")
         return content
+
+    def get_summary_citations_for_episode(self, episode: Episode, summary_content: str) -> Optional[List[dict]]:
+        """Load frontend-safe summary citations for an already-resolved episode.
+
+        Invalid, stale, or missing sidecars return ``None`` so callers can
+        render the summary as normal markdown. The helper validates the sidecar
+        against the exact summary content being served and the current
+        annotated transcript metadata.
+        """
+        if not episode.summary_path:
+            return None
+        segmented = self.get_segmented_transcript_for_episode(episode)
+        if segmented is None:
+            return None
+        summary_path = self.path_manager.summary_file(episode.summary_path)
+        return load_valid_citations_for_api(
+            summary_markdown=summary_content,
+            episode=episode,
+            transcript=segmented.annotated,
+            summary_path=summary_path,
+            path_manager=self.path_manager,
+            file_storage=self.file_storage,
+        )

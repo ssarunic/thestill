@@ -32,6 +32,7 @@ function makeTranscript(segments: AnnotatedSegment[]): AnnotatedTranscriptDump {
     segments,
     playback_time_offset_seconds: 0,
     algorithm_version: 'v1',
+    transcript_source_duration_s: null,
   }
 }
 
@@ -117,6 +118,24 @@ describe('SegmentedTranscriptViewer', () => {
       fireEvent.click(checkbox)
       expect(checkbox).toBeChecked()
       expect(window.localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
+    })
+
+    it('scrolls to an explicit segment target', () => {
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      const scrollIntoView = vi.fn()
+      HTMLElement.prototype.scrollIntoView = scrollIntoView
+
+      try {
+        renderViewer({
+          transcript: defaultTranscript(),
+          scrollToSegmentId: { segmentId: 2, nonce: 1 },
+        })
+
+        expect(scrollIntoView).toHaveBeenCalledTimes(1)
+        expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId('segment-content-2'))
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
     })
 
     it('collapses non-matching segments during search and keeps matches visible', () => {

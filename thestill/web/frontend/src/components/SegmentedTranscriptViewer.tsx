@@ -154,6 +154,7 @@ interface SegmentedTranscriptViewerProps {
   // When non-null, only segments whose id appears in the set are
   // rendered. Spec §5.2 inline filter bar — pure client-side filter.
   visibleSegmentIds?: Set<number> | null
+  scrollToSegmentId?: { segmentId: number; nonce: number } | null
   // The entity the user last focused (hovered/clicked). Drives the
   // `[`/`]` keyboard nav (spec §5.2 affordance #1).
   focusedEntityId?: string | null
@@ -531,6 +532,7 @@ export default function SegmentedTranscriptViewer({
   mentionsBySegmentId,
   entityHighlightsEnabled: entityHighlightsEnabledProp,
   visibleSegmentIds,
+  scrollToSegmentId,
   focusedEntityId: focusedEntityIdProp,
   onFocusEntity: onFocusEntityProp,
   karaokeEnabled,
@@ -677,6 +679,13 @@ export default function SegmentedTranscriptViewer({
     activeKey: activeSegmentId,
     enabled: followPlayback && isCurrentEpisode,
   })
+
+  useEffect(() => {
+    if (!scrollToSegmentId) return
+    follow.scrollToKey(scrollToSegmentId.segmentId)
+    // follow is stable from useAutoScrollFollow; intentionally exclude.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToSegmentId?.segmentId, scrollToSegmentId?.nonce])
 
   const handleCopyTimestamp = useCallback(
     async (seconds: number) => {

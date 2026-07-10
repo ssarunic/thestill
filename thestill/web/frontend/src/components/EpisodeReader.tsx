@@ -1,5 +1,5 @@
-import { useMemo, useState, useCallback, useEffect, lazy, Suspense, type RefObject } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense, type RefObject } from 'react'
+import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
@@ -22,9 +22,10 @@ import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
 import MentionDensityTimeline from './episode-entities/MentionDensityTimeline'
 import EntityBranchProgress from './EntityBranchProgress'
-import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite } from '../api/types'
+import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite, SummaryCitation } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
+type SegmentScrollTarget = { segmentId: number; nonce: number }
 
 const stateColors: Record<string, string> = {
   discovered: 'bg-gray-100 text-gray-600',
@@ -62,9 +63,64 @@ export interface EpisodeReaderProps {
  */
 export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps) {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
-  const [activeTab, setActiveTab] = useState<Tab>('summary')
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const player = usePlayer()
+
+  // The active tab lives in the URL (`?view=transcript`) rather than local
+  // state, so a citation jump can push a history entry and browser Back
+  // returns to the summary the reader was on. Manual tab clicks replace (no
+  // history spam); `location.state` is threaded through every navigation so
+  // the spec #52 overlay's `backgroundLocation` survives the change.
+  const activeTab: Tab = searchParams.get('view') === 'transcript' ? 'transcript' : 'summary'
+
+  // Summary and transcript share one scroll container. Remember the summary's
+  // scroll offset when leaving it and restore it when returning (browser Back
+  // from a citation jump, or a manual tab toggle), so the reader lands back
+  // where you were reading instead of at the transcript's leftover offset.
+  const summaryScrollRef = useRef(0)
+  const getScrollTop = useCallback(() => {
+    const el = scrollContainerRef?.current
+    return el ? el.scrollTop : window.scrollY
+  }, [scrollContainerRef])
+  const setScrollTop = useCallback(
+    (top: number) => {
+      const el = scrollContainerRef?.current
+      if (el) el.scrollTo({ top, behavior: 'instant' })
+      else window.scrollTo({ top, behavior: 'instant' })
+    },
+    [scrollContainerRef],
+  )
+
+  const setTab = useCallback(
+    (tab: Tab, opts?: { push?: boolean }) => {
+      if (activeTab === 'summary' && tab !== 'summary') summaryScrollRef.current = getScrollTop()
+      const params = new URLSearchParams(searchParams)
+      if (tab === 'transcript') params.set('view', 'transcript')
+      else params.delete('view')
+      const search = params.toString()
+      navigate(
+        { pathname: location.pathname, search: search ? `?${search}` : '' },
+        { replace: !opts?.push, state: location.state },
+      )
+    },
+    [activeTab, getScrollTop, navigate, location.pathname, location.state, searchParams],
+  )
+
+  // Restore the summary scroll offset when the tab returns to summary from the
+  // transcript (Back after a citation jump, or a manual toggle back). Two rAFs
+  // let the re-mounted summary content lay out before we scroll.
+  const prevTabRef = useRef<Tab>(activeTab)
+  useEffect(() => {
+    const prev = prevTabRef.current
+    prevTabRef.current = activeTab
+    if (prev === 'transcript' && activeTab === 'summary') {
+      const top = summaryScrollRef.current
+      requestAnimationFrame(() => requestAnimationFrame(() => setScrollTop(top)))
+    }
+  }, [activeTab, setScrollTop])
 
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
@@ -118,6 +174,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
   const [hiddenEntityTypes, setHiddenEntityTypes] = useState<Set<EntityType>>(() => new Set())
   const [filterEntityIds, setFilterEntityIds] = useState<Set<string>>(() => new Set())
   const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null)
+  const [citationScrollTarget, setCitationScrollTarget] = useState<SegmentScrollTarget | null>(null)
 
   const visibleEntities = useMemo(
     () => entities.filter((e) => !hiddenEntityTypes.has(e.entity.type)),
@@ -198,6 +255,27 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
       )
     },
     [episode, podcastSlug, episodeSlug, player],
+  )
+
+  const handleSummaryCitation = useCallback(
+    (citation: SummaryCitation) => {
+      const seconds = citation.target_playback_s ?? citation.cited_playback_s
+      handleSegmentSeek(seconds)
+
+      const segmentId = citation.segment_id_hint
+      if (segmentId == null) return
+
+      clearEntityFilter()
+      // Push a history entry only when actually switching tabs, so browser
+      // Back returns to the summary rather than exiting the reader. Already on
+      // the transcript → just re-scroll, no extra entry.
+      if (activeTab !== 'transcript') setTab('transcript', { push: true })
+      setCitationScrollTarget((prev) => ({
+        segmentId,
+        nonce: (prev?.nonce ?? 0) + 1,
+      }))
+    },
+    [activeTab, setTab, clearEntityFilter, handleSegmentSeek],
   )
 
   // Handle task completion - refresh relevant data
@@ -442,7 +520,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
           <div className="border-b border-gray-200">
             <nav className="flex">
               <button
-                onClick={() => setActiveTab('summary')}
+                onClick={() => setTab('summary')}
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'summary'
                     ? 'border-primary-600 text-primary-600'
@@ -455,7 +533,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 )}
               </button>
               <button
-                onClick={() => setActiveTab('transcript')}
+                onClick={() => setTab('transcript')}
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'transcript'
                     ? 'border-primary-600 text-primary-600'
@@ -483,6 +561,8 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                   isLoading={summaryLoading}
                   available={summaryData?.available}
                   episodeState={episode?.state}
+                  citations={summaryData?.citations ?? null}
+                  onCite={handleSummaryCitation}
                 />
               ) : (
                 <TranscriptPanel
@@ -495,6 +575,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
                   visibleSegmentIds={visibleSegmentIds}
+                  scrollToSegment={citationScrollTarget}
                   focusedEntityId={focusedEntityId}
                   onFocusEntity={setFocusedEntityId}
                   entityFilterBar={
@@ -593,6 +674,7 @@ interface TranscriptPanelProps {
   entitiesById?: Map<string, EpisodeEntity>
   mentionsBySegmentId?: Map<number, MentionLite[]>
   visibleSegmentIds?: Set<number> | null
+  scrollToSegment?: SegmentScrollTarget | null
   focusedEntityId?: string | null
   onFocusEntity?: (entityId: string) => void
   // Slot for the filter bar — rendered above the segmented viewer so
@@ -679,6 +761,7 @@ function TranscriptPanel({
   entitiesById,
   mentionsBySegmentId,
   visibleSegmentIds,
+  scrollToSegment,
   focusedEntityId,
   onFocusEntity,
   entityFilterBar,
@@ -736,6 +819,7 @@ function TranscriptPanel({
             entitiesById={entitiesById}
             mentionsBySegmentId={mentionsBySegmentId}
             visibleSegmentIds={visibleSegmentIds}
+            scrollToSegmentId={scrollToSegment}
             focusedEntityId={focusedEntityId}
             onFocusEntity={onFocusEntity}
             karaokeEnabled={karaokeEnabled}

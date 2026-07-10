@@ -693,8 +693,19 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
         # Summarize, then persist via FileStorage (spec #35) so the artefact
         # lands on the configured backend rather than always-local disk.
+        # Spec #54 resolves timestamp citations against the annotated
+        # transcript sidecar when present, writing the summary + citations
+        # sidecar through the same helper the CLI uses.
+        from .summary_citations import resolve_and_persist_summary_citations
+
         summary_text = summarizer.summarize(transcript_text, metadata=metadata)
-        state.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
+        resolve_and_persist_summary_citations(
+            summary_markdown=summary_text,
+            episode=episode,
+            summary_path=output_path,
+            path_manager=path_manager,
+            file_storage=state.config.file_storage,
+        )
 
         # Update episode state
         state.feed_manager.mark_episode_processed(

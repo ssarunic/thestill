@@ -298,6 +298,16 @@ export interface KaraokeWordsByEpisode {
   wordsBySegmentId: Map<number, WordTimestamp[]>
 }
 
+export interface SummaryCitation {
+  id: string
+  raw_label: string
+  cited_playback_s: number
+  target_playback_s?: number | null
+  segment_id_hint?: number | null
+  source_segment_ids: number[]
+  resolved: boolean
+}
+
 export interface ContentResponse {
   status: string
   timestamp: string
@@ -305,6 +315,7 @@ export interface ContentResponse {
   episode_title: string
   content: string
   available: boolean
+  citations?: SummaryCitation[] | null
   transcript_type?: TranscriptType  // 'cleaned' or 'raw', undefined if not available
   // Present iff the segmented-cleanup JSON sidecar exists for this
   // episode. Absence means "no segmented output to render" — the
