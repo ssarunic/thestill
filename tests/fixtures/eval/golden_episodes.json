@@ -1,0 +1,30 @@
+{
+  "description": "Pinned episode set for longitudinal eval runs (spec #53). Pass to `thestill eval run --episodes-file`. Episodes span 5 podcasts and genres, are short enough that summaries stay single-chunk, and all three artifacts (raw transcript, clean transcript, summary) existed on disk when pinned (2026-07-10). Do not rotate members casually: comparisons across time assume the same inputs.",
+  "episodes": [
+    {
+      "podcast_slug": "better-offline",
+      "episode_slug": "monologue-ai-can-t-afford-to-slow-down",
+      "why": "single-speaker tech monologue, ~6 min"
+    },
+    {
+      "podcast_slug": "product-thinking",
+      "episode_slug": "episode-256-de-risking-product-launches-effectively",
+      "why": "structured product-advice episode, ~8 min"
+    },
+    {
+      "podcast_slug": "today-in-focus",
+      "episode_slug": "us-and-iran-exchange-strikes-is-trumps-peace-deal-over-the-latest",
+      "why": "news format with host+correspondent attribution, ~10 min"
+    },
+    {
+      "podcast_slug": "the-prof-g-pod-with-scott-galloway",
+      "episode_slug": "no-mercy-no-malice-the-reckoning",
+      "why": "opinion essay readout, number-heavy claims, ~15 min"
+    },
+    {
+      "podcast_slug": "the-rest-is-history",
+      "episode_slug": "music-the-father-of-the-blues-golden-age-of-jazz-and-david-bowie-history-in-photos",
+      "why": "two-host conversational history, entity-dense, ~8 min"
+    }
+  ]
+}

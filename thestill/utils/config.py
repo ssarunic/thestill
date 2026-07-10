@@ -345,6 +345,16 @@ class Config(BaseModel):
     cleaning_overlap_pct: float = 0.15  # Overlap percentage (0.10 = 10%)
     cleaning_extract_entities: bool = True  # Extract entities for consistency
 
+    # Eval judge configuration (spec #53). The judge is pinned
+    # independently of the pipeline LLM so quality scores stay comparable
+    # across pipeline model changes; prefer a dated snapshot from a
+    # different model family than the one producing the judged artifacts
+    # (self-preference bias). Empty = fall back to the pipeline provider
+    # (allowed, but runs are marked ``pinned: false``).
+    eval_judge_provider: str = ""  # openai, ollama, gemini, anthropic, or mistral
+    eval_judge_model: str = ""  # dated snapshot id, not a floating alias
+    eval_judge_temperature: float = 0.0
+
     # Cleanup Configuration
     cleanup_days: int = 30
     delete_audio_after_processing: bool = False  # Delete audio files after each pipeline stage completes
@@ -699,6 +709,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "cleaning_chunk_size": int(os.getenv("CLEANING_CHUNK_SIZE", "20000")),
         "cleaning_overlap_pct": float(os.getenv("CLEANING_OVERLAP_PCT", "0.15")),
         "cleaning_extract_entities": os.getenv("CLEANING_EXTRACT_ENTITIES", "true").lower() == "true",
+        "eval_judge_provider": os.getenv("EVAL_JUDGE_PROVIDER", "").lower(),
+        "eval_judge_model": os.getenv("EVAL_JUDGE_MODEL", ""),
+        "eval_judge_temperature": float(os.getenv("EVAL_JUDGE_TEMPERATURE", "0.0")),
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,

@@ -28,12 +28,14 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
-from .core.evaluator import PostProcessorEvaluator, TranscriptEvaluator, print_evaluation_summary
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
+from .evals.compare import compare_runs
+from .evals.rubrics import RUBRICS, get_rubric
+from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
@@ -2437,6 +2439,374 @@ def narrate(ctx, briefing_id, target_duration, slug, dry_run):
     ctx.exit(0 if run.content.mode == "narrated" else 1)
 
 
+# ---------------------------------------------------------------------------
+# Spec #53 — append-only eval runs (`thestill eval ...`) + deprecated wrappers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_judge_or_exit(ctx, judge_provider, judge_model, judge_temperature):
+    """Resolve the judge (CLI flag -> EVAL_JUDGE_* -> pipeline fallback)."""
+    try:
+        judge = resolve_judge(
+            ctx.obj.config,
+            cli_provider=judge_provider,
+            cli_model=judge_model,
+            cli_temperature=judge_temperature,
+        )
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize judge LLM provider: {e}", err=True)
+        ctx.exit(1)
+    if not judge.info.pinned:
+        click.echo(
+            "⚠️  Judge is not pinned (no --judge-* flag and no EVAL_JUDGE_* config); "
+            "falling back to the pipeline LLM. Scores from unpinned runs are not "
+            "comparable across pipeline model changes.",
+            err=True,
+        )
+    return judge
+
+
+def _resolve_podcast_rss_or_exit(ctx, podcast_id, episode_id):
+    """Resolve --podcast-id/--episode-id to (rss_url, external_id) or exit."""
+    podcast_rss_url = None
+    episode_external_id = None
+    if episode_id and not podcast_id:
+        click.echo("❌ --episode-id requires --podcast-id", err=True)
+        ctx.exit(1)
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        podcast_rss_url = str(podcast.rss_url)
+    if episode_id:
+        target_episode = ctx.obj.podcast_service.get_episode(podcast_id, episode_id)
+        if not target_episode:
+            click.echo(f"❌ Episode not found: {episode_id}", err=True)
+            ctx.exit(1)
+        episode_external_id = target_episode.external_id
+    return podcast_rss_url, episode_external_id
+
+
+def _format_scores(scores, scores_std=None):
+    if not scores:
+        return "-"
+    parts = []
+    for name, value in scores.items():
+        text = f"{name}={value:.1f}"
+        if scores_std and scores_std.get(name):
+            text += f"±{scores_std[name]:.1f}"
+        parts.append(text)
+    return " ".join(parts)
+
+
+def _echo_manifest_header(manifest):
+    pinned = "pinned" if manifest.judge.pinned else "UNPINNED (pipeline fallback)"
+    click.echo(f"Run:     {manifest.run_id}")
+    click.echo(f"Created: {manifest.created_at}  (commit {manifest.git_commit or '?'})")
+    click.echo(
+        f"Rubric:  {manifest.rubric.name} v{manifest.rubric.version}  prompt {manifest.rubric.prompt_sha256[:12]}"
+    )
+    click.echo(
+        f"Judge:   {manifest.judge.provider}/{manifest.judge.model} "
+        f"temp={manifest.judge.temperature} samples={manifest.judge.samples} [{pinned}]"
+    )
+    if manifest.note:
+        click.echo(f"Note:    {manifest.note}")
+    click.echo(f"Items:   {manifest.counts.get('ok', 0)} ok, {manifest.counts.get('failed', 0)} failed")
+
+
+@main.group("eval")
+def eval_group():
+    """Append-only LLM-as-judge evaluation runs (spec #53)."""
+
+
+@eval_group.command("run")
+@click.option(
+    "--rubric",
+    "rubric_name",
+    required=True,
+    type=click.Choice(sorted(RUBRICS)),
+    help="Which rubric to run",
+)
+@click.option("--podcast-id", help="Limit to one podcast (index, URL, or UUID)")
+@click.option("--episode-id", help="Limit to one episode (requires --podcast-id)")
+@click.option("--max-episodes", "-m", type=int, help="Maximum episodes to judge")
+@click.option(
+    "--episodes-file",
+    type=click.Path(exists=True),
+    help="JSON file pinning an explicit episode set (e.g. the golden set)",
+)
+@click.option("--label", help="Human label; becomes part of the run id")
+@click.option("--note", help="Free-text provenance note recorded in the manifest")
+@click.option("--samples", type=int, default=1, show_default=True, help="Judgements per episode (variance visibility)")
+@click.option("--judge-provider", help="Override judge provider for this run")
+@click.option("--judge-model", help="Override judge model for this run")
+@click.option("--judge-temperature", type=float, help="Override judge temperature for this run")
+@click.option("--dry-run", "-d", is_flag=True, help="List the episodes that would be judged")
+@click.pass_context
+@require_config
+@log_command
+def eval_run(
+    ctx,
+    rubric_name,
+    podcast_id,
+    episode_id,
+    max_episodes,
+    episodes_file,
+    label,
+    note,
+    samples,
+    judge_provider,
+    judge_model,
+    judge_temperature,
+    dry_run,
+):
+    """Judge episodes with a rubric and persist an immutable run.
+
+    Every run records judge (provider/model/temperature), rubric version +
+    prompt hash, and per-artifact content hashes, so runs stay comparable.
+    Nothing is ever overwritten; re-running creates a new run directory.
+    """
+    rubric = get_rubric(rubric_name)
+    runner = EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
+    podcast_rss_url, episode_external_id = _resolve_podcast_rss_or_exit(ctx, podcast_id, episode_id)
+
+    try:
+        items = runner.discover(
+            rubric,
+            podcast_rss_url=podcast_rss_url,
+            episode_external_id=episode_external_id,
+            max_episodes=max_episodes,
+            episodes_file=Path(episodes_file) if episodes_file else None,
+        )
+    except EvalError as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+
+    if not items:
+        click.echo("✓ No episodes with the required artifacts found")
+        return
+
+    click.echo(f"📄 {len(items)} episode(s) selected for rubric '{rubric.name}'")
+    if dry_run:
+        for podcast, episode in items:
+            click.echo(f"  • {podcast.title}: {episode.title}")
+        click.echo("\n(Run without --dry-run to judge)")
+        return
+
+    judge = _resolve_judge_or_exit(ctx, judge_provider, judge_model, judge_temperature)
+    click.echo(f"⚖️  Judge: {judge.info.provider}/{judge.info.model} (samples={samples})")
+
+    def _echo_item(item):
+        if item.status == "ok":
+            checks = "" if item.checks_ok is None else ("  checks ✓" if item.checks_ok else "  checks ✗")
+            click.echo(
+                f"  ✓ {item.podcast_slug}/{item.episode_slug}  {_format_scores(item.scores, item.scores_std)}{checks}"
+            )
+        else:
+            click.echo(f"  ❌ {item.podcast_slug}/{item.episode_slug}  {item.error}", err=True)
+
+    try:
+        manifest = runner.run(rubric, judge, items, label=label, note=note, samples=samples, on_item=_echo_item)
+    except EvalError as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+
+    click.echo(f"\n📊 Run {manifest.run_id}: {manifest.counts['ok']} ok, {manifest.counts['failed']} failed")
+    click.echo(f"📁 {ctx.obj.path_manager.evaluation_run_dir(manifest.run_id)}")
+    if manifest.counts["failed"]:
+        ctx.exit(1)
+
+
+@eval_group.command("list")
+@click.pass_context
+@require_config
+@log_command
+def eval_list(ctx):
+    """List completed eval runs, newest first."""
+    manifests = list_manifests(ctx.obj.path_manager)
+    if not manifests:
+        click.echo("No eval runs yet. Start one with: thestill eval run --rubric <name>")
+        return
+    for manifest in manifests:
+        pinned = "" if manifest.judge.pinned else "  ⚠ unpinned"
+        label = f"  [{manifest.label}]" if manifest.label else ""
+        click.echo(
+            f"{manifest.run_id}  {manifest.rubric.name} v{manifest.rubric.version}  "
+            f"{manifest.judge.provider}/{manifest.judge.model}  "
+            f"{manifest.counts.get('ok', 0)} ok/{manifest.counts.get('failed', 0)} failed{label}{pinned}"
+        )
+
+
+@eval_group.command("show")
+@click.argument("run_id")
+@click.pass_context
+@require_config
+@log_command
+def eval_show(ctx, run_id):
+    """Show one run: manifest header, per-item scores, aggregates."""
+    try:
+        manifest = load_manifest(ctx.obj.path_manager, run_id)
+    except (EvalError, ValueError) as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+
+    _echo_manifest_header(manifest)
+    click.echo()
+    for item in manifest.items:
+        if item.status == "ok":
+            flags = ""
+            if item.checks_ok is not None:
+                flags += "  checks ✓" if item.checks_ok else "  checks ✗"
+            if item.transcript_truncated:
+                flags += "  ⚠ truncated"
+            click.echo(
+                f"  ✓ {item.podcast_slug}/{item.episode_slug}  {_format_scores(item.scores, item.scores_std)}{flags}"
+            )
+        else:
+            click.echo(f"  ❌ {item.podcast_slug}/{item.episode_slug}  {item.error}")
+
+    summary = summarize_run(manifest)
+    if summary.dimensions:
+        click.echo("\nAggregates (ok items):")
+        for name, stats in summary.dimensions.items():
+            click.echo(
+                f"  {name}: mean={stats.mean:.2f} median={stats.median:.1f} "
+                f"min={stats.min:.1f} max={stats.max:.1f} n={stats.n}"
+            )
+
+
+_CLASSIFICATION_BANNERS = {
+    "judge": "⚖️  JUDGE COMPARISON — same artifacts, different judge/prompt. Deltas measure the judges, not your pipeline.",
+    "pipeline": "🔬 PIPELINE COMPARISON — same judge, different artifacts. Deltas measure your pipeline change.",
+    "confounded": "⚠️  CONFOUNDED — judge/prompt AND artifacts both differ. Deltas attribute to nothing; re-run with one variable held fixed.",
+    "reproducibility": "🔁 REPRODUCIBILITY CHECK — identical judge and artifacts. Deltas show judge variance only.",
+}
+
+
+@eval_group.command("compare")
+@click.argument("run_a")
+@click.argument("run_b")
+@click.option("--json", "json_output", is_flag=True, help="Emit the comparison as JSON")
+@click.pass_context
+@require_config
+@log_command
+def eval_compare(ctx, run_a, run_b, json_output):
+    """Compare two runs of the same rubric (B relative to A)."""
+    try:
+        manifest_a = load_manifest(ctx.obj.path_manager, run_a)
+        manifest_b = load_manifest(ctx.obj.path_manager, run_b)
+        comparison = compare_runs(manifest_a, manifest_b)
+    except (EvalError, ValueError) as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+
+    if json_output:
+        click.echo(json.dumps(comparison.to_dict(), indent=2))
+        return
+
+    click.echo(_CLASSIFICATION_BANNERS[comparison.classification])
+    click.echo(f"\nA: {comparison.run_a}\nB: {comparison.run_b}\n")
+
+    if comparison.dimensions:
+        click.echo(f"{'dimension':<22}{'mean A':>8}{'mean B':>8}{'delta':>8}  per-episode")
+        for dim in comparison.dimensions:
+            noise = ""
+            if dim.within_noise is True:
+                noise = "  (within judge noise)"
+            elif dim.within_noise is False:
+                noise = "  (exceeds judge noise)"
+            click.echo(
+                f"{dim.dimension:<22}{dim.mean_a:>8.2f}{dim.mean_b:>8.2f}{dim.delta:>+8.2f}"
+                f"  ↑{dim.improved} ↓{dim.regressed} ={dim.unchanged}{noise}"
+            )
+
+    if comparison.episodes:
+        click.echo("\nPer-episode deltas (B - A):")
+        for episode in comparison.episodes:
+            deltas = " ".join(f"{k}={v:+.1f}" for k, v in episode.deltas.items())
+            mismatch = "" if episode.artifacts_match else "  (artifacts differ)"
+            click.echo(f"  {episode.podcast_slug}/{episode.episode_slug}  {deltas}{mismatch}")
+
+    if comparison.only_in_a or comparison.only_in_b or comparison.failed_excluded:
+        click.echo("\nExcluded from deltas:")
+        for key in comparison.only_in_a:
+            click.echo(f"  only in A: {key}")
+        for key in comparison.only_in_b:
+            click.echo(f"  only in B: {key}")
+        if comparison.failed_excluded:
+            click.echo(f"  failed items: {comparison.failed_excluded}")
+
+
+def _deprecated_eval_wrapper(
+    ctx, rubric_name, transcript_path, original, output, podcast_id, episode_id, max_episodes, dry_run, force
+):
+    """Shared body of the deprecated evaluate-* commands.
+
+    Standalone mode (a file argument) keeps the old single-file behaviour;
+    batch mode delegates to the run infrastructure.
+    """
+    equivalent = f"thestill eval run --rubric {rubric_name}"
+    if podcast_id:
+        equivalent += f" --podcast-id {podcast_id}"
+    if episode_id:
+        equivalent += f" --episode-id {episode_id}"
+    if max_episodes:
+        equivalent += f" --max-episodes {max_episodes}"
+    click.echo(
+        f"⚠️  Deprecated: use `{equivalent}` (spec #53). This wrapper will be removed in a future release.", err=True
+    )
+    if force:
+        click.echo("⚠️  --force is obsolete: runs are append-only and never overwrite.", err=True)
+
+    rubric = get_rubric(rubric_name)
+
+    if transcript_path:
+        judge = _resolve_judge_or_exit(ctx, None, None, None)
+        runner = EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
+        artifacts = {rubric.inputs[0]: Path(transcript_path).read_text(encoding="utf-8")}
+        if original:
+            artifacts["raw_transcript"] = Path(original).read_text(encoding="utf-8")
+        click.echo(f"📊 Evaluating with {judge.info.provider}/{judge.info.model}...")
+        try:
+            reports, truncated = runner.evaluate_texts(rubric, judge, artifacts)
+        except EvalError as e:
+            click.echo(f"❌ Error during evaluation: {e}", err=True)
+            ctx.exit(1)
+        if truncated:
+            click.echo("⚠️  Input truncated to fit the judge context window.", err=True)
+        report = reports[0]
+        if not output:
+            transcript_path_obj = Path(transcript_path)
+            output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_evaluation.json")
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        scores = report.get("scores", {})
+        click.echo(f"Scores: {_format_scores(scores)}")
+        verdict = report.get("summary", {}).get("verdict")
+        if verdict:
+            click.echo(f"Verdict: {verdict}")
+        click.echo(f"📄 Detailed report saved to: {output}")
+        return
+
+    ctx.invoke(
+        eval_run,
+        rubric_name=rubric_name,
+        podcast_id=podcast_id,
+        episode_id=episode_id,
+        max_episodes=max_episodes,
+        episodes_file=None,
+        label=None,
+        note="via deprecated evaluate-* wrapper",
+        samples=1,
+        judge_provider=None,
+        judge_model=None,
+        judge_temperature=None,
+        dry_run=dry_run,
+    )
+
+
 @main.command("evaluate-raw-transcript")
 @click.argument("transcript_path", type=click.Path(exists=True), required=False)
 @click.option("--output", "-o", help="Output path for evaluation report (standalone mode only)")
@@ -2444,148 +2814,14 @@ def narrate(ctx, briefing_id, target_duration, slug, dry_run):
 @click.option("--episode-id", help="Evaluate specific episode (requires --podcast-id)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to evaluate")
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be evaluated")
-@click.option("--force", "-f", is_flag=True, help="Re-evaluate even if evaluation exists")
+@click.option("--force", "-f", is_flag=True, help="Obsolete: runs are append-only (ignored)")
 @click.pass_context
 @require_config
 def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id, max_episodes, dry_run, force):
-    """Evaluate the quality of raw transcripts.
-
-    If TRANSCRIPT_PATH is provided, evaluates that specific file.
-    Otherwise, discovers episodes with raw transcripts and evaluates them in batch.
-
-    Uses LLM to analyze transcript quality including accuracy, completeness,
-    entity handling, and structural clarity.
-    """
-    config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    feed_manager = ctx.obj.feed_manager
-    podcast_service = ctx.obj.podcast_service
-
-    # Create LLM provider
-    try:
-        llm_provider = create_llm_provider_from_config(config)
-    except Exception as e:
-        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
-        ctx.exit(1)
-
-    evaluator = TranscriptEvaluator(llm_provider, console=ctx.obj.console)
-
-    # Standalone mode: evaluate a specific file
-    if transcript_path:
-        import json
-
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            transcript_data = json.load(f)
-
-        if not output:
-            transcript_path_obj = Path(transcript_path)
-            output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_evaluation.json")
-
-        click.echo(f"📊 Evaluating transcript quality with {llm_provider.get_model_name()}...")
-
-        try:
-            evaluation = evaluator.evaluate(transcript_data, output)
-            print_evaluation_summary(evaluation, "transcript", console=ctx.obj.console)
-            click.echo(f"📄 Detailed report saved to: {output}")
-        except Exception as e:
-            click.echo(f"❌ Error during evaluation: {e}", err=True)
-            ctx.exit(1)
-        return
-
-    # Batch mode: discover and evaluate episodes with raw transcripts
-    click.echo("🔍 Looking for raw transcripts to evaluate...")
-
-    episodes_to_evaluate = feed_manager.get_episodes_with_raw_transcripts(str(config.storage_path))
-
-    # Filter by podcast_id if specified
-    if podcast_id:
-        podcast = podcast_service.get_podcast(podcast_id)
-        if not podcast:
-            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
-            ctx.exit(1)
-        episodes_to_evaluate = [(p, ep) for p, ep in episodes_to_evaluate if str(p.rss_url) == str(podcast.rss_url)]
-
-    # Filter by episode_id if specified
-    if episode_id:
-        if not podcast_id:
-            click.echo("❌ --episode-id requires --podcast-id", err=True)
-            ctx.exit(1)
-        target_episode = podcast_service.get_episode(podcast_id, episode_id)
-        if not target_episode:
-            click.echo(f"❌ Episode not found: {episode_id}", err=True)
-            ctx.exit(1)
-        episodes_to_evaluate = [
-            (p, ep) for p, ep in episodes_to_evaluate if ep.external_id == target_episode.external_id
-        ]
-
-    # Filter out already-evaluated episodes (unless --force)
-    if not force:
-        filtered = []
-        for podcast, episode in episodes_to_evaluate:
-            eval_filename = f"{Path(episode.raw_transcript_path).stem}_evaluation.json"
-            eval_path = path_manager.raw_transcript_evaluation_file(podcast.slug, eval_filename)
-            if not eval_path.exists():
-                filtered.append((podcast, episode))
-        episodes_to_evaluate = filtered
-
-    if not episodes_to_evaluate:
-        click.echo("✓ No raw transcripts found to evaluate")
-        return
-
-    # Apply max_episodes limit
-    if max_episodes:
-        episodes_to_evaluate = episodes_to_evaluate[:max_episodes]
-
-    total_episodes = len(episodes_to_evaluate)
-    click.echo(f"📄 Found {total_episodes} transcript(s) to evaluate")
-
-    if dry_run:
-        for podcast, episode in episodes_to_evaluate:
-            click.echo(f"  • {podcast.title}: {episode.title}")
-        click.echo("\n(Run without --dry-run to evaluate)")
-        return
-
-    # Process episodes
-    import json
-
-    total_processed = 0
-    start_time = time.time()
-
-    current_podcast = None
-    for podcast, episode in episodes_to_evaluate:
-        if current_podcast != podcast.title:
-            click.echo(f"\n📻 {podcast.title}")
-            click.echo("─" * 50)
-            current_podcast = podcast.title
-
-        click.echo(f"\n🎧 {episode.title}")
-
-        try:
-            # Load transcript
-            transcript_path_obj = path_manager.raw_transcript_file(episode.raw_transcript_path)
-            with open(transcript_path_obj, "r", encoding="utf-8") as f:
-                transcript_data = json.load(f)
-
-            # Determine output path
-            eval_filename = f"{transcript_path_obj.stem}_evaluation.json"
-            eval_path = path_manager.raw_transcript_evaluation_file(podcast.slug, eval_filename)
-            eval_path.parent.mkdir(parents=True, exist_ok=True)
-
-            click.echo(f"   📊 Evaluating with {llm_provider.get_model_name()}...")
-            evaluation = evaluator.evaluate(transcript_data, str(eval_path))
-            print_evaluation_summary(evaluation, "transcript", console=ctx.obj.console)
-            click.echo(f"   ✓ Saved: {eval_path}")
-            total_processed += 1
-
-        except Exception as e:
-            click.echo(f"   ❌ Error: {e}", err=True)
-            import traceback
-
-            traceback.print_exc()
-
-    total_time = time.time() - start_time
-    click.echo("\n🎉 Evaluation complete!")
-    click.echo(f"✓ {total_processed} transcript(s) evaluated in {total_time:.1f} seconds")
+    """[Deprecated] Evaluate raw transcripts — use `thestill eval run --rubric raw-transcript`."""
+    _deprecated_eval_wrapper(
+        ctx, "raw-transcript", transcript_path, None, output, podcast_id, episode_id, max_episodes, dry_run, force
+    )
 
 
 @main.command("evaluate-clean-transcript")
@@ -2596,170 +2832,16 @@ def evaluate_raw_transcript(ctx, transcript_path, output, podcast_id, episode_id
 @click.option("--episode-id", help="Evaluate specific episode (requires --podcast-id)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to evaluate")
 @click.option("--dry-run", "-d", is_flag=True, help="Preview what would be evaluated")
-@click.option("--force", "-f", is_flag=True, help="Re-evaluate even if evaluation exists")
+@click.option("--force", "-f", is_flag=True, help="Obsolete: runs are append-only (ignored)")
 @click.pass_context
 @require_config
 def evaluate_clean_transcript(
     ctx, transcript_path, original, output, podcast_id, episode_id, max_episodes, dry_run, force
 ):
-    """Evaluate the quality of clean transcripts.
-
-    If TRANSCRIPT_PATH is provided, evaluates that specific file.
-    Otherwise, discovers episodes with clean transcripts and evaluates them in batch.
-
-    Uses LLM to analyze fidelity, formatting, readability, and enhancements.
-    """
-    config = ctx.obj.config
-    path_manager = ctx.obj.path_manager
-    feed_manager = ctx.obj.feed_manager
-    podcast_service = ctx.obj.podcast_service
-
-    # Create LLM provider
-    try:
-        llm_provider = create_llm_provider_from_config(config)
-    except Exception as e:
-        click.echo(f"❌ Failed to initialize LLM provider: {e}", err=True)
-        ctx.exit(1)
-
-    evaluator = PostProcessorEvaluator(llm_provider, console=ctx.obj.console)
-
-    # Standalone mode: evaluate a specific file
-    if transcript_path:
-        import json
-
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            if transcript_path.endswith(".json"):
-                transcript_data = json.load(f)
-            else:
-                # If it's markdown, wrap it as content
-                transcript_data = {"full_output": f.read()}
-
-        # Load original if provided
-        original_data = None
-        if original:
-            with open(original, "r", encoding="utf-8") as f:
-                original_data = json.load(f)
-
-        if not output:
-            transcript_path_obj = Path(transcript_path)
-            output = str(transcript_path_obj.parent / f"{transcript_path_obj.stem}_evaluation.json")
-
-        click.echo(f"📊 Evaluating clean transcript quality with {llm_provider.get_model_name()}...")
-
-        try:
-            evaluation = evaluator.evaluate(transcript_data, original_data, output)
-            print_evaluation_summary(evaluation, "clean-transcript", console=ctx.obj.console)
-            click.echo(f"📄 Detailed report saved to: {output}")
-        except Exception as e:
-            click.echo(f"❌ Error during evaluation: {e}", err=True)
-            ctx.exit(1)
-        return
-
-    # Batch mode: discover and evaluate episodes with clean transcripts
-    click.echo("🔍 Looking for clean transcripts to evaluate...")
-
-    episodes_to_evaluate = feed_manager.get_episodes_with_clean_transcripts(str(config.storage_path))
-
-    # Filter by podcast_id if specified
-    if podcast_id:
-        podcast = podcast_service.get_podcast(podcast_id)
-        if not podcast:
-            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
-            ctx.exit(1)
-        episodes_to_evaluate = [(p, ep) for p, ep in episodes_to_evaluate if str(p.rss_url) == str(podcast.rss_url)]
-
-    # Filter by episode_id if specified
-    if episode_id:
-        if not podcast_id:
-            click.echo("❌ --episode-id requires --podcast-id", err=True)
-            ctx.exit(1)
-        target_episode = podcast_service.get_episode(podcast_id, episode_id)
-        if not target_episode:
-            click.echo(f"❌ Episode not found: {episode_id}", err=True)
-            ctx.exit(1)
-        episodes_to_evaluate = [
-            (p, ep) for p, ep in episodes_to_evaluate if ep.external_id == target_episode.external_id
-        ]
-
-    # Filter out already-evaluated episodes (unless --force)
-    if not force:
-        filtered = []
-        for podcast, episode in episodes_to_evaluate:
-            eval_filename = f"{Path(episode.clean_transcript_path).stem}_evaluation.json"
-            eval_path = path_manager.clean_transcript_evaluation_file(podcast.slug, eval_filename)
-            if not eval_path.exists():
-                filtered.append((podcast, episode))
-        episodes_to_evaluate = filtered
-
-    if not episodes_to_evaluate:
-        click.echo("✓ No clean transcripts found to evaluate")
-        return
-
-    # Apply max_episodes limit
-    if max_episodes:
-        episodes_to_evaluate = episodes_to_evaluate[:max_episodes]
-
-    total_episodes = len(episodes_to_evaluate)
-    click.echo(f"📄 Found {total_episodes} transcript(s) to evaluate")
-
-    if dry_run:
-        for podcast, episode in episodes_to_evaluate:
-            click.echo(f"  • {podcast.title}: {episode.title}")
-        click.echo("\n(Run without --dry-run to evaluate)")
-        return
-
-    # Process episodes
-    import json
-
-    total_processed = 0
-    start_time = time.time()
-
-    current_podcast = None
-    for podcast, episode in episodes_to_evaluate:
-        if current_podcast != podcast.title:
-            click.echo(f"\n📻 {podcast.title}")
-            click.echo("─" * 50)
-            current_podcast = podcast.title
-
-        click.echo(f"\n🎧 {episode.title}")
-
-        try:
-            # Load clean transcript
-            clean_path = path_manager.clean_transcript_file(episode.clean_transcript_path)
-            with open(clean_path, "r", encoding="utf-8") as f:
-                if str(clean_path).endswith(".json"):
-                    transcript_data = json.load(f)
-                else:
-                    transcript_data = {"full_output": f.read()}
-
-            # Load raw transcript for comparison if available
-            original_data = None
-            if episode.raw_transcript_path:
-                raw_path = path_manager.raw_transcript_file(episode.raw_transcript_path)
-                if raw_path.exists():
-                    with open(raw_path, "r", encoding="utf-8") as f:
-                        original_data = json.load(f)
-
-            # Determine output path
-            eval_filename = f"{clean_path.stem}_evaluation.json"
-            eval_path = path_manager.clean_transcript_evaluation_file(podcast.slug, eval_filename)
-            eval_path.parent.mkdir(parents=True, exist_ok=True)
-
-            click.echo(f"   📊 Evaluating with {llm_provider.get_model_name()}...")
-            evaluation = evaluator.evaluate(transcript_data, original_data, str(eval_path))
-            print_evaluation_summary(evaluation, "clean-transcript", console=ctx.obj.console)
-            click.echo(f"   ✓ Saved: {eval_path}")
-            total_processed += 1
-
-        except Exception as e:
-            click.echo(f"   ❌ Error: {e}", err=True)
-            import traceback
-
-            traceback.print_exc()
-
-    total_time = time.time() - start_time
-    click.echo("\n🎉 Evaluation complete!")
-    click.echo(f"✓ {total_processed} transcript(s) evaluated in {total_time:.1f} seconds")
+    """[Deprecated] Evaluate clean transcripts — use `thestill eval run --rubric clean-transcript`."""
+    _deprecated_eval_wrapper(
+        ctx, "clean-transcript", transcript_path, original, output, podcast_id, episode_id, max_episodes, dry_run, force
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -124,6 +124,17 @@ Saves disk space by removing intermediate audio files:
 
 See [transcript-cleaning.md](transcript-cleaning.md) for details.
 
+## Eval Judge (spec #53)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `EVAL_JUDGE_PROVIDER` | LLM-as-judge provider for `thestill eval run`, pinned independently of the pipeline LLM | `` (falls back to pipeline, marked unpinned) |
+| `EVAL_JUDGE_MODEL` | Judge model — use a dated snapshot, not a floating alias | `` (provider's configured model) |
+| `EVAL_JUDGE_TEMPERATURE` | Judge sampling temperature | `0.0` |
+
+Prefer a judge from a different model family than the one producing the
+judged artifacts (self-preference bias). See [evals.md](evals.md).
+
 ## Web Server
 
 | Variable | Description | Default |

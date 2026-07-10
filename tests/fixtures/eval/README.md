@@ -1,15 +1,17 @@
-# Spec #28 evaluation fixtures
+# Evaluation fixtures
 
-These JSON files are the **measurement sticks** for spec #28 (corpus
-search & entities). They drive Phase 0.3, gate Phase 1 and Phase 2, and
-run nightly thereafter.
+These JSON files are **measurement sticks**: pinned inputs that keep
+eval results comparable over time. The spec #28 files gate corpus
+search & entities; the spec #53 file pins the golden episode set for
+LLM-as-judge quality runs.
 
 ## Files
 
 | File | What it gates | When it runs |
 |---|---|---|
-| `harness_reference_questions.json` | O1 + O5 acceptance — "ask Claude a question, get a narrative answer with cited clips" | End of Phase 1 (against SQL-only MCP alpha), end of Phase 2 (against full hybrid surface), nightly |
-| `semantic_recall_pairs.json` | O3 — top-5 semantic recall ≥ 0.8 over `search_corpus(mode=hybrid)` | End of Phase 2, nightly |
+| `harness_reference_questions.json` | Spec #28 O1 + O5 acceptance — "ask Claude a question, get a narrative answer with cited clips" | End of Phase 1 (against SQL-only MCP alpha), end of Phase 2 (against full hybrid surface), nightly |
+| `semantic_recall_pairs.json` | Spec #28 O3 — top-5 semantic recall ≥ 0.8 over `search_corpus(mode=hybrid)` | End of Phase 2, nightly |
+| `golden_episodes.json` | Spec #53 — the pinned episode set for longitudinal quality runs (`thestill eval run --episodes-file tests/fixtures/eval/golden_episodes.json`) | On demand: before/after any prompt, model, or pipeline change you want scored |
 
 Each file's schema is documented in the file header. Counts target the
 spec: 10 harness questions, 50 semantic-recall pairs.

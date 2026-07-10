@@ -1,6 +1,6 @@
 # Eval Runs and Summary Rubric
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Implemented — Phases 1–3 (2026-07-10); Phase 4 (provenance capture, briefing rubric, CI gate) future
 > **Created:** 2026-07-07
 > **Author:** Product & Engineering
 > **Related:** [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (§1.12 harness-eval), [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md), [#41 llm-prohibited-content-fallback](41-llm-prohibited-content-fallback.md)
@@ -191,8 +191,11 @@ Design notes:
 - **Artifact hashes make comparisons honest.** Two runs over "the same
   episode" may be judging different bytes (the clean transcript was
   regenerated in between); the hash is how `compare` detects that.
-- With `--samples N > 1`, `scores` holds per-dimension
-  `{"mean": …, "std": …, "n": N}` and the item file keeps all N reports.
+- With `--samples N > 1`, `scores` holds the per-dimension mean, a
+  sibling `scores_std` map holds the per-dimension sample standard
+  deviation (N itself lives once in `judge.samples`), and the item file
+  keeps all N reports. Keeping `scores` flat means `list`/`show`/
+  `compare` read one shape regardless of sampling.
 
 ### Rubric registry (`thestill/evals/rubrics.py`)
 

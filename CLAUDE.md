@@ -162,6 +162,7 @@ These IDs enable tracing requests across all layers of the application.
 - [web-server.md](docs/web-server.md) - API endpoints and webhooks
 - [mcp-usage.md](docs/mcp-usage.md) - MCP server usage
 - [transcript-cleaning.md](docs/transcript-cleaning.md) - Cleaning configuration
+- [evals.md](docs/evals.md) - LLM-as-judge quality eval runs (`thestill eval`)
 - [code-guidelines.md](docs/code-guidelines.md) - Development standards
 
 ### Technical Specs (`specs/`)
