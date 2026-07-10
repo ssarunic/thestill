@@ -35,13 +35,18 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import structlog
 from pydantic import ValidationError
 
 from thestill.core.feed_manager import PodcastFeedManager
-from thestill.core.llm_provider import LLMProvider, create_llm_provider, create_llm_provider_from_config
+from thestill.core.llm_provider import (
+    LLMProvider,
+    create_llm_provider,
+    create_llm_provider_from_config,
+    provider_kwargs_from_config,
+)
 from thestill.models.podcast import Episode, Podcast
 from thestill.utils.path_manager import PathManager
 from thestill.utils.slug import generate_slug
@@ -96,9 +101,7 @@ def resolve_judge(
     the EVAL_JUDGE_* config — i.e. it was chosen deliberately for judging
     rather than inherited from whatever the pipeline happens to use.
     """
-    provider_name = cli_provider or config.eval_judge_provider or ""
-    model_name = cli_model or config.eval_judge_model or ""
-    pinned = bool(provider_name or model_name)
+    pinned = bool(cli_provider or cli_model or config.eval_judge_provider or config.eval_judge_model)
 
     if cli_temperature is not None:
         temperature = cli_temperature
@@ -115,24 +118,22 @@ def resolve_judge(
         )
         return JudgeResolution(provider=provider, info=info)
 
-    # Judge provider family defaults to the pipeline's when only a model
-    # was pinned; the model defaults to that family's configured model
-    # when only a provider was pinned.
-    provider_name = (provider_name or config.llm_provider).lower()
-    provider_kwargs = dict(
-        openai_api_key=config.openai_api_key,
-        openai_model=config.openai_model,
-        openai_reasoning_effort=config.openai_reasoning_effort,
-        ollama_base_url=config.ollama_base_url,
-        ollama_model=config.ollama_model,
-        gemini_api_key=config.gemini_api_key,
-        gemini_model=config.gemini_model,
-        gemini_thinking_level=config.gemini_thinking_level,
-        anthropic_api_key=config.anthropic_api_key,
-        anthropic_model=config.anthropic_model,
-        mistral_api_key=config.mistral_api_key,
-        mistral_model=config.mistral_model,
-    )
+    provider_name = (cli_provider or config.eval_judge_provider or config.llm_provider).lower()
+
+    # EVAL_JUDGE_PROVIDER/EVAL_JUDGE_MODEL are a coupled pair: the env model
+    # only applies when the winning provider is the family it was written
+    # for. A --judge-provider override of a different family must fall back
+    # to that family's configured default model, not inherit an env model
+    # id from another provider (e.g. AnthropicProvider with a gpt-* id).
+    env_model_family = (config.eval_judge_provider or config.llm_provider).lower()
+    if cli_model:
+        model_name = cli_model
+    elif config.eval_judge_model and provider_name == env_model_family:
+        model_name = config.eval_judge_model
+    else:
+        model_name = ""
+
+    provider_kwargs = provider_kwargs_from_config(config)
     if model_name:
         provider_kwargs[f"{provider_name}_model"] = model_name
     provider = create_llm_provider(provider_type=provider_name, **provider_kwargs)
@@ -282,11 +283,15 @@ class EvalRunner:
         Returns (reports, truncated). Shared by runs and the legacy
         single-file wrappers.
         """
+        # The char budget bounds the COMBINED input (split evenly across
+        # artifacts) so a multi-artifact rubric can't sum past the judge's
+        # context window with every part individually under the cap.
         truncated = False
         bounded: Dict[str, str] = {}
+        per_artifact_budget = MAX_INPUT_CHARS // max(1, len(artifacts))
         for kind, text in artifacts.items():
-            if len(text) > MAX_INPUT_CHARS:
-                bounded[kind] = text[:MAX_INPUT_CHARS]
+            if len(text) > per_artifact_budget:
+                bounded[kind] = text[:per_artifact_budget]
                 truncated = True
             else:
                 bounded[kind] = text
@@ -315,7 +320,7 @@ class EvalRunner:
         label: Optional[str] = None,
         note: Optional[str] = None,
         samples: int = 1,
-        on_item: Optional[callable] = None,
+        on_item: Optional[Callable[[ManifestItem], None]] = None,
     ) -> RunManifest:
         """Execute a run and persist it under ``evaluations/runs/<run_id>/``."""
         if samples < 1:

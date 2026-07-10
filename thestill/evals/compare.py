@@ -84,15 +84,7 @@ class RunComparison:
             "prompt_differs": self.prompt_differs,
             "artifacts_differ": self.artifacts_differ,
             "dimensions": [vars(d) for d in self.dimensions],
-            "episodes": [
-                {
-                    "podcast_slug": e.podcast_slug,
-                    "episode_slug": e.episode_slug,
-                    "deltas": e.deltas,
-                    "artifacts_match": e.artifacts_match,
-                }
-                for e in self.episodes
-            ],
+            "episodes": [vars(e) for e in self.episodes],
             "only_in_a": self.only_in_a,
             "only_in_b": self.only_in_b,
             "failed_excluded": self.failed_excluded,

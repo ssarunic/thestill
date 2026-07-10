@@ -22,7 +22,7 @@ from thestill.evals.models import RunManifest
 from thestill.evals.rubrics import get_rubric
 from thestill.evals.runner import MANIFEST_FILENAME, MAX_INPUT_CHARS, EvalError, EvalRunner, resolve_judge
 
-from .conftest import VALID_RAW_REPORT, SequenceProvider, make_episode, make_judge, make_podcast
+from .conftest import VALID_CLEAN_REPORT, VALID_RAW_REPORT, make_episode, make_judge
 
 
 class TestResolveJudge:
@@ -76,6 +76,25 @@ class TestResolveJudge:
         judge = resolve_judge(self._config(eval_judge_provider="anthropic"))
         assert judge.info.pinned is True
         assert judge.info.model == "claude-config-model"
+
+    def test_cli_provider_override_does_not_inherit_env_model_of_other_family(self):
+        # .env pins openai/gpt-judge as a coupled pair; a one-off
+        # --judge-provider anthropic must get anthropic's config model,
+        # not an AnthropicProvider with a gpt-* model id.
+        config = self._config(eval_judge_provider="openai", eval_judge_model="gpt-judge-20260101")
+        judge = resolve_judge(config, cli_provider="anthropic")
+        assert judge.info.provider == "anthropic"
+        assert judge.info.model == "claude-config-model"
+
+    def test_env_model_alone_applies_to_pipeline_family_only(self):
+        # EVAL_JUDGE_MODEL without EVAL_JUDGE_PROVIDER pins a model within
+        # the pipeline's family...
+        config = self._config(eval_judge_model="gpt-judge-20260101")
+        judge = resolve_judge(config)
+        assert (judge.info.provider, judge.info.model) == ("openai", "gpt-judge-20260101")
+        # ...but must not leak onto a different family chosen via CLI.
+        judge = resolve_judge(config, cli_provider="anthropic")
+        assert (judge.info.provider, judge.info.model) == ("anthropic", "claude-config-model")
 
 
 class TestDiscover:
@@ -181,6 +200,20 @@ class TestRun:
         rubric = get_rubric("raw-transcript")
         manifest = eval_env.runner.run(rubric, judge, eval_env.runner.discover(rubric))
         assert manifest.items[0].transcript_truncated is True
+
+    def test_truncation_budget_bounds_the_combined_input(self, eval_env):
+        # Two artifacts each just under the cap must still be truncated:
+        # the budget is combined, not per-artifact.
+        judge = make_judge([json.dumps(VALID_CLEAN_REPORT)])
+        rubric = get_rubric("clean-transcript")
+        oversized = {
+            "clean_transcript": "c" * (MAX_INPUT_CHARS - 10),
+            "raw_transcript": "r" * (MAX_INPUT_CHARS - 10),
+        }
+        _, truncated = eval_env.runner.evaluate_texts(rubric, judge, oversized)
+        assert truncated is True
+        user_message = judge.provider.last_messages[-1]["content"]
+        assert len(user_message) <= MAX_INPUT_CHARS + 200  # small allowance for prompt framing text
 
     def test_duplicate_run_id_is_refused(self, eval_env, monkeypatch):
         from datetime import datetime, timezone

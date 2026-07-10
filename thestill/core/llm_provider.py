@@ -3004,6 +3004,29 @@ def create_llm_provider(
         )
 
 
+def provider_kwargs_from_config(config) -> dict:
+    """Extract every per-provider keyword for create_llm_provider from a config.
+
+    Shared by ``create_llm_provider_from_config`` and callers that need to
+    construct a provider with a selectively overridden model (e.g. the
+    spec #53 eval judge), so the config->kwargs mapping lives in one place.
+    """
+    return dict(
+        openai_api_key=config.openai_api_key,
+        openai_model=config.openai_model,
+        openai_reasoning_effort=config.openai_reasoning_effort,
+        ollama_base_url=config.ollama_base_url,
+        ollama_model=config.ollama_model,
+        gemini_api_key=config.gemini_api_key,
+        gemini_model=config.gemini_model,
+        gemini_thinking_level=config.gemini_thinking_level,
+        anthropic_api_key=config.anthropic_api_key,
+        anthropic_model=config.anthropic_model,
+        mistral_api_key=config.mistral_api_key,
+        mistral_model=config.mistral_model,
+    )
+
+
 def create_llm_provider_from_config(config) -> LLMProvider:
     """
     Create an LLM provider from a config object.
@@ -3018,18 +3041,4 @@ def create_llm_provider_from_config(config) -> LLMProvider:
     Returns:
         LLMProvider instance configured according to config settings
     """
-    return create_llm_provider(
-        provider_type=config.llm_provider,
-        openai_api_key=config.openai_api_key,
-        openai_model=config.openai_model,
-        openai_reasoning_effort=config.openai_reasoning_effort,
-        ollama_base_url=config.ollama_base_url,
-        ollama_model=config.ollama_model,
-        gemini_api_key=config.gemini_api_key,
-        gemini_model=config.gemini_model,
-        gemini_thinking_level=config.gemini_thinking_level,
-        anthropic_api_key=config.anthropic_api_key,
-        anthropic_model=config.anthropic_model,
-        mistral_api_key=config.mistral_api_key,
-        mistral_model=config.mistral_model,
-    )
+    return create_llm_provider(provider_type=config.llm_provider, **provider_kwargs_from_config(config))

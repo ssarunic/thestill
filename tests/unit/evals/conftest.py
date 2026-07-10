@@ -52,6 +52,30 @@ VALID_RAW_REPORT = {
 }
 
 
+VALID_CLEAN_REPORT = {
+    "fidelity": {
+        "meaning_preserved": True,
+        "invented_content": {"count": 0, "examples": []},
+        "name_entity_corrections": {"count": 1, "examples": ["Jon -> John"]},
+    },
+    "formatting": {
+        "speaker_labels_clear": True,
+        "ads_marked": True,
+        "intro_marked": True,
+        "outro_marked": True,
+        "headings_present": True,
+        "timestamps_consistent": True,
+    },
+    "enhancements": {
+        "notable_quotes": {"count": 2, "examples": ["quote"]},
+        "social_snippets": {"count": 1, "examples": ["snippet"]},
+        "markdown_used": True,
+    },
+    "scores": {"fidelity": 9, "formatting_clarity": 8, "readability": 8, "enhancements_value": 7},
+    "summary": {"strengths": ["faithful"], "weaknesses": [], "verdict": "good"},
+}
+
+
 class SequenceProvider(MockLLMProvider):
     """Mock provider returning scripted responses in order."""
 
