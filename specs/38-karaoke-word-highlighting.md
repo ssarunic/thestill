@@ -2,7 +2,7 @@
 
 **Status**: ✅ Shipped (PRs 1–5). PRs 6–7 intentionally deferred.
 **Created**: 2026-05-11
-**Updated**: 2026-05-11
+**Updated**: 2026-07-11 (perceptual lead follow-up)
 **Priority**: Medium (visible playback polish; builds on specs #22 / #23)
 **Supersedes**: [24-word-level-transcript-highlighting.md](24-word-level-transcript-highlighting.md)
 
@@ -381,6 +381,39 @@ PR 3's `useKaraokeProgress` rAF driver was built and then deleted along
 with the wipe; it was replaced by `useKaraokeActiveWordIdx` returning
 `{ activeIdx, readUpTo }`. PR 7's reduced-motion handling went with it —
 the two-tone design has no motion to suppress.
+
+### Follow-up: perceptual lead (2026-07-11)
+
+User feedback after shipping: the highlight felt like it trailed the
+speech, making it odd to read along. Analysis confirmed the mechanism —
+the original comparison (`word.s + offset <= currentTime`) fires at the
+word's acoustic onset at the earliest, and every latency in the chain
+stacks on the late side: rAF read → React commit → paint (~16–33 ms),
+Whisper-family onset bias (tens of ms, worse after pauses), and the
+~100–200 ms the eye needs to saccade to a newly-highlighted word.
+Karaoke UIs (Apple Music Sing, Musixmatch) lead deliberately for the
+same reason.
+
+The fix is a shared constant, `HIGHLIGHT_LEAD_SECONDS = 0.15` in
+[highlightLead.ts](../thestill/web/frontend/src/utils/highlightLead.ts),
+added to `currentTime` before the comparison in two places:
+
+- **`readUpTo`** (the visual read/unread cutoff) in
+  `useKaraokeActiveWordIdx` — words now colour ~150 ms before their
+  acoustic onset. `activeIdx` / `aria-current` is deliberately **not**
+  biased: for assistive tech "the word actually being spoken now" is
+  the honest answer.
+- **The active-segment search** in `SegmentedTranscriptViewer` — keeps
+  the segment highlight in step with the word colouring, and lets a new
+  segment's first word lead too (words only render once their segment
+  is active, so a lead applied only to words could never cross a
+  segment boundary).
+
+The lead is in media-time, so at 2× playback the wall-clock lead halves
+to ~75 ms. Scaling by `playbackRate` was considered and skipped for the
+first pass — revisit if sped-up listening feels laggy again. Tune by
+ear in the 0.10–0.20 s range; past ~0.25 s the highlight reads as
+"jumping ahead".
 
 ### Open items — resolved
 

@@ -25,6 +25,7 @@ import {
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
+import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
 import KaraokeWord from './KaraokeWord'
@@ -646,7 +647,14 @@ export default function SegmentedTranscriptViewer({
     // Search the full (unfiltered) list so filler gaps and hidden kinds
     // don't flicker the highlight, then walk back to the nearest visible
     // segment so the outline lands on something the reader can see.
-    const idx = findActiveSegmentIndex(transcript.segments, currentTime, offset)
+    // The lead keeps the segment highlight in step with the karaoke
+    // read-word colouring, and lets a new segment's first word lead too
+    // (words only render once their segment is active).
+    const idx = findActiveSegmentIndex(
+      transcript.segments,
+      currentTime + HIGHLIGHT_LEAD_SECONDS,
+      offset,
+    )
     if (idx < 0) return null
     const visibleIds = new Set(renderedSegments.map((s) => s.id))
     for (let i = idx; i >= 0; i -= 1) {
