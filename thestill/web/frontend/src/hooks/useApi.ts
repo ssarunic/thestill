@@ -11,6 +11,7 @@ import {
   getNarrationDashboardStats,
   getRecentActivity,
   getPodcasts,
+  getTopPodcasts,
   getPodcast,
   getPodcastEpisodes,
   getEpisode,
@@ -104,6 +105,21 @@ export function usePodcastsInfinite(limit = 12, q?: string) {
     queryFn: ({ pageParam = 0 }) => getPodcasts(limit, pageParam, q),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.next_offset,
+  })
+}
+
+// Top-podcast charts (spec #57). Cached by (region, q, category) so returning
+// to the page — e.g. via the browser Back button from a podcast detail —
+// re-renders instantly from cache, letting the browser restore the scroll
+// position instead of dumping the user at the top. ``placeholderData`` keeps
+// the previous list on screen while a new filter's request lands, so the list
+// height (and thus scroll) doesn't collapse mid-transition.
+export function useTopPodcasts(region?: string, q?: string, category?: string) {
+  return useQuery({
+    queryKey: ['top-podcasts', region ?? '', q ?? '', category ?? ''],
+    queryFn: () => getTopPodcasts(region, 500, q, category),
+    staleTime: 60_000,
+    placeholderData: (previous) => previous,
   })
 }
 

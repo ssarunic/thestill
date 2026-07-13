@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useDLQTasks, useRetryDLQTask, useSkipDLQTask, useRetryAllDLQTasks } from '../hooks/useApi'
+import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { DLQTask, DLQBranchFilter, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
 import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
@@ -169,9 +170,30 @@ function DLQTaskCard({ task, onRetry, onSkip, isRetrying, isSkipping }: DLQTaskC
 }
 
 export default function FailedTasks() {
+  // Restore scroll position on Back from an episode detail page.
+  useScrollRestoration()
   // Spec #28 Phase 3.2 — default to ``user`` so the entity branch
-  // doesn't drown the user-facing critical path on page load.
-  const [branch, setBranch] = useState<DLQBranchFilter>('user')
+  // doesn't drown the user-facing critical path on page load. The active tab
+  // lives in the URL so the browser Back button restores it when returning
+  // from an episode detail page — the app-wide convention.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const branchParam = searchParams.get('branch')
+  const branch: DLQBranchFilter =
+    branchParam === 'entity' || branchParam === 'feed' || branchParam === 'all'
+      ? branchParam
+      : 'user'
+  const setBranch = (next: DLQBranchFilter) => {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        // ``user`` is the default — keep the URL clean by omitting it.
+        if (next === 'user') params.delete('branch')
+        else params.set('branch', next)
+        return params
+      },
+      { replace: true },
+    )
+  }
   const { data, isLoading, error } = useDLQTasks(100, branch)
   // Always fetch ``all`` for the stat tiles so the tab counts stay
   // truthful even when a non-``all`` tab is active.
