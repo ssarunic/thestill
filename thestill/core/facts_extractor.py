@@ -477,6 +477,21 @@ Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPI
    - Context clues (who asks questions vs gives opinions, host vs guest patterns)
    - Ad narrator patterns (reads sponsor copy, different tone)
 
+   CONFIDENCE RULE — do not guess a specific person's name:
+   - A specific NAME may only be assigned when the audio itself supports it:
+     the speaker introduces themselves, is addressed by name, or is clearly
+     named by another speaker. The ROLE (host vs guest vs ad narrator) may be
+     inferred from question/answer patterns, but the NAME may not.
+   - The "EXISTING PODCAST FACTS" host list tells you who MIGHT appear, never
+     who DOES. Many podcasts rotate hosts. NEVER pick a specific host name from
+     that roster just because it is listed first, is the most prominent host,
+     or is the only plausible option. Presence in the roster is not evidence.
+   - When you can tell a speaker is the host but NOT which host (no spoken name
+     cue), label them with the generic host role word in the transcript's
+     language (e.g. "Host" in English, "Voditelj" in Croatian) — optionally
+     with the podcast name, e.g. "Host (Netokracija)". A visibly unnamed host
+     is correct; a confidently wrong name is not.
+
 2. GUESTS: Identify any guests appearing in THIS episode
    - Include their role/company if mentioned
    - Do NOT include regular hosts
@@ -494,7 +509,9 @@ Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPI
 
 IMPORTANT GUIDELINES:
 - For speaker mapping, use format "Name (Role)" e.g., "Scott Galloway (Host)"
-- If you cannot identify a speaker, use "Unknown Speaker" or keep as SPEAKER_XX
+- If you cannot identify a speaker AT ALL, use "Unknown Speaker" or keep as SPEAKER_XX
+- If you know the ROLE but not the NAME (see the CONFIDENCE RULE above), label
+  by role rather than guessing a name, e.g. "Host (Netokracija)", "Voditelj"
 - For ad narrators, use "Ad Narrator" as the name
 - Look for patterns: hosts usually introduce guests, guests are introduced by title/company
 - Keep topics_keywords focused (20-50 items max) - prioritize proper nouns that might be misspelled
