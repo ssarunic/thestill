@@ -192,10 +192,18 @@ def seed_top_chart(app_state: AppState, region: str, entries: list[dict]) -> Non
             top_id = conn.execute(
                 """
                 INSERT INTO top_podcasts
-                    (name, artist, rss_url, category_id, first_seen_at, last_seen_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (name, artist, rss_url, image_url, category_id, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (entry["name"], entry.get("artist"), entry["rss_url"], category_id, now, now),
+                (
+                    entry["name"],
+                    entry.get("artist"),
+                    entry["rss_url"],
+                    entry.get("image_url"),
+                    category_id,
+                    now,
+                    now,
+                ),
             ).lastrowid
             conn.execute(
                 """

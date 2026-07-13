@@ -33,11 +33,13 @@ from typing import Any, Callable, List, Literal, Optional, Protocol, Sequence, T
 from urllib.parse import urlparse, urlunparse
 
 from structlog import get_logger
+from urllib3.util.retry import Retry
 
 from ..core.queue_manager import QueueManager, TaskStage
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..utils.url_guard import guarded_session
 from ..utils.url_patterns import (
     extract_apple_episode_id,
     extract_apple_podcast_id,
@@ -46,6 +48,15 @@ from ..utils.url_patterns import (
 )
 
 logger = get_logger(__name__)
+
+# Apple's ``itunes.apple.com/lookup`` endpoint returns HTTP 403 to non-browser
+# User-Agents (our default ``thestill/1.0`` UA is blocked outright), so the
+# resolver must present a browser-like UA to get a 200. 429/5xx are retried
+# with backoff via the guarded session below.
+_ITUNES_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+)
 
 
 # Audio file extensions recognised by ``BareAudioResolver``. Lower-case;
@@ -320,12 +331,16 @@ def _itunes_lookup(params: str, *, label: str) -> list:
     import requests
 
     url = f"https://itunes.apple.com/lookup?{params}"
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        respect_retry_after_header=True,
+    )
     try:
-        resp = requests.get(
-            url,
-            timeout=10,
-            headers={"User-Agent": "thestill/1.0 (+https://github.com/ssarunic/thestill)"},
-        )
+        with guarded_session(user_agent=_ITUNES_USER_AGENT, retries=retry) as session:
+            resp = session.get(url, timeout=10)
     except requests.RequestException as exc:
         raise ResolverError(f"iTunes lookup failed for {label}: {exc}") from exc
     if resp.status_code != 200:

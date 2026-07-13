@@ -46,9 +46,11 @@ episode-side mixin also carries — accepted for now, flagged for cleanup.
 
 from __future__ import annotations
 
+import json
 import uuid as _uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import psycopg
@@ -66,6 +68,15 @@ from .sqlite_podcast_repository import (
 )
 
 logger = get_logger(__name__)
+
+# Per-region chart JSONs (data/top_podcasts_<region>.json), produced by
+# scripts/build_top_podcasts.py. Postgres seeds from the same files the SQLite
+# repo globs (spec #57), so "drop a new JSON file" adds a region on either
+# backend. ``_MTIME_EPSILON`` matches the SQLite gate so a file's float mtime
+# compares equal across the two repos.
+_TOP_PODCASTS_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_TOP_PODCASTS_GLOB = "top_podcasts_*.json"
+_MTIME_EPSILON = 1e-6
 
 # The canonical podcast projection used by every podcast SELECT below —
 # identical column list to the SQLite queries.
@@ -256,6 +267,152 @@ class PodcastsMixin:
         return self._cat_id_to_pair.get(cat_id, (None, None))
 
     # ------------------------------------------------------------------
+    # Top-podcasts (chart) seeding
+    # ------------------------------------------------------------------
+
+    def _seed_top_podcasts(self) -> None:
+        """Sync top_podcasts + top_podcast_rankings from per-region JSON.
+
+        The Postgres parity for the SQLite ``_seed_top_podcasts`` (spec #57).
+        Before this, Postgres only ever received chart rows via the one-shot
+        ``db_promotion`` migration, so dropping a ``data/top_podcasts_<region>``
+        JSON — the documented way to add a region — did nothing on a
+        Postgres-backed server (FM-6 parallel-path drift). Now both backends
+        discover regions by glob and mtime-gate each import against
+        ``top_podcasts_meta``.
+
+        Called once from ``PostgresPodcastRepository.__init__`` (the repo is a
+        process-lifetime singleton). Steady state is a single ``meta`` read
+        then skip. Fail-open throughout: a missing schema, a malformed file, or
+        a per-region SQL error is logged and skipped without blocking startup
+        or the other regions (FM-1).
+        """
+        json_files = sorted(_TOP_PODCASTS_DIR.glob(_TOP_PODCASTS_GLOB))
+        if not json_files:
+            return
+
+        try:
+            with self._get_connection() as conn:
+                meta = {
+                    row["region"]: row["source_mtime"]
+                    for row in conn.execute("SELECT region, source_mtime FROM top_podcasts_meta").fetchall()
+                }
+        except psycopg.Error as exc:
+            # Most likely the schema hasn't been migrated yet — nothing to seed.
+            logger.warning("top-podcasts seed skipped (meta unreadable)", error=str(exc))
+            return
+
+        for path in json_files:
+            region = path.stem.removeprefix("top_podcasts_").lower()
+            if not region:
+                continue
+            mtime = path.stat().st_mtime
+            if region in meta and abs(meta[region] - mtime) < _MTIME_EPSILON:
+                continue  # unchanged — skip
+
+            try:
+                rows = json.loads(path.read_text())
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "skipping malformed top-podcasts file",
+                    region=region,
+                    path=str(path),
+                    error=str(exc),
+                )
+                continue
+
+            try:
+                self._seed_top_podcasts_region(region, rows, path, mtime)
+            except psycopg.Error as exc:
+                logger.warning("top-podcasts region seed failed", region=region, error=str(exc))
+                continue
+
+    def _seed_top_podcasts_region(
+        self, region: str, rows: List[Dict[str, Any]], path: Path, mtime: float
+    ) -> None:
+        """Atomically reseed one region: drop its rankings, upsert podcasts, re-rank.
+
+        Mirrors the SQLite path row-for-row (dedupe by ``rss_url`` keeping the
+        best rank, upsert podcast metadata, insert one thin ranking row, bump
+        the meta row) using the Postgres port conventions: ``%s`` placeholders,
+        ``ON CONFLICT ... RETURNING``, native tz-aware ``timestamptz`` params.
+        The whole region commits or rolls back as one transaction.
+        """
+        # Dedupe by rss_url within the region — Apple sometimes lists the same
+        # canonical feed under two track_ids; keep the better (lower) rank.
+        best_by_rss: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+        for i, row in enumerate(rows, start=1):
+            rss_url = (row.get("rss_url") or "").strip()
+            if not rss_url:
+                continue
+            rank = row.get("rank") or i
+            existing = best_by_rss.get(rss_url)
+            if existing is None or rank < existing[0]:
+                best_by_rss[rss_url] = (rank, row)
+
+        now = now_utc()
+        with self._get_connection() as conn:
+            self._ensure_category_cache(conn)
+            conn.execute("DELETE FROM top_podcast_rankings WHERE region = %s", (region,))
+
+            inserted = 0
+            for rss_url, (rank, row) in best_by_rss.items():
+                category_id = self._resolve_category_strings_to_id(row.get("category"), row.get("subcategory"), conn)
+                pid = conn.execute(
+                    """
+                    INSERT INTO top_podcasts (
+                        name, artist, rss_url, apple_url, youtube_url,
+                        apple_track_id, image_url, category_id, first_seen_at, last_seen_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (rss_url) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        artist = EXCLUDED.artist,
+                        apple_url = EXCLUDED.apple_url,
+                        youtube_url = EXCLUDED.youtube_url,
+                        apple_track_id = EXCLUDED.apple_track_id,
+                        image_url = EXCLUDED.image_url,
+                        category_id = EXCLUDED.category_id,
+                        last_seen_at = EXCLUDED.last_seen_at
+                    RETURNING id
+                    """,
+                    (
+                        row.get("name") or "",
+                        row.get("artist"),
+                        rss_url,
+                        row.get("apple_url"),
+                        row.get("youtube_url"),
+                        row.get("track_id"),
+                        _normalize_artwork_url(row.get("image_url")),
+                        category_id,
+                        now,
+                        now,
+                    ),
+                ).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO top_podcast_rankings (
+                        top_podcast_id, region, rank, source_genre, scraped_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (pid, region, rank, row.get("source_genre"), now),
+                )
+                inserted += 1
+
+            conn.execute(
+                """
+                INSERT INTO top_podcasts_meta (region, source_path, source_mtime, row_count, seeded_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (region) DO UPDATE SET
+                    source_path = EXCLUDED.source_path,
+                    source_mtime = EXCLUDED.source_mtime,
+                    row_count = EXCLUDED.row_count,
+                    seeded_at = EXCLUDED.seeded_at
+                """,
+                (region, str(path), mtime, inserted, now),
+            )
+        logger.info("seeded top-podcasts region", region=region, count=inserted)
+
+    # ------------------------------------------------------------------
     # Refresh loaders (spec #19 / #48)
     # ------------------------------------------------------------------
 
@@ -427,8 +584,11 @@ class PodcastsMixin:
 
         ``user_id`` enables the ``is_following`` flag per row; ``None``
         (anonymous) makes every row report ``is_following=False`` because
-        the ``LEFT JOIN`` simply misses. ``podcast_slug`` / ``image_url``
-        ride the same ``podcasts`` join; ``None`` for unimported entries.
+        the ``LEFT JOIN`` simply misses. ``podcast_slug`` rides the same
+        ``podcasts`` join; ``None`` for unimported entries. ``image_url``
+        prefers the imported podcast's artwork and falls back to the chart's
+        own ``top_podcasts.image_url`` (Apple ``artworkUrl600`` at scrape
+        time), so unimported entries still render a cover.
         """
         if not region:
             return []
@@ -458,7 +618,7 @@ class PodcastsMixin:
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
                        c.name AS category, r.source_genre,
                        up.slug AS podcast_slug,
-                       up.image_url AS image_url,
+                       COALESCE(up.image_url, p.image_url) AS image_url,
                        CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id

@@ -2,25 +2,50 @@ import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import BriefingScheduleSettings from '../components/BriefingScheduleSettings'
 
-// Region dropdown options. Today the data layer only ships top-podcast
-// rankings for "us" and "gb"; the rest are listed as common markets so
-// the user can still pick something stable that won't get re-inferred.
-// When new region CSVs land, just append here.
+// Region dropdown options. The data layer ships top-podcast rankings for
+// "us", "gb", and the whole EEA (spec #57); the remaining entries are common
+// markets listed so the user can still pick something stable that won't get
+// re-inferred. Keep this in sync with the FLAG map in utils/regions.ts —
+// the two lists must cover the same codes (FM-6). When new region files land,
+// just append here. Liechtenstein (li) is intentionally absent: Apple has no
+// Liechtenstein storefront chart, so it can only ever be empty.
 const REGIONS: Array<{ code: string; label: string }> = [
+  // Primary anchors.
   { code: 'us', label: 'United States' },
   { code: 'gb', label: 'United Kingdom' },
+  // EEA (EU 27 + Iceland, Norway), alphabetical by country name.
+  { code: 'at', label: 'Austria' },
+  { code: 'be', label: 'Belgium' },
+  { code: 'bg', label: 'Bulgaria' },
+  { code: 'hr', label: 'Croatia' },
+  { code: 'cy', label: 'Cyprus' },
+  { code: 'cz', label: 'Czechia' },
+  { code: 'dk', label: 'Denmark' },
+  { code: 'ee', label: 'Estonia' },
+  { code: 'fi', label: 'Finland' },
+  { code: 'fr', label: 'France' },
+  { code: 'de', label: 'Germany' },
+  { code: 'gr', label: 'Greece' },
+  { code: 'hu', label: 'Hungary' },
+  { code: 'is', label: 'Iceland' },
+  { code: 'ie', label: 'Ireland' },
+  { code: 'it', label: 'Italy' },
+  { code: 'lv', label: 'Latvia' },
+  { code: 'lt', label: 'Lithuania' },
+  { code: 'lu', label: 'Luxembourg' },
+  { code: 'mt', label: 'Malta' },
+  { code: 'nl', label: 'Netherlands' },
+  { code: 'no', label: 'Norway' },
+  { code: 'pl', label: 'Poland' },
+  { code: 'pt', label: 'Portugal' },
+  { code: 'ro', label: 'Romania' },
+  { code: 'sk', label: 'Slovakia' },
+  { code: 'si', label: 'Slovenia' },
+  { code: 'es', label: 'Spain' },
+  { code: 'se', label: 'Sweden' },
+  // Other common markets (no chart data shipped yet).
   { code: 'ca', label: 'Canada' },
   { code: 'au', label: 'Australia' },
-  { code: 'ie', label: 'Ireland' },
-  { code: 'de', label: 'Germany' },
-  { code: 'fr', label: 'France' },
-  { code: 'es', label: 'Spain' },
-  { code: 'it', label: 'Italy' },
-  { code: 'nl', label: 'Netherlands' },
-  { code: 'se', label: 'Sweden' },
-  { code: 'no', label: 'Norway' },
-  { code: 'dk', label: 'Denmark' },
-  { code: 'fi', label: 'Finland' },
   { code: 'jp', label: 'Japan' },
   { code: 'br', label: 'Brazil' },
   { code: 'mx', label: 'Mexico' },

@@ -326,3 +326,28 @@ def test_podcast_slug_populated_when_imported(client, two_pods, app_state):
     # The other (unimported) chart entry has neither slug nor artwork.
     assert by_rank[2]["podcast_slug"] is None
     assert by_rank[2]["image_url"] is None
+
+
+def test_chart_artwork_surfaces_for_unimported_entry(client, app_state):
+    """A chart entry that carries its own Apple artwork renders a cover even
+    when it has never been imported into ``podcasts`` locally."""
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {
+                "rank": 1,
+                "name": "Never Visited",
+                "artist": "Someone",
+                "rss_url": "https://r/never",
+                "image_url": "https://cdn.example.com/never600.jpg",
+            },
+        ],
+    )
+
+    response = client.get("/api/top-podcasts")
+
+    body = response.json()
+    row = body["top_podcasts"][0]
+    assert row["podcast_slug"] is None  # not imported
+    assert row["image_url"] == "https://cdn.example.com/never600.jpg"
