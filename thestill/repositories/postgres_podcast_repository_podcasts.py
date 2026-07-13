@@ -427,8 +427,11 @@ class PodcastsMixin:
 
         ``user_id`` enables the ``is_following`` flag per row; ``None``
         (anonymous) makes every row report ``is_following=False`` because
-        the ``LEFT JOIN`` simply misses. ``podcast_slug`` / ``image_url``
-        ride the same ``podcasts`` join; ``None`` for unimported entries.
+        the ``LEFT JOIN`` simply misses. ``podcast_slug`` rides the same
+        ``podcasts`` join; ``None`` for unimported entries. ``image_url``
+        prefers the imported podcast's artwork and falls back to the chart's
+        own ``top_podcasts.image_url`` (Apple ``artworkUrl600`` at scrape
+        time), so unimported entries still render a cover.
         """
         if not region:
             return []
@@ -458,7 +461,7 @@ class PodcastsMixin:
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
                        c.name AS category, r.source_genre,
                        up.slug AS podcast_slug,
-                       up.image_url AS image_url,
+                       COALESCE(up.image_url, p.image_url) AS image_url,
                        CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id

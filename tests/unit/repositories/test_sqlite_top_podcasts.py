@@ -160,6 +160,36 @@ class TestSeeding:
         # Most-specific resolution → subcategory name (Politics).
         assert row["cat"] == "Politics"
 
+    def test_seeds_artwork_from_chart_entry(self, repo_with_charts):
+        build, _ = repo_with_charts
+        repo = build(
+            {
+                "us": [
+                    _entry("A", "https://e/a", 1, image_url="https://cdn/a600.jpg"),
+                ]
+            }
+        )
+        with repo._get_connection() as conn:
+            img = conn.execute("SELECT image_url FROM top_podcasts WHERE rss_url = 'https://e/a'").fetchone()[
+                "image_url"
+            ]
+        assert img == "https://cdn/a600.jpg"
+
+    def test_normalizes_http_artwork_to_https(self, repo_with_charts):
+        build, _ = repo_with_charts
+        repo = build(
+            {
+                "us": [
+                    _entry("A", "https://e/a", 1, image_url="http://cdn/a600.jpg"),
+                ]
+            }
+        )
+        with repo._get_connection() as conn:
+            img = conn.execute("SELECT image_url FROM top_podcasts WHERE rss_url = 'https://e/a'").fetchone()[
+                "image_url"
+            ]
+        assert img == "https://cdn/a600.jpg"
+
     def test_skips_entries_with_no_rss_url(self, repo_with_charts):
         build, _ = repo_with_charts
         repo = build(
@@ -322,3 +352,42 @@ class TestGetTopPodcasts:
         build, _ = repo_with_charts
         repo = build({"us": [_entry("A", "https://e/a", 1)]})
         assert repo.get_top_podcasts("nope") == []
+
+    def test_surfaces_chart_artwork_for_unimported_entry(self, repo_with_charts):
+        """Chart-only entries (no local ``podcasts`` row) still get a cover."""
+        build, _ = repo_with_charts
+        repo = build(
+            {
+                "us": [
+                    _entry("A", "https://e/a", 1, image_url="https://cdn/a600.jpg"),
+                ]
+            }
+        )
+        rows = repo.get_top_podcasts("us")
+        assert rows[0]["image_url"] == "https://cdn/a600.jpg"
+
+    def test_imported_artwork_wins_over_chart_artwork(self, repo_with_charts):
+        """An imported podcast's own artwork takes precedence over the chart's."""
+        build, _ = repo_with_charts
+        repo = build(
+            {
+                "us": [
+                    _entry("A", "https://e/a", 1, image_url="https://cdn/chart.jpg"),
+                ]
+            }
+        )
+        # Simulate a locally-imported podcast on the same RSS URL with its own art.
+        with repo._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO podcasts (id, created_at, rss_url, title, slug, image_url) " "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "00000000-0000-0000-0000-000000000001",
+                    "2026-01-01T00:00:00+00:00",
+                    "https://e/a",
+                    "A",
+                    "a",
+                    "https://cdn/local.jpg",
+                ),
+            )
+        rows = repo.get_top_podcasts("us")
+        assert rows[0]["image_url"] == "https://cdn/local.jpg"

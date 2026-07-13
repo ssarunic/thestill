@@ -462,6 +462,7 @@ CREATE TABLE IF NOT EXISTS top_podcasts (
     apple_url text NULL,
     youtube_url text NULL,
     apple_track_id text NULL,
+    image_url text NULL,
     category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     first_seen_at timestamptz NOT NULL,
     last_seen_at timestamptz NOT NULL
