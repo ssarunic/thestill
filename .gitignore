@@ -189,6 +189,9 @@ feeds.json
 .env.bak
 .env.bak2
 thestill/web/frontend/node_modules/
+# Playwright e2e artifacts (traces, screenshots, HTML report).
+thestill/web/frontend/test-results/
+thestill/web/frontend/playwright-report/
 # Stray repo-root node_modules from ad-hoc tool runs — there is no
 # package.json at the repo root, so anything that lands here is junk.
 /node_modules/

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { BrowserRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import TopPodcasts from './TopPodcasts'
 import type { TopPodcast, TopPodcastsResponse } from '../api/types'
@@ -64,15 +64,21 @@ function response(
   }
 }
 
-function renderPage() {
+// MemoryRouter (not BrowserRouter) so each render gets its own isolated
+// history — filters now live in the URL, and a shared BrowserRouter would leak
+// query state from one test into the next.
+function renderPage(initialEntries: string[] = ['/top']) {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // gcTime 0 so switching a filter back to a previously-fetched value
+    // re-issues the request instead of silently serving cache — lets the
+    // tests assert on the args passed to getTopPodcasts.
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <TopPodcasts />
-      </BrowserRouter>
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -197,7 +203,8 @@ describe('TopPodcasts category filter', () => {
   it('passes the selected category to the API', async () => {
     const user = userEvent.setup()
     renderPage()
-    await waitFor(() => expect(mockGetTopPodcasts).toHaveBeenCalled())
+    // Wait for the response to render (options come from the payload).
+    await screen.findByRole('option', { name: 'Technology' })
 
     const select = screen.getByLabelText(/filter by category/i)
     await user.selectOptions(select, 'Technology')
@@ -212,7 +219,7 @@ describe('TopPodcasts category filter', () => {
   it('clears category back to undefined when "All" is reselected', async () => {
     const user = userEvent.setup()
     renderPage()
-    await waitFor(() => expect(mockGetTopPodcasts).toHaveBeenCalled())
+    await screen.findByRole('option', { name: 'Comedy' })
 
     const select = screen.getByLabelText(/filter by category/i)
     await user.selectOptions(select, 'Comedy')
@@ -259,5 +266,29 @@ describe('TopPodcasts category filter', () => {
         screen.getByText(/no top podcasts in history match "foo"/i),
       ).toBeInTheDocument()
     })
+  })
+})
+
+// Filters live in the URL so the browser Back button restores them (and the
+// scroll position) when returning from a podcast detail page.
+describe('TopPodcasts URL-persisted filters', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetTopPodcasts.mockResolvedValue(response([row({ rank: 1, name: 'Seeded Show' })]))
+  })
+
+  it('seeds region, category and q from the URL query string on mount', async () => {
+    renderPage(['/top?region=us&category=Technology&q=hist'])
+
+    await waitFor(() => expect(mockGetTopPodcasts).toHaveBeenCalled())
+    // Signature: getTopPodcasts(region, limit, q, category)
+    const [region, , q, category] = mockGetTopPodcasts.mock.calls[0]
+    expect(region).toBe('us')
+    expect(q).toBe('hist')
+    expect(category).toBe('Technology')
+
+    // The search input reflects the restored query.
+    const input = screen.getByLabelText(/search top podcasts/i) as HTMLInputElement
+    expect(input.value).toBe('hist')
   })
 })

@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { usePodcastsInfinite } from '../hooks/useApi'
+import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import PodcastCard from '../components/PodcastCard'
 import AddPodcastModal from '../components/AddPodcastModal'
 import Button, { PlusIcon } from '../components/Button'
@@ -47,17 +49,35 @@ function SearchBox({ value, onChange, inputClassName, testId }: SearchBoxProps) 
 }
 
 export default function Podcasts() {
+  // Restore scroll position on Back from a podcast detail page.
+  useScrollRestoration()
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
-  // Search state — ``searchInput`` is what the user types; ``debouncedQ`` is
-  // what we actually send to the API. The filter is server-side (the list is
-  // paginated, so a client-side filter would miss unloaded pages).
-  const [searchInput, setSearchInput] = useState('')
-  const [debouncedQ, setDebouncedQ] = useState('')
+  // Search state. The active filter lives in the URL ``q`` param so the browser
+  // Back button restores it (and the scroll position) when returning from a
+  // podcast detail page — the app-wide convention. ``searchInput`` is what the
+  // user types; it seeds from the URL on mount and debounces back into it. The
+  // filter is server-side (the list is paginated, so a client-side filter would
+  // miss unloaded pages).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const debouncedQ = searchParams.get('q') ?? ''
+  const [searchInput, setSearchInput] = useState(debouncedQ)
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(searchInput.trim()), 250)
+    const trimmed = searchInput.trim()
+    if (trimmed === debouncedQ) return
+    const t = setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (trimmed) next.set('q', trimmed)
+          else next.delete('q')
+          return next
+        },
+        { replace: true },
+      )
+    }, 250)
     return () => clearTimeout(t)
-  }, [searchInput])
+  }, [searchInput, debouncedQ, setSearchParams])
 
   const {
     data,
