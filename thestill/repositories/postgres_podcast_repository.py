@@ -39,4 +39,7 @@ class PostgresPodcastRepository(PodcastsMixin, EpisodesMixin, PodcastRepository,
 
     def __init__(self, dsn: str):
         self.dsn = dsn
+        # Discover chart regions from data/top_podcasts_<region>.json, same as
+        # the SQLite repo (spec #57). Fail-open — never blocks startup.
+        self._seed_top_podcasts()
         logger.info("Initialized Postgres podcast repository")

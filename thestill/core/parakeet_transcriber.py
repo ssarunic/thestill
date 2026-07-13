@@ -39,8 +39,10 @@ class ParakeetTranscriber(Transcriber):
 
     Returns word- and segment-level timestamps natively, so cleanup can
     take the segment-preserving path (spec #18) without a forced-alignment
-    fallback. English-only; custom prompt support is not provided by the
-    model and is silently ignored.
+    fallback. The v3 model is multilingual across ~25 European languages
+    (no Icelandic/Norwegian/Irish — see spec #57) and auto-detects the
+    spoken language; there is no language-selection input. Custom prompt
+    support is not provided by the model and is silently ignored.
     """
 
     DEFAULT_MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
