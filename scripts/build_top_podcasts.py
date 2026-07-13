@@ -6,6 +6,8 @@ TARGET_COUNT unique podcasts are collected, then enriches each with:
 - Podcast name
 - RSS URL              (mandatory; rows without RSS are dropped)
 - Apple Podcast URL
+- Artwork URL          (largest Apple cover, so the chart can render a cover
+                        even before the podcast is imported locally)
 - YouTube channel URL  (best-effort, via yt-dlp search heuristic)
 - Category / Subcategory (Apple's primary genre + first subgenre)
 - Release cadence + duration (parsed from RSS feed):
@@ -300,6 +302,15 @@ def enrich_with_lookup(items: list[dict[str, Any]], top_level_names: set[str]) -
         result = lookup_podcast(item["track_id"]) or {}
         feed_url = result.get("feedUrl") or ""
         apple_url = result.get("collectionViewUrl") or result.get("trackViewUrl") or ""
+        # Apple returns several artwork sizes; prefer the largest so the chart
+        # can render a crisp cover even before the podcast is imported locally.
+        image_url = (
+            result.get("artworkUrl600")
+            or result.get("artworkUrl100")
+            or result.get("artworkUrl60")
+            or result.get("artworkUrl30")
+            or ""
+        )
         primary = result.get("primaryGenreName") or ""
         genres = [g for g in (result.get("genres") or []) if g and g.lower() != "podcasts"]
 
@@ -326,6 +337,7 @@ def enrich_with_lookup(items: list[dict[str, Any]], top_level_names: set[str]) -
             **item,
             "rss_url": feed_url,
             "apple_url": apple_url,
+            "image_url": image_url,
             "category": category,
             "subcategory": subcategory,
         }
@@ -551,6 +563,7 @@ def main() -> int:
         "artist",
         "rss_url",
         "apple_url",
+        "image_url",
         "youtube_url",
         "category",
         "subcategory",
@@ -573,6 +586,7 @@ def main() -> int:
                     "artist": row.get("artist", ""),
                     "rss_url": row.get("rss_url", ""),
                     "apple_url": row.get("apple_url", ""),
+                    "image_url": row.get("image_url", ""),
                     "youtube_url": row.get("youtube_url", ""),
                     "category": row.get("category", ""),
                     "subcategory": row.get("subcategory", ""),
@@ -589,6 +603,7 @@ def main() -> int:
     # ---- Coverage + cost summary ----
     with_yt = sum(1 for r in enriched if r.get("youtube_url"))
     with_apple = sum(1 for r in enriched if r.get("apple_url"))
+    with_artwork = sum(1 for r in enriched if r.get("image_url"))
     with_cat = sum(1 for r in enriched if r.get("category"))
     with_cadence = sum(1 for r in enriched if r.get("episodes_per_month") is not None)
     with_duration = sum(1 for r in enriched if r.get("avg_episode_minutes") is not None)
@@ -605,7 +620,7 @@ def main() -> int:
 
     print(
         f"\ndone. {len(enriched)} rows | RSS: {len(enriched)} | Apple: {with_apple} | "
-        f"YouTube: {with_yt} | category: {with_cat} | "
+        f"artwork: {with_artwork} | YouTube: {with_yt} | category: {with_cat} | "
         f"cadence: {with_cadence} | duration: {with_duration}",
         flush=True,
     )

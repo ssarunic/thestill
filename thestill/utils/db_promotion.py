@@ -303,9 +303,9 @@ _PROMOTIONS: list[tuple[str, str]] = [
         "top_podcasts",
         """
         INSERT INTO top_podcasts (id, name, artist, rss_url, apple_url, youtube_url,
-            apple_track_id, category_id, first_seen_at, last_seen_at) OVERRIDING SYSTEM VALUE
+            apple_track_id, image_url, category_id, first_seen_at, last_seen_at) OVERRIDING SYSTEM VALUE
         SELECT id::bigint, name, artist, rss_url, apple_url, youtube_url, apple_track_id,
-               NULLIF(category_id,'')::bigint, NULLIF(first_seen_at,'')::timestamptz,
+               image_url, NULLIF(category_id,'')::bigint, NULLIF(first_seen_at,'')::timestamptz,
                NULLIF(last_seen_at,'')::timestamptz
         FROM {m}.top_podcasts
         """,

@@ -544,6 +544,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     apple_url TEXT NULL,
                     youtube_url TEXT NULL,
                     apple_track_id TEXT NULL,
+                    image_url TEXT NULL,
                     category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
                     first_seen_at TIMESTAMP NOT NULL,
                     last_seen_at TIMESTAMP NOT NULL
@@ -575,6 +576,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
             )
             logger.info("Migration complete: top_podcasts tables created")
+
+        # Migration: add top_podcasts.image_url (idempotent). Lets the chart
+        # render Apple artwork for entries that haven't been imported into
+        # ``podcasts`` locally yet. Older DBs created top_podcasts before this
+        # column existed, so add it in place.
+        top_podcast_columns = {row["name"] for row in conn.execute("PRAGMA table_info(top_podcasts)").fetchall()}
+        if "image_url" not in top_podcast_columns:
+            logger.info("Migrating database: adding image_url column to top_podcasts")
+            conn.execute("ALTER TABLE top_podcasts ADD COLUMN image_url TEXT NULL")
+            logger.info("Migration complete: image_url column added to top_podcasts")
 
         # spec #28 Migration: entity-layer schema (idempotent).
         # Adds:
@@ -1890,14 +1901,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                     INSERT INTO top_podcasts (
                         name, artist, rss_url, apple_url, youtube_url,
-                        apple_track_id, category_id, first_seen_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        apple_track_id, image_url, category_id, first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(rss_url) DO UPDATE SET
                         name = excluded.name,
                         artist = excluded.artist,
                         apple_url = excluded.apple_url,
                         youtube_url = excluded.youtube_url,
                         apple_track_id = excluded.apple_track_id,
+                        image_url = excluded.image_url,
                         category_id = excluded.category_id,
                         last_seen_at = excluded.last_seen_at
                     RETURNING id
@@ -1909,6 +1921,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                         row.get("apple_url"),
                         row.get("youtube_url"),
                         row.get("track_id"),
+                        _normalize_artwork_url(row.get("image_url")),
                         category_id,
                         now_iso,
                         now_iso,
@@ -1989,6 +2002,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 apple_url TEXT NULL,
                 youtube_url TEXT NULL,
                 apple_track_id TEXT NULL,
+                image_url TEXT NULL,
                 category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
                 first_seen_at TIMESTAMP NOT NULL,
                 last_seen_at TIMESTAMP NOT NULL
@@ -4510,10 +4524,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         exist in the local DB (regardless of follow state). ``None`` means
         the podcast has not been imported yet.
 
-        ``image_url`` rides the same join and is whatever artwork URL the
-        original ``add_podcast`` flow stored (read from the RSS feed at
-        import time). ``None`` for unimported entries — chart-only rows
-        carry no artwork.
+        ``image_url`` prefers the imported podcast's artwork (whatever the
+        original ``add_podcast`` flow stored from the RSS feed) and falls
+        back to the chart's own ``top_podcasts.image_url`` (Apple artwork
+        captured at scrape time), so unimported entries still render a cover.
+        ``None`` only when neither source has artwork.
         """
         if not region:
             return []
@@ -4544,7 +4559,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT r.rank, p.name, p.artist, p.rss_url, p.apple_url, p.youtube_url,
                        c.name AS category, r.source_genre,
                        up.slug AS podcast_slug,
-                       up.image_url AS image_url,
+                       COALESCE(up.image_url, p.image_url) AS image_url,
                        CASE WHEN pf.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_following
                 FROM top_podcast_rankings r
                 JOIN top_podcasts p ON p.id = r.top_podcast_id
