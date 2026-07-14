@@ -289,8 +289,8 @@ implicitly, since evals and citations key off artifact hashes.
 **Why admin-only sidesteps the hard problems:** no trust/vandalism surface,
 no ad-offset drift (canonical audio), no need to make boundary-drag
 interactions foolproof for casual users, and timing corrections become
-trustworthy ground truth — which is what unlocks *segmenter* evaluation in
-#53, a dimension Tier 1 data can never provide.
+trustworthy ground truth — which is what unlocks *segmenter* evaluation
+in #53, a dimension Tier 1 data can never provide.
 
 ## Closing the loop
 
@@ -326,8 +326,8 @@ data tells us whether it earns its keep.
 
 ## Failure modes ([#42](42-robustness-and-failure-mode-hardening.md))
 
-- **FM-1 (isolation):** failed snapshot extraction degrades to storing anchor
-  + category with `context_json = {"snapshot_error": ...}` — never reject a
+- **FM-1 (isolation):** failed snapshot extraction degrades to storing anchor +
+  category with `context_json = {"snapshot_error": ...}` — never reject a
   report because the artifact read hiccuped. A malformed overlay row is
   skipped at render, never breaks the viewer.
 - **FM-7 (unsanitized input):** anchors and proposals are range/vocab
