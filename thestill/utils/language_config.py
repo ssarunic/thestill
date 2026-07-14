@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared ISO 639-1 language metadata for LLM prompts.
+"""Shared ISO 639 language metadata for LLM prompts and artefact keys.
 
 The :class:`~thestill.core.segmented_transcript_cleaner.SegmentedTranscriptCleaner`
 needs name + spelling-rules vocabulary for its language-aware system
@@ -20,7 +20,8 @@ prompt. Keeping it in one place prevents drift as new languages are
 added.
 """
 
-from typing import Dict, TypedDict
+import re
+from typing import Dict, Optional, TypedDict
 
 
 class LanguageSpec(TypedDict):
@@ -62,6 +63,23 @@ LANGUAGE_CONFIG: Dict[str, LanguageSpec] = {
     "tr": {"name": "Turkish", "spelling": "standard Turkish spelling rules"},
 }
 
+_LANGUAGE_CODE_RE = re.compile(r"^[a-z]{2,3}$")
+
+
+def normalize_language_code(language: Optional[str], *, default: str = "en") -> str:
+    """Return a safe lower-case primary ISO language subtag.
+
+    RSS and browser locales are often BCP-47 values (for example ``en-GB``),
+    while summary filenames use only the primary language subtag. Invalid
+    values fall back rather than ever reaching a storage path.
+    """
+
+    candidate = (language or "").strip().lower().replace("_", "-").split("-", 1)[0]
+    if _LANGUAGE_CODE_RE.fullmatch(candidate):
+        return candidate
+    fallback = default.strip().lower().replace("_", "-").split("-", 1)[0]
+    return fallback if _LANGUAGE_CODE_RE.fullmatch(fallback) else "en"
+
 
 def resolve_language_spec(language: str) -> LanguageSpec:
     """Return the ``LanguageSpec`` for an ISO 639-1 code, with a safe fallback.
@@ -69,6 +87,7 @@ def resolve_language_spec(language: str) -> LanguageSpec:
     Unknown codes yield a generic spec (uppercased code as name, generic
     spelling rules) so callers never crash on an exotic language.
     """
+    language = normalize_language_code(language)
     spec = LANGUAGE_CONFIG.get(language)
     if spec is not None:
         return spec

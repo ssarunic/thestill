@@ -1399,11 +1399,21 @@ def setup_tools(server: Server, storage_path: str):
                             pub_date=episode.pub_date,
                             duration_seconds=episode.duration,
                             podcast_title=podcast.title,
+                            language=podcast.language,
                         )
 
                         summary_text = summarizer.summarize(transcript_text, metadata=metadata)
                         # Spec #35 — persist via the configured FileStorage backend
-                        config.file_storage.write_text(path_manager.to_relative(summary_path), summary_text)
+                        summary_key = path_manager.to_relative(summary_path)
+                        config.file_storage.write_text(summary_key, summary_text)
+                        from ..core.summary_artifacts import write_summary_manifest
+
+                        write_summary_manifest(
+                            config.file_storage,
+                            summary_key=summary_key,
+                            summary_content=summary_text,
+                            canonical_language=podcast.language,
+                        )
 
                         # Update feed manager
                         feed_manager.mark_episode_processed(

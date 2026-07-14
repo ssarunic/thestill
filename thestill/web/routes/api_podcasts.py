@@ -21,13 +21,15 @@ Provides access to podcasts, episodes, and follow/unfollow functionality.
 import threading
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...utils.duration import format_duration
+from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
 from ..responses import api_response, conflict, not_found, paginated_response
 
@@ -393,6 +395,7 @@ async def get_episode_transcript_by_slugs(
 async def get_episode_summary_by_slugs(
     podcast_slug: str,
     episode_slug: str,
+    lang: Optional[str] = Query(None, pattern=r"^[A-Za-z]{2,3}$"),
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """
@@ -412,14 +415,68 @@ async def get_episode_summary_by_slugs(
 
     podcast, episode = result
 
-    summary = state.podcast_service.get_summary(podcast.id, episode.id)
+    podcast_language = normalize_language_code(podcast.language)
+    provider = None
+    canonical_language = state.podcast_service.get_recorded_summary_language(episode)
+    if canonical_language is None and episode.summary_path:
+        try:
+            from ...core.llm_provider import create_llm_provider_from_config
+
+            provider = create_llm_provider_from_config(state.config)
+            canonical_language = await run_in_threadpool(
+                state.podcast_service.detect_and_record_summary_language,
+                episode,
+                podcast_language=podcast_language,
+                provider=provider,
+            )
+        except Exception as exc:  # Legacy invariant is the safe no-provider fallback.
+            logger.warning(
+                "summary_language.detect_failed",
+                episode_id=episode.id,
+                error=str(exc),
+            )
+            canonical_language = "en"
+    canonical_language = normalize_language_code(canonical_language, default=podcast_language)
+    requested_language = normalize_language_code(lang, default=canonical_language) if lang else canonical_language
+    summary = state.podcast_service.get_summary_for_episode(
+        episode,
+        language=requested_language,
+        canonical_language=canonical_language,
+    )
+
+    # A missing non-canonical variant is generated synchronously on first
+    # request, then served from FileStorage on subsequent requests. Run the
+    # blocking provider call in FastAPI's worker pool rather than the event
+    # loop so unrelated requests remain responsive.
+    if summary is None and requested_language != canonical_language and episode.summary_path:
+        if provider is None:
+            from ...core.llm_provider import create_llm_provider_from_config
+
+            provider = create_llm_provider_from_config(state.config)
+        summary = await run_in_threadpool(
+            state.podcast_service.get_or_create_summary_translation,
+            episode,
+            source_language=canonical_language,
+            target_language=requested_language,
+            provider=provider,
+        )
 
     if summary is None:
-        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+        raise HTTPException(status_code=500, detail="Summary translation could not be generated")
 
     citations = None
     if not summary.startswith("N/A"):
-        citations = state.podcast_service.get_summary_citations_for_episode(episode, summary)
+        citations = state.podcast_service.get_summary_citations_for_episode(
+            episode,
+            summary,
+            language=requested_language,
+            canonical_language=canonical_language,
+        )
+
+    available_languages = state.podcast_service.get_available_summary_languages(
+        episode,
+        canonical_language=canonical_language,
+    )
 
     return api_response(
         {
@@ -428,6 +485,10 @@ async def get_episode_summary_by_slugs(
             "content": summary,
             "available": not summary.startswith("N/A"),
             "citations": citations,
+            "language": requested_language,
+            "podcast_language": podcast_language,
+            "canonical_language": canonical_language,
+            "available_languages": available_languages,
         }
     )
 

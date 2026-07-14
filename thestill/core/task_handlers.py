@@ -669,6 +669,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             pub_date=episode.pub_date,
             duration_seconds=episode.duration,
             podcast_title=podcast.title,
+            language=podcast.language,
         )
 
         # Determine output path - preserve podcast subfolder structure
@@ -696,15 +697,22 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         # Spec #54 resolves timestamp citations against the annotated
         # transcript sidecar when present, writing the summary + citations
         # sidecar through the same helper the CLI uses.
+        from .summary_artifacts import write_summary_manifest
         from .summary_citations import resolve_and_persist_summary_citations
 
         summary_text = summarizer.summarize(transcript_text, metadata=metadata)
-        resolve_and_persist_summary_citations(
+        persisted_summary = resolve_and_persist_summary_citations(
             summary_markdown=summary_text,
             episode=episode,
             summary_path=output_path,
             path_manager=path_manager,
             file_storage=state.config.file_storage,
+        )
+        write_summary_manifest(
+            state.config.file_storage,
+            summary_key=path_manager.to_relative(output_path),
+            summary_content=persisted_summary.markdown,
+            canonical_language=podcast.language,
         )
 
         # Update episode state

@@ -195,8 +195,13 @@ export async function getEpisodeTranscript(podcastSlug: string, episodeSlug: str
   return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/transcript`)
 }
 
-export async function getEpisodeSummary(podcastSlug: string, episodeSlug: string): Promise<ContentResponse> {
-  return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/summary`)
+export async function getEpisodeSummary(
+  podcastSlug: string,
+  episodeSlug: string,
+  lang?: string,
+): Promise<ContentResponse> {
+  const query = lang ? `?lang=${encodeURIComponent(lang)}` : ''
+  return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/summary${query}`)
 }
 
 // Spec #38 — karaoke wipe data source. 404 is a valid response shape
