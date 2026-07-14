@@ -1,8 +1,8 @@
 # Transcript & Summary Feedback (flag-or-fix corrections)
 
-> **Status:** 💡 Proposal (v2)
+> **Status:** 💡 Proposal (v3)
 > **Created:** 2026-07-14
-> **Updated:** 2026-07-14 (v2 — from flag-only to flag-or-fix; per-user diffs + corroboration)
+> **Updated:** 2026-07-14 (v3 — added Tier 2 admin correction workbench; v2 — from flag-only to flag-or-fix; per-user diffs + corroboration)
 > **Priority:** Medium
 > **Author:** Product & Engineering
 > **Related:** [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) (the `source_segment_ids` durable anchor + the reserved `user_segment_id` edit hook), [#54 summary-segment-citations](54-summary-segment-citations.md) (sidecar + staleness-guard precedent), [#53 eval-runs-and-summary-rubric](53-eval-runs-and-summary-rubric.md) (where verified corrections land), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (`POST /api/entities/corrections` — the correction-endpoint template), [#06 authentication](06-authentication.md) (user attribution)
@@ -42,17 +42,24 @@ draggable boundaries). The spectrum is:
 | Level | Captures | Build cost | Who uses it |
 |---|---|---|---|
 | Flag | location + category | trivial | any reader |
-| **Structured proposal (chosen)** | location + category + **expected value** | small — reuses existing segment UI | any reader, one extra tap |
-| Full editor (waveform, boundary drag) | everything incl. timing | large — new rendering + audio surface | transcriptionists, not digest readers |
+| **Structured proposal (Tier 1)** | location + category + **expected value** | small — reuses existing segment UI | any reader, one extra tap |
+| **Full editor (Tier 2, admin-only)** | everything incl. timing/boundaries | moderate — data layer already exists (see below) | the operator, driven by Tier 1 reports |
 
-The middle level captures ~80% of an editor's data value (the diff) at ~5% of
-its cost, and matches the actual persona — readers skimming a digest, not
-audio professionals. The full editor is **explicitly deferred**, and if it
-ever comes, likely as an **admin triage/golden-set curation tool** first
-(where waveform-verified boundary fixes matter), not a reader feature. Timing
-data is also the least trustworthy thing to crowdsource: dynamic ad insertion
-means users may legitimately hear different audio offsets (#54's drift
-caveat), while text and speaker proposals are offset-independent.
+Tier 1 captures ~80% of an editor's data value (the diff) at ~5% of its cost,
+and matches the reader persona — people skimming a digest, not audio
+professionals. Timing data is also the least trustworthy thing to
+*crowdsource*: dynamic ad insertion means readers may legitimately hear
+different audio offsets (#54's drift caveat), while text and speaker
+proposals are offset-independent.
+
+Tier 2 (v3) resolves both objections by scoping the editor to the **admin**:
+the operator works against the server's canonical audio (no offset drift),
+is trusted (no vandalism surface), and is the one person for whom
+boundary/timing precision pays off — triage verification and golden-set
+curation. Crucially it is a *destination for Tier 1 reports*, not a separate
+product: the admin clicks a report and lands in the editor at the anchored
+segment with the proposed diff staged. See
+[Tier 2 — admin correction workbench](#tier-2--admin-correction-workbench).
 
 The design bet stays *capture generously, structure minimally, analyze later*:
 no dashboards, no automatic reprocessing, no reputation system in v1. Once
@@ -104,9 +111,9 @@ snippet ([api_entities.py:657](../thestill/web/routes/api_entities.py#L657)).
 
 ## Non-goals (v1)
 
-- **No waveform/timeline editor.** No word-timestamp dragging, no boundary
-  scrubbing against audio. Deferred; revisit as an admin tool if boundary
-  complaints dominate the data.
+- **No waveform/timeline editor for readers — ever, as currently scoped.**
+  Word-timestamp dragging and boundary scrubbing are Tier 2, admin-only
+  (Phase 5). Reader-facing correction stays at the structured-proposal level.
 - **No canonical-artifact mutation and no automatic reprocessing.** Overlays
   only; the pipeline's files stay write-once. A corroborated report is a
   signal, not a command.
@@ -229,6 +236,62 @@ replacements; boundary proposals render as a marker, not a re-segmentation).
 Corrected spans get a subtle "your edit" treatment with revert. This is
 client-side merge only — canonical data untouched, other users unaffected.
 
+## Tier 2 — admin correction workbench
+
+An ElevenLabs-style editor, scoped to `is_admin` (route behind `AdminRoute`,
+API behind the admin guard), reached primarily by clicking a report in the
+triage list — it opens on the episode with the anchored segment centered and
+the proposed diff staged for accept/adjust/reject.
+
+**The data layer already exists; the build is UI + a write path:**
+
+- Word-level timestamps per segment are already served —
+  `GET /{podcast}/episodes/{episode}/transcript/words`
+  ([api_transcript_words.py:71](../thestill/web/routes/api_transcript_words.py#L71),
+  built for karaoke #38) — and `WordSpan` gives durable word addressing into
+  the write-once raw transcript
+  ([annotated_transcript.py:60](../thestill/models/annotated_transcript.py#L60)).
+- Audio is already streamed for the player (#22/#23); a waveform needs only
+  peak extraction (client-side Web Audio decode in v1; precomputed server-side
+  peaks if long episodes make decode sluggish).
+- Segment kinds, speakers, and click-to-seek machinery all exist in
+  `SegmentedTranscriptViewer` and can be reused for the read layer of the
+  workbench.
+
+**Capabilities (in build order):**
+
+1. **Verify view (no waveform)** — audio scrub + word-level display with
+   click-word-to-play, the report's diff staged inline. Accept / adjust /
+   reject writes the triage status. This alone makes triage listen-and-decide
+   fast and covers speaker/text/kind verification fully.
+2. **Editorial edits** — the admin can relabel speakers, correct text, and
+   retag kinds directly (not just adjudicate reader proposals). These write
+   the same `feedback` rows (`user_id` = admin, status `confirmed` on save) —
+   one data model, no parallel edit store.
+3. **Waveform + boundary editing** — waveform strip with word-timestamp
+   alignment; drag segment boundaries, split/merge with audible verification.
+   Boundary edits are stored as operations (`split_at_word`, `merge`,
+   `adjust_boundary{word_index}`) against `source_segment_ids` — replayable
+   on top of any future re-clean, exactly the op-overlay model reader
+   boundary proposals already use.
+
+**Where admin edits land.** Same overlay discipline as Tier 1 — pipeline
+artifacts stay write-once — but admin-confirmed corrections form the
+**editorial layer**: applied at serve time for *all* users (Phase 4's global
+overlay is exactly this; the workbench is its authoring surface), populating
+the reserved `user_segment_id` UUID on first edit
+([annotated_transcript.py:88](../thestill/models/annotated_transcript.py#L88))
+as #18 anticipated. Whether a heavily-corrected episode can be *promoted* —
+re-materializing the clean transcript JSON with the editorial layer folded in,
+with provenance — is an open question (§Open questions); it must never happen
+implicitly, since evals and citations key off artifact hashes.
+
+**Why admin-only sidesteps the hard problems:** no trust/vandalism surface,
+no ad-offset drift (canonical audio), no need to make boundary-drag
+interactions foolproof for casual users, and timing corrections become
+trustworthy ground truth — which is what unlocks *segmenter* evaluation in
+#53, a dimension Tier 1 data can never provide.
+
 ## Closing the loop
 
 1. **Triage** — admin list, corroborated reports first; snapshots + diffs make
@@ -252,7 +315,14 @@ client-side merge only — canonical data untouched, other users unaffected.
 | 2 — Own-edits overlay + summary | `/feedback/mine` + client-side merge (relabels, text) + section flags + admin `GET`/`PATCH` list | Reporter sees their fix rendered; admin can confirm/invalidate |
 | 3 — Use the data | `thestill feedback export`; golden-snippet emission for confirmed reports (#53); corroboration flip live | One confirmed correction round-trips into an eval run; two matching reports auto-corroborate |
 | 4 — Community overlay | Global "corrected" toggle rendering **confirmed** diffs for everyone | Confirmed relabel visible to a second user without artifact mutation |
-| 5+ — Pattern-driven (unscoped) | Whatever the data says: hint-term suggestions, prompt regression suites, boundary/waveform admin editor, reputation | Decided after ~50–100 real reports |
+| 5a — Workbench: verify view | Admin-only route; report → editor deep link; audio scrub + word display; accept/adjust/reject; direct editorial edits | Admin adjudicates a report end-to-end without leaving the workbench |
+| 5b — Workbench: waveform + boundaries | Waveform strip, word-timestamp alignment, drag/split/merge boundary ops stored as replayable operations | A boundary fix survives a re-clean and renders via the editorial layer |
+| 6+ — Pattern-driven (unscoped) | Whatever the data says: hint-term suggestions, prompt regression suites, canonical promotion, reputation | Decided after ~50–100 real reports |
+
+Phase ordering note: 5a can start any time after Phase 2 (it consumes the
+triage list); 5b is worth building only if `bad_boundary` reports show up in
+practice — the waveform is the most expensive pixel in this spec, and Tier 1
+data tells us whether it earns its keep.
 
 ## Failure modes ([#42](42-robustness-and-failure-mode-hardening.md))
 
@@ -285,3 +355,10 @@ client-side merge only — canonical data untouched, other users unaffected.
    systems; revisit at Phase 3.
 5. **Briefings** — third flaggable artifact (#33/#36); `target_type` leaves
    room; deferred until transcript/summary proves the loop.
+6. **Canonical promotion** — should an admin be able to fold the editorial
+   layer into a re-materialized clean-transcript revision (with provenance +
+   new hashes), or does the serve-time editorial layer suffice forever?
+   Promotion invalidates citation sidecars (#54) and eval artifact hashes
+   (#53) by design, so it needs an explicit re-resolve step; leaning
+   serve-time-only until an episode accumulates enough edits to hurt
+   render cost.
