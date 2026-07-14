@@ -508,75 +508,39 @@ def enrich_with_youtube(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def main() -> int:
-    global REGION
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--region",
-        default="us",
-        help="Apple region code (e.g. us, gb, de, fr, au, ca, jp). Default: us.",
-    )
-    args = parser.parse_args()
-    REGION = args.region.lower()
-    out_json = DATA_DIR / f"top_podcasts_{REGION}.json"
-    out_csv = DATA_DIR / f"top_podcasts_{REGION}.csv"
+CSV_FIELDS = [
+    "rank",
+    "name",
+    "artist",
+    "rss_url",
+    "apple_url",
+    "image_url",
+    "youtube_url",
+    "category",
+    "subcategory",
+    "source_genre",
+    "episodes_per_month",
+    "avg_episode_minutes",
+    "audio_hours_per_month",
+    "window_days",
+    "episodes_in_window",
+    "track_id",
+]
 
-    if not CATEGORIES_FILE.exists():
-        print(f"missing {CATEGORIES_FILE}", file=sys.stderr)
-        return 1
 
-    print(f"region: {REGION}", flush=True)
-    cats = json.loads(CATEGORIES_FILE.read_text())["categories"]
-    top_level_names = {c["name"] for c in cats}
+def write_region_files(region: str, enriched: list[dict[str, Any]], *, summary: bool = True) -> None:
+    """Write ``top_podcasts_<region>.{json,csv}`` and (optionally) print the summary.
 
-    print("[1/4] collecting Apple top charts...", flush=True)
-    raw_items = collect_chart_entries(cats)
-    print(f"      collected {len(raw_items)} unique chart entries", flush=True)
+    ``enriched`` must already be in final rank order — the row's position is
+    its rank (the seeder reads rank positionally). Shared by the single-region
+    and batch paths so both emit byte-identical file shapes.
+    """
+    out_json = DATA_DIR / f"top_podcasts_{region}.json"
+    out_csv = DATA_DIR / f"top_podcasts_{region}.csv"
 
-    print("[2/4] iTunes Lookup for RSS + categories...", flush=True)
-    enriched = enrich_with_lookup(raw_items, top_level_names)
-
-    # Preserve the original collection order (overall top chart first, then
-    # round-robin across all categories). enrich_with_lookup runs in a
-    # ThreadPoolExecutor which scrambles order, so reindex back to the order
-    # of raw_items.
-    order = {it["track_id"]: i for i, it in enumerate(raw_items)}
-    enriched = [e for e in enriched if e.get("rss_url")]
-    enriched.sort(key=lambda e: order.get(e["track_id"], 10**9))
-    enriched = enriched[:TARGET_COUNT]
-    print(f"      kept {len(enriched)} with RSS feeds", flush=True)
-
-    print("[3/5] YouTube channel search (best-effort)...", flush=True)
-    enriched = enrich_with_youtube(enriched)
-
-    print("[4/5] RSS feed cadence + duration...", flush=True)
-    enriched = enrich_with_feed_stats(enriched)
-    # enrich_with_feed_stats also runs in a ThreadPoolExecutor — restore order.
-    enriched.sort(key=lambda e: order.get(e["track_id"], 10**9))
-
-    print("[5/5] writing output files...", flush=True)
     out_json.write_text(json.dumps(enriched, indent=2, ensure_ascii=False))
-
-    fields = [
-        "rank",
-        "name",
-        "artist",
-        "rss_url",
-        "apple_url",
-        "image_url",
-        "youtube_url",
-        "category",
-        "subcategory",
-        "source_genre",
-        "episodes_per_month",
-        "avg_episode_minutes",
-        "audio_hours_per_month",
-        "window_days",
-        "episodes_in_window",
-        "track_id",
-    ]
     with out_csv.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
         for rank, row in enumerate(enriched, start=1):
             writer.writerow(
@@ -600,7 +564,14 @@ def main() -> int:
                 }
             )
 
-    # ---- Coverage + cost summary ----
+    if summary:
+        print_region_summary(region, enriched)
+    print(f"wrote {out_json}", flush=True)
+    print(f"wrote {out_csv}", flush=True)
+
+
+def print_region_summary(region: str, enriched: list[dict[str, Any]]) -> None:
+    """Coverage + cadence/cost aggregates for a single region's rows."""
     with_yt = sum(1 for r in enriched if r.get("youtube_url"))
     with_apple = sum(1 for r in enriched if r.get("apple_url"))
     with_artwork = sum(1 for r in enriched if r.get("image_url"))
@@ -619,12 +590,12 @@ def main() -> int:
     inactive = sum(1 for r in enriched if r.get("episodes_per_month") == 0)
 
     print(
-        f"\ndone. {len(enriched)} rows | RSS: {len(enriched)} | Apple: {with_apple} | "
+        f"\ndone ({region}). {len(enriched)} rows | RSS: {len(enriched)} | Apple: {with_apple} | "
         f"artwork: {with_artwork} | YouTube: {with_yt} | category: {with_cat} | "
         f"cadence: {with_cadence} | duration: {with_duration}",
         flush=True,
     )
-    print(f"\n=== Cadence & cost summary ({REGION.upper()}) ===", flush=True)
+    print(f"=== Cadence & cost summary ({region.upper()}) ===", flush=True)
     print(f"  inactive podcasts (no episodes in {CADENCE_WINDOW_DAYS}d): {inactive}", flush=True)
     print(f"  total episodes/month across catalog:   {total_eps_per_month:>10.0f}", flush=True)
     print(f"  total audio hours/month:               {total_hours:>10.1f}", flush=True)
@@ -632,30 +603,149 @@ def main() -> int:
     print(f"  median audio hours/month per podcast:  {median_hours_per_podcast:>10.2f}", flush=True)
     est_total = total_hours * TRANSCRIBE_COST_PER_HOUR_GBP
     est_avg = avg_hours_per_podcast * TRANSCRIBE_COST_PER_HOUR_GBP
-    print(
-        f"  est. transcription cost @ £{TRANSCRIBE_COST_PER_HOUR_GBP:.2f}/hr:",
-        flush=True,
-    )
+    print(f"  est. transcription cost @ £{TRANSCRIBE_COST_PER_HOUR_GBP:.2f}/hr:", flush=True)
     print(f"    total/month:        £{est_total:>10.2f}", flush=True)
     print(f"    avg per podcast:    £{est_avg:>10.2f}", flush=True)
 
-    # Top 10 by audio volume — useful for "which podcasts dominate cost"
-    top_volume = sorted(
-        (r for r in enriched if r.get("audio_hours_per_month") is not None),
-        key=lambda r: r["audio_hours_per_month"],
-        reverse=True,
-    )[:10]
-    if top_volume:
-        print("\n  top 10 by audio hours/month:", flush=True)
-        for r in top_volume:
-            print(
-                f"    {r['audio_hours_per_month']:>6.1f}h  "
-                f"({r['episodes_per_month']:>4.1f} eps × {r['avg_episode_minutes']:>5.1f} min)  "
-                f"{r['name'][:60]}",
-                flush=True,
-            )
-    print(f"\nwrote {out_json}", flush=True)
-    print(f"wrote {out_csv}", flush=True)
+
+def enrich_and_order(raw_items: list[dict[str, Any]], top_level_names: set[str]) -> list[dict[str, Any]]:
+    """Run the full enrichment pipeline on a pre-collected chart list.
+
+    Lookup → drop RSS-less → YouTube → RSS cadence, restoring the input's
+    ranked order after each ThreadPool stage and trimming to TARGET_COUNT.
+    This is the per-region enrichment used by single-region mode; batch mode
+    calls the enrich_* stages directly on the deduped union instead.
+    """
+    order = {it["track_id"]: i for i, it in enumerate(raw_items)}
+
+    print("[2/5] iTunes Lookup for RSS + categories...", flush=True)
+    enriched = enrich_with_lookup(raw_items, top_level_names)
+    enriched = [e for e in enriched if e.get("rss_url")]
+    enriched.sort(key=lambda e: order.get(e["track_id"], 10**9))
+    enriched = enriched[:TARGET_COUNT]
+    print(f"      kept {len(enriched)} with RSS feeds", flush=True)
+
+    print("[3/5] YouTube channel search (best-effort)...", flush=True)
+    enriched = enrich_with_youtube(enriched)
+
+    print("[4/5] RSS feed cadence + duration...", flush=True)
+    enriched = enrich_with_feed_stats(enriched)
+    enriched.sort(key=lambda e: order.get(e["track_id"], 10**9))
+    return enriched
+
+
+def run_batch(regions: list[str], cats: list[dict[str, Any]], top_level_names: set[str]) -> None:
+    """Build charts for several regions, enriching each unique podcast once.
+
+    The expensive stages (iTunes Lookup, YouTube search, RSS cadence) are the
+    cost driver, and the same show charts in many countries — 24% of EEA shows
+    appear in >1 region, some in all of them. Per-region runs re-enrich every
+    overlap; this path collects all regions' charts first, enriches the *union
+    of unique track_ids once*, then writes each region's file by looking up its
+    shared enrichment and keeping that region's own rank order / source genre.
+    """
+    # 1. Collect each region's ranked chart (cheap: ~20 chart requests/region).
+    per_region: dict[str, list[dict[str, Any]]] = {}
+    unique: dict[str, dict[str, Any]] = {}
+    for region in regions:
+        global REGION
+        REGION = region
+        print(f"\n=== [charts] {region} ===", flush=True)
+        items = collect_chart_entries(cats)
+        if not items:
+            print(f"  {region}: no chart entries — skipping (no storefront?)", flush=True)
+            continue
+        per_region[region] = items
+        for it in items:
+            unique.setdefault(it["track_id"], dict(it))
+
+    if not per_region:
+        print("no regions produced chart entries; nothing to do", flush=True)
+        return
+
+    total_appearances = sum(len(v) for v in per_region.values())
+    n_unique = len(unique)
+    factor = total_appearances / n_unique if n_unique else 1.0
+    print(
+        f"\n[dedup] {total_appearances} chart appearances across {len(per_region)} regions "
+        f"→ {n_unique} unique podcasts ({factor:.2f}× overlap). "
+        f"Enriching {n_unique} once instead of {total_appearances} times.",
+        flush=True,
+    )
+
+    # 2. Enrich the union ONCE.
+    unique_items = list(unique.values())
+    print(f"\n[enrich] iTunes Lookup for {len(unique_items)} unique podcasts...", flush=True)
+    enriched = enrich_with_lookup(unique_items, top_level_names)
+    enriched = [e for e in enriched if e.get("rss_url")]
+    print(f"         {len(enriched)} have RSS feeds", flush=True)
+    print("[enrich] YouTube channel search (best-effort)...", flush=True)
+    enriched = enrich_with_youtube(enriched)
+    print("[enrich] RSS feed cadence + duration...", flush=True)
+    enriched = enrich_with_feed_stats(enriched)
+    by_track = {e["track_id"]: e for e in enriched}
+
+    # 3. Write each region's file from the shared enrichment, preserving that
+    #    region's rank order and its own source_genre/source_rank per row.
+    print("\n[write] per-region files...", flush=True)
+    for region, items in per_region.items():
+        rows: list[dict[str, Any]] = []
+        for it in items:
+            e = by_track.get(it["track_id"])
+            if not e:  # dropped for lacking an RSS feed
+                continue
+            merged = dict(e)
+            merged["source_genre"] = it.get("source_genre")
+            merged["source_rank"] = it.get("source_rank")
+            rows.append(merged)
+        rows = rows[:TARGET_COUNT]
+        write_region_files(region, rows, summary=False)
+        print(f"  {region}: {len(rows)} rows", flush=True)
+
+
+def main() -> int:
+    global REGION
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--region",
+        default="us",
+        help="Apple region code (e.g. us, gb, de, fr, au, ca, jp). Default: us.",
+    )
+    parser.add_argument(
+        "--regions",
+        default="",
+        help=(
+            "Comma-separated region codes for batch mode (e.g. 'de,fr,es,it'). "
+            "Enriches each unique podcast once across all listed regions, so "
+            "overlapping shows aren't re-looked-up per country. Overrides --region."
+        ),
+    )
+    args = parser.parse_args()
+
+    if not CATEGORIES_FILE.exists():
+        print(f"missing {CATEGORIES_FILE}", file=sys.stderr)
+        return 1
+
+    cats = json.loads(CATEGORIES_FILE.read_text())["categories"]
+    top_level_names = {c["name"] for c in cats}
+
+    batch = [r.strip().lower() for r in args.regions.split(",") if r.strip()]
+    if batch:
+        print(f"batch regions: {', '.join(batch)}", flush=True)
+        run_batch(batch, cats, top_level_names)
+        return 0
+
+    # Single-region mode (unchanged behavior).
+    REGION = args.region.lower()
+    print(f"region: {REGION}", flush=True)
+    print("[1/5] collecting Apple top charts...", flush=True)
+    raw_items = collect_chart_entries(cats)
+    print(f"      collected {len(raw_items)} unique chart entries", flush=True)
+
+    enriched = enrich_and_order(raw_items, top_level_names)
+
+    print("[5/5] writing output files...", flush=True)
+    write_region_files(REGION, enriched, summary=True)
     return 0
 
 
