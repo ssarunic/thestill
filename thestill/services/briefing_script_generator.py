@@ -80,7 +80,7 @@ class BriefingScriptContent:
 
 
 def extract_gist(summary_text: str) -> Optional[str]:
-    """Extract 2–3 sentences from the ``The Gist`` section of a summary.
+    """Extract 2–3 sentences from the numbered first summary section.
 
     Public so the narration theme clusterer (spec #33) can feed the same
     compact episode synopsis into its LLM input that the link-index
@@ -96,8 +96,11 @@ def extract_gist(summary_text: str) -> Optional[str]:
 
     We want the 2 sentences before "The Big 3-5 Takeaways".
     """
-    gist_pattern = r"##\s*1\.?\s*(?:🎙️\s*)?The Gist\s*\n(.*?)(?=\*\*The Big|##\s*2\.|$)"
-    match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)
+    # Spec #58 localises section headings, so the stable section number is
+    # the primary anchor. The English fallback retains support for older,
+    # less-structured summaries.
+    gist_pattern = r"^##\s*1\.?\s*(?:🎙️\s*)?[^\n]*\n+(.*?)(?=^##\s*2\.?|\Z)"
+    match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE | re.MULTILINE)
     if not match:
         gist_pattern = r"(?:The Gist|Executive Summary|Overview)\s*\n+(.*?)(?=\*\*|##|$)"
         match = re.search(gist_pattern, summary_text, re.DOTALL | re.IGNORECASE)

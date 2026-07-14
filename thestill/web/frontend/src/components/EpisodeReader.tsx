@@ -27,6 +27,15 @@ import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
 
+function normalizeLanguageCode(language: string | null | undefined): string | undefined {
+  const primary = language?.trim().toLowerCase().split(/[-_]/, 1)[0]
+  return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined
+}
+
+function getBrowserLanguage(): string {
+  return normalizeLanguageCode(typeof navigator === 'undefined' ? undefined : navigator.language) ?? 'en'
+}
+
 const stateColors: Record<string, string> = {
   discovered: 'bg-gray-100 text-gray-600',
   downloaded: 'bg-blue-100 text-blue-700',
@@ -75,6 +84,8 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
   // history spam); `location.state` is threaded through every navigation so
   // the spec #52 overlay's `backgroundLocation` survives the change.
   const activeTab: Tab = searchParams.get('view') === 'transcript' ? 'transcript' : 'summary'
+  const requestedSummaryLanguage = normalizeLanguageCode(searchParams.get('lang'))
+  const defaultSummaryLanguage = getBrowserLanguage()
 
   // Summary and transcript share one scroll container. Remember the summary's
   // scroll offset when leaving it and restore it when returning (browser Back
@@ -124,7 +135,58 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
 
   const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
-  const { data: summaryData, isLoading: summaryLoading } = useEpisodeSummary(podcastSlug!, episodeSlug!)
+  const {
+    data: summaryData,
+    isLoading: summaryLoading,
+    isFetching: summaryFetching,
+  } = useEpisodeSummary(podcastSlug!, episodeSlug!, requestedSummaryLanguage)
+  const summaryBusy = summaryLoading || summaryFetching
+  const podcastLanguage = normalizeLanguageCode(summaryData?.podcast_language)
+  const canonicalSummaryLanguage = normalizeLanguageCode(summaryData?.canonical_language)
+  const selectedSummaryLanguage = requestedSummaryLanguage ?? normalizeLanguageCode(summaryData?.language) ?? canonicalSummaryLanguage
+
+  // The reader flips between the podcast's original language, the language the
+  // canonical artifact is actually stored in, and their own browser default.
+  // These can all differ: the pre-#58 corpus holds English summaries of
+  // foreign podcasts, so canonical (en) != podcast (hr). Deriving the offered
+  // options from all three — rather than assuming canonical == podcast — keeps
+  // the canonical reachable (so `selectedSummaryLanguage` always maps to a
+  // button) and never hides the toggle from a reader whose locale matches the
+  // podcast language but not the stored summary.
+  const summaryLanguageOptions = useMemo(() => {
+    const options: { code: string; original: boolean }[] = []
+    const seen = new Set<string>()
+    const add = (code: string | undefined) => {
+      if (!code || seen.has(code)) return
+      seen.add(code)
+      options.push({ code, original: code === podcastLanguage })
+    }
+    add(podcastLanguage) // original language, marked "(original)"
+    add(canonicalSummaryLanguage) // the free, already-stored artifact
+    add(defaultSummaryLanguage) // the reader's browser locale
+    return options
+  }, [podcastLanguage, canonicalSummaryLanguage, defaultSummaryLanguage])
+  const showSummaryLanguageToggle = summaryLanguageOptions.length > 1
+  const translationInProgress = Boolean(
+    summaryFetching
+      && requestedSummaryLanguage
+      && requestedSummaryLanguage !== canonicalSummaryLanguage
+      && !(summaryData?.available_languages ?? []).includes(requestedSummaryLanguage),
+  )
+
+  const setSummaryLanguage = useCallback(
+    (language: string) => {
+      const params = new URLSearchParams(searchParams)
+      if (language === canonicalSummaryLanguage) params.delete('lang')
+      else params.set('lang', language)
+      const search = params.toString()
+      navigate(
+        { pathname: location.pathname, search: search ? `?${search}` : '' },
+        { replace: false, state: location.state },
+      )
+    },
+    [canonicalSummaryLanguage, location.pathname, location.state, navigate, searchParams],
+  )
 
   // Spec #38 karaoke wipe. Chip state is persisted at the parent level so
   // a single ``usePersistedBoolean`` drives both the chip checkbox and the
@@ -517,7 +579,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
         <div className="bg-white rounded-lg border border-gray-200 min-h-[400px]">
           {/* Tab Headers */}
-          <div className="border-b border-gray-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pr-3">
             <nav className="flex">
               <button
                 onClick={() => setTab('summary')}
@@ -546,6 +608,41 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 )}
               </button>
             </nav>
+            {showSummaryLanguageToggle && (
+              <div className="flex items-center gap-2">
+                {translationInProgress && requestedSummaryLanguage && (
+                  <span
+                    role="status"
+                    aria-live="polite"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-primary-700"
+                  >
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-600" />
+                    Translating to {requestedSummaryLanguage.toUpperCase()}…
+                  </span>
+                )}
+                <div
+                  className="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium"
+                  aria-label="Summary language"
+                >
+                  {summaryLanguageOptions.map(({ code, original }) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setSummaryLanguage(code)}
+                      disabled={summaryBusy}
+                      aria-pressed={selectedSummaryLanguage === code}
+                      className={`rounded-md px-2.5 py-1.5 transition-colors disabled:cursor-wait ${
+                        selectedSummaryLanguage === code
+                          ? 'bg-white text-primary-700 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {original ? `${code.toUpperCase()} (original)` : code.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Tab Content */}
@@ -558,7 +655,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
               {activeTab === 'summary' ? (
                 <SummaryViewer
                   content={summaryData?.content ?? ''}
-                  isLoading={summaryLoading}
+                  isLoading={summaryBusy}
                   available={summaryData?.available}
                   episodeState={episode?.state}
                   citations={summaryData?.citations ?? null}

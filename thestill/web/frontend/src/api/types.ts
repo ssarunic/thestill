@@ -316,6 +316,11 @@ export interface ContentResponse {
   content: string
   available: boolean
   citations?: SummaryCitation[] | null
+  // Summary-only language metadata (spec #58). Transcript responses omit it.
+  language?: string
+  podcast_language?: string
+  canonical_language?: string
+  available_languages?: string[]
   transcript_type?: TranscriptType  // 'cleaned' or 'raw', undefined if not available
   // Present iff the segmented-cleanup JSON sidecar exists for this
   // episode. Absence means "no segmented output to render" — the

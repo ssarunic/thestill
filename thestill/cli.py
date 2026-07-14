@@ -2034,6 +2034,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         ctx.exit(1)
 
     summarizer = TranscriptSummarizer(llm_provider, console=ctx.obj.console)
+    from .core.summary_artifacts import write_summary_manifest
     from .core.summary_citations import resolve_and_persist_summary_citations
 
     # If transcript_path provided, summarize that specific file
@@ -2073,6 +2074,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                                     pub_date=episode.pub_date,
                                     duration_seconds=episode.duration,
                                     podcast_title=podcast.title,
+                                    language=podcast.language,
                                 )
                                 break
                         break
@@ -2094,7 +2096,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         try:
             summary_text = summarizer.summarize(transcript_text, metadata=metadata)
             if matched_episode is not None:
-                resolve_and_persist_summary_citations(
+                persisted_summary = resolve_and_persist_summary_citations(
                     summary_markdown=summary_text,
                     episode=matched_episode,
                     summary_path=output_path,
@@ -2108,6 +2110,13 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 # have no episode row, so spec #54 citation resolution cannot
                 # load an annotated sidecar for them.
                 ctx.obj.config.file_storage.write_text(path_manager.to_relative(output_path), summary_text)
+                persisted_summary = None
+            write_summary_manifest(
+                ctx.obj.config.file_storage,
+                summary_key=path_manager.to_relative(output_path),
+                summary_content=persisted_summary.markdown if persisted_summary else summary_text,
+                canonical_language=metadata.language if metadata else "en",
+            )
             click.echo("Summarization complete!")
             click.echo(f"Output saved to: {output_path}")
         except Exception as e:
@@ -2198,16 +2207,23 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 pub_date=episode.pub_date,
                 duration_seconds=episode.duration,
                 podcast_title=podcast.title,
+                language=podcast.language,
             )
 
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
             summary_text = summarizer.summarize(transcript_text, metadata=metadata)
-            resolve_and_persist_summary_citations(
+            persisted_summary = resolve_and_persist_summary_citations(
                 summary_markdown=summary_text,
                 episode=episode,
                 summary_path=output_path,
                 path_manager=path_manager,
                 file_storage=ctx.obj.config.file_storage,
+            )
+            write_summary_manifest(
+                ctx.obj.config.file_storage,
+                summary_key=path_manager.to_relative(output_path),
+                summary_content=persisted_summary.markdown,
+                canonical_language=podcast.language,
             )
 
             # Update feed manager

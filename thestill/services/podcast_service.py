@@ -16,14 +16,22 @@
 Podcast service - Business logic for podcast and episode management
 """
 
+import re
+import threading
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import List, Literal, NamedTuple, Optional, Union
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, computed_field
 from structlog import get_logger
 
 from ..core.feed_manager import PodcastFeedManager
+from ..core.summary_artifacts import (
+    load_valid_summary_manifest,
+    load_valid_translation_metadata,
+    write_summary_manifest,
+    write_translation_metadata,
+)
 from ..core.summary_citations import load_valid_citations_for_api
 from ..models.annotated_transcript import AnnotatedTranscript, WordSpan
 from ..models.podcast import Episode, Podcast
@@ -32,16 +40,20 @@ from ..models.transcript import Word
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.duration import format_duration
 from ..utils.file_storage import FileStorage
+from ..utils.language_config import normalize_language_code
 from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from ..core.llm_provider import LLMProvider
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]
 
 
 def extract_summary_preview(content: str, max_length: int = 200) -> Optional[str]:
-    """Extract a preview from summary markdown content (The Gist section).
+    """Extract a preview from the numbered first section of a summary.
 
     Takes the markdown content as a string — callers own the read. Spec #35
     pushed file I/O up to ``FileStorage``; centralising the extraction here
@@ -58,7 +70,13 @@ def extract_summary_preview(content: str, max_length: int = 200) -> Optional[str
     try:
         import re
 
-        gist_match = re.search(r"##\s*1\.\s*🎙️\s*The Gist\s*\n+([\s\S]*?)(?=\n##|\n---|\Z)", content, re.IGNORECASE)
+        # Spec #58 localises section headings. Key off the stable section
+        # number/structure rather than the English words "The Gist".
+        gist_match = re.search(
+            r"^##\s*1\.?\s*(?:🎙️\s*)?[^\n]*\n+([\s\S]*?)(?=^##|^---|\Z)",
+            content,
+            re.IGNORECASE | re.MULTILINE,
+        )
         if gist_match:
             gist_content = gist_match.group(1).strip()
             lines = [line.strip() for line in gist_content.split("\n") if line.strip()]
@@ -265,6 +283,8 @@ class PodcastService:
         self.path_manager: PathManager = path_manager
         self.repository: PodcastRepository = podcast_repository
         self.file_storage: FileStorage = file_storage
+        self._summary_translation_locks: dict[str, threading.Lock] = {}
+        self._summary_translation_locks_guard = threading.Lock()
 
         self.feed_manager: PodcastFeedManager = PodcastFeedManager(
             podcast_repository=podcast_repository, path_manager=path_manager
@@ -809,7 +829,32 @@ class PodcastService:
             segments=segments_out,
         )
 
-    def get_summary(self, podcast_id: Union[str, int], episode_id: Union[str, int]) -> Optional[str]:
+    def _summary_path_for_language(
+        self,
+        episode: Episode,
+        *,
+        language: Optional[str] = None,
+        canonical_language: str = "en",
+    ) -> Optional[Path]:
+        """Resolve the canonical or language-suffixed summary artefact path."""
+
+        if not episode.summary_path:
+            return None
+        canonical = normalize_language_code(canonical_language)
+        requested = normalize_language_code(language, default=canonical) if language else canonical
+        base_path = self.path_manager.summary_file(episode.summary_path)
+        if requested == canonical:
+            return base_path
+        if base_path.suffix == ".md":
+            return base_path.with_suffix(f".{requested}.md")
+        return base_path.with_name(f"{base_path.name}.{requested}.md")
+
+    def get_summary(
+        self,
+        podcast_id: Union[str, int],
+        episode_id: Union[str, int],
+        language: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Get the summary for an episode.
 
@@ -824,6 +869,77 @@ class PodcastService:
         if not episode:
             logger.warning(f"Episode not found for summary: {podcast_id}/{episode_id}")
             return None
+        canonical_language = self.get_recorded_summary_language(episode) or "en"
+        return self.get_summary_for_episode(episode, language=language, canonical_language=canonical_language)
+
+    def get_recorded_summary_language(self, episode: Episode) -> Optional[str]:
+        """Return a valid canonical-language manifest value, if one exists."""
+
+        if not episode.summary_path:
+            return None
+        base_path = self.path_manager.summary_file(episode.summary_path)
+        base_key = self.path_manager.to_relative(base_path)
+        try:
+            content = self.file_storage.read_text(base_key)
+        except FileNotFoundError:
+            return None
+        manifest = load_valid_summary_manifest(
+            self.file_storage,
+            summary_key=base_key,
+            summary_content=content,
+        )
+        return manifest.canonical_language if manifest else None
+
+    def detect_and_record_summary_language(
+        self,
+        episode: Episode,
+        *,
+        podcast_language: str,
+        provider: "LLMProvider",
+    ) -> str:
+        """Resolve an unmarked summary as legacy English or podcast-language output."""
+
+        if not episode.summary_path:
+            return "en"
+        base_path = self.path_manager.summary_file(episode.summary_path)
+        base_key = self.path_manager.to_relative(base_path)
+        with self._summary_translation_locks_guard:
+            lock = self._summary_translation_locks.setdefault(f"manifest:{base_key}", threading.Lock())
+        with lock:
+            recorded = self.get_recorded_summary_language(episode)
+            if recorded is not None:
+                return recorded
+            content = self.file_storage.read_text(base_key)
+            podcast_code = normalize_language_code(podcast_language)
+            if podcast_code == "en":
+                detected = "en"
+            else:
+                from ..core.summary_translation import SummaryTranslator
+
+                detected = SummaryTranslator(provider).detect_language(
+                    content,
+                    candidates=("en", podcast_code),
+                )
+            write_summary_manifest(
+                self.file_storage,
+                summary_key=base_key,
+                summary_content=content,
+                canonical_language=detected,
+            )
+            return detected
+
+    def get_summary_for_episode(
+        self,
+        episode: Episode,
+        *,
+        language: Optional[str] = None,
+        canonical_language: str = "en",
+    ) -> Optional[str]:
+        """Read one summary variant for an already-resolved episode.
+
+        A missing translated variant returns ``None`` so the caller can lazily
+        generate it. The canonical summary keeps the legacy ``N/A`` messages.
+        """
 
         # Check if episode has a summary
         if not episode.summary_path:
@@ -833,19 +949,160 @@ class PodcastService:
         # Spec #35 — route through FileStorage. The single try/except
         # replaces the prior require_file_exists + open() pair (two S3
         # round-trips → one).
-        summary_path = self.path_manager.summary_file(episode.summary_path)
+        canonical = normalize_language_code(canonical_language)
+        requested = normalize_language_code(language, default=canonical) if language else canonical
+        summary_path = self._summary_path_for_language(
+            episode,
+            language=requested,
+            canonical_language=canonical,
+        )
+        if summary_path is None:
+            return "N/A - Episode not yet summarized"
         try:
             content = self._read_relative(summary_path)
         except FileNotFoundError:
             logger.warning(f"Summary file not found: {summary_path}")
-            return "N/A - Summary file not found"
+            return None if requested != canonical else "N/A - Summary file not found"
         except Exception as e:
             logger.error(f"Error reading summary file: {e}")
             return f"N/A - Error reading summary: {e}"
+
+        if requested != canonical:
+            base_path = self._summary_path_for_language(
+                episode,
+                canonical_language=canonical,
+            )
+            if base_path is None:
+                return None
+            try:
+                source_content = self._read_relative(base_path)
+            except FileNotFoundError:
+                return None
+            summary_key = self.path_manager.to_relative(summary_path)
+            if (
+                load_valid_translation_metadata(
+                    self.file_storage,
+                    summary_key=summary_key,
+                    source_content=source_content,
+                    translated_content=content,
+                    source_language=canonical,
+                    target_language=requested,
+                )
+                is None
+            ):
+                logger.info(
+                    "summary_translation.stale_or_untrusted",
+                    episode_id=episode.id,
+                    language=requested,
+                )
+                return None
         logger.info(f"Retrieved summary for: {episode.title}")
         return content
 
-    def get_summary_citations_for_episode(self, episode: Episode, summary_content: str) -> Optional[List[dict]]:
+    def get_or_create_summary_translation(
+        self,
+        episode: Episode,
+        *,
+        source_language: str,
+        target_language: str,
+        provider: "LLMProvider",
+    ) -> Optional[str]:
+        """Return a cached translation, creating and citation-resolving it once."""
+
+        source = normalize_language_code(source_language)
+        target = normalize_language_code(target_language, default=source)
+        if target == source:
+            return self.get_summary_for_episode(episode, canonical_language=source)
+
+        translation_path = self._summary_path_for_language(
+            episode,
+            language=target,
+            canonical_language=source,
+        )
+        if translation_path is None:
+            return "N/A - Episode not yet summarized"
+        translation_key = self.path_manager.to_relative(translation_path)
+        with self._summary_translation_locks_guard:
+            lock = self._summary_translation_locks.setdefault(translation_key, threading.Lock())
+
+        with lock:
+            cached = self.get_summary_for_episode(
+                episode,
+                language=target,
+                canonical_language=source,
+            )
+            if cached is not None:
+                return cached
+
+            original = self.get_summary_for_episode(episode, canonical_language=source)
+            if original is None or original.startswith("N/A"):
+                return original
+
+            from ..core.summary_citations import resolve_and_persist_summary_citations
+            from ..core.summary_translation import SummaryTranslator
+
+            translated = SummaryTranslator(provider).translate(
+                original,
+                target_language=target,
+                source_language=source,
+            )
+            persisted = resolve_and_persist_summary_citations(
+                summary_markdown=translated,
+                episode=episode,
+                summary_path=translation_path,
+                path_manager=self.path_manager,
+                file_storage=self.file_storage,
+            )
+            write_translation_metadata(
+                self.file_storage,
+                summary_key=translation_key,
+                source_content=original,
+                translated_content=persisted.markdown,
+                source_language=source,
+                target_language=target,
+            )
+            return persisted.markdown
+
+    def get_available_summary_languages(self, episode: Episode, *, canonical_language: str) -> List[str]:
+        """List the canonical language and cached sibling translations."""
+
+        if not episode.summary_path:
+            return []
+        canonical = normalize_language_code(canonical_language)
+        base_path = self.path_manager.summary_file(episode.summary_path)
+        base_key = self.path_manager.to_relative(base_path)
+        key_path = PurePosixPath(base_key)
+        stem = base_path.stem if base_path.suffix == ".md" else base_path.name
+        pattern = f"{stem}.*.md"
+        languages = {canonical}
+        try:
+            for metadata in self.file_storage.list_files(
+                prefix="" if str(key_path.parent) == "." else str(key_path.parent),
+                pattern=pattern,
+            ):
+                match = re.fullmatch(rf"{re.escape(stem)}\.([a-z]{{2,3}})\.md", PurePosixPath(metadata.path).name)
+                if (
+                    match
+                    and self.get_summary_for_episode(
+                        episode,
+                        language=match.group(1),
+                        canonical_language=canonical,
+                    )
+                    is not None
+                ):
+                    languages.add(match.group(1))
+        except Exception as exc:  # Listing failure must not hide the summary itself.
+            logger.warning("summary_translation.list_failed", episode_id=episode.id, error=str(exc))
+        return [canonical, *sorted(languages - {canonical})]
+
+    def get_summary_citations_for_episode(
+        self,
+        episode: Episode,
+        summary_content: str,
+        *,
+        language: Optional[str] = None,
+        canonical_language: str = "en",
+    ) -> Optional[List[dict]]:
         """Load frontend-safe summary citations for an already-resolved episode.
 
         Invalid, stale, or missing sidecars return ``None`` so callers can
@@ -858,7 +1115,13 @@ class PodcastService:
         segmented = self.get_segmented_transcript_for_episode(episode)
         if segmented is None:
             return None
-        summary_path = self.path_manager.summary_file(episode.summary_path)
+        summary_path = self._summary_path_for_language(
+            episode,
+            language=language,
+            canonical_language=canonical_language,
+        )
+        if summary_path is None:
+            return None
         return load_valid_citations_for_api(
             summary_markdown=summary_content,
             episode=episode,

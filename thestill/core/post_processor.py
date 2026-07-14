@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from thestill.utils.console import ConsoleOutput
+from thestill.utils.language_config import normalize_language_code, resolve_language_spec
 from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 # Import ModelLimits and MODEL_CONFIGS from llm_provider (canonical location)
@@ -40,6 +41,7 @@ class EpisodeMetadata:
     pub_date: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     podcast_title: Optional[str] = None
+    language: str = "en"
 
     @property
     def formatted_date(self) -> str:
@@ -243,7 +245,24 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
         :mod:`thestill.utils.prompt_safety` so the model knows to treat
         anything inside the sentinels as data rather than instructions.
         """
-        return self.SYSTEM_PROMPT + UNTRUSTED_CONTENT_PREAMBLE
+        language = normalize_language_code(metadata.language if metadata else "en")
+        prompt = self.SYSTEM_PROMPT
+        if language != "en":
+            language_name = resolve_language_spec(language)["name"]
+            prompt = prompt.replace(
+                "Use British English.",
+                f"Write the entire summary in {language_name}.",
+                1,
+            )
+            prompt += f"""
+
+**Language requirement:** Localise the complete output into {language_name},
+including every section header, template label (such as \"What happened\"),
+and all prose. Keep the section numbering, emojis, Markdown structure,
+timestamps, proper names, and citation syntax unchanged. The English wording
+in the template describes the required structure; it is not output language.
+"""
+        return prompt + UNTRUSTED_CONTENT_PREAMBLE
 
     def _process_single_chunk(
         self,

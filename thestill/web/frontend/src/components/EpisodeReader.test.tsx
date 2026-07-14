@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import EpisodeReader from './EpisodeReader'
@@ -16,10 +17,7 @@ import type { EpisodeDetailResponse } from '../api/types'
 vi.mock('../hooks/useApi', () => ({
   useEpisode: vi.fn(),
   useEpisodeTranscript: vi.fn(() => ({ data: undefined, isLoading: false })),
-  useEpisodeSummary: vi.fn(() => ({
-    data: { status: 'ok', timestamp: '', available: true, content: '# Summary' },
-    isLoading: false,
-  })),
+  useEpisodeSummary: vi.fn(),
   useEpisodeTranscriptWords: vi.fn(() => ({ data: undefined, isFetched: false })),
   useEpisodeEntities: vi.fn(() => ({ data: { entities: [] } })),
   useRelatedEpisodes: vi.fn(() => ({ data: { episodes: [] }, isLoading: false })),
@@ -29,9 +27,10 @@ vi.mock('../hooks/useApi', () => ({
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))
 vi.mock('./SummaryViewer', () => ({ default: () => <div>SUMMARY_VIEWER</div> }))
 
-import { useEpisode, useMarkInboxReadOnView } from '../hooks/useApi'
+import { useEpisode, useEpisodeSummary, useMarkInboxReadOnView } from '../hooks/useApi'
 
 const mockUseEpisode = useEpisode as ReturnType<typeof vi.fn>
+const mockUseSummary = useEpisodeSummary as ReturnType<typeof vi.fn>
 const mockMarkOnView = useMarkInboxReadOnView as ReturnType<typeof vi.fn>
 
 function episodeResponse(): EpisodeDetailResponse {
@@ -100,6 +99,11 @@ async function expectReaderContent() {
 describe('EpisodeReader page/overlay parity (spec #52)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUseSummary.mockReturnValue({
+      data: { status: 'ok', timestamp: '', available: true, content: '# Summary' },
+      isLoading: false,
+      isFetching: false,
+    })
     mockUseEpisode.mockReturnValue({
       data: episodeResponse(),
       isLoading: false,
@@ -138,5 +142,61 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     renderAtEpisodeRoute(<EpisodeReader />)
     expect(screen.getByText('Error loading episode')).toBeInTheDocument()
     expect(screen.getByText('boom')).toBeInTheDocument()
+  })
+
+  it('shows an original/default-language toggle and keys the request from the URL', async () => {
+    const languageSpy = vi.spyOn(window.navigator, 'language', 'get').mockReturnValue('en-GB')
+    mockUseSummary.mockImplementation((_podcastSlug: string, _episodeSlug: string, lang?: string) => ({
+      data: {
+        status: 'ok',
+        timestamp: '',
+        available: true,
+        content: lang === 'en' ? '# Summary' : '# Sažetak',
+        language: lang ?? 'hr',
+        podcast_language: 'hr',
+        canonical_language: 'hr',
+        available_languages: ['hr', ...(lang === 'en' ? ['en'] : [])],
+      },
+      isLoading: false,
+      isFetching: false,
+    }))
+    const user = userEvent.setup()
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+
+    expect(await screen.findByRole('button', { name: 'HR (original)' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'EN' }))
+    await waitFor(() => {
+      expect(mockUseSummary).toHaveBeenLastCalledWith('sample-pod', 'sample-episode', 'en')
+    })
+    expect(screen.getByRole('button', { name: 'EN' })).toHaveAttribute('aria-pressed', 'true')
+    languageSpy.mockRestore()
+  })
+
+  it('treats legacy English as canonical and shows progress while creating Croatian', async () => {
+    const languageSpy = vi.spyOn(window.navigator, 'language', 'get').mockReturnValue('en-GB')
+    mockUseSummary.mockImplementation((_podcastSlug: string, _episodeSlug: string, lang?: string) => ({
+      data: {
+        status: 'ok',
+        timestamp: '',
+        available: true,
+        content: '# The Gist',
+        language: 'en',
+        podcast_language: 'hr',
+        canonical_language: 'en',
+        available_languages: ['en'],
+      },
+      isLoading: false,
+      isFetching: lang === 'hr',
+    }))
+    const user = userEvent.setup()
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+
+    expect(await screen.findByRole('button', { name: 'EN' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'HR (original)' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Translating to HR…')
+    expect(screen.getByRole('button', { name: 'HR (original)' })).toHaveAttribute('aria-pressed', 'true')
+    languageSpy.mockRestore()
   })
 })

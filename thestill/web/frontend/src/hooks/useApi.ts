@@ -226,11 +226,14 @@ export function useEpisodeTranscriptWords(
   })
 }
 
-export function useEpisodeSummary(podcastSlug: string, episodeSlug: string) {
+export function useEpisodeSummary(podcastSlug: string, episodeSlug: string, lang?: string) {
   return useQuery({
-    queryKey: ['episodes', podcastSlug, episodeSlug, 'summary'],
-    queryFn: () => getEpisodeSummary(podcastSlug, episodeSlug),
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'summary', lang ?? 'original'],
+    queryFn: () => getEpisodeSummary(podcastSlug, episodeSlug, lang),
     enabled: !!podcastSlug && !!episodeSlug,
+    // Keep the language control visible while a first-time translation is
+    // generated; EpisodeReader replaces the content itself with a skeleton.
+    placeholderData: (previousData) => previousData,
     // Don't poll summary content
     refetchInterval: false,
     staleTime: 60000, // 1 minute
