@@ -179,8 +179,14 @@ class YouTubeDownloader:
                 return episodes
 
         except Exception as e:
+            # Spec #60: do NOT swallow to [] — that made a YouTube outage
+            # indistinguishable from "no new episodes" (and a clean run then
+            # CLEARED the feed's prior error state via record_refresh_success).
+            # Re-raise so the feed manager's catch-all classifies it (network
+            # → connectivity, yt-dlp extractor trouble → remote_transient,
+            # genuine bug → internal).
             logger.error(f"Error getting episodes from YouTube: {e}", exc_info=True)
-            return []
+            raise
 
     def download_episode(self, episode: Episode, podcast_title: str) -> Optional[str]:
         """

@@ -37,12 +37,22 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from thestill.core.refresh_failure import RefreshFailure, RefreshFailureKind, RefreshPolicySettings
 from thestill.models.podcast import Episode, FailureType, Podcast
 from thestill.repositories.postgres_podcast_repository_podcasts import PodcastsMixin
-from thestill.repositories.sqlite_podcast_repository import (
-    SYNTHETIC_AUDIO_IMPORTS_ID,
-    SqlitePodcastRepository,
-)
+from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SqlitePodcastRepository
+
+# Spec #60 — shared policy settings + failure builders for the refresh tests.
+_SETTINGS = RefreshPolicySettings(min_interval_seconds=600, max_interval_seconds=86400, default_interval_seconds=3600)
+
+
+def _gone_410() -> RefreshFailure:
+    return RefreshFailure(kind=RefreshFailureKind.REMOTE_GONE, http_status=410, exception="410 Gone")
+
+
+def _connectivity() -> RefreshFailure:
+    return RefreshFailure(kind=RefreshFailureKind.CONNECTIVITY, exception="[Errno 8] nodename nor servname")
+
 
 PG_DSN = os.getenv("TEST_DATABASE_URL", "")
 
@@ -458,24 +468,220 @@ def test_refresh_scheduling_bookkeeping(repo):
     assert datetime.fromisoformat(next_iso) == base + timedelta(seconds=2700)
     assert p.id in repo.get_due_podcasts(now=base + timedelta(seconds=2700))
 
-    # Terminal failure PARKS the feed (next_refresh_at NULL).
-    repo.record_refresh_error(p.id, "gone 410", terminal=True, now=base)
+    # Spec #60 — a decisive 410 QUARANTINES the feed (next_refresh_at NULL,
+    # reason recorded).
+    decision = repo.record_refresh_failure(p.id, _gone_410(), _SETTINGS, now=base)
+    assert decision.disabled_reason == "feed_gone"
     assert p.id not in repo.get_due_podcasts(now=base + timedelta(days=365))
-    row = _exec(repo, "SELECT last_refresh_error FROM podcasts WHERE id = ?", (p.id,), fetch=True)[0]
-    assert row["last_refresh_error"] == "gone 410"
-    # A parked feed is never silently re-seeded.
+    row = _exec(
+        repo,
+        "SELECT last_refresh_error, refresh_disabled_reason, last_refresh_failure_kind, "
+        "last_refresh_status_code, consecutive_refresh_failures FROM podcasts WHERE id = ?",
+        (p.id,),
+        fetch=True,
+    )[0]
+    assert row["last_refresh_error"] == "410 Gone"
+    assert row["refresh_disabled_reason"] == "feed_gone"
+    assert row["last_refresh_failure_kind"] == "remote_gone"
+    assert row["last_refresh_status_code"] == 410
+    assert row["consecutive_refresh_failures"] == 1
+    # A quarantined feed is never silently re-seeded.
     assert repo.seed_unscheduled_feeds(3600, now=base) == 0
 
-    # Operator retry re-arms to now.
+    # Operator retry re-arms to now and clears ALL failure state.
     next_iso = repo.clear_podcast_refresh_failure(p.id, 3600, now=base)
     assert datetime.fromisoformat(next_iso) == base
     assert p.id in repo.get_due_podcasts(now=base)
-    row = _exec(repo, "SELECT last_refresh_error FROM podcasts WHERE id = ?", (p.id,), fetch=True)[0]
+    row = _exec(
+        repo,
+        "SELECT last_refresh_error, refresh_disabled_reason, last_refresh_failure_kind, "
+        "consecutive_refresh_failures FROM podcasts WHERE id = ?",
+        (p.id,),
+        fetch=True,
+    )[0]
     assert row["last_refresh_error"] is None
+    assert row["refresh_disabled_reason"] is None
+    assert row["last_refresh_failure_kind"] is None
+    assert row["consecutive_refresh_failures"] == 0
 
-    # Retryable error records the failure but does NOT park.
-    repo.record_refresh_error(p.id, "timeout", terminal=False, now=base)
-    assert p.id in repo.get_due_podcasts(now=base)
+    # Spec #60 core incident fix — connectivity backs off but NEVER parks.
+    decision = repo.record_refresh_failure(p.id, _connectivity(), _SETTINGS, now=base)
+    assert decision.disabled_reason is None
+    row = _exec(
+        repo,
+        "SELECT next_refresh_at, refresh_disabled_reason FROM podcasts WHERE id = ?",
+        (p.id,),
+        fetch=True,
+    )[0]
+    assert row["next_refresh_at"] is not None
+    assert row["refresh_disabled_reason"] is None
+    # Backed off: due again after the lengthened interval, not immediately.
+    assert p.id not in repo.get_due_podcasts(now=base)
+    assert p.id in repo.get_due_podcasts(now=base + timedelta(days=2))
+
+
+def test_record_refresh_failure_policy_matrix(repo):
+    """Decisive kinds quarantine on first sight; internal never touches the
+    schedule; success resets the streak (both backends)."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    for failure, expected_reason in [
+        (RefreshFailure(kind=RefreshFailureKind.SECURITY_POLICY, exception="ssrf refusal"), "blocked_unsafe"),
+        (RefreshFailure(kind=RefreshFailureKind.AUTHENTICATION, http_status=401, exception="401"), "auth_required"),
+    ]:
+        p = _mk_podcast()
+        repo.save(p)
+        repo.seed_unscheduled_feeds(3600, now=base)
+        decision = repo.record_refresh_failure(p.id, failure, _SETTINGS, now=base)
+        assert decision.disabled_reason == expected_reason
+        row = _exec(
+            repo, "SELECT next_refresh_at, refresh_disabled_reason FROM podcasts WHERE id = ?", (p.id,), fetch=True
+        )[0]
+        assert row["next_refresh_at"] is None
+        assert row["refresh_disabled_reason"] == expected_reason
+
+    # INTERNAL (our bug): stamps visibility only, schedule untouched.
+    p = _mk_podcast()
+    repo.save(p)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    before = _exec(repo, "SELECT next_refresh_at FROM podcasts WHERE id = ?", (p.id,), fetch=True)[0]
+    repo.record_refresh_failure(
+        p.id,
+        RefreshFailure(kind=RefreshFailureKind.INTERNAL, exception="KeyError('bug')", is_internal=True),
+        _SETTINGS,
+        now=base,
+    )
+    row = _exec(
+        repo,
+        "SELECT next_refresh_at, refresh_disabled_reason, consecutive_refresh_failures, "
+        "last_refresh_failure_kind FROM podcasts WHERE id = ?",
+        (p.id,),
+        fetch=True,
+    )[0]
+    assert row["next_refresh_at"] == before["next_refresh_at"]  # untouched
+    assert row["refresh_disabled_reason"] is None
+    assert row["consecutive_refresh_failures"] == 0  # IGNORE does not extend the streak
+    assert row["last_refresh_failure_kind"] == "internal"
+
+    # Success clears the whole failure streak.
+    repo.record_refresh_failure(p.id, _connectivity(), _SETTINGS, now=base)
+    repo.record_refresh_success(
+        p.id, found_new=False, min_interval=600, max_interval=86400, default_interval=3600, now=base
+    )
+    row = _exec(
+        repo,
+        "SELECT consecutive_refresh_failures, last_refresh_failure_kind, "
+        "refresh_failure_streak_started_at FROM podcasts WHERE id = ?",
+        (p.id,),
+        fetch=True,
+    )[0]
+    assert row["consecutive_refresh_failures"] == 0
+    assert row["last_refresh_failure_kind"] is None
+    assert row["refresh_failure_streak_started_at"] is None
+
+
+def test_404_horizon_gate(repo):
+    """404 quarantines only once the AIMD interval sits at max AND the streak
+    has persisted a full max interval of wall clock — never on a quick burst."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    p = _mk_podcast()
+    repo.save(p)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    gone_404 = RefreshFailure(kind=RefreshFailureKind.REMOTE_GONE, http_status=404, exception="404")
+
+    # Burst of 404s minutes apart: backs off, never quarantines.
+    for minute in range(3):
+        decision = repo.record_refresh_failure(p.id, gone_404, _SETTINGS, now=base + timedelta(minutes=minute))
+        assert decision.disabled_reason is None
+
+    # Force the feed to the AIMD max interval, streak already old — the next
+    # 404 after a full max-interval horizon quarantines.
+    _exec(
+        repo,
+        "UPDATE podcasts SET refresh_interval_seconds = ?, refresh_failure_streak_started_at = ? WHERE id = ?",
+        (86400, _ts(repo, base - timedelta(days=2)), p.id),
+    )
+    decision = repo.record_refresh_failure(p.id, gone_404, _SETTINGS, now=base + timedelta(days=2))
+    assert decision.disabled_reason == "feed_gone"
+    # 410 needs no horizon: immediate (fresh podcast, min interval).
+    p2 = _mk_podcast()
+    repo.save(p2)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    assert repo.record_refresh_failure(p2.id, _gone_410(), _SETTINGS, now=base).disabled_reason == "feed_gone"
+
+
+def test_clear_podcast_refresh_failures_bulk(repo):
+    """Spec #60 Phase 0 — the bulk re-arm previously MISSING on Postgres."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    parked = []
+    for _ in range(3):
+        p = _mk_podcast()
+        repo.save(p)
+        repo.seed_unscheduled_feeds(3600, now=base)
+        repo.record_refresh_failure(p.id, _gone_410(), _SETTINGS, now=base)
+        parked.append(p.id)
+    for pid in parked:
+        assert pid not in repo.get_due_podcasts(now=base + timedelta(days=365))
+
+    updated = repo.clear_podcast_refresh_failures(parked, 3600, now=base)
+    assert updated == 3
+    due = repo.get_due_podcasts(now=base)
+    for pid in parked:
+        assert pid in due
+    assert repo.clear_podcast_refresh_failures([], 3600, now=base) == 0
+
+
+def test_quarantine_probe_due_and_reasons(repo):
+    """Only feed_gone/invalid_content quarantines are re-probed; auth/security
+    quarantines are never auto-probed regardless of age."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    old = base - timedelta(days=30)
+
+    gone = _mk_podcast()
+    repo.save(gone)
+    repo.seed_unscheduled_feeds(3600, now=old)
+    repo.record_refresh_failure(gone.id, _gone_410(), _SETTINGS, now=old)
+
+    blocked = _mk_podcast()
+    repo.save(blocked)
+    repo.seed_unscheduled_feeds(3600, now=old)
+    repo.record_refresh_failure(
+        blocked.id, RefreshFailure(kind=RefreshFailureKind.SECURITY_POLICY, exception="ssrf"), _SETTINGS, now=old
+    )
+
+    fresh_gone = _mk_podcast()
+    repo.save(fresh_gone)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    repo.record_refresh_failure(fresh_gone.id, _gone_410(), _SETTINGS, now=base)
+
+    probes = repo.get_quarantine_probe_due(7 * 86400, now=base)
+    assert gone.id in probes  # 30 days old → due a probe
+    assert blocked.id not in probes  # security quarantine: NEVER probed
+    assert fresh_gone.id not in probes  # quarantined just now → not due yet
+
+
+def test_get_refresh_health_counts(repo):
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    healthy = _mk_podcast()
+    repo.save(healthy)
+    repo.seed_unscheduled_feeds(3600, now=base)
+
+    backing = _mk_podcast()
+    repo.save(backing)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    repo.record_refresh_failure(backing.id, _connectivity(), _SETTINGS, now=base)
+
+    quarantined = _mk_podcast()
+    repo.save(quarantined)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    repo.record_refresh_failure(quarantined.id, _gone_410(), _SETTINGS, now=base)
+
+    counts = repo.get_refresh_health_counts(now=base + timedelta(days=2))
+    assert counts["active"] >= 2  # healthy + backing (still scheduled)
+    assert counts["backing_off"] >= 1
+    assert counts["parked_by_reason"].get("feed_gone", 0) >= 1
+    assert counts["parked_total"] >= 1
 
 
 def test_get_due_podcasts_excludes_inactive(repo):
@@ -656,8 +862,7 @@ def _seed_chart(repo, region: str):
     _seed_pg_categories(repo)
     comedy_sub_id = _exec(
         repo,
-        "SELECT c.id FROM categories c JOIN categories p ON p.id = c.parent_id "
-        "WHERE c.name = ? AND p.name = ?",
+        "SELECT c.id FROM categories c JOIN categories p ON p.id = c.parent_id " "WHERE c.name = ? AND p.name = ?",
         ("Improv", "Comedy"),
         fetch=True,
     )[0]["id"]
@@ -666,7 +871,9 @@ def _seed_chart(repo, region: str):
         "SELECT id FROM categories WHERE name = ? AND parent_id IS NULL",
         ("News",),
         fetch=True,
-    )[0]["id"]
+    )[
+        0
+    ]["id"]
 
     now = _ts(repo, datetime.now(timezone.utc))
     u = _uniq()

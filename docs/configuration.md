@@ -83,6 +83,7 @@ See [transcription-providers.md](transcription-providers.md) for provider-specif
 | `DELETE_AUDIO_AFTER_PROCESSING` | Delete audio after each stage | `false` |
 | `REFRESH_MAX_WORKERS` | Parallel workers for `thestill refresh` (see [spec #19](../specs/19-refresh-performance.md)) | `1` |
 | `REFRESH_MAX_PER_HOST` | Cap on concurrent HTTP fetches per host during refresh | `2` |
+| `REFRESH_QUARANTINE_PROBE_INTERVAL_SECONDS` | Spec #60: how long a `feed_gone`/`invalid_content` quarantine sits before one automatic re-probe (`auth_required`/`blocked_unsafe` are never auto-probed) | `604800` (weekly) |
 
 ### MAX_EPISODES_PER_PODCAST
 

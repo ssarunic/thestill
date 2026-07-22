@@ -34,7 +34,7 @@ from typing import Optional
 
 from structlog import get_logger
 
-from thestill.utils.exceptions import FatalError, TransientError
+from thestill.utils.exceptions import VALID_ERROR_CLASSES, FatalError, TransientError
 
 logger = get_logger(__name__)
 
@@ -260,8 +260,12 @@ def classify_error_class(exception: Exception) -> str:
     - ``'item'`` — a per-item transient or unclassified error. Keeps the
       existing 3-strike budget and, once exhausted, requires manual retry.
 
-    Fatal is checked first (most specific), then infra, then everything else
-    falls through to item. Accepts an exception or a bare message string.
+    An explicit, validated ``error_class`` attribute on the exception (set at
+    raise time via ``ThestillError(..., error_class=...)``, spec #60) wins over
+    message matching — the raiser knows the real failure kind; the regexes
+    below are the fallback for exceptions that never got classified upstream.
+    Then fatal is checked first (most specific), then infra, then everything
+    else falls through to item. Accepts an exception or a bare message string.
 
     Args:
         exception: The exception (or message) to classify
@@ -269,6 +273,9 @@ def classify_error_class(exception: Exception) -> str:
     Returns:
         One of ``'fatal'``, ``'infra'``, ``'item'``
     """
+    explicit = getattr(exception, "error_class", None)
+    if explicit in VALID_ERROR_CLASSES:
+        return explicit
     if is_fatal_error(exception):
         return "fatal"
     if is_infrastructure_error(exception):

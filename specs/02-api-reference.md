@@ -109,9 +109,25 @@ Detailed system status with pipeline statistics and configuration.
     "transcription_provider": "whisper",
     "llm_provider": "openai",
     "diarization_enabled": true
+  },
+  "refresh_health": {
+    "active": 88,
+    "due_now": 3,
+    "backing_off": 2,
+    "parked_total": 2,
+    "parked_by_reason": {
+      "feed_gone": 1,
+      "auth_required": 1
+    }
   }
 }
 ```
+
+`refresh_health` (spec #60): feed refresh scheduling health. `backing_off`
+counts feeds currently failing but still scheduled (never silently parked);
+`parked_by_reason` buckets quarantined feeds by `refresh_disabled_reason`
+(`feed_gone` | `blocked_unsafe` | `auth_required` | `invalid_content`;
+legacy pre-#60 parks appear as `unknown`).
 
 ---
 

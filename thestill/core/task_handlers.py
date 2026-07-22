@@ -1382,6 +1382,7 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
         get_refresh_min_interval_seconds,
     )
     from .media_source import RSSMediaSource
+    from .refresh_failure import RefreshPolicySettings, error_class_for_failure
 
     podcast_id = task.podcast_id
     if not podcast_id:
@@ -1398,16 +1399,50 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     max_eps = getattr(state.config, "max_episodes_per_podcast", None)
 
     # 1-2. Fetch (network outside any txn) and surface errors.
-    podcast, new_eps, had_error, hit, source, headers_rotated, image_rows, audio_rows = fm._refresh_single_podcast(
-        podcast, max_eps, known_external_ids
-    )
-    if had_error:
-        # Non-terminal stamp for visibility; the worker parks on terminal exhaustion.
+    result = fm._refresh_single_podcast(podcast, max_eps, known_external_ids)
+    podcast = result.podcast
+    new_eps = result.new_episodes
+    hit = result.conditional_hit
+    source = result.source
+    headers_rotated = result.headers_rotated
+    image_rows = result.image_rows
+    audio_rows = result.audio_rows
+    if result.failure is not None:
+        # Spec #60 — ONE authoritative policy-applying write per attempt.
+        # The repository reads the current AIMD/streak state and applies
+        # decide_refresh_action atomically; the worker's exhaustion-time
+        # path only records a fallback when this write never happened
+        # (``refresh_failure_recorded`` below).
+        failure = result.failure
+        settings = RefreshPolicySettings.from_config()
+        recorded = False
         try:
-            repo.record_refresh_error(podcast_id, "feed refresh failed", terminal=False)
+            decision = repo.record_refresh_failure(podcast_id, failure, settings)
+            recorded = True
+            logger.info(
+                "refresh_failure_recorded",
+                podcast_id=podcast_id,
+                failure_kind=failure.kind.value,
+                http_status=failure.http_status,
+                action=decision.action.value,
+                disabled_reason=decision.disabled_reason,
+            )
         except Exception:
-            logger.warning("refresh_error_stamp_failed", podcast_id=podcast_id)
-        raise TransientError(f"Feed refresh failed for {podcast.title} ({podcast_id})")
+            logger.warning("refresh_error_stamp_failed", podcast_id=podcast_id, exc_info=True)
+
+        error_class = error_class_for_failure(failure)
+        msg = f"Feed refresh failed for {podcast.title} ({podcast_id}): {failure.kind.value}"
+        exc_type = FatalError if error_class == "fatal" else TransientError
+        exc = exc_type(
+            msg,
+            error_class=error_class,
+            refresh_failure_kind=failure.kind.value,
+            http_status=failure.http_status,
+        )
+        # Typed marker for the worker's idempotent fallback: True means the
+        # podcast row already carries this attempt's classified failure.
+        exc.refresh_failure_recorded = recorded
+        raise exc
 
     # 3. Per-feed persist — only on success. A plain 304 (no rotated headers)
     #    persists nothing; otherwise persist the podcast (+ new episodes).

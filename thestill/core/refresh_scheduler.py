@@ -51,12 +51,14 @@ class RefreshScheduler:
         tick_seconds: int = 60,
         default_interval_seconds: int = 3600,
         max_enqueue_per_tick: int = 500,
+        quarantine_probe_interval_seconds: int = 7 * 86400,
     ) -> None:
         self.repository = repository
         self.queue_manager = queue_manager
         self.tick_seconds = max(5, tick_seconds)
         self.default_interval_seconds = default_interval_seconds
         self.max_enqueue_per_tick = max_enqueue_per_tick
+        self.quarantine_probe_interval_seconds = quarantine_probe_interval_seconds
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -97,12 +99,20 @@ class RefreshScheduler:
     def tick(self) -> int:
         """One scheduling pass. Returns the number of feeds enqueued."""
         # Seed any never-scheduled active feed (e.g. just added) so it becomes
-        # due; parked (terminally-failed) feeds are left alone.
+        # due; parked/quarantined feeds are left alone.
         self.repository.seed_unscheduled_feeds(self.default_interval_seconds)
 
         due = self.repository.get_due_podcasts(limit=self.max_enqueue_per_tick)
+        # Spec #60 — quarantined feed_gone/invalid_content feeds get one
+        # low-frequency re-probe (weekly by default). The probe rides the
+        # normal REFRESH_FEED path: success un-quarantines via
+        # record_refresh_success; failure re-quarantines via the policy.
+        probes = self.repository.get_quarantine_probe_due(
+            self.quarantine_probe_interval_seconds,
+            limit=self.max_enqueue_per_tick,
+        )
         enqueued = 0
-        for podcast_id in due:
+        for podcast_id in [*due, *probes]:
             # Coalescing: skip if a non-terminal REFRESH_FEED already exists.
             if self.queue_manager.has_pending_feed_task(podcast_id, TaskStage.REFRESH_FEED):
                 continue
@@ -110,5 +120,10 @@ class RefreshScheduler:
             if task is not None:
                 enqueued += 1
         if enqueued:
-            logger.info("refresh_scheduler_enqueued", due=len(due), enqueued=enqueued)
+            logger.info(
+                "refresh_scheduler_enqueued",
+                due=len(due),
+                quarantine_probes=len(probes),
+                enqueued=enqueued,
+            )
         return enqueued

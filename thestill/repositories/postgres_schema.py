@@ -109,10 +109,30 @@ CREATE TABLE IF NOT EXISTS podcasts (
     refresh_interval_seconds bigint NULL,
     next_refresh_at timestamptz NULL,
     last_refresh_at timestamptz NULL,
-    last_refresh_error text NULL
+    last_refresh_error text NULL,
+    -- spec #60: durable per-kind failure policy state. A feed is QUARANTINED
+    -- (next_refresh_at NULL) only with an explicit refresh_disabled_reason;
+    -- connectivity failures never park.
+    last_refresh_failure_kind text NULL,
+    last_refresh_status_code integer NULL,
+    consecutive_refresh_failures integer NOT NULL DEFAULT 0,
+    refresh_failure_streak_started_at timestamptz NULL,
+    refresh_disabled_reason text NULL,
+    refresh_retry_after_at timestamptz NULL
 );
 CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
 CREATE INDEX IF NOT EXISTS idx_podcasts_next_refresh ON podcasts(next_refresh_at) WHERE next_refresh_at IS NOT NULL;
+-- Spec #60 — converge databases bootstrapped before failure classification
+-- landed (CREATE TABLE IF NOT EXISTS skips existing tables, so the new
+-- columns need explicit idempotent ALTERs; same contract as alembic 0006).
+ALTER TABLE podcasts
+    ADD COLUMN IF NOT EXISTS last_refresh_failure_kind text NULL,
+    ADD COLUMN IF NOT EXISTS last_refresh_status_code integer NULL,
+    ADD COLUMN IF NOT EXISTS consecutive_refresh_failures integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS refresh_failure_streak_started_at timestamptz NULL,
+    ADD COLUMN IF NOT EXISTS refresh_disabled_reason text NULL,
+    ADD COLUMN IF NOT EXISTS refresh_retry_after_at timestamptz NULL;
+CREATE INDEX IF NOT EXISTS idx_podcasts_quarantine ON podcasts(refresh_disabled_reason, last_refresh_at) WHERE refresh_disabled_reason IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS episodes (
     id uuid PRIMARY KEY,

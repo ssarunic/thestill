@@ -1,0 +1,364 @@
+# Transcript & Summary Feedback (flag-or-fix corrections)
+
+> **Status:** 💡 Proposal (v3)
+> **Created:** 2026-07-14
+> **Updated:** 2026-07-14 (v3 — added Tier 2 admin correction workbench; v2 — from flag-only to flag-or-fix; per-user diffs + corroboration)
+> **Priority:** Medium
+> **Author:** Product & Engineering
+> **Related:** [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) (the `source_segment_ids` durable anchor + the reserved `user_segment_id` edit hook), [#54 summary-segment-citations](54-summary-segment-citations.md) (sidecar + staleness-guard precedent), [#53 eval-runs-and-summary-rubric](53-eval-runs-and-summary-rubric.md) (where verified corrections land), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (`POST /api/entities/corrections` — the correction-endpoint template), [#06 authentication](06-authentication.md) (user attribution)
+
+---
+
+## Executive Summary
+
+Readers notice pipeline mistakes long before we do: a segment attributed to
+the wrong speaker, a garbled product name, an ad chunk bleeding into content,
+a summary claim that isn't in the episode. Today that signal evaporates.
+
+This spec adds a **flag-or-fix correction loop**. Every report locates an
+error with a **durable anchor** and a **snapshot of what the user saw**; where
+the fix is cheap to express, the same interaction also captures a **structured
+proposal** — the corrected value, not just "something's wrong here":
+
+- tap a speaker label → pick the right speaker (a relabel diff),
+- select text in a segment → type the replacement (a word-level text diff),
+- segment boundary wrong → merge-with-prev/next or split-at-word,
+- summary problems → category + free text (prose proposals are just text).
+
+Proposals are **per-user overlay diffs**, never mutations of the canonical
+artifact. Your own corrections render back to you immediately (your transcript,
+fixed); canonical artifacts stay write-once so re-cleans and evals remain
+deterministic. Because proposals are structured, **agreement is detectable**:
+two independent users producing the same normalized diff on the same anchor
+(`fingerprint` match) auto-corroborates the report — crowdsourced confidence
+that something is real and worth acting on.
+
+### v2 direction change (2026-07-14)
+
+v1 of this proposal was flag-only. v2 shifts to flag-or-fix after weighing
+ElevenLabs-style transcript editors (waveform + word-timestamp alignment +
+draggable boundaries). The spectrum is:
+
+| Level | Captures | Build cost | Who uses it |
+|---|---|---|---|
+| Flag | location + category | trivial | any reader |
+| **Structured proposal (Tier 1)** | location + category + **expected value** | small — reuses existing segment UI | any reader, one extra tap |
+| **Full editor (Tier 2, admin-only)** | everything incl. timing/boundaries | moderate — data layer already exists (see below) | the operator, driven by Tier 1 reports |
+
+Tier 1 captures ~80% of an editor's data value (the diff) at ~5% of its cost,
+and matches the reader persona — people skimming a digest, not audio
+professionals. Timing data is also the least trustworthy thing to
+*crowdsource*: dynamic ad insertion means readers may legitimately hear
+different audio offsets (#54's drift caveat), while text and speaker
+proposals are offset-independent.
+
+Tier 2 (v3) resolves both objections by scoping the editor to the **admin**:
+the operator works against the server's canonical audio (no offset drift),
+is trusted (no vandalism surface), and is the one person for whom
+boundary/timing precision pays off — triage verification and golden-set
+curation. Crucially it is a *destination for Tier 1 reports*, not a separate
+product: the admin clicks a report and lands in the editor at the anchored
+segment with the proposed diff staged. See
+[Tier 2 — admin correction workbench](#tier-2--admin-correction-workbench).
+
+The design bet stays *capture generously, structure minimally, analyze later*:
+no dashboards, no automatic reprocessing, no reputation system in v1. Once
+reports accumulate, patterns pick what Phase 5+ automates — hint-term lists,
+prompt tweaks, or golden eval items per [#53](53-eval-runs-and-summary-rubric.md),
+mirroring how entity corrections already emit a paste-ready golden-eval
+snippet ([api_entities.py:657](../thestill/web/routes/api_entities.py#L657)).
+
+## Motivation
+
+1. **A diff is strictly better data than a flag.** "Wrong speaker" needs an
+   admin to re-listen; "SPEAKER_01 → Satya Nadella" is machine-actionable —
+   it can relabel an overlay, seed a golden eval item, or feed speaker-mapping
+   prompts directly.
+2. **Independent agreement is a free verifier.** Structured proposals
+   canonicalize, so "several users made the same fix" is computable — a
+   strong, automatic signal of what's worth acting on, which pure free-text
+   comments can never give.
+3. **The anchor and edit hooks already exist.** Spec #18 built
+   `source_segment_ids` as the durable anchor (docstring: "bookmarks, user
+   edits, future eval ground truth" —
+   [annotated_transcript.py:83](../thestill/models/annotated_transcript.py#L83))
+   and reserved `user_segment_id` for exactly this editing follow-up.
+   Spec #54 solved snapshot staleness (`summary_sha256`).
+4. **The UI is already discrete and speaker-aware.**
+   `SegmentedTranscriptViewer` renders one element per segment and already
+   holds the episode's full speaker set client-side (speaker color map), so a
+   speaker picker costs no extra fetches. Summaries have nine numbered `##`
+   sections ([summary_checks.py:34](../thestill/evals/summary_checks.py#L34)).
+
+## Goals
+
+1. One interaction to flag; at most one more to fix — category chip, then an
+   optional structured proposal (speaker picker / replacement text / merge–
+   split choice) or free-text note.
+2. Every report carries a **durable anchor** (`source_segment_ids` +
+   `algorithm_version` for transcript; section number + `summary_sha256` for
+   summary) and a **server-built context snapshot**, so reports survive
+   re-cleans and regenerations.
+3. Proposals are **per-user overlay diffs**: the reporting user sees their own
+   corrections applied in the viewer immediately; canonical artifacts are
+   never mutated.
+4. **Corroboration is automatic**: identical normalized proposals from
+   distinct users on the same anchor are detected via a stored `fingerprint`
+   and surfaced first in triage.
+5. Reports are attributable and triageable
+   (`open → corroborated → confirmed | invalid | fixed`); admin list + CLI
+   export; confirmed corrections have a clear onward path into #53 golden sets.
+
+## Non-goals (v1)
+
+- **No waveform/timeline editor for readers — ever, as currently scoped.**
+  Word-timestamp dragging and boundary scrubbing are Tier 2, admin-only
+  (Phase 5). Reader-facing correction stays at the structured-proposal level.
+- **No canonical-artifact mutation and no automatic reprocessing.** Overlays
+  only; the pipeline's files stay write-once. A corroborated report is a
+  signal, not a command.
+- **No global (other-users-visible) overlay in v1.** You see your own edits;
+  everyone else sees canonical. A "community corrected" global overlay of
+  *confirmed* diffs is Phase 4.
+- **No reputation/anti-vandalism system.** Self-host is trusted; hosted
+  multi-user gets rate limits + the only-confirmed-goes-global rule, which
+  bounds abuse until volume justifies more.
+- **No threads, replies, or votes.** Agreement is derived from independent
+  identical diffs, not from a voting UI.
+- **No word-level timing proposals.** Text and labels crowdsource well;
+  timings don't (dynamic-ad offset drift).
+
+## Correction taxonomy
+
+| Category | Target | Proposal shape (`proposed_json`) | Fix surface |
+|---|---|---|---|
+| `wrong_speaker` | segment | `{speaker: str}` — picker over episode speakers + free entry | Diarization, speaker-mapping prompt |
+| `wrong_words` | segment | `{old_text: str, new_text: str, word_span?}` — from text selection | ASR hint terms, cleaning prompt |
+| `bad_boundary` | segment | `{action: "merge_prev" \| "merge_next" \| "split", split_word_index?}` | Segmenter |
+| `wrong_kind` | segment | `{kind: SegmentKind}` | Kind classifier prompt |
+| `summary_inaccurate` | section | free text | Summary prompt (faithfulness) |
+| `summary_missing` | section | free text | Summary prompt (coverage) |
+| `summary_malformed` | section | free text | Prompt + deterministic checks (#53) |
+| `other` | either | free text | — |
+
+`proposed_json = NULL` is always allowed — a pure flag remains the zero-effort
+path. Proposals are validated server-side against the live artifact
+(`old_text` must match the snapshot text; speaker/kind from known vocab or
+explicit free entry; split index in range) — FM-7.
+
+## Data model
+
+One table, both backends (SQLite in-place `CREATE TABLE IF NOT EXISTS` in
+`_create_schema()`/`_run_migrations()`, plus Alembic `0006_feedback.py`
+mirroring `postgres_schema.SCHEMA_SQL` — the `user_briefing_schedules`
+dual-track pattern).
+
+```sql
+CREATE TABLE IF NOT EXISTS feedback (
+    id            TEXT PRIMARY KEY,        -- uuid4
+    user_id       TEXT,                    -- NULL in single-user mode
+    episode_id    TEXT NOT NULL,
+    target_type   TEXT NOT NULL,           -- 'transcript_segment' | 'summary_section'
+    category      TEXT NOT NULL,           -- taxonomy above
+    comment       TEXT,                    -- optional free text
+    anchor_json   TEXT NOT NULL,           -- durable anchor, shape per target_type
+    proposed_json TEXT,                    -- structured proposal; NULL = pure flag
+    context_json  TEXT NOT NULL,           -- server-built snapshot at report time
+    fingerprint   TEXT,                    -- normalized hash(anchor+category+proposal); NULL for pure flags
+    status        TEXT NOT NULL DEFAULT 'open',  -- open | corroborated | confirmed | invalid | fixed
+    created_at    TEXT NOT NULL,           -- ISO-8601 UTC
+    resolved_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_episode     ON feedback(episode_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_status      ON feedback(status);
+CREATE INDEX IF NOT EXISTS idx_feedback_fingerprint ON feedback(fingerprint);
+```
+
+**Anchor shapes** (validated Pydantic models, never trusted raw):
+
+- `transcript_segment`: `{ source_segment_ids: [int], algorithm_version: str,
+  segment_id_hint: int, start_s: float, end_s: float }` — durable key into the
+  write-once raw transcript; positional `segment_id` is a re-resolvable hint
+  only (the split #54 settled).
+- `summary_section`: `{ section_number: int, section_heading: str,
+  summary_sha256: str }`.
+
+**Context snapshot** (`context_json`): built by the **server** re-reading the
+artifact — segment text/speaker/kind or section markdown (capped ~2 kB) as
+rendered when flagged. Denormalized on purpose: reports stay interpretable
+after any re-clean without artifact history.
+
+**Fingerprint** = `sha256(episode_id | target_type | canonical_anchor |
+category | normalized_proposal)`, where normalization lowercases and
+whitespace-collapses text, and canonical_anchor is the sorted
+`source_segment_ids` (offset-independent, so users on different ad-inserted
+audio still converge). Two rows, distinct `user_id`, same fingerprint →
+both flip `open → corroborated`. Threshold configurable
+(`FEEDBACK_CORROBORATION_THRESHOLD`, default 2).
+
+**Repository**: `feedback_repository.py` ABC + SQLite/Postgres impls via
+`repositories/factory.py` — copy the `briefing_delivery` repository shape.
+
+## API
+
+New `web/routes/api_feedback.py`, standard router → `AppState` → service →
+repository shape.
+
+- `POST /api/feedback` — auth-gated when multi-user; body: `target_type`,
+  `category`, `episode_id`, `anchor`, optional `proposed`, optional
+  `comment`. Server validates proposal against the artifact, builds
+  `context_json`, computes `fingerprint`, checks corroboration. Light
+  rate-limit per user per episode.
+- `GET /api/feedback?status=&category=&episode_id=&podcast_id=` — admin list,
+  paginated, corroborated-first ordering.
+- `GET /api/episodes/{id}/feedback/mine` — the reporting user's own
+  corrections for an episode, consumed by the viewer to apply the per-user
+  overlay.
+- `PATCH /api/feedback/{id}` — admin status transition, sets `resolved_at`.
+
+## Frontend
+
+One shared `FeedbackPopover`, three entry points:
+
+1. **Speaker relabel** — the speaker label in each segment becomes tappable →
+   picker of the episode's speakers (already client-side in the color map) +
+   free-text entry. Files `wrong_speaker` with proposal in one gesture.
+2. **Text correction** — select text inside a segment → floating "Suggest
+   fix" → inline input pre-filled with the selection. Files `wrong_words`
+   with `{old_text, new_text}`.
+3. **Flag icon** — per-segment hover action and per-`##`-section icon for
+   everything else (`bad_boundary` with merge/split chips, `wrong_kind` with
+   kind chips, summary categories with free text, plain flags).
+
+**Per-user overlay**: on episode load the viewer fetches `/feedback/mine` and
+merges the user's own proposals into the rendered segments (relabels, text
+replacements; boundary proposals render as a marker, not a re-segmentation).
+Corrected spans get a subtle "your edit" treatment with revert. This is
+client-side merge only — canonical data untouched, other users unaffected.
+
+## Tier 2 — admin correction workbench
+
+An ElevenLabs-style editor, scoped to `is_admin` (route behind `AdminRoute`,
+API behind the admin guard), reached primarily by clicking a report in the
+triage list — it opens on the episode with the anchored segment centered and
+the proposed diff staged for accept/adjust/reject.
+
+**The data layer already exists; the build is UI + a write path:**
+
+- Word-level timestamps per segment are already served —
+  `GET /{podcast}/episodes/{episode}/transcript/words`
+  ([api_transcript_words.py:71](../thestill/web/routes/api_transcript_words.py#L71),
+  built for karaoke #38) — and `WordSpan` gives durable word addressing into
+  the write-once raw transcript
+  ([annotated_transcript.py:60](../thestill/models/annotated_transcript.py#L60)).
+- Audio is already streamed for the player (#22/#23); a waveform needs only
+  peak extraction (client-side Web Audio decode in v1; precomputed server-side
+  peaks if long episodes make decode sluggish).
+- Segment kinds, speakers, and click-to-seek machinery all exist in
+  `SegmentedTranscriptViewer` and can be reused for the read layer of the
+  workbench.
+
+**Capabilities (in build order):**
+
+1. **Verify view (no waveform)** — audio scrub + word-level display with
+   click-word-to-play, the report's diff staged inline. Accept / adjust /
+   reject writes the triage status. This alone makes triage listen-and-decide
+   fast and covers speaker/text/kind verification fully.
+2. **Editorial edits** — the admin can relabel speakers, correct text, and
+   retag kinds directly (not just adjudicate reader proposals). These write
+   the same `feedback` rows (`user_id` = admin, status `confirmed` on save) —
+   one data model, no parallel edit store.
+3. **Waveform + boundary editing** — waveform strip with word-timestamp
+   alignment; drag segment boundaries, split/merge with audible verification.
+   Boundary edits are stored as operations (`split_at_word`, `merge`,
+   `adjust_boundary{word_index}`) against `source_segment_ids` — replayable
+   on top of any future re-clean, exactly the op-overlay model reader
+   boundary proposals already use.
+
+**Where admin edits land.** Same overlay discipline as Tier 1 — pipeline
+artifacts stay write-once — but admin-confirmed corrections form the
+**editorial layer**: applied at serve time for *all* users (Phase 4's global
+overlay is exactly this; the workbench is its authoring surface), populating
+the reserved `user_segment_id` UUID on first edit
+([annotated_transcript.py:88](../thestill/models/annotated_transcript.py#L88))
+as #18 anticipated. Whether a heavily-corrected episode can be *promoted* —
+re-materializing the clean transcript JSON with the editorial layer folded in,
+with provenance — is an open question (§Open questions); it must never happen
+implicitly, since evals and citations key off artifact hashes.
+
+**Why admin-only sidesteps the hard problems:** no trust/vandalism surface,
+no ad-offset drift (canonical audio), no need to make boundary-drag
+interactions foolproof for casual users, and timing corrections become
+trustworthy ground truth — which is what unlocks *segmenter* evaluation
+in #53, a dimension Tier 1 data can never provide.
+
+## Closing the loop
+
+1. **Triage** — admin list, corroborated reports first; snapshots + diffs make
+   most decisions one-glance. `confirmed`/`invalid`/`fixed`.
+2. **Aggregate** — `thestill feedback list/export` (JSON/CSV); first queries
+   are GROUP BYs: category × podcast, category × `algorithm_version`,
+   fingerprint cardinality. This is where patterns emerge — deliberately
+   offline/ad-hoc in v1.
+3. **Feed evals** — a confirmed *proposal* is expected-vs-observed ground
+   truth verbatim. Emit the paste-ready golden-set snippet (entity-corrections
+   precedent) into the #53 golden episode set, so every confirmed correction
+   becomes a permanent regression guard.
+4. **Fix upstream** — clusters map to fix surfaces per the taxonomy table;
+   confirmed diffs double as before/after test cases for prompt changes.
+
+## Phasing
+
+| Phase | Scope | Gate |
+|---|---|---|
+| 1 — Capture (transcript) | Table + repos + `POST` + flag popover + speaker-picker & text-selection proposals | A proposal filed from the UI survives a re-clean with an interpretable snapshot + diff |
+| 2 — Own-edits overlay + summary | `/feedback/mine` + client-side merge (relabels, text) + section flags + admin `GET`/`PATCH` list | Reporter sees their fix rendered; admin can confirm/invalidate |
+| 3 — Use the data | `thestill feedback export`; golden-snippet emission for confirmed reports (#53); corroboration flip live | One confirmed correction round-trips into an eval run; two matching reports auto-corroborate |
+| 4 — Community overlay | Global "corrected" toggle rendering **confirmed** diffs for everyone | Confirmed relabel visible to a second user without artifact mutation |
+| 5a — Workbench: verify view | Admin-only route; report → editor deep link; audio scrub + word display; accept/adjust/reject; direct editorial edits | Admin adjudicates a report end-to-end without leaving the workbench |
+| 5b — Workbench: waveform + boundaries | Waveform strip, word-timestamp alignment, drag/split/merge boundary ops stored as replayable operations | A boundary fix survives a re-clean and renders via the editorial layer |
+| 6+ — Pattern-driven (unscoped) | Whatever the data says: hint-term suggestions, prompt regression suites, canonical promotion, reputation | Decided after ~50–100 real reports |
+
+Phase ordering note: 5a can start any time after Phase 2 (it consumes the
+triage list); 5b is worth building only if `bad_boundary` reports show up in
+practice — the waveform is the most expensive pixel in this spec, and Tier 1
+data tells us whether it earns its keep.
+
+## Failure modes ([#42](42-robustness-and-failure-mode-hardening.md))
+
+- **FM-1 (isolation):** failed snapshot extraction degrades to storing anchor +
+  category with `context_json = {"snapshot_error": ...}` — never reject a
+  report because the artifact read hiccuped. A malformed overlay row is
+  skipped at render, never breaks the viewer.
+- **FM-7 (unsanitized input):** anchors and proposals are range/vocab
+  validated at write time; `old_text` must match the live snapshot;
+  `comment`/`new_text` stored verbatim but always rendered as text, never
+  markdown/HTML.
+- **Silent-stale:** reports carry `algorithm_version`/`summary_sha256`; the
+  overlay merge and the admin list badge stale reports instead of silently
+  resolving anchors against the wrong generation.
+- **Offset drift:** fingerprints and anchors are offset-independent
+  (`source_segment_ids`, not seconds), so dynamic-ad audio variants still
+  corroborate; timing-valued proposals are excluded by design.
+
+## Open questions
+
+1. **Corroboration threshold & scope** — default 2 distinct users; should
+   near-matches (overlapping spans, same normalized replacement) count, or
+   exact fingerprint only? Leaning: exact-only v1, measure the near-miss rate.
+2. **Single-user attribution** — `user_id = NULL` fine in no-auth mode?
+   (Leaning: yes.)
+3. **Reporter feedback loop** — notify "your correction was confirmed"?
+   Nice retention touch once multi-user is real; out of scope now.
+4. **Speaker vocabulary** — should the picker also offer resolved entity
+   names (#28) rather than only diarization labels? Powerful but couples two
+   systems; revisit at Phase 3.
+5. **Briefings** — third flaggable artifact (#33/#36); `target_type` leaves
+   room; deferred until transcript/summary proves the loop.
+6. **Canonical promotion** — should an admin be able to fold the editorial
+   layer into a re-materialized clean-transcript revision (with provenance +
+   new hashes), or does the serve-time editorial layer suffice forever?
+   Promotion invalidates citation sidecars (#54) and eval artifact hashes
+   (#53) by design, so it needs an explicit re-resolve step; leaning
+   serve-time-only until an episode accumulates enough edits to hurt
+   render cost.

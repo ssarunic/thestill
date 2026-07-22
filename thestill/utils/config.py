@@ -86,6 +86,13 @@ def get_refresh_scheduler_tick_seconds() -> int:
     return _env_int("REFRESH_SCHEDULER_TICK_SECONDS", 60)
 
 
+def get_quarantine_probe_interval_seconds() -> int:
+    """Spec #60 — how long a ``feed_gone``/``invalid_content`` quarantine sits
+    before one automatic re-probe attempt (default weekly). ``auth_required``
+    and ``blocked_unsafe`` quarantines are never auto-probed."""
+    return _env_int("REFRESH_QUARANTINE_PROBE_INTERVAL_SECONDS", 7 * 86400)
+
+
 # ---------------------------------------------------------------------------
 # Spec #50 — scheduled briefings knobs. Same standalone-getter pattern as the
 # #48 refresh scheduler; ships dark and flips per deployment via env.
