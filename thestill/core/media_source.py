@@ -1253,14 +1253,18 @@ class RSSMediaSource(MediaSource):
 
         <guid> text first, atom-style <id> as fallback — shared by every
         raw-XML extractor so their keys line up with stored episodes'
-        ``external_id``.
+        ``external_id``. The text is stripped: feedparser trims element
+        text before it becomes ``external_id``, so a pretty-printed
+        ``<guid>\\n  id\\n</guid>`` would otherwise never match and the
+        keyed rows (alternate enclosures, transcript links) would silently
+        drop.
         """
         guid_elem = item.find("guid")
-        if guid_elem is not None and guid_elem.text:
-            return guid_elem.text
+        if guid_elem is not None and guid_elem.text and guid_elem.text.strip():
+            return guid_elem.text.strip()
         id_elem = item.find("id")
-        if id_elem is not None and id_elem.text:
-            return id_elem.text
+        if id_elem is not None and id_elem.text and id_elem.text.strip():
+            return id_elem.text.strip()
         return None
 
     def extract_transcript_links(self, rss_content: str) -> Dict[str, List[TranscriptLink]]:

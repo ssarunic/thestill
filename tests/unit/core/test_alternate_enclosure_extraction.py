@@ -138,6 +138,39 @@ def test_missing_source_uri_skipped(source):
     assert source.extract_alternate_enclosures(rss) == {}
 
 
+def test_multiline_guid_is_stripped_to_match_feedparser(source):
+    """Feedparser trims element text before it becomes external_id; a
+    pretty-printed <guid> must key identically or the batch INSERT..SELECT
+    silently drops the episode's rows."""
+    rss = _wrap(
+        """<item>
+            <title>Formatted guid</title>
+            <guid isPermaLink="false">
+                ep-padded
+            </guid>
+            <podcast:alternateEnclosure type="video/youtube">
+                <podcast:source uri="https://youtu.be/paddedVID01"/>
+            </podcast:alternateEnclosure>
+        </item>"""
+    )
+    result = source.extract_alternate_enclosures(rss)
+    assert set(result.keys()) == {"ep-padded"}
+
+
+def test_whitespace_only_guid_falls_back_to_id(source):
+    rss = _wrap(
+        """<item>
+            <title>Blank guid</title>
+            <guid>   </guid>
+            <id>atom-fallback-1</id>
+            <podcast:alternateEnclosure type="video/youtube">
+                <podcast:source uri="https://youtu.be/fallbkVID01"/>
+            </podcast:alternateEnclosure>
+        </item>"""
+    )
+    assert set(source.extract_alternate_enclosures(rss).keys()) == {"atom-fallback-1"}
+
+
 def test_falls_back_to_id_when_guid_missing(source):
     rss = _wrap(
         """<item>
