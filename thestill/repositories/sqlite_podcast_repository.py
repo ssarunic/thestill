@@ -34,8 +34,15 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from structlog import get_logger
 
+from ..core.refresh_failure import (
+    RefreshAction,
+    RefreshDecision,
+    RefreshFailure,
+    RefreshPolicySettings,
+    decide_refresh_action,
+)
 from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
-from ..utils.datetime_utils import now_utc
+from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from ..utils.slug import generate_slug
 from .podcast_repository import EpisodeRepository, PodcastRepository
@@ -1612,6 +1619,30 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "CREATE INDEX IF NOT EXISTS idx_podcasts_due ON podcasts(next_refresh_at) WHERE next_refresh_at IS NOT NULL"
         )
 
+        # spec #60 — refresh failure classification: durable per-kind policy
+        # state. All nullable / zero-default, so no backfill is needed (NULL
+        # is exactly "no classified failure yet"; legacy parked rows keep
+        # their generic last_refresh_error until they fail again under the
+        # new classifier and surface as reason 'unknown' in health counts).
+        cursor = conn.execute("PRAGMA table_info(podcasts)")
+        podcast_columns_now = {row["name"] for row in cursor.fetchall()}
+        if "last_refresh_failure_kind" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_refresh_failure_kind TEXT NULL")
+        if "last_refresh_status_code" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN last_refresh_status_code INTEGER NULL")
+        if "consecutive_refresh_failures" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN consecutive_refresh_failures INTEGER NOT NULL DEFAULT 0")
+        if "refresh_failure_streak_started_at" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN refresh_failure_streak_started_at TIMESTAMP NULL")
+        if "refresh_disabled_reason" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN refresh_disabled_reason TEXT NULL")
+        if "refresh_retry_after_at" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN refresh_retry_after_at TIMESTAMP NULL")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_podcasts_quarantine ON podcasts(refresh_disabled_reason, last_refresh_at) "
+            "WHERE refresh_disabled_reason IS NOT NULL"
+        )
+
     # ------------------------------------------------------------------
     # Spec #40 — file → DB backfill
     # ------------------------------------------------------------------
@@ -2074,6 +2105,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 next_refresh_at TIMESTAMP NULL,
                 last_refresh_at TIMESTAMP NULL,
                 last_refresh_error TEXT NULL,
+                -- spec #60: durable per-kind failure policy state. A feed is
+                -- QUARANTINED (next_refresh_at NULL) only with an explicit
+                -- refresh_disabled_reason; connectivity failures never park.
+                last_refresh_failure_kind TEXT NULL,
+                last_refresh_status_code INTEGER NULL,
+                consecutive_refresh_failures INTEGER NOT NULL DEFAULT 0,
+                refresh_failure_streak_started_at TIMESTAMP NULL,
+                refresh_disabled_reason TEXT NULL,
+                refresh_retry_after_at TIMESTAMP NULL,
                 -- Synthetic fallback parent (e.g. bare-audio imports);
                 -- excluded from refresh, browse, and follow flows.
                 synthetic INTEGER NOT NULL DEFAULT 0,
@@ -3183,6 +3223,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NOT NULL
                   AND next_refresh_at <= ?
+                  AND (refresh_retry_after_at IS NULL OR refresh_retry_after_at <= ?)
                   AND COALESCE(synthetic, 0) = 0
                   AND COALESCE(is_complete, 0) = 0
                   AND (COALESCE(auto_added, 0) = 0
@@ -3190,9 +3231,96 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ORDER BY next_refresh_at ASC
                 LIMIT ?
                 """,
-                (now_iso, limit),
+                (now_iso, now_iso, limit),
             ).fetchall()
             return [row["id"] for row in rows]
+
+    def get_quarantine_probe_due(
+        self,
+        probe_interval_seconds: int,
+        now: Optional[datetime] = None,
+        limit: int = 200,
+    ) -> List[str]:
+        """Spec #60 — quarantined feeds due one low-frequency re-probe.
+
+        Only self-healable reasons (``feed_gone`` / ``invalid_content``) are
+        probed; ``auth_required`` / ``blocked_unsafe`` need a human and are
+        excluded STRUCTURALLY (SQL literal, no config path can widen it).
+        A probe attempt that fails re-quarantines via the normal policy; one
+        that succeeds un-quarantines via ``record_refresh_success``.
+        """
+        now_dt = now or now_utc()
+        cutoff = (now_dt - timedelta(seconds=probe_interval_seconds)).isoformat()
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM podcasts
+                WHERE next_refresh_at IS NULL
+                  AND refresh_disabled_reason IN ('feed_gone', 'invalid_content')
+                  AND (last_refresh_at IS NULL OR last_refresh_at <= ?)
+                  AND COALESCE(synthetic, 0) = 0
+                  AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                ORDER BY last_refresh_at ASC
+                LIMIT ?
+                """,
+                (cutoff, limit),
+            ).fetchall()
+            return [row["id"] for row in rows]
+
+    def get_refresh_health_counts(self, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Spec #60 — one cheap aggregate for status surfacing.
+
+        Returns ``{"active": n, "due_now": n, "backing_off": n,
+        "parked_total": n, "parked_by_reason": {reason: n}}``. Parked rows
+        without a ``refresh_disabled_reason`` (legacy generic parks from
+        before spec #60) count under reason ``"unknown"`` — the visible
+        signal that unclassified parks still exist.
+        """
+        now_iso = (now or now_utc()).isoformat()
+        active_filter = """
+                  COALESCE(synthetic, 0) = 0
+                  AND COALESCE(is_complete, 0) = 0
+                  AND (COALESCE(auto_added, 0) = 0
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+        """
+        with self._get_connection() as conn:
+            reason_rows = conn.execute(
+                f"""
+                SELECT COALESCE(refresh_disabled_reason, 'unknown') AS reason, COUNT(*) AS n
+                FROM podcasts
+                WHERE next_refresh_at IS NULL
+                  AND (last_refresh_at IS NOT NULL OR last_refresh_error IS NOT NULL)
+                  AND {active_filter}
+                GROUP BY reason
+                """
+            ).fetchall()
+            parked_by_reason = {row["reason"]: row["n"] for row in reason_rows}
+            active = conn.execute(
+                f"SELECT COUNT(*) AS n FROM podcasts WHERE next_refresh_at IS NOT NULL AND {active_filter}"
+            ).fetchone()["n"]
+            due_now = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM podcasts
+                WHERE next_refresh_at IS NOT NULL AND next_refresh_at <= ? AND {active_filter}
+                """,
+                (now_iso,),
+            ).fetchone()["n"]
+            backing_off = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM podcasts
+                WHERE next_refresh_at IS NOT NULL AND last_refresh_failure_kind IS NOT NULL
+                  AND {active_filter}
+                """
+            ).fetchone()["n"]
+        return {
+            "active": active,
+            "due_now": due_now,
+            "backing_off": backing_off,
+            "parked_total": sum(parked_by_reason.values()),
+            "parked_by_reason": parked_by_reason,
+        }
 
     def get_discovered_unqueued_episodes(
         self, podcast_id: str, within_days: int = 2, limit: int = 25
@@ -3440,6 +3568,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     next_refresh_at = ?,
                     last_refresh_at = ?,
                     last_refresh_error = NULL,
+                    last_refresh_failure_kind = NULL,
+                    last_refresh_status_code = NULL,
+                    consecutive_refresh_failures = 0,
+                    refresh_failure_streak_started_at = NULL,
+                    refresh_disabled_reason = NULL,
+                    refresh_retry_after_at = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -3447,42 +3581,151 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             return next_at
 
-    def record_refresh_error(
+    def record_refresh_failure(
         self,
         podcast_id: str,
-        error: str,
-        terminal: bool,
+        failure: RefreshFailure,
+        settings: RefreshPolicySettings,
         now: Optional[datetime] = None,
-    ) -> None:
-        """Record a feed-scoped refresh failure (spec #48 failure isolation).
+    ) -> RefreshDecision:
+        """Apply the spec #60 failure policy in ONE atomic state transition.
 
-        Always stamps ``last_refresh_at`` + ``last_refresh_error``. A
-        **terminal** failure PARKS the feed (``next_refresh_at = NULL``) so the
-        scheduler stops re-enqueuing it every interval; only operator retry
-        (:meth:`clear_podcast_refresh_failure`) re-arms it. Retryable errors
-        leave ``next_refresh_at`` alone — the task's own retry will re-fetch.
+        Reads the feed's current AIMD/streak state, asks the pure
+        :func:`decide_refresh_action` what to do, and writes exactly one of:
+
+        - **IGNORE** (internal bug): stamp visibility fields only — never
+          touches schedule, streak or quarantine state. Our bug must not
+          condemn the feed.
+        - **BACKOFF**: lengthen the interval (×1.5, clamped), advance
+          ``next_refresh_at`` (honoring ``Retry-After``), extend the failure
+          streak. NEVER parks — this is the 2026-07-15 incident fix.
+        - **QUARANTINE**: ``next_refresh_at = NULL`` + an explicit
+          ``refresh_disabled_reason``. Only decisive signals (410, SSRF
+          refusal, auth) or a horizon-exhausted 404/invalid_content get here.
+
+        A change in failure kind restarts the streak (a feed that was 404ing
+        and is now unreachable is a new problem, not more of the old one).
         Never touches cache headers (FM-2 is enforced on the feed path).
         """
         now_dt = now or now_utc()
         with self._get_connection() as conn:
-            if terminal:
-                conn.execute(
-                    """
-                    UPDATE podcasts
-                    SET last_refresh_at = ?, last_refresh_error = ?, next_refresh_at = NULL, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (now_dt.isoformat(), error[:2000], now_dt.isoformat(), podcast_id),
-                )
+            row = conn.execute(
+                """
+                SELECT refresh_interval_seconds, consecutive_refresh_failures,
+                       refresh_failure_streak_started_at, last_refresh_failure_kind
+                FROM podcasts WHERE id = ?
+                """,
+                (podcast_id,),
+            ).fetchone()
+            current_interval = (
+                row["refresh_interval_seconds"]
+                if row and row["refresh_interval_seconds"]
+                else settings.default_interval_seconds
+            )
+            prior_consecutive = (row["consecutive_refresh_failures"] or 0) if row else 0
+            prior_kind = row["last_refresh_failure_kind"] if row else None
+            streak_raw = row["refresh_failure_streak_started_at"] if row else None
+            streak_started = ensure_utc(datetime.fromisoformat(streak_raw)) if streak_raw else None
+
+            kind_changed = prior_kind is not None and prior_kind != failure.kind.value
+            if kind_changed or streak_started is None:
+                streak_for_decision = now_dt
+                consecutive_before = 0 if kind_changed else prior_consecutive
             else:
+                streak_for_decision = streak_started
+                consecutive_before = prior_consecutive
+
+            decision = decide_refresh_action(
+                failure.kind,
+                failure.http_status,
+                current_interval_seconds=current_interval,
+                streak_started_at=streak_for_decision,
+                now=now_dt,
+                settings=settings,
+            )
+
+            error_text = (failure.exception or "refresh failed")[:2000]
+            if decision.action is RefreshAction.IGNORE:
                 conn.execute(
                     """
                     UPDATE podcasts
-                    SET last_refresh_at = ?, last_refresh_error = ?, updated_at = ?
+                    SET last_refresh_at = ?, last_refresh_error = ?,
+                        last_refresh_failure_kind = ?, last_refresh_status_code = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (now_dt.isoformat(), error[:2000], now_dt.isoformat(), podcast_id),
+                    (
+                        now_dt.isoformat(),
+                        error_text,
+                        failure.kind.value,
+                        failure.http_status,
+                        now_dt.isoformat(),
+                        podcast_id,
+                    ),
                 )
+                return decision
+
+            new_consecutive = consecutive_before + 1
+            streak_iso = streak_for_decision.isoformat()
+            if decision.action is RefreshAction.QUARANTINE:
+                conn.execute(
+                    """
+                    UPDATE podcasts
+                    SET last_refresh_at = ?, last_refresh_error = ?,
+                        last_refresh_failure_kind = ?, last_refresh_status_code = ?,
+                        consecutive_refresh_failures = ?, refresh_failure_streak_started_at = ?,
+                        refresh_disabled_reason = ?, next_refresh_at = NULL,
+                        refresh_retry_after_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now_dt.isoformat(),
+                        error_text,
+                        failure.kind.value,
+                        failure.http_status,
+                        new_consecutive,
+                        streak_iso,
+                        decision.disabled_reason,
+                        now_dt.isoformat(),
+                        podcast_id,
+                    ),
+                )
+                return decision
+
+            # BACKOFF: lengthen and stay scheduled. Honor a server-directed
+            # Retry-After when it is later than the AIMD backoff.
+            new_interval = max(
+                settings.min_interval_seconds,
+                min(settings.max_interval_seconds, int(current_interval * 1.5)),
+            )
+            next_at_dt = now_dt + timedelta(seconds=new_interval)
+            retry_after = ensure_utc(failure.retry_after)
+            if retry_after is not None and retry_after > next_at_dt:
+                next_at_dt = retry_after
+            conn.execute(
+                """
+                UPDATE podcasts
+                SET refresh_interval_seconds = ?, next_refresh_at = ?,
+                    refresh_retry_after_at = ?, last_refresh_at = ?, last_refresh_error = ?,
+                    last_refresh_failure_kind = ?, last_refresh_status_code = ?,
+                    consecutive_refresh_failures = ?, refresh_failure_streak_started_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_interval,
+                    next_at_dt.isoformat(),
+                    retry_after.isoformat() if retry_after else None,
+                    now_dt.isoformat(),
+                    error_text,
+                    failure.kind.value,
+                    failure.http_status,
+                    new_consecutive,
+                    streak_iso,
+                    now_dt.isoformat(),
+                    podcast_id,
+                ),
+            )
+            return decision
 
     def clear_podcast_refresh_failure(
         self,
@@ -3490,9 +3733,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         default_interval: int,
         now: Optional[datetime] = None,
     ) -> str:
-        """Operator retry of a parked feed: clear the error and re-arm
-        ``next_refresh_at`` to ``now`` so the next tick re-enqueues it.
-        Returns the new ``next_refresh_at``.
+        """Operator retry of a parked/quarantined feed: clear all failure
+        state and re-arm ``next_refresh_at`` to ``now`` so the next tick
+        re-enqueues it. Returns the new ``next_refresh_at``.
         """
         now_dt = now or now_utc()
         next_at = now_dt.isoformat()
@@ -3501,6 +3744,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 UPDATE podcasts
                 SET last_refresh_error = NULL,
+                    last_refresh_failure_kind = NULL,
+                    last_refresh_status_code = NULL,
+                    consecutive_refresh_failures = 0,
+                    refresh_failure_streak_started_at = NULL,
+                    refresh_disabled_reason = NULL,
+                    refresh_retry_after_at = NULL,
                     next_refresh_at = ?,
                     refresh_interval_seconds = COALESCE(refresh_interval_seconds, ?),
                     updated_at = ?
@@ -3909,6 +4158,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     f"""
                     UPDATE podcasts
                     SET last_refresh_error = NULL,
+                        last_refresh_failure_kind = NULL,
+                        last_refresh_status_code = NULL,
+                        consecutive_refresh_failures = 0,
+                        refresh_failure_streak_started_at = NULL,
+                        refresh_disabled_reason = NULL,
+                        refresh_retry_after_at = NULL,
                         next_refresh_at = ?,
                         refresh_interval_seconds = COALESCE(refresh_interval_seconds, ?),
                         updated_at = ?

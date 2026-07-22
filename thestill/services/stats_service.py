@@ -68,6 +68,16 @@ class SystemStats(BaseModel):
     # Spec #28 Phase 3.4 — episodes the entity branch skipped because they
     # have no AnnotatedTranscript JSON sidecar (legacy Markdown-only cleaning).
     episodes_skipped_legacy: int = 0
+    # Spec #60 — feed refresh health. ``refresh_parked_by_reason`` buckets
+    # quarantined feeds by refresh_disabled_reason; legacy generic parks
+    # (pre-#60) count under 'unknown'. ``refresh_backing_off`` is the
+    # incident's previously-missing signal: feeds failing but still
+    # scheduled (never silently parked).
+    refresh_active: int = 0
+    refresh_due_now: int = 0
+    refresh_backing_off: int = 0
+    refresh_parked_total: int = 0
+    refresh_parked_by_reason: dict = {}
     storage_path: str
     last_updated: datetime
 
@@ -161,6 +171,7 @@ class StatsService:
 
         chunks_count, embedding_model = self._chunks_health()
         episodes_skipped_legacy = self._skipped_legacy_count()
+        refresh_health = self._refresh_health()
 
         stats = SystemStats(
             podcasts_tracked=podcasts_tracked,
@@ -178,6 +189,11 @@ class StatsService:
             chunks_count=chunks_count,
             embedding_model=embedding_model,
             episodes_skipped_legacy=episodes_skipped_legacy,
+            refresh_active=refresh_health.get("active", 0),
+            refresh_due_now=refresh_health.get("due_now", 0),
+            refresh_backing_off=refresh_health.get("backing_off", 0),
+            refresh_parked_total=refresh_health.get("parked_total", 0),
+            refresh_parked_by_reason=refresh_health.get("parked_by_reason", {}),
             storage_path=str(self.storage_path),
             last_updated=now_utc(),
         )
@@ -209,6 +225,21 @@ class StatsService:
         if getter is None:
             return 0
         return getter()
+
+    def _refresh_health(self) -> dict:
+        """Delegate to the repository's refresh-health aggregate (spec #60).
+
+        Returns {} on backends that don't implement it (e.g. in-memory test
+        repositories) so the stats payload stays well-formed.
+        """
+        getter = getattr(self.repository, "get_refresh_health_counts", None)
+        if getter is None:
+            return {}
+        try:
+            return getter()
+        except Exception:
+            logger.warning("refresh_health_counts_failed", exc_info=True)
+            return {}
 
     def get_recent_activity(self, limit: int = 20) -> List[ActivityItem]:
         """

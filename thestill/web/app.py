@@ -416,6 +416,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # scheduler and the queued path are off unless explicitly enabled.
         from ..utils.config import (
             get_default_refresh_interval_seconds,
+            get_quarantine_probe_interval_seconds,
             get_refresh_scheduler_tick_seconds,
             is_refresh_scheduler_enabled,
             is_refresh_via_queue_enabled,
@@ -430,6 +431,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 queue_manager=queue_manager,
                 tick_seconds=get_refresh_scheduler_tick_seconds(),
                 default_interval_seconds=get_default_refresh_interval_seconds(),
+                quarantine_probe_interval_seconds=get_quarantine_probe_interval_seconds(),
             )
             refresh_scheduler.start()
             app_state.refresh_scheduler = refresh_scheduler

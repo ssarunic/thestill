@@ -683,7 +683,7 @@ class TaskWorker:
                     exc_info=True,
                 )
                 self._safe_mark_dead(task, error_msg, "fatal")
-                self._mark_episode_failed(task, error_msg, "fatal")
+                self._mark_episode_failed(task, error_msg, "fatal", exc=e)
                 self._report_failure(task.id, error_msg)
 
             except TransientError as e:
@@ -703,7 +703,7 @@ class TaskWorker:
                 updated_task = self._handle_transient_failure(task, error_msg, error_class)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
-                    self._mark_episode_failed(task, error_msg, "transient")
+                    self._mark_episode_failed(task, error_msg, "transient", exc=e)
                 self._report_failure(task.id, error_msg)
 
             except Exception as e:
@@ -719,7 +719,7 @@ class TaskWorker:
                 updated_task = self._handle_transient_failure(task, error_msg, error_class)
                 # Check if retries exhausted (task marked as failed)
                 if updated_task and updated_task.status.value == "failed":
-                    self._mark_episode_failed(task, error_msg, "transient")
+                    self._mark_episode_failed(task, error_msg, "transient", exc=e)
                 self._report_failure(task.id, error_msg)
 
             finally:
@@ -824,7 +824,9 @@ class TaskWorker:
                 ),
             )
 
-    def _mark_episode_failed(self, task: Task, error_msg: str, failure_type: str) -> None:
+    def _mark_episode_failed(
+        self, task: Task, error_msg: str, failure_type: str, exc: Optional[BaseException] = None
+    ) -> None:
         """Persist a final task failure on the owning episode.
 
         Spec #28 §6 ("Failure isolation rule") — for entity-branch
@@ -841,22 +843,45 @@ class TaskWorker:
 
         try:
             if is_feed_scoped_stage(task.stage):
-                # Spec #48 — feed-scoped failure domain. There is no episode
-                # to mark; write podcast-level failure state and PARK the feed
-                # (terminal here: this is only called once retries are
-                # exhausted / on a fatal error), so the scheduler stops
-                # re-enqueuing it. Operator retry re-arms it. Cache headers are
-                # untouched (FM-2 is enforced on the feed path).
-                self.repository.record_refresh_error(
-                    podcast_id=task.podcast_id,
-                    error=error_msg,
-                    terminal=True,
-                )
+                # Spec #60 — feed-scoped failure domain. The handler already
+                # applied the ONE authoritative, kind-aware policy write for
+                # this attempt (``refresh_failure_recorded`` marker on the
+                # raised exception); parking is a policy decision made there,
+                # never an automatic consequence of retry exhaustion (that
+                # was the 2026-07-15 incident). This exhaustion-time path is
+                # observational — plus one idempotent INTERNAL fallback stamp
+                # when the handler's write never happened (an exception
+                # escaped before classification, or the stamp itself failed).
+                # Cache headers are untouched (FM-2 on the feed path).
+                recorded = bool(getattr(exc, "refresh_failure_recorded", False))
+                if not recorded:
+                    from ..utils.config import (
+                        get_default_refresh_interval_seconds,
+                        get_refresh_max_interval_seconds,
+                        get_refresh_min_interval_seconds,
+                    )
+                    from .refresh_failure import RefreshFailure, RefreshFailureKind, RefreshPolicySettings
+
+                    self.repository.record_refresh_failure(
+                        task.podcast_id,
+                        RefreshFailure(
+                            kind=RefreshFailureKind.INTERNAL,
+                            exception=error_msg,
+                            is_internal=True,
+                        ),
+                        RefreshPolicySettings(
+                            min_interval_seconds=get_refresh_min_interval_seconds(),
+                            max_interval_seconds=get_refresh_max_interval_seconds(),
+                            default_interval_seconds=get_default_refresh_interval_seconds(),
+                        ),
+                    )
                 logger.info(
-                    "refresh_feed_failed_parked",
+                    "refresh_feed_task_exhausted",
                     stage=task.stage.value,
                     failure_type=failure_type,
                     podcast_id=task.podcast_id,
+                    refresh_failure_kind=getattr(exc, "context", {}).get("refresh_failure_kind"),
+                    handler_recorded=recorded,
                 )
                 return
 

@@ -34,6 +34,12 @@ from pathlib import Path
 import pytest
 
 from thestill.core.queue_manager import QueueManager, TaskStage, is_feed_scoped_stage
+from thestill.core.refresh_failure import (
+    RefreshAttemptResult,
+    RefreshFailure,
+    RefreshFailureKind,
+    RefreshPolicySettings,
+)
 from thestill.core.refresh_scheduler import RefreshScheduler
 from thestill.models.podcast import Episode, Podcast
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -41,6 +47,16 @@ from thestill.utils.datetime_utils import now_utc
 
 PODCAST_ID = "00000000-0000-0000-0000-000000000001"
 EPISODE_ID = "11111111-1111-1111-1111-111111111111"
+
+SETTINGS = RefreshPolicySettings(min_interval_seconds=900, max_interval_seconds=86400, default_interval_seconds=3600)
+
+
+def _gone_410() -> RefreshFailure:
+    return RefreshFailure(kind=RefreshFailureKind.REMOTE_GONE, http_status=410, exception="410 Gone")
+
+
+def _connectivity() -> RefreshFailure:
+    return RefreshFailure(kind=RefreshFailureKind.CONNECTIVITY, exception="[Errno 8] nodename nor servname")
 
 
 @pytest.fixture
@@ -169,23 +185,41 @@ def test_due_query_excludes_parked_and_future(db: str) -> None:
     assert PODCAST_ID in repo.get_due_podcasts()
 
 
-def test_terminal_failure_parks_and_operator_rearms(db: str) -> None:
+def test_decisive_failure_quarantines_and_operator_rearms(db: str) -> None:
     repo = SqlitePodcastRepository(db)
     repo.seed_unscheduled_feeds(3600)
     _force_due(db)
-    repo.record_refresh_error(PODCAST_ID, "boom", terminal=True)
-    assert PODCAST_ID not in repo.get_due_podcasts()  # parked
+    decision = repo.record_refresh_failure(PODCAST_ID, _gone_410(), SETTINGS)
+    assert decision.disabled_reason == "feed_gone"
+    assert PODCAST_ID not in repo.get_due_podcasts()  # quarantined
+    con = sqlite3.connect(db)
+    reason, kind = con.execute(
+        "SELECT refresh_disabled_reason, last_refresh_failure_kind FROM podcasts WHERE id=?", (PODCAST_ID,)
+    ).fetchone()
+    con.close()
+    assert reason == "feed_gone"
+    assert kind == "remote_gone"
     repo.clear_podcast_refresh_failure(PODCAST_ID, 3600)
     assert PODCAST_ID in repo.get_due_podcasts()  # re-armed
 
 
-def test_retryable_error_does_not_park(db: str) -> None:
+def test_connectivity_error_never_parks(db: str) -> None:
+    """Spec #60 core incident fix: a connectivity failure backs off but stays
+    SCHEDULED (next_refresh_at non-NULL), no matter how often it repeats."""
     repo = SqlitePodcastRepository(db)
     repo.seed_unscheduled_feeds(3600)
     _force_due(db)
-    repo.record_refresh_error(PODCAST_ID, "transient", terminal=False)
-    # Still scheduled (the task's own retry re-fetches); not parked.
-    assert PODCAST_ID in repo.get_due_podcasts()
+    for _ in range(10):  # far past any retry budget
+        repo.record_refresh_failure(PODCAST_ID, _connectivity(), SETTINGS)
+    con = sqlite3.connect(db)
+    nxt, reason, consecutive = con.execute(
+        "SELECT next_refresh_at, refresh_disabled_reason, consecutive_refresh_failures " "FROM podcasts WHERE id=?",
+        (PODCAST_ID,),
+    ).fetchone()
+    con.close()
+    assert nxt is not None  # NEVER parked
+    assert reason is None
+    assert consecutive == 10
 
 
 def test_aimd_shortens_on_new_and_lengthens_on_none(db: str) -> None:
@@ -223,8 +257,8 @@ def test_aimd_clamps_to_min_and_max(db: str) -> None:
 def test_seed_does_not_revive_parked_feed(db: str) -> None:
     repo = SqlitePodcastRepository(db)
     repo.seed_unscheduled_feeds(3600)
-    repo.record_refresh_error(PODCAST_ID, "dead", terminal=True)  # park (sets last_refresh_*)
-    # Seeding again must NOT re-arm a parked feed.
+    repo.record_refresh_failure(PODCAST_ID, _gone_410(), SETTINGS)  # quarantine
+    # Seeding again must NOT re-arm a quarantined feed.
     repo.seed_unscheduled_feeds(3600)
     assert PODCAST_ID not in repo.get_due_podcasts()
 
@@ -274,21 +308,29 @@ def test_handler_raises_on_had_error_and_enqueues_nothing(db: str) -> None:
 
     repo0 = SqlitePodcastRepository(db)
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
-    # had_error=True returned normally (batch contract) — handler must RAISE.
-    state, repo, qm, _ = _make_state(db, (podcast, [], True, False, None, False, [], []))
+    # A classified failure returned normally (batch contract) — handler must RAISE.
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, failure=_connectivity()))
     task = Task(id="c" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
-    with pytest.raises(TransientError):
+    with pytest.raises(TransientError) as excinfo:
         handle_refresh_feed(task, state)
 
-    # No DOWNLOAD enqueued; error stamped (non-terminal, not parked).
+    # Spec #60: connectivity carries explicit infra attribution + the
+    # recorded marker for the worker's idempotent fallback.
+    assert excinfo.value.error_class == "infra"
+    assert getattr(excinfo.value, "refresh_failure_recorded", False) is True
+
+    # No DOWNLOAD enqueued; error stamped; backed off but NOT parked.
     assert qm.get_next_task(stage=TaskStage.DOWNLOAD) is None
     con = sqlite3.connect(db)
-    err, nxt = con.execute(
-        "SELECT last_refresh_error, next_refresh_at FROM podcasts WHERE id=?", (PODCAST_ID,)
+    err, nxt, reason = con.execute(
+        "SELECT last_refresh_error, next_refresh_at, refresh_disabled_reason FROM podcasts WHERE id=?",
+        (PODCAST_ID,),
     ).fetchone()
     con.close()
     assert err is not None  # stamped
+    assert nxt is not None  # never parked on connectivity
+    assert reason is None
 
 
 def test_handler_persists_reconciles_and_enqueues_download_at_priority(db: str) -> None:
@@ -307,7 +349,7 @@ def test_handler_persists_reconciles_and_enqueues_download_at_priority(db: str) 
         audio_url="https://example.com/ep2.mp3",
         duration=60,
     )
-    state, repo, qm, _ = _make_state(db, (podcast, [new_ep], False, False, None, False, [], []))
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, new_episodes=[new_ep]))
     task = Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
     handle_refresh_feed(task, state)
@@ -347,7 +389,7 @@ def test_handler_starts_at_transcribe_for_dalston(db: str) -> None:
         duration=60,
     )
     state, repo, qm, _ = _make_state(
-        db, (podcast, [new_ep], False, False, None, False, [], []), transcription_provider="dalston"
+        db, RefreshAttemptResult(podcast=podcast, new_episodes=[new_ep]), transcription_provider="dalston"
     )
     task = Task(id="e" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
@@ -387,7 +429,7 @@ def test_handler_repairs_orphaned_discovered_episode(db: str) -> None:
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     # 304 / no new episodes this run.
-    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, [], []))
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
     task = Task(id="f" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 
     handle_refresh_feed(task, state)
@@ -436,7 +478,7 @@ def test_handler_initial_backfill_caps_to_seed_and_marks_rest(db: str) -> None:
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     state, repo, qm, _ = _make_state(
-        db, (podcast, [], False, True, None, False, [], []), transcription_provider="dalston"
+        db, RefreshAttemptResult(podcast=podcast, conditional_hit=True), transcription_provider="dalston"
     )
     state.config.inbox_seed_on_follow = 2
     task = Task(id="a" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
@@ -472,7 +514,7 @@ def test_handler_initial_backfill_counts_already_queued_toward_cap(db: str) -> N
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     state, repo, qm, _ = _make_state(
-        db, (podcast, [], False, True, None, False, [], []), transcription_provider="dalston"
+        db, RefreshAttemptResult(podcast=podcast, conditional_hit=True), transcription_provider="dalston"
     )
     state.config.inbox_seed_on_follow = 2
     task = Task(id="c" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
@@ -504,7 +546,7 @@ def test_handler_established_podcast_skips_cap(db: str) -> None:
     assert repo0.has_processed_episodes(PODCAST_ID) is True
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
-    state, repo, qm, _ = _make_state(db, (podcast, [], False, True, None, False, [], []))
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
     state.config.inbox_seed_on_follow = 2
     task = Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
 

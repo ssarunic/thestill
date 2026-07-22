@@ -49,6 +49,7 @@ from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
 from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
 from ..utils.url_patterns import APPLE_PODCAST_ID_RE, extract_apple_podcast_id, looks_like_rss
+from .refresh_failure import RefreshFailureKind, classify_fetch_exception
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -64,6 +65,12 @@ class FetchRSSResult(NamedTuple):
     case. ``etag`` / ``last_modified`` are echoed from the response
     headers (or kept from the input on 304) so the caller can persist
     them for the next refresh.
+
+    Spec #60: on failure, ``kind`` carries the structured failure category
+    (``status_code`` keeps its legacy 0-on-network-error coercion for
+    existing readers; the REAL status, when a response arrived, is on the
+    classified failure path via ``status_code`` != 0). ``retry_after`` is
+    the parsed ``Retry-After`` when the server sent one.
     """
 
     content: Optional[str]
@@ -72,13 +79,17 @@ class FetchRSSResult(NamedTuple):
     last_modified: Optional[str]
     not_modified: bool
     error: Optional[str]
+    kind: Optional[RefreshFailureKind] = None
+    retry_after: Optional[datetime] = None
 
 
 class FetchAndParseResult(NamedTuple):
     """Outcome of :meth:`RSSMediaSource.fetch_and_parse`.
 
     Adds the parsed feedparser result to :class:`FetchRSSResult`. On a
-    304 hit, both ``content`` and ``parsed_feed`` are ``None``.
+    304 hit, both ``content`` and ``parsed_feed`` are ``None``. Spec #60:
+    ``kind``/``retry_after`` mirror :class:`FetchRSSResult`; a parse
+    (bozo) failure sets ``kind=INVALID_CONTENT`` instead of ``error=None``.
     """
 
     content: Optional[str]
@@ -88,6 +99,8 @@ class FetchAndParseResult(NamedTuple):
     last_modified: Optional[str]
     not_modified: bool
     error: Optional[str]
+    kind: Optional[RefreshFailureKind] = None
+    retry_after: Optional[datetime] = None
 
 
 class MediaSource(ABC):
@@ -212,6 +225,11 @@ class RSSMediaSource(MediaSource):
             status_forcelist=(500, 502, 503, 504),
             allowed_methods=frozenset(["GET"]),
             respect_retry_after_header=True,
+            # Spec #60: on retry exhaustion return the FINAL response instead
+            # of raising RetryError (which carries no response). raise_for_status
+            # then produces a normal HTTPError whose real status code survives
+            # into the failure classification.
+            raise_on_status=False,
         )
         # Guarded adapter re-validates the URL on every send, so HTTP redirects
         # cannot smuggle a public host into a private/loopback target.
@@ -610,27 +628,32 @@ class RSSMediaSource(MediaSource):
                 response.raise_for_status()
                 rss_content = response.text
                 timing_ctx["bytes"] = len(rss_content)
-            except requests.RequestException as e:
+            except (requests.RequestException, UnsafeURLError) as e:
+                # Spec #60: classify structurally instead of flattening every
+                # failure to status_code=0 — a DNS outage, an HTTP 410 and an
+                # SSRF refusal leave here distinguishable via ``kind``.
+                failure = classify_fetch_exception(e)
                 timing_ctx["error"] = str(e)
-                logger.error(f"Error fetching RSS feed {url}: {e}")
+                timing_ctx["failure_kind"] = failure.kind.value
+                if failure.kind is RefreshFailureKind.SECURITY_POLICY:
+                    logger.warning("rss_fetch_blocked_unsafe_url", url=url, error=str(e))
+                else:
+                    logger.error(
+                        "rss_fetch_failed",
+                        url=url,
+                        error=str(e),
+                        failure_kind=failure.kind.value,
+                        status_code=failure.http_status,
+                    )
                 return FetchRSSResult(
                     content=None,
-                    status_code=0,
+                    status_code=failure.http_status or 0,
                     etag=None,
                     last_modified=None,
                     not_modified=False,
                     error=str(e),
-                )
-            except UnsafeURLError as e:
-                timing_ctx["error"] = str(e)
-                logger.warning("rss_fetch_blocked_unsafe_url", url=url, error=str(e))
-                return FetchRSSResult(
-                    content=None,
-                    status_code=0,
-                    etag=None,
-                    last_modified=None,
-                    not_modified=False,
-                    error=f"Unsafe URL refused: {e}",
+                    kind=failure.kind,
+                    retry_after=failure.retry_after,
                 )
 
         if self.path_manager and podcast_slug:
@@ -703,8 +726,24 @@ class RSSMediaSource(MediaSource):
                 last_modified=fetch.last_modified,
                 not_modified=fetch.not_modified,
                 error=fetch.error,
+                kind=fetch.kind,
+                retry_after=fetch.retry_after,
             )
         parsed_feed = self.parse_rss(fetch.content, url)
+        if parsed_feed is None:
+            # Spec #60: a bozo/malformed feed is a real failure, not a silent
+            # ``error=None`` success — it previously fell through to "zero new
+            # episodes" and cleared the feed's error state.
+            return FetchAndParseResult(
+                content=fetch.content,
+                parsed_feed=None,
+                status_code=fetch.status_code,
+                etag=fetch.etag,
+                last_modified=fetch.last_modified,
+                not_modified=False,
+                error="Invalid RSS feed (bozo/malformed)",
+                kind=RefreshFailureKind.INVALID_CONTENT,
+            )
         return FetchAndParseResult(
             content=fetch.content,
             parsed_feed=parsed_feed,
@@ -1368,8 +1407,12 @@ class YouTubeMediaSource(MediaSource):
             return new_episodes
 
         except Exception as e:
+            # Spec #60: do NOT swallow to [] — that made a YouTube outage
+            # indistinguishable from "no new episodes" (invisible even to
+            # had_error). Re-raise so the feed manager's catch-all classifies
+            # it (network → connectivity, genuine bug → internal).
             logger.error(f"Error fetching episodes from YouTube {url}: {e}")
-            return []
+            raise
 
     def download_episode(self, episode: Episode, podcast_title: str, storage_path: str) -> Optional[str]:
         """

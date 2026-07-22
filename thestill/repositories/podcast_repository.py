@@ -7,9 +7,14 @@ enabling easy swapping between different storage backends (JSON, SQLite, Postgre
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..models.podcast import Episode, Podcast, TranscriptLink
+
+if TYPE_CHECKING:
+    # Pure dataclasses from the core layer, imported type-only to keep the
+    # repository layer free of runtime core dependencies.
+    from ..core.refresh_failure import RefreshDecision, RefreshFailure, RefreshPolicySettings
 
 
 class PodcastRepository(ABC):
@@ -285,6 +290,83 @@ class PodcastRepository(ABC):
         Returns:
             Number of links actually inserted (excludes duplicates)
         """
+        pass
+
+    # ------------------------------------------------------------------
+    # Spec #48/#60 — background refresh scheduling + failure policy.
+    # Declared abstract so a backend missing one of these fails LOUDLY at
+    # construction instead of shipping silently (the missing Postgres
+    # ``clear_podcast_refresh_failures`` reached production exactly because
+    # these methods were absent from this interface — spec #60 Phase 0).
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def get_due_podcasts(self, now: Optional[datetime] = None, limit: int = 500) -> List[str]:
+        """Ids of feeds due for refresh (scheduled, ``next_refresh_at <= now``,
+        past any ``refresh_retry_after_at``), oldest-due first."""
+        pass
+
+    @abstractmethod
+    def get_quarantine_probe_due(
+        self, probe_interval_seconds: int, now: Optional[datetime] = None, limit: int = 200
+    ) -> List[str]:
+        """Quarantined ``feed_gone``/``invalid_content`` feeds due one
+        low-frequency re-probe (never ``auth_required``/``blocked_unsafe``)."""
+        pass
+
+    @abstractmethod
+    def seed_unscheduled_feeds(self, default_interval_seconds: int, now: Optional[datetime] = None) -> int:
+        """Arm never-scheduled active feeds with a jittered first due time.
+        Must NOT revive quarantined feeds. Returns the number seeded."""
+        pass
+
+    @abstractmethod
+    def record_refresh_success(
+        self,
+        podcast_id: str,
+        found_new: bool,
+        min_interval: int,
+        max_interval: int,
+        default_interval: int,
+        now: Optional[datetime] = None,
+    ) -> str:
+        """Record a successful refresh: recompute the AIMD interval and clear
+        ALL failure state (error, kind, streak, quarantine reason,
+        retry-after). Returns the new ``next_refresh_at`` ISO string."""
+        pass
+
+    @abstractmethod
+    def record_refresh_failure(
+        self,
+        podcast_id: str,
+        failure: "RefreshFailure",
+        settings: "RefreshPolicySettings",
+        now: Optional[datetime] = None,
+    ) -> "RefreshDecision":
+        """Apply the spec #60 failure policy in one atomic state transition
+        (IGNORE / BACKOFF / QUARANTINE — see ``core.refresh_failure``)."""
+        pass
+
+    @abstractmethod
+    def clear_podcast_refresh_failure(
+        self, podcast_id: str, default_interval: int, now: Optional[datetime] = None
+    ) -> str:
+        """Operator re-arm of one parked/quarantined feed: clear all failure
+        state, set ``next_refresh_at = now``. Returns the new value."""
+        pass
+
+    @abstractmethod
+    def clear_podcast_refresh_failures(
+        self, podcast_ids: Sequence[str], default_interval: int, now: Optional[datetime] = None
+    ) -> int:
+        """Bulk variant of :meth:`clear_podcast_refresh_failure`. Returns the
+        number of rows updated."""
+        pass
+
+    @abstractmethod
+    def get_refresh_health_counts(self, now: Optional[datetime] = None) -> Dict[str, object]:
+        """Aggregate counts for status surfacing: active / due_now /
+        backing_off / parked_total / parked_by_reason."""
         pass
 
 

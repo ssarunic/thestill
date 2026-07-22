@@ -976,21 +976,22 @@ class TestYouTubeMediaSource:
         assert result == "/tmp/storage/video1.m4a"
         source.youtube_downloader.download_episode.assert_called_once_with(episode, "Test Podcast")
 
-    def test_fetch_episodes_error_handling(self, temp_storage):
-        """Test YouTube episode fetching error handling."""
+    def test_fetch_episodes_error_propagates(self, temp_storage):
+        """Spec #60: a YouTube fetch failure must RAISE, not silently return []
+        — swallowing made an outage indistinguishable from 'no new episodes'
+        (invisible even to had_error). The feed manager's catch-all classifies
+        the raised exception (network → connectivity, bug → internal)."""
         source = YouTubeMediaSource(str(temp_storage))
 
         source.youtube_downloader.get_episodes_from_playlist = Mock(side_effect=Exception("Network error"))
 
-        episodes = source.fetch_episodes(
-            url="https://www.youtube.com/@testchannel",
-            existing_episodes=[],
-            last_processed=None,
-            max_episodes=None,
-        )
-
-        # Should return empty list on error
-        assert len(episodes) == 0
+        with pytest.raises(Exception, match="Network error"):
+            source.fetch_episodes(
+                url="https://www.youtube.com/@testchannel",
+                existing_episodes=[],
+                last_processed=None,
+                max_episodes=None,
+            )
 
 
 class TestMediaSourceFactory:

@@ -31,6 +31,12 @@ Example:
 """
 
 
+#: Valid queue-attribution values (spec #49 vocabulary) an exception may
+#: carry explicitly. Anything else is rejected at construction so free-form
+#: metadata can never silently influence queue healing (spec #60).
+VALID_ERROR_CLASSES = frozenset({"fatal", "infra", "item"})
+
+
 class ThestillError(Exception):
     """
     Base exception for all Thestill application errors.
@@ -41,6 +47,9 @@ class ThestillError(Exception):
 
     Attributes:
         message: Human-readable error message
+        error_class: Optional explicit queue attribution ('fatal' | 'infra'
+            | 'item'). When set, ``classify_error_class`` honors it instead
+            of message-pattern matching (spec #60 — explicit beats regex).
         context: Optional dict of additional error context (url, path, etc.)
 
     Example:
@@ -69,17 +78,23 @@ class ThestillError(Exception):
             raise ThestillError(f"Feed parsing failed: {url}") from e
     """
 
-    def __init__(self, message: str, **context):
+    def __init__(self, message: str, *, error_class: "str | None" = None, **context):
         """
         Initialize ThestillError.
 
         Args:
             message: Human-readable error message
+            error_class: Optional explicit queue attribution — must be one of
+                'fatal' | 'infra' | 'item' (spec #49 vocabulary). Validated
+                here so arbitrary metadata can never become control flow.
             **context: Optional keyword arguments for error context
                       (e.g., url, path, episode_id, provider)
         """
         super().__init__(message)
         self.message = message
+        if error_class is not None and error_class not in VALID_ERROR_CLASSES:
+            raise ValueError(f"invalid error_class {error_class!r}; expected one of {sorted(VALID_ERROR_CLASSES)}")
+        self.error_class: "str | None" = error_class
         self.context = context if context else {}
 
     def __str__(self):
@@ -193,6 +208,7 @@ class FatalError(ThestillError):
 
 
 __all__ = [
+    "VALID_ERROR_CLASSES",
     "ThestillError",
     "TranscriptCleaningError",
     "ProhibitedContentError",

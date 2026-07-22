@@ -1325,6 +1325,16 @@ def status(ctx):
     click.echo("")
     click.echo("Entity extraction:")
     click.echo(f"  Skipped (legacy, no JSON sidecar): {stats.episodes_skipped_legacy:,}")
+    click.echo("")
+    # Spec #60 — feed refresh health: make a mass park/quarantine visible
+    # instead of silent (the 2026-07-15 incident's second half).
+    click.echo("Feed refresh health:")
+    click.echo(f"  Active (scheduled):      {stats.refresh_active}")
+    click.echo(f"  Due now:                 {stats.refresh_due_now}")
+    click.echo(f"  Backing off (failing):   {stats.refresh_backing_off}")
+    click.echo(f"  Parked/quarantined:      {stats.refresh_parked_total}")
+    for reason, count in sorted(stats.refresh_parked_by_reason.items()):
+        click.echo(f"    - {reason}: {count}")
 
     # Show pending Google Cloud transcription operations (if using Google provider)
     if config.transcription_provider.lower() == "google":

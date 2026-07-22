@@ -51,21 +51,24 @@ import uuid as _uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 import psycopg
 from structlog import get_logger
 
+from ..core.refresh_failure import (
+    RefreshAction,
+    RefreshDecision,
+    RefreshFailure,
+    RefreshPolicySettings,
+    decide_refresh_action,
+)
 from ..models.podcast import Episode, FailureType, Podcast
-from ..utils.datetime_utils import now_utc
+from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
 from ..utils.slug import generate_slug
-from .sqlite_podcast_repository import (
-    SYNTHETIC_AUDIO_IMPORTS_ID,
-    SYNTHETIC_AUDIO_IMPORTS_RSS,
-    _normalize_artwork_url,
-)
+from .sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SYNTHETIC_AUDIO_IMPORTS_RSS, _normalize_artwork_url
 
 logger = get_logger(__name__)
 
@@ -203,9 +206,7 @@ class PodcastsMixin:
         """
         if getattr(self, "_cat_cache_loaded", False):
             return
-        rows = conn.execute(
-            "SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id"
-        ).fetchall()
+        rows = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id").fetchall()
         cat_id_to_pair: Dict[int, Tuple[Optional[str], Optional[str]]] = {}
         cat_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
         top_id_to_name: Dict[int, str] = {}
@@ -327,9 +328,7 @@ class PodcastsMixin:
                 logger.warning("top-podcasts region seed failed", region=region, error=str(exc))
                 continue
 
-    def _seed_top_podcasts_region(
-        self, region: str, rows: List[Dict[str, Any]], path: Path, mtime: float
-    ) -> None:
+    def _seed_top_podcasts_region(self, region: str, rows: List[Dict[str, Any]], path: Path, mtime: float) -> None:
         """Atomically reseed one region: drop its rankings, upsert podcasts, re-rank.
 
         Mirrors the SQLite path row-for-row (dedupe by ``rss_url`` keeping the
@@ -668,9 +667,7 @@ class PodcastsMixin:
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:
-            rows = conn.execute(
-                f"SELECT {_PODCAST_COLS} FROM podcasts ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute(f"SELECT {_PODCAST_COLS} FROM podcasts ORDER BY created_at DESC").fetchall()
             return [self._row_to_podcast(row, conn) for row in rows]
 
     def get(self, podcast_id: str) -> Optional[Podcast]:
@@ -1074,6 +1071,7 @@ class PodcastsMixin:
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NOT NULL
                   AND next_refresh_at <= %s
+                  AND (refresh_retry_after_at IS NULL OR refresh_retry_after_at <= %s)
                   AND COALESCE(synthetic, false) = false
                   AND COALESCE(is_complete, false) = false
                   AND (COALESCE(auto_added, false) = false
@@ -1081,9 +1079,88 @@ class PodcastsMixin:
                 ORDER BY next_refresh_at ASC
                 LIMIT %s
                 """,
-                (now_dt, limit),
+                (now_dt, now_dt, limit),
             ).fetchall()
             return [as_str(row["id"]) for row in rows]
+
+    def get_quarantine_probe_due(
+        self,
+        probe_interval_seconds: int,
+        now: Optional[datetime] = None,
+        limit: int = 200,
+    ) -> List[str]:
+        """Spec #60 — quarantined feeds due one low-frequency re-probe.
+
+        Only self-healable reasons (``feed_gone`` / ``invalid_content``) are
+        probed; ``auth_required`` / ``blocked_unsafe`` need a human and are
+        excluded STRUCTURALLY (SQL literal, no config path can widen it).
+        """
+        now_dt = now or now_utc()
+        cutoff = now_dt - timedelta(seconds=probe_interval_seconds)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM podcasts
+                WHERE next_refresh_at IS NULL
+                  AND refresh_disabled_reason IN ('feed_gone', 'invalid_content')
+                  AND (last_refresh_at IS NULL OR last_refresh_at <= %s)
+                  AND COALESCE(synthetic, false) = false
+                  AND COALESCE(is_complete, false) = false
+                  AND (COALESCE(auto_added, false) = false
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                ORDER BY last_refresh_at ASC
+                LIMIT %s
+                """,
+                (cutoff, limit),
+            ).fetchall()
+            return [as_str(row["id"]) for row in rows]
+
+    def get_refresh_health_counts(self, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """Spec #60 — one cheap aggregate for status surfacing (port of the
+        SQLite implementation; see there for field semantics)."""
+        now_dt = now or now_utc()
+        active_filter = """
+                  COALESCE(synthetic, false) = false
+                  AND COALESCE(is_complete, false) = false
+                  AND (COALESCE(auto_added, false) = false
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+        """
+        with self._get_connection() as conn:
+            reason_rows = conn.execute(
+                f"""
+                SELECT COALESCE(refresh_disabled_reason, 'unknown') AS reason, COUNT(*) AS n
+                FROM podcasts
+                WHERE next_refresh_at IS NULL
+                  AND (last_refresh_at IS NOT NULL OR last_refresh_error IS NOT NULL)
+                  AND {active_filter}
+                GROUP BY reason
+                """
+            ).fetchall()
+            parked_by_reason = {row["reason"]: row["n"] for row in reason_rows}
+            active = conn.execute(
+                f"SELECT COUNT(*) AS n FROM podcasts WHERE next_refresh_at IS NOT NULL AND {active_filter}"
+            ).fetchone()["n"]
+            due_now = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM podcasts
+                WHERE next_refresh_at IS NOT NULL AND next_refresh_at <= %s AND {active_filter}
+                """,
+                (now_dt,),
+            ).fetchone()["n"]
+            backing_off = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM podcasts
+                WHERE next_refresh_at IS NOT NULL AND last_refresh_failure_kind IS NOT NULL
+                  AND {active_filter}
+                """
+            ).fetchone()["n"]
+        return {
+            "active": active,
+            "due_now": due_now,
+            "backing_off": backing_off,
+            "parked_total": sum(parked_by_reason.values()),
+            "parked_by_reason": parked_by_reason,
+        }
 
     def seed_unscheduled_feeds(self, default_interval_seconds: int, now: Optional[datetime] = None) -> int:
         """Seed active feeds that have NEVER been scheduled or attempted.
@@ -1152,6 +1229,12 @@ class PodcastsMixin:
                     next_refresh_at = %s,
                     last_refresh_at = %s,
                     last_refresh_error = NULL,
+                    last_refresh_failure_kind = NULL,
+                    last_refresh_status_code = NULL,
+                    consecutive_refresh_failures = 0,
+                    refresh_failure_streak_started_at = NULL,
+                    refresh_disabled_reason = NULL,
+                    refresh_retry_after_at = NULL,
                     updated_at = %s
                 WHERE id = %s
                 """,
@@ -1159,41 +1242,129 @@ class PodcastsMixin:
             )
             return next_at_dt.isoformat()
 
-    def record_refresh_error(
+    def record_refresh_failure(
         self,
         podcast_id: str,
-        error: str,
-        terminal: bool,
+        failure: RefreshFailure,
+        settings: RefreshPolicySettings,
         now: Optional[datetime] = None,
-    ) -> None:
-        """Record a feed-scoped refresh failure (spec #48 failure isolation).
+    ) -> RefreshDecision:
+        """Apply the spec #60 failure policy in ONE atomic state transition.
 
-        Always stamps ``last_refresh_at`` + ``last_refresh_error``. A
-        **terminal** failure PARKS the feed (``next_refresh_at = NULL``) so
-        the scheduler stops re-enqueuing it; only operator retry
-        (:meth:`clear_podcast_refresh_failure`) re-arms it. Retryable errors
-        leave ``next_refresh_at`` alone. Never touches cache headers.
+        Faithful port of the SQLite implementation (see there for the policy
+        semantics): IGNORE stamps visibility only, BACKOFF lengthens and
+        stays scheduled (never parks — the 2026-07-15 incident fix),
+        QUARANTINE requires a decisive signal or an exhausted horizon. A
+        kind change restarts the failure streak.
         """
         now_dt = now or now_utc()
         with self._get_connection() as conn:
-            if terminal:
-                conn.execute(
-                    """
-                    UPDATE podcasts
-                    SET last_refresh_at = %s, last_refresh_error = %s, next_refresh_at = NULL, updated_at = %s
-                    WHERE id = %s
-                    """,
-                    (now_dt, error[:2000], now_dt, podcast_id),
-                )
+            row = conn.execute(
+                """
+                SELECT refresh_interval_seconds, consecutive_refresh_failures,
+                       refresh_failure_streak_started_at, last_refresh_failure_kind
+                FROM podcasts WHERE id = %s
+                """,
+                (podcast_id,),
+            ).fetchone()
+            current_interval = (
+                row["refresh_interval_seconds"]
+                if row and row["refresh_interval_seconds"]
+                else settings.default_interval_seconds
+            )
+            prior_consecutive = (row["consecutive_refresh_failures"] or 0) if row else 0
+            prior_kind = row["last_refresh_failure_kind"] if row else None
+            streak_started = ensure_utc(row["refresh_failure_streak_started_at"]) if row else None
+
+            kind_changed = prior_kind is not None and prior_kind != failure.kind.value
+            if kind_changed or streak_started is None:
+                streak_for_decision = now_dt
+                consecutive_before = 0 if kind_changed else prior_consecutive
             else:
+                streak_for_decision = streak_started
+                consecutive_before = prior_consecutive
+
+            decision = decide_refresh_action(
+                failure.kind,
+                failure.http_status,
+                current_interval_seconds=current_interval,
+                streak_started_at=streak_for_decision,
+                now=now_dt,
+                settings=settings,
+            )
+
+            error_text = (failure.exception or "refresh failed")[:2000]
+            if decision.action is RefreshAction.IGNORE:
                 conn.execute(
                     """
                     UPDATE podcasts
-                    SET last_refresh_at = %s, last_refresh_error = %s, updated_at = %s
+                    SET last_refresh_at = %s, last_refresh_error = %s,
+                        last_refresh_failure_kind = %s, last_refresh_status_code = %s, updated_at = %s
                     WHERE id = %s
                     """,
-                    (now_dt, error[:2000], now_dt, podcast_id),
+                    (now_dt, error_text, failure.kind.value, failure.http_status, now_dt, podcast_id),
                 )
+                return decision
+
+            new_consecutive = consecutive_before + 1
+            if decision.action is RefreshAction.QUARANTINE:
+                conn.execute(
+                    """
+                    UPDATE podcasts
+                    SET last_refresh_at = %s, last_refresh_error = %s,
+                        last_refresh_failure_kind = %s, last_refresh_status_code = %s,
+                        consecutive_refresh_failures = %s, refresh_failure_streak_started_at = %s,
+                        refresh_disabled_reason = %s, next_refresh_at = NULL,
+                        refresh_retry_after_at = NULL, updated_at = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        now_dt,
+                        error_text,
+                        failure.kind.value,
+                        failure.http_status,
+                        new_consecutive,
+                        streak_for_decision,
+                        decision.disabled_reason,
+                        now_dt,
+                        podcast_id,
+                    ),
+                )
+                return decision
+
+            new_interval = max(
+                settings.min_interval_seconds,
+                min(settings.max_interval_seconds, int(current_interval * 1.5)),
+            )
+            next_at_dt = now_dt + timedelta(seconds=new_interval)
+            retry_after = ensure_utc(failure.retry_after)
+            if retry_after is not None and retry_after > next_at_dt:
+                next_at_dt = retry_after
+            conn.execute(
+                """
+                UPDATE podcasts
+                SET refresh_interval_seconds = %s, next_refresh_at = %s,
+                    refresh_retry_after_at = %s, last_refresh_at = %s, last_refresh_error = %s,
+                    last_refresh_failure_kind = %s, last_refresh_status_code = %s,
+                    consecutive_refresh_failures = %s, refresh_failure_streak_started_at = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                (
+                    new_interval,
+                    next_at_dt,
+                    retry_after,
+                    now_dt,
+                    error_text,
+                    failure.kind.value,
+                    failure.http_status,
+                    new_consecutive,
+                    streak_for_decision,
+                    now_dt,
+                    podcast_id,
+                ),
+            )
+            return decision
 
     def clear_podcast_refresh_failure(
         self,
@@ -1201,9 +1372,9 @@ class PodcastsMixin:
         default_interval: int,
         now: Optional[datetime] = None,
     ) -> str:
-        """Operator retry of a parked feed: clear the error and re-arm
-        ``next_refresh_at`` to ``now`` so the next tick re-enqueues it.
-        Returns the new ``next_refresh_at``.
+        """Operator retry of a parked/quarantined feed: clear all failure
+        state and re-arm ``next_refresh_at`` to ``now`` so the next tick
+        re-enqueues it. Returns the new ``next_refresh_at``.
         """
         now_dt = now or now_utc()
         with self._get_connection() as conn:
@@ -1211,6 +1382,12 @@ class PodcastsMixin:
                 """
                 UPDATE podcasts
                 SET last_refresh_error = NULL,
+                    last_refresh_failure_kind = NULL,
+                    last_refresh_status_code = NULL,
+                    consecutive_refresh_failures = 0,
+                    refresh_failure_streak_started_at = NULL,
+                    refresh_disabled_reason = NULL,
+                    refresh_retry_after_at = NULL,
                     next_refresh_at = %s,
                     refresh_interval_seconds = COALESCE(refresh_interval_seconds, %s),
                     updated_at = %s
@@ -1219,6 +1396,44 @@ class PodcastsMixin:
                 (now_dt, default_interval, now_dt, podcast_id),
             )
         return now_dt.isoformat()
+
+    def clear_podcast_refresh_failures(
+        self,
+        podcast_ids: Sequence[str],
+        default_interval: int,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Bulk variant of :meth:`clear_podcast_refresh_failure` (spec #60
+        Phase 0 — previously MISSING on Postgres, which broke the DLQ
+        "retry all" endpoint on the live DB). One ``= ANY(%s)`` update; no
+        chunking needed (Postgres has no SQLite-style parameter ceiling).
+        Returns the number of rows updated.
+        """
+        ids = list(dict.fromkeys(podcast_ids))  # de-dupe, preserve order
+        if not ids:
+            return 0
+        now_dt = now or now_utc()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE podcasts
+                SET last_refresh_error = NULL,
+                    last_refresh_failure_kind = NULL,
+                    last_refresh_status_code = NULL,
+                    consecutive_refresh_failures = 0,
+                    refresh_failure_streak_started_at = NULL,
+                    refresh_disabled_reason = NULL,
+                    refresh_retry_after_at = NULL,
+                    next_refresh_at = %s,
+                    refresh_interval_seconds = COALESCE(refresh_interval_seconds, %s),
+                    updated_at = %s
+                WHERE id = ANY(%s)
+                """,
+                (now_dt, default_interval, now_dt, ids),
+            )
+            updated = cursor.rowcount or 0
+        logger.info("Bulk-cleared podcast refresh failures", requested=len(ids), updated=updated)
+        return updated
 
     # ------------------------------------------------------------------
     # Row mapping helpers
@@ -1401,9 +1616,7 @@ class PodcastsMixin:
             ).fetchone()
             if inserted is not None:
                 return as_str(inserted["id"]), inserted["title"], inserted["slug"]
-            existing = conn.execute(
-                "SELECT id, title, slug FROM podcasts WHERE rss_url = %s", (rss_url,)
-            ).fetchone()
+            existing = conn.execute("SELECT id, title, slug FROM podcasts WHERE rss_url = %s", (rss_url,)).fetchone()
             if existing is None:
                 raise RuntimeError(
                     f"upsert_auto_added_podcast: row for rss_url={rss_url!r} " "neither inserted nor found"

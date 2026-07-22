@@ -67,5 +67,13 @@ async def get_status(state: AppState = Depends(get_app_state)):
                 "llm_provider": state.config.llm_provider,
                 "diarization_enabled": state.config.enable_diarization,
             },
+            # Spec #60 — feed refresh health (parked/quarantined by reason).
+            "refresh_health": {
+                "active": stats.refresh_active,
+                "due_now": stats.refresh_due_now,
+                "backing_off": stats.refresh_backing_off,
+                "parked_total": stats.refresh_parked_total,
+                "parked_by_reason": stats.refresh_parked_by_reason,
+            },
         }
     )

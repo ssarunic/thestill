@@ -65,7 +65,25 @@ _DEFAULT_TIMEOUT_SECONDS = 30
 
 
 class UnsafeURLError(ValueError):
-    """Raised when a user-supplied URL targets a forbidden destination."""
+    """Raised when a user-supplied URL targets a forbidden destination.
+
+    Base class — existing ``except UnsafeURLError`` call sites keep catching
+    every guard refusal. Spec #60 splits the two very different meanings this
+    class used to conflate into the subclasses below so the refresh path can
+    tell "the environment is broken" from "the destination is forbidden".
+    """
+
+
+class URLResolutionError(UnsafeURLError):
+    """DNS resolution failed (or resolved to nothing) — environmental and
+    retryable (spec #60: ``connectivity``), NOT a security refusal."""
+
+
+class UnsafeDestinationError(UnsafeURLError):
+    """Resolution succeeded but the destination/scheme is forbidden
+    (private/loopback/metadata IP, disallowed scheme, unsafe redirect
+    target). A security-policy refusal — never retried (spec #60:
+    ``security_policy``)."""
 
 
 @dataclass(frozen=True)
@@ -100,7 +118,7 @@ def _resolve(hostname: str) -> Tuple[str, ...]:
     try:
         infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
-        raise UnsafeURLError(f"DNS lookup failed for {hostname!r}: {exc}") from exc
+        raise URLResolutionError(f"DNS lookup failed for {hostname!r}: {exc}") from exc
     return tuple({info[4][0] for info in infos})
 
 
@@ -133,11 +151,11 @@ def validate_public_url(url: str) -> ResolvedHost:
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
-        raise UnsafeURLError(f"disallowed scheme {scheme!r} in {url!r}")
+        raise UnsafeDestinationError(f"disallowed scheme {scheme!r} in {url!r}")
 
     hostname = parsed.hostname
     if not hostname:
-        raise UnsafeURLError(f"no hostname in {url!r}")
+        raise UnsafeDestinationError(f"no hostname in {url!r}")
 
     # Bare-IP URLs: validate the literal without DNS.
     try:
@@ -146,7 +164,7 @@ def validate_public_url(url: str) -> ResolvedHost:
         literal = None
     if literal is not None:
         if not _ip_is_public(hostname):
-            raise UnsafeURLError(f"URL targets non-public address {hostname!r}")
+            raise UnsafeDestinationError(f"URL targets non-public address {hostname!r}")
         return ResolvedHost(hostname=hostname, addresses=(hostname,))
 
     if _is_allowlisted_host(hostname):
@@ -159,11 +177,14 @@ def validate_public_url(url: str) -> ResolvedHost:
 
     addresses = _resolve(hostname)
     if not addresses:
-        raise UnsafeURLError(f"hostname {hostname!r} resolved to no addresses")
+        # DNS answered but with nothing usable — closer to a resolution
+        # failure than a refusal (an expiring record self-heals), so it is
+        # environmental per spec #60's keep-trying bias.
+        raise URLResolutionError(f"hostname {hostname!r} resolved to no addresses")
 
     bad = [addr for addr in addresses if not _ip_is_public(addr)]
     if bad:
-        raise UnsafeURLError(f"hostname {hostname!r} resolves to non-public address(es): {bad}")
+        raise UnsafeDestinationError(f"hostname {hostname!r} resolves to non-public address(es): {bad}")
     return ResolvedHost(hostname=hostname, addresses=addresses)
 
 

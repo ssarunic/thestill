@@ -32,6 +32,7 @@ from ..utils.path_manager import PathManager
 from ..utils.timing import log_phase_timing
 from ..utils.url_guard import UnsafeURLError, guarded_get
 from .media_source import MediaSourceFactory, RSSMediaSource
+from .refresh_failure import RefreshAttemptResult, RefreshFailure, RefreshFailureKind, classify_fetch_exception
 
 logger = get_logger(__name__)
 
@@ -270,7 +271,7 @@ class PodcastFeedManager:
         podcast: Podcast,
         max_episodes_per_podcast: Optional[int],
         known_external_ids: Optional[set] = None,
-    ) -> Tuple[Podcast, List[Episode], bool, bool, Any, bool, List[Tuple[str, str, Optional[str]]]]:
+    ) -> RefreshAttemptResult:
         """
         Refresh a single podcast. Safe to call from a worker thread.
 
@@ -280,9 +281,10 @@ class PodcastFeedManager:
         new episodes in a single transaction (spec #19).
 
         Returns:
-            (podcast, new_episodes, had_error, conditional_get_hit, source,
-            headers_rotated, image_rows, audio_rows). ``conditional_get_hit`` is
-            True when the server returned 304 and no parse/extract work ran.
+            :class:`RefreshAttemptResult` (spec #60 — replaces the historical
+            8-tuple). ``failure`` is ``None`` on success and a classified
+            :class:`RefreshFailure` otherwise. ``conditional_hit`` is True when
+            the server returned 304 and no parse/extract work ran.
             ``headers_rotated`` is True when a 304 response carried a *new* ETag
             / Last-Modified that we must still persist (RFC 7232) — otherwise
             the rotated header is silently dropped and the next refresh sends a
@@ -301,7 +303,7 @@ class PodcastFeedManager:
             episodes.
         """
         podcast_start = time.perf_counter()
-        had_error = False
+        failure: Optional[RefreshFailure] = None
         new_eps: List[Episode] = []
         source: Any = None
         conditional_get_hit = False
@@ -342,7 +344,14 @@ class PodcastFeedManager:
                     if result.last_modified and result.last_modified != podcast.last_modified:
                         podcast.last_modified = result.last_modified
                         headers_rotated = True
-                    return podcast, [], False, True, source, headers_rotated, image_rows, audio_rows
+                    return RefreshAttemptResult(
+                        podcast=podcast,
+                        conditional_hit=True,
+                        headers_rotated=headers_rotated,
+                        image_rows=image_rows,
+                        audio_rows=audio_rows,
+                        source=source,
+                    )
 
                 # Spec #42/#49 — a fetch/parse failure (DNS, HTTP error, empty
                 # body) comes back as an error SENTINEL: content/parsed_feed are
@@ -352,14 +361,31 @@ class PodcastFeedManager:
                 # never retried/parked (errors-as-empty-results). Treat it as a
                 # hard error so the queued REFRESH_FEED task raises and recovers.
                 if result.error or result.content is None:
-                    had_error = True
+                    # Spec #60: carry the classified kind out of the fetch
+                    # layer instead of a bare boolean. A sentinel without a
+                    # kind (defensive) is treated as connectivity — the
+                    # keep-trying bias, never a park.
+                    failure = RefreshFailure(
+                        kind=result.kind or RefreshFailureKind.CONNECTIVITY,
+                        http_status=result.status_code or None,
+                        retry_after=result.retry_after,
+                        exception=result.error or "fetch returned no content",
+                    )
                     logger.error(
                         "feed_fetch_failed",
                         podcast_rss_url=rss_url_str,
                         status_code=result.status_code,
                         error=result.error,
+                        failure_kind=failure.kind.value,
                     )
-                    return podcast, [], True, False, source, headers_rotated, image_rows, audio_rows
+                    return RefreshAttemptResult(
+                        podcast=podcast,
+                        headers_rotated=headers_rotated,
+                        image_rows=image_rows,
+                        audio_rows=audio_rows,
+                        source=source,
+                        failure=failure,
+                    )
 
                 rss_content = result.content
                 parsed_feed = result.parsed_feed
@@ -474,11 +500,16 @@ class PodcastFeedManager:
                     episode.podcast_id = podcast.id
 
         except Exception as e:
-            had_error = True
+            # Spec #60: classify structurally — a requests-level exception
+            # escaping here (e.g. the YouTube source re-raising a network
+            # error) is connectivity/transient; anything unrecognized is OUR
+            # bug (INTERNAL) and must never condemn the feed.
+            failure = classify_fetch_exception(e)
             logger.error(
                 "Error checking feed",
                 podcast_rss_url=str(podcast.rss_url),
                 error=str(e),
+                failure_kind=failure.kind.value,
                 exc_info=True,
             )
         finally:
@@ -488,12 +519,22 @@ class PodcastFeedManager:
                 source_type=type(source).__name__ if source is not None else None,
                 duration_ms=round((time.perf_counter() - podcast_start) * 1000, 2),
                 new_episodes=len(new_eps),
-                had_error=had_error,
+                had_error=failure is not None,
+                failure_kind=failure.kind.value if failure else None,
                 conditional_get_hit=conditional_get_hit,
             )
         # headers_rotated only governs the 304 path (which returns above); a
         # 200 response routes the podcast through changed_podcasts regardless.
-        return podcast, new_eps, had_error, conditional_get_hit, source, headers_rotated, image_rows, audio_rows
+        return RefreshAttemptResult(
+            podcast=podcast,
+            new_episodes=new_eps,
+            conditional_hit=conditional_get_hit,
+            headers_rotated=headers_rotated,
+            image_rows=image_rows,
+            audio_rows=audio_rows,
+            source=source,
+            failure=failure,
+        )
 
     def _apply_rss_metadata(self, podcast: Podcast, metadata: Dict[str, Any]) -> bool:
         """Apply refreshed RSS metadata to podcast. Returns True if any field changed."""
@@ -602,18 +643,12 @@ class PodcastFeedManager:
         episode_audio_updates: List[Tuple[str, str, str]] = []
         transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
 
-        def _record_outcome(
-            podcast: Podcast,
-            eps: List[Episode],
-            had_error: bool,
-            hit: bool,
-            source: Any,
-            headers_rotated: bool,
-            image_rows: List[Tuple[str, str, Optional[str]]],
-            audio_rows: List[Tuple[str, str, str]],
-        ) -> None:
+        def _record_outcome(result: RefreshAttemptResult) -> None:
             nonlocal podcasts_with_errors, conditional_get_hits
-            if had_error:
+            podcast = result.podcast
+            eps = result.new_episodes
+            source = result.source
+            if result.failure is not None:
                 # FM-2: never certify a checkpoint on a failed refresh. The
                 # podcast's etag / last_modified / last_processed were already
                 # advanced in-memory before and during fetching; persisting
@@ -625,14 +660,14 @@ class PodcastFeedManager:
                 # retries instead.
                 podcasts_with_errors += 1
                 return
-            if hit:
+            if result.conditional_hit:
                 conditional_get_hits += 1
                 # A plain 304 (nothing changed) skips the batch entirely. But
                 # if the server *rotated* its ETag / Last-Modified on the 304,
                 # persist the podcast so the next refresh sends the fresh
                 # validator — otherwise the rotated header is dropped and we
                 # lose the conditional-GET hit on the following run.
-                if headers_rotated:
+                if result.headers_rotated:
                     changed_podcasts.append(podcast)
                 return
             changed_podcasts.append(podcast)
@@ -640,10 +675,10 @@ class PodcastFeedManager:
             # episodes (200 path only; a 304 returns above with empty rows).
             # The guarded UPDATEs in the batch writer make unchanged rows a
             # no-op.
-            if image_rows:
-                episode_image_updates.extend(image_rows)
-            if audio_rows:
-                episode_audio_updates.extend(audio_rows)
+            if result.image_rows:
+                episode_image_updates.extend(result.image_rows)
+            if result.audio_rows:
+                episode_audio_updates.extend(result.audio_rows)
             if eps:
                 new_episodes.append((podcast, eps))
                 new_episode_rows.extend(eps)
@@ -654,19 +689,7 @@ class PodcastFeedManager:
         if use_pool:
             # Preserve input ordering in the returned list so callers see a
             # deterministic shape regardless of completion order.
-            results: Dict[
-                int,
-                Tuple[
-                    Podcast,
-                    List[Episode],
-                    bool,
-                    bool,
-                    Any,
-                    bool,
-                    List[Tuple[str, str, Optional[str]]],
-                    List[Tuple[str, str, str]],
-                ],
-            ] = {}
+            results: Dict[int, RefreshAttemptResult] = {}
             with ThreadPoolExecutor(
                 max_workers=min(self.max_workers, total_podcasts),
                 thread_name_prefix="thestill-refresh",
@@ -694,19 +717,24 @@ class PodcastFeedManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        results[idx] = (podcast, [], True, False, None, False, [], [])
+                        # Something escaped _refresh_single_podcast's own
+                        # catch-all — classify anyway (spec #60); genuinely
+                        # unknown exceptions land as INTERNAL, never a park.
+                        results[idx] = RefreshAttemptResult(
+                            podcast=podcast,
+                            failure=classify_fetch_exception(e),
+                        )
                     if progress_callback:
-                        returned_podcast = results[idx][0]
-                        progress_callback(completed, total_podcasts, returned_podcast.title)
+                        progress_callback(completed, total_podcasts, results[idx].podcast.title)
 
             for idx in range(total_podcasts):
-                _record_outcome(*results[idx])
+                _record_outcome(results[idx])
         else:
             for idx, podcast in enumerate(podcasts):
                 if progress_callback:
                     progress_callback(idx, total_podcasts, podcast.title)
                 _record_outcome(
-                    *self._refresh_single_podcast(
+                    self._refresh_single_podcast(
                         podcast,
                         max_episodes_per_podcast,
                         known_external_ids_by_podcast.get(podcast.id, set()),

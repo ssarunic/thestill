@@ -17,8 +17,8 @@
 ``RSSMediaSource.fetch_and_parse`` returns an error SENTINEL (content /
 parsed_feed None, ``error`` set) on DNS/HTTP failures rather than raising.
 ``_refresh_single_podcast`` previously fell through to ``episodes = []`` and
-returned ``had_error=False`` — a silent success that cleared
-``last_refresh_error`` and never retried. It must now flag ``had_error=True``.
+reported success — a silent success that cleared ``last_refresh_error`` and
+never retried. It must now return a classified ``RefreshFailure`` (spec #60).
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from pathlib import Path
 
 from thestill.core.feed_manager import PodcastFeedManager
 from thestill.core.media_source import FetchAndParseResult, RSSMediaSource
+from thestill.core.refresh_failure import RefreshFailureKind
 from thestill.models.podcast import Podcast
 from thestill.utils.path_manager import PathManager
 
@@ -62,24 +63,42 @@ def _error_result() -> FetchAndParseResult:
         last_modified=None,
         not_modified=False,
         error="[Errno 8] nodename nor servname provided, or not known",
+        kind=RefreshFailureKind.CONNECTIVITY,
     )
 
 
-def test_fetch_error_sentinel_sets_had_error(tmp_path, monkeypatch):
+def test_fetch_error_sentinel_sets_failure(tmp_path, monkeypatch):
     fm = _feed_manager(tmp_path)
     source = RSSMediaSource(path_manager=PathManager(str(tmp_path)))
     monkeypatch.setattr(source, "fetch_and_parse", lambda *a, **k: _error_result())
     monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
 
-    podcast, new_eps, had_error, hit, _src, _rot, _imgs, _audio = fm._refresh_single_podcast(_podcast(), None, set())
+    result = fm._refresh_single_podcast(_podcast(), None, set())
 
-    assert had_error is True
-    assert new_eps == []
-    assert hit is False
+    assert result.had_error is True
+    assert result.failure is not None
+    assert result.failure.kind is RefreshFailureKind.CONNECTIVITY
+    assert result.new_episodes == []
+    assert result.conditional_hit is False
+
+
+def test_fetch_error_sentinel_without_kind_defaults_to_connectivity(tmp_path, monkeypatch):
+    # Defensive: a sentinel that somehow lost its kind must classify as
+    # connectivity (the keep-trying bias), never anything park-eligible.
+    fm = _feed_manager(tmp_path)
+    source = RSSMediaSource(path_manager=PathManager(str(tmp_path)))
+    bare = _error_result()._replace(kind=None)
+    monkeypatch.setattr(source, "fetch_and_parse", lambda *a, **k: bare)
+    monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
+
+    result = fm._refresh_single_podcast(_podcast(), None, set())
+
+    assert result.failure is not None
+    assert result.failure.kind is RefreshFailureKind.CONNECTIVITY
 
 
 def test_successful_fetch_is_not_flagged(tmp_path, monkeypatch):
-    # A 304 (not_modified) is NOT an error — must stay had_error=False.
+    # A 304 (not_modified) is NOT an error — must stay failure=None.
     fm = _feed_manager(tmp_path)
     source = RSSMediaSource(path_manager=PathManager(str(tmp_path)))
     not_modified = FetchAndParseResult(
@@ -94,7 +113,8 @@ def test_successful_fetch_is_not_flagged(tmp_path, monkeypatch):
     monkeypatch.setattr(source, "fetch_and_parse", lambda *a, **k: not_modified)
     monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
 
-    _podcast_out, _eps, had_error, hit, _src, _rot, _imgs, _audio = fm._refresh_single_podcast(_podcast(), None, set())
+    result = fm._refresh_single_podcast(_podcast(), None, set())
 
-    assert had_error is False
-    assert hit is True  # conditional-GET hit, not an error
+    assert result.had_error is False
+    assert result.failure is None
+    assert result.conditional_hit is True  # conditional-GET hit, not an error
