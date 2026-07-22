@@ -43,7 +43,7 @@ from ..core.refresh_failure import (
     decide_refresh_action,
     resolve_streak_state,
 )
-from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from ..utils.slug import generate_slug
@@ -2239,6 +2239,37 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 WHERE downloaded_path IS NULL;
 
             -- ========================================================================
+            -- EPISODE ALTERNATE ENCLOSURES (Podcasting 2.0 <podcast:alternateEnclosure>)
+            -- ========================================================================
+            -- Observational: one row per <podcast:source> child, re-observed on
+            -- every refresh (spec #62). video/youtube rows feed the playback
+            -- manifest's YouTube rendition. Mirrors postgres_schema.py.
+            CREATE TABLE IF NOT EXISTS episode_alternate_enclosures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id TEXT NOT NULL,
+                source_uri TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                length INTEGER NULL,
+                bitrate REAL NULL,
+                height INTEGER NULL,
+                title TEXT NULL,
+                rel TEXT NULL,
+                language TEXT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                UNIQUE(episode_id, source_uri),
+                CHECK (length(source_uri) > 0),
+                CHECK (length(mime_type) > 0),
+                CHECK (is_default IN (0, 1))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_alt_enclosures_episode
+                ON episode_alternate_enclosures(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_alt_enclosures_mime_type
+                ON episode_alternate_enclosures(mime_type);
+
+            -- ========================================================================
             -- USERS TABLE (Authentication)
             -- ========================================================================
             -- Supports single-user mode (default user) and multi-user mode (Google OAuth)
@@ -2987,6 +3018,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
         episode_audio_updates: Optional[List[Tuple[str, str, str, Optional[str]]]] = None,
+        episode_alternate_enclosures: Optional[List[Tuple[str, str, AlternateEnclosure]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
@@ -3020,8 +3052,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 additionally scoped to rows whose audio hasn't been downloaded
                 or transcribed yet — feeds that rotate enclosure URLs on every
                 fetch must not churn already-processed episodes.
+            episode_alternate_enclosures: Optional ``(podcast_id, external_id,
+                AlternateEnclosure)`` observation rows (spec #62), new and
+                already-tracked episodes alike. Inserted after the episode
+                INSERT so ``external_id → episode_id`` resolves in-transaction;
+                ``INSERT OR IGNORE`` on ``UNIQUE(episode_id, source_uri)``
+                makes every-refresh re-observation a no-op.
         """
-        if not changed_podcasts and not new_episodes and not episode_image_updates and not episode_audio_updates:
+        if (
+            not changed_podcasts
+            and not new_episodes
+            and not episode_image_updates
+            and not episode_audio_updates
+            and not episode_alternate_enclosures
+        ):
             return
 
         for ep in new_episodes:
@@ -3173,6 +3217,41 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                       AND audio_path IS NULL AND raw_transcript_path IS NULL
                     """,
                     audio_params,
+                )
+
+            # Spec #62 — observe <podcast:alternateEnclosure> rows in the SAME
+            # transaction as the conditional-GET checkpoint above: a post-commit
+            # write could fail after etag/last_modified advanced, and the next
+            # refresh's 304 would never re-parse this feed revision. The
+            # INSERT..SELECT resolves external_id → episode_id in-transaction
+            # (new episodes were inserted just above).
+            if episode_alternate_enclosures:
+                alt_params = [
+                    (
+                        str(alt.source_uri),
+                        alt.mime_type,
+                        alt.length,
+                        alt.bitrate,
+                        alt.height,
+                        alt.title,
+                        alt.rel,
+                        alt.language,
+                        1 if alt.is_default else 0,
+                        now_iso,
+                        podcast_id,
+                        external_id,
+                    )
+                    for podcast_id, external_id, alt in episode_alternate_enclosures
+                ]
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO episode_alternate_enclosures
+                        (episode_id, source_uri, mime_type, length, bitrate, height,
+                         title, rel, language, is_default, created_at)
+                    SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    FROM episodes WHERE podcast_id = ? AND external_id = ?
+                    """,
+                    alt_params,
                 )
 
     def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
@@ -4997,6 +5076,85 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             language=row["language"],
             rel=row["rel"],
             downloaded_path=row["downloaded_path"],
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        )
+
+    # ============================================================================
+    # AlternateEnclosure Methods (Podcasting 2.0 <podcast:alternateEnclosure>)
+    # ============================================================================
+
+    _ALT_ENCLOSURE_COLUMNS = (
+        "id, episode_id, source_uri, mime_type, length, bitrate, height, title, rel, language, is_default, created_at"
+    )
+
+    def get_alternate_enclosures(self, episode_id: str) -> List[AlternateEnclosure]:
+        """
+        Get all alternate enclosures for an episode (spec #62).
+
+        Args:
+            episode_id: Episode UUID
+
+        Returns:
+            AlternateEnclosure objects in observation order (created_at, id).
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT {self._ALT_ENCLOSURE_COLUMNS}
+                FROM episode_alternate_enclosures
+                WHERE episode_id = ?
+                ORDER BY created_at ASC, id ASC
+            """,
+                (episode_id,),
+            )
+            return [self._row_to_alternate_enclosure(row) for row in cursor.fetchall()]
+
+    def get_alternate_enclosures_for_episodes(self, episode_ids: List[str]) -> Dict[str, List[AlternateEnclosure]]:
+        """
+        Batched alternate-enclosure lookup for list endpoints (spec #62).
+
+        Every requested id is present in the result (empty list when the
+        episode has no rows), so callers can index without a default.
+
+        Args:
+            episode_ids: Episode UUIDs.
+
+        Returns:
+            ``{episode_id: [AlternateEnclosure, ...]}`` for every requested id.
+        """
+        result: Dict[str, List[AlternateEnclosure]] = {episode_id: [] for episode_id in episode_ids}
+        if not episode_ids:
+            return result
+
+        placeholders = ", ".join("?" for _ in episode_ids)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT {self._ALT_ENCLOSURE_COLUMNS}
+                FROM episode_alternate_enclosures
+                WHERE episode_id IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+            """,
+                episode_ids,
+            )
+            for row in cursor.fetchall():
+                result[row["episode_id"]].append(self._row_to_alternate_enclosure(row))
+        return result
+
+    def _row_to_alternate_enclosure(self, row: sqlite3.Row) -> AlternateEnclosure:
+        """Convert database row to AlternateEnclosure model."""
+        return AlternateEnclosure(
+            id=row["id"],
+            episode_id=row["episode_id"],
+            source_uri=row["source_uri"],
+            mime_type=row["mime_type"],
+            length=row["length"],
+            bitrate=row["bitrate"],
+            height=row["height"],
+            title=row["title"],
+            rel=row["rel"],
+            language=row["language"],
+            is_default=bool(row["is_default"]),
             created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         )
 

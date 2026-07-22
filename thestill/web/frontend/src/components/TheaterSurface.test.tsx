@@ -7,6 +7,12 @@ import { PlayerProvider, usePlayer, type PlayerContextValue, type PlayerTrack } 
 import TheaterSurface from './TheaterSurface'
 import type { PlaybackManifest } from '../api/types'
 
+// Spec #62 — shared IFrame API fixture: no script tag is ever injected.
+vi.mock('../contexts/playback-engine/youtube-iframe-api', async () => {
+  const { fakeYouTubeApi } = await import('../contexts/playback-engine/youtube-player-fake')
+  return { loadYouTubeIframeApi: vi.fn(() => Promise.resolve(fakeYouTubeApi)) }
+})
+
 // Captured in an effect (not during render, per react-hooks/globals) and
 // read through a proxy so assertions always see the latest context value.
 const ctxHolder: { current: PlayerContextValue | null } = { current: null }
@@ -110,5 +116,56 @@ describe('TheaterSurface', () => {
     expect(ctx.presentation).toBe('hidden')
     // Poster play affordance still offered for this episode.
     expect(screen.getByRole('button', { name: 'Play video' })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spec #62 — YouTube rendition menu entries
+// ---------------------------------------------------------------------------
+
+const dualTrack: PlayerTrack = {
+  ...track,
+  playback: {
+    ...manifest,
+    youtube: { video_id: 'validVID001', watch_url: 'https://www.youtube.com/watch?v=validVID001' },
+  },
+}
+
+function renderDualSurface() {
+  return render(
+    <PlayerProvider>
+      <Probe />
+      <TheaterSurface episodeId="ep-1" posterUrl="https://cdn.test/poster.jpg" track={dualTrack} />
+    </PlayerProvider>,
+  )
+}
+
+describe('TheaterSurface — spec #62 YouTube entries', () => {
+  it('offers the YouTube rendition only when the manifest carries the asset', async () => {
+    const user = userEvent.setup()
+    renderSurface()
+    await user.click(screen.getByRole('button', { name: 'Play video' }))
+    expect(screen.queryByRole('button', { name: 'Play video on YouTube player' })).not.toBeInTheDocument()
+  })
+
+  it('entering the YouTube rendition swaps the menu to "Use audio rendition" and back', async () => {
+    const user = userEvent.setup()
+    renderDualSurface()
+    await user.click(screen.getByRole('button', { name: 'Play video' }))
+
+    const ytButton = screen.getByRole('button', { name: 'Play video on YouTube player' })
+    await act(async () => {
+      ytButton.click()
+    })
+
+    expect(ctx.activeEngine).toBe('youtube')
+    expect(ctx.presentation).toBe('theater') // slot stays registered — no §7 bounce
+    expect(screen.queryByRole('button', { name: 'Play video on YouTube player' })).not.toBeInTheDocument()
+
+    // A video-enclosure episode lands back on the native VIDEO rendition
+    // (its manifest has no audio asset to switch to).
+    await user.click(screen.getByRole('button', { name: 'Use video rendition' }))
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.activeRendition).toBe('video')
   })
 })

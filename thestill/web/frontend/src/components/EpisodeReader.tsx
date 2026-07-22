@@ -548,6 +548,25 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 </button>
               )
             })()}
+            {/* Spec #62 §6 — "Watch video": audio-kind episodes carrying an
+                episode-level YouTube link enter the YouTube rendition here
+                (the theater mounts once the engine switches). Video-kind
+                episodes get their YouTube entry in the theater menu. */}
+            {playerTrack &&
+              episode.playback?.youtube &&
+              episode.playback.kind !== 'video' &&
+              !(player.activeEngine === 'youtube' && player.isCurrent(episode.id)) && (
+                <button
+                  type="button"
+                  onClick={() => player.playYouTube(playerTrack)}
+                  className="ml-3 inline-flex items-center gap-2 rounded-full border border-gray-300 px-5 py-2.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 active:bg-gray-100"
+                >
+                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21.6 7.2a2.5 2.5 0 00-1.76-1.77C18.25 5 12 5 12 5s-6.25 0-7.84.43A2.5 2.5 0 002.4 7.2 26.2 26.2 0 002 12c0 1.62.13 3.23.4 4.8a2.5 2.5 0 001.76 1.77C5.75 19 12 19 12 19s6.25 0 7.84-.43a2.5 2.5 0 001.76-1.77c.27-1.57.4-3.18.4-4.8 0-1.62-.13-3.23-.4-4.8zM10 15.5v-7l6 3.5-6 3.5z" />
+                  </svg>
+                  <span>Watch video</span>
+                </button>
+              )}
           </div>
 
           {/* Spec #28 §"Failure isolation" — entity branch is its own
@@ -568,14 +587,20 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
       {/* Spec #61 §2 — theater surface for video episodes: a 16:9 slot
           above the transcript that the global media layer positions the
           stable video node over. Karaoke transcript runs beneath exactly
-          as today; clicking a word still seeks. */}
-      {episode && playerTrack && episode.playback?.kind === 'video' && episode.playback.video && (
-        <TheaterSurface
-          episodeId={episode.id}
-          posterUrl={episode.playback.poster_url ?? episode.image_url ?? episode.podcast_image_url}
-          track={playerTrack}
-        />
-      )}
+          as today; clicking a word still seeks. Spec #62 §6 — audio-kind
+          episodes with a YouTube link get the theater only once the user
+          opts into the YouTube rendition ("Watch video"); leaving it
+          returns the reader to plain audio presentation. */}
+      {episode &&
+        playerTrack &&
+        ((episode.playback?.kind === 'video' && episode.playback.video) ||
+          (episode.playback?.youtube && player.activeEngine === 'youtube' && player.isCurrent(episode.id))) && (
+          <TheaterSurface
+            episodeId={episode.id}
+            posterUrl={episode.playback.poster_url ?? episode.image_url ?? episode.podcast_image_url}
+            track={playerTrack}
+          />
+        )}
 
       {/* Spec #28 §5.2 — Key entities strip, above the fold. Empty
           state (zero entities) hides itself. */}

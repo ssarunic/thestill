@@ -1,6 +1,6 @@
 # YouTube Video Rendition via Iframe Engine
 
-> **Status:** 📝 Draft (2026-07-22)
+> **Status:** 🚧 Implemented on `feat/62-youtube-rendition` (2026-07-22) — all three increments: observer + dual-backend data layer, manifest `youtube` asset + CSP + engine adapter (`PlaybackEngine` / `NativeEngine` / `YouTubeEngine`), theater/floating hosting, polled+interpolated clock, §7 policy effect. Open items unchanged.
 > **Created:** 2026-07-22
 > **Updated:** 2026-07-22
 > **Author:** Engineering (playback design)

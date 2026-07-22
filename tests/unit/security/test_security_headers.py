@@ -67,6 +67,16 @@ class TestSecurityHeaders:
         csp = TestClient(_make_app(is_production=True)).get("/x").headers["Content-Security-Policy"]
         assert "frame-ancestors 'none'" in csp
 
+    def test_csp_allows_youtube_iframe_engine(self):
+        """Spec #62 — the IFrame Player API script and the embed itself must
+        be allow-listed, scoped to exact YouTube hosts (no wildcards)."""
+        csp = TestClient(_make_app(is_production=True)).get("/x").headers["Content-Security-Policy"]
+        directives = {c.strip().split(" ")[0]: c.strip() for c in csp.split(";") if c.strip()}
+        assert "https://www.youtube.com" in directives["script-src"]
+        assert "https://s.ytimg.com" in directives["script-src"]
+        assert "frame-src" in directives
+        assert directives["frame-src"] == "frame-src https://www.youtube.com"
+
     def test_route_set_header_not_overwritten(self):
         """A deliberate per-route header override must win."""
         app = FastAPI()

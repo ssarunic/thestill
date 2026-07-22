@@ -155,14 +155,28 @@ export interface PlaybackAsset {
   height?: number | null
 }
 
+// Spec #62 — episode-level YouTube link (from a `video/youtube`
+// <podcast:alternateEnclosure>). Deliberately NOT a PlaybackAsset: the
+// iframe engine is built from `video_id` (no fetchable url), and there is
+// no `timeline_offset` — a static offset cannot model YouTube's dynamic
+// ad insertion, so seeks onto this rendition are best-effort by design.
+export interface YoutubeAsset {
+  video_id: string
+  watch_url: string
+  title?: string | null
+}
+
 // One episode, multiple renditions, one logical playback session. Audio-only
 // episodes emit `kind: 'audio'` with the existing URL; RSS video-enclosure
-// episodes emit a `video` asset plus poster. `captions_url` is reserved
-// (spec #61 open item — WebVTT derived from the cleaned transcript).
+// episodes emit a `video` asset plus poster. `youtube` is an opt-in
+// rendition (spec #62) — `kind` ignores it, it is never the default engine.
+// `captions_url` is reserved (spec #61 open item — WebVTT derived from the
+// cleaned transcript).
 export interface PlaybackManifest {
   kind: 'audio' | 'video'
   audio?: PlaybackAsset | null
   video?: PlaybackAsset | null
+  youtube?: YoutubeAsset | null
   poster_url?: string | null
   captions_url?: string | null
 }

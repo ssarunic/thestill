@@ -15,6 +15,18 @@ import {
 import type { PlaybackManifest } from '../api/types'
 
 // ---------------------------------------------------------------------------
+// YouTube IFrame API mock (spec #62) — shared fixture; no script tag is
+// ever injected, and FakeYTPlayer records transport calls.
+// ---------------------------------------------------------------------------
+
+import { fakePlayers, resetFakePlayers } from './playback-engine/youtube-player-fake'
+
+vi.mock('./playback-engine/youtube-iframe-api', async () => {
+  const { fakeYouTubeApi } = await import('./playback-engine/youtube-player-fake')
+  return { loadYouTubeIframeApi: vi.fn(() => Promise.resolve(fakeYouTubeApi)) }
+})
+
+// ---------------------------------------------------------------------------
 // HTMLMediaElement stubs
 // ---------------------------------------------------------------------------
 
@@ -469,5 +481,180 @@ describe('stop', () => {
     expect(ctx.presentation).toBe('hidden')
     expect(ctx.activeRendition).toBe('audio')
     expect(video.hasAttribute('src')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spec #62 — YouTube iframe engine
+// ---------------------------------------------------------------------------
+
+const youtubeTrack: PlayerTrack = {
+  episodeId: 'ep-yt',
+  podcastSlug: 'pod',
+  episodeSlug: 'ep-3',
+  title: 'YouTube Episode',
+  podcastTitle: 'The Pod',
+  audioUrl: 'https://cdn.test/ep3.mp3',
+  playback: {
+    kind: 'audio',
+    audio: { url: 'https://cdn.test/ep3.mp3', mime_type: 'audio/mpeg', timeline_offset: 0 },
+    video: null,
+    youtube: { video_id: 'validVID001', watch_url: 'https://www.youtube.com/watch?v=validVID001' },
+    poster_url: 'https://cdn.test/poster3.jpg',
+    captions_url: null,
+  },
+}
+
+// Enters the YouTube rendition the way the reader does: the theater slot
+// registers in the same commit as the engine flip (in the app the theater
+// mounts off `activeEngine`; here both run inside one act()).
+async function enterYouTube(slot: HTMLElement) {
+  await act(async () => {
+    ctx.playYouTube(youtubeTrack)
+    ctx.registerTheaterSlot('ep-yt', slot)
+  })
+  return fakePlayers.at(-1)!
+}
+
+describe('spec #62 — YouTube iframe engine', () => {
+  beforeEach(() => {
+    resetFakePlayers()
+  })
+
+  it('exposes youtubeAvailable from the manifest', () => {
+    renderPlayer()
+    act(() => ctx.play(audioTrack))
+    expect(ctx.youtubeAvailable).toBe(false)
+    act(() => ctx.play(youtubeTrack))
+    expect(ctx.youtubeAvailable).toBe(true)
+  })
+
+  it('playYouTube enters the engine, carries logical position, and swaps node visibility', async () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    video.currentTime = 30
+
+    const player = await enterYouTube(document.createElement('div'))
+
+    expect(ctx.activeEngine).toBe('youtube')
+    expect(ctx.presentation).toBe('theater')
+    expect(video.paused).toBe(true) // native paused, source retained
+    expect(video.src).toBe('https://cdn.test/ep3.mp3')
+    expect(player.loadVideoById).toHaveBeenCalledWith('validVID001', 30)
+    expect(player.playVideo).toHaveBeenCalled()
+    // One visible node at a time.
+    expect(video.style.display).toBe('none')
+    expect((document.querySelector('[data-testid="player-youtube-layer"]') as HTMLElement).style.display).not.toBe('none')
+  })
+
+  it('switchRendition(audio) leaves YouTube carrying the iframe clock best-effort', async () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    const player = await enterYouTube(document.createElement('div'))
+    player.time = 100
+    act(() => player.emit(1)) // PLAYING
+
+    act(() => ctx.switchRendition('audio'))
+
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.activeRendition).toBe('audio')
+    // Same source URL as before the YouTube detour → in-place seek. The
+    // interpolated clock may add sub-millisecond wall time — best-effort
+    // is the contract (§8).
+    expect(video.src).toBe('https://cdn.test/ep3.mp3')
+    expect(video.currentTime).toBeCloseTo(100, 1)
+    expect(video.paused).toBe(false) // was playing → still playing
+    expect(player.pauseVideo).toHaveBeenCalled()
+  })
+
+  it('§7: hiding video while on YouTube switches to the audio rendition', async () => {
+    renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.activeEngine).toBe('youtube')
+
+    act(() => ctx.setVideoPreference('audio-only'))
+
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.activeRendition).toBe('audio')
+    expect(ctx.presentation).toBe('hidden')
+  })
+
+  it('§7: unregistering the last presenting surface switches to audio', async () => {
+    renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    const slot = document.createElement('div')
+    let unregister!: () => void
+    await act(async () => {
+      ctx.playYouTube(youtubeTrack)
+      unregister = ctx.registerTheaterSlot('ep-yt', slot)
+    })
+    expect(ctx.activeEngine).toBe('youtube')
+
+    act(() => unregister())
+
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.activeRendition).toBe('audio')
+  })
+
+  it('a new episode always starts on the native engine', async () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    const player = await enterYouTube(document.createElement('div'))
+
+    act(() => ctx.play(audioTrack))
+
+    expect(ctx.activeEngine).toBe('native')
+    expect(video.src).toBe('https://cdn.test/ep1.mp3')
+    expect(player.pauseVideo).toHaveBeenCalled()
+  })
+
+  it('stop destroys the iframe player and resets the engine', async () => {
+    renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    const player = await enterYouTube(document.createElement('div'))
+
+    act(() => ctx.stop())
+
+    expect(player.destroy).toHaveBeenCalled()
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.track).toBeNull()
+  })
+
+  it('hides the PiP affordance while the YouTube engine is active', async () => {
+    renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.pipSupported).toBe(false)
+  })
+
+  it('playYouTube clears a prior "Hide video" so the opt-in is never a no-op', async () => {
+    // Review regression: videoPreference is session-global; without the
+    // reset, the §7 effect saw an unpresented iframe and bounced straight
+    // back to audio, making "Watch video" a visible no-op.
+    renderPlayer()
+    act(() => ctx.play(youtubeTrack))
+    act(() => ctx.setVideoPreference('audio-only'))
+
+    await enterYouTube(document.createElement('div'))
+
+    expect(ctx.videoPreference).toBe('shown')
+    expect(ctx.activeEngine).toBe('youtube')
+    expect(ctx.presentation).toBe('theater')
+  })
+
+  it('playYouTube exits native picture-in-picture before switching engines', async () => {
+    const { video } = renderPlayer()
+    const exitSpy = vi.fn(() => Promise.resolve())
+    Object.defineProperty(document, 'pictureInPictureElement', { configurable: true, value: video })
+    Object.defineProperty(document, 'exitPictureInPicture', { configurable: true, value: exitSpy })
+    try {
+      act(() => ctx.play(youtubeTrack))
+      await enterYouTube(document.createElement('div'))
+      expect(exitSpy).toHaveBeenCalled()
+    } finally {
+      delete (document as unknown as Record<string, unknown>).pictureInPictureElement
+      delete (document as unknown as Record<string, unknown>).exitPictureInPicture
+    }
   })
 })

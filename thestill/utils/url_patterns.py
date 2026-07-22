@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import re
 from typing import Final
+from urllib.parse import parse_qs, urlparse
 
 # ---------------------------------------------------------------------------
 # YouTube
@@ -61,6 +62,48 @@ YOUTUBE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 def is_youtube_url(url: str) -> bool:
     """Return True iff ``url`` looks like a YouTube video, channel, or playlist."""
     return any(p.search(url) for p in YOUTUBE_PATTERNS)
+
+
+# YouTube video ids are exactly 11 URL-safe base64 characters. Anchored
+# fullmatch over a fixed-length class — the validation gate for anything
+# that ends up interpolated into an iframe/embed URL (spec #62): feed data
+# is untrusted input, so an id that fails this shape is dropped, never
+# emitted.
+YOUTUBE_VIDEO_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+_YOUTUBE_VIDEO_HOSTS: Final[frozenset[str]] = frozenset(
+    {"youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"}
+)
+
+
+def extract_youtube_video_id(url: str) -> str | None:
+    """Extract a validated 11-char YouTube video id from a video URL.
+
+    Accepts ``youtu.be/<id>``, ``youtube.com/watch?v=<id>``,
+    ``youtube.com/embed/<id>``, ``/shorts/<id>`` and ``/live/<id>`` forms
+    (with ``www.``/``m.``/nocookie host variants). Returns ``None`` — never
+    raises — for anything unparseable or failing the 11-char validation.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower()
+    candidate: str | None = None
+    if host == "youtu.be":
+        candidate = parsed.path.lstrip("/").split("/", 1)[0] or None
+    elif host in _YOUTUBE_VIDEO_HOSTS:
+        path = parsed.path
+        if path == "/watch":
+            candidate = parse_qs(parsed.query).get("v", [None])[0]
+        elif path.startswith(("/embed/", "/shorts/", "/live/")):
+            segments = path.split("/")
+            candidate = segments[2] if len(segments) > 2 and segments[2] else None
+
+    if candidate and YOUTUBE_VIDEO_ID_RE.fullmatch(candidate):
+        return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +173,7 @@ def is_apple_podcast_url(url: str) -> bool:
 # own list.
 ALL_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     *YOUTUBE_PATTERNS,
+    YOUTUBE_VIDEO_ID_RE,
     *RSS_HINT_PATTERNS,
     APPLE_PODCAST_ID_RE,
     APPLE_EPISODE_ID_RE,

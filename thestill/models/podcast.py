@@ -103,6 +103,40 @@ class TranscriptLink(BaseModel):
         return mime_to_ext.get(self.mime_type, "txt")
 
 
+class AlternateEnclosure(BaseModel):
+    """
+    One <podcast:source> child of a <podcast:alternateEnclosure> tag (Podcasting 2.0).
+
+    Observational only — the audio <enclosure> remains canonical for the
+    processing pipeline. Rows feed the playback manifest's YouTube rendition
+    (spec #62): a ``video/youtube`` entry's ``source_uri`` carries the
+    episode-level YouTube link. ``source_uri`` is deliberately a plain string,
+    not HttpUrl — the namespace allows non-HTTP source URIs (e.g. ipfs://)
+    and an observational table should record them verbatim.
+
+    See: https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md#alternate-enclosure
+    """
+
+    # Database fields (optional, only set when loaded from DB)
+    id: Optional[int] = None  # Primary key from episode_alternate_enclosures table
+    episode_id: Optional[str] = None  # FK to episodes.id (UUID)
+
+    # RSS feed fields (required)
+    source_uri: str  # <podcast:source uri="…">
+    mime_type: str  # Parent tag's type attribute, e.g. "video/youtube", "video/mp4"
+
+    # RSS feed fields (optional, inherited from the parent tag)
+    length: Optional[int] = None  # Bytes
+    bitrate: Optional[float] = None  # Bits per second
+    height: Optional[int] = None  # Video height in pixels
+    title: Optional[str] = None
+    rel: Optional[str] = None
+    language: Optional[str] = None
+    is_default: bool = False  # Parent tag's default="true"
+
+    created_at: Optional[datetime] = None  # When the entry was first observed
+
+
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID

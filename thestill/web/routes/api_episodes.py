@@ -120,6 +120,11 @@ async def get_all_episodes(
     )
 
     # Format response
+    # Spec #62 — one batched lookup (not per-episode) so the list endpoint
+    # doesn't go N+1 on the alternate-enclosure table.
+    alt_by_episode = app_state.repository.get_alternate_enclosures_for_episodes(
+        [ep.id for _, ep in episodes_with_podcasts]
+    )
     episodes = []
     for podcast, episode in episodes_with_podcasts:
         # Extract summary preview if summary exists. Spec #35 — read via
@@ -147,8 +152,9 @@ async def get_all_episodes(
                 "description_html": episode.description_html,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "audio_url": str(episode.audio_url),
-                # Spec #61 §4 — playback-asset manifest (audio/video renditions).
-                "playback": build_playback_manifest(episode),
+                # Spec #61 §4 — playback-asset manifest (audio/video renditions;
+                # spec #62 adds the opt-in youtube asset).
+                "playback": build_playback_manifest(episode, alt_by_episode.get(episode.id, [])),
                 "duration": episode.duration,
                 "duration_formatted": format_duration(episode.duration) if episode.duration else None,
                 "external_id": episode.external_id,

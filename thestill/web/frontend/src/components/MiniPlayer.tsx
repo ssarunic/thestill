@@ -24,6 +24,7 @@ export default function MiniPlayer() {
     skip,
     stop,
     mediaKind,
+    youtubeAvailable,
     setVideoPreference,
   } = usePlayer()
   const currentTime = usePlayerTime()
@@ -83,8 +84,11 @@ export default function MiniPlayer() {
 
         {/* Spec #61 §2 — for video episodes the mini player keeps episode
             artwork (no live thumbnail: one DOM video cannot render in two
-            places) and gains a "Show video" affordance. */}
-        {mediaKind === 'video' && (
+            places) and gains a "Show video" affordance. Spec #62 — tracks
+            with a YouTube link get the same affordance; it leads back to
+            the reader, where the "Watch video" opt-in re-enters the
+            YouTube rendition (the iframe never plays off-surface). */}
+        {(mediaKind === 'video' || youtubeAvailable) && (
           <Link
             to={episodePath}
             onClick={() => setVideoPreference('shown')}
