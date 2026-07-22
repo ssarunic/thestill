@@ -855,11 +855,6 @@ class TaskWorker:
                 # Cache headers are untouched (FM-2 on the feed path).
                 recorded = bool(getattr(exc, "refresh_failure_recorded", False))
                 if not recorded:
-                    from ..utils.config import (
-                        get_default_refresh_interval_seconds,
-                        get_refresh_max_interval_seconds,
-                        get_refresh_min_interval_seconds,
-                    )
                     from .refresh_failure import RefreshFailure, RefreshFailureKind, RefreshPolicySettings
 
                     self.repository.record_refresh_failure(
@@ -869,11 +864,7 @@ class TaskWorker:
                             exception=error_msg,
                             is_internal=True,
                         ),
-                        RefreshPolicySettings(
-                            min_interval_seconds=get_refresh_min_interval_seconds(),
-                            max_interval_seconds=get_refresh_max_interval_seconds(),
-                            default_interval_seconds=get_default_refresh_interval_seconds(),
-                        ),
+                        RefreshPolicySettings.from_config(),
                     )
                 logger.info(
                     "refresh_feed_task_exhausted",

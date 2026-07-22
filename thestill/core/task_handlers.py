@@ -1414,11 +1414,7 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
         # path only records a fallback when this write never happened
         # (``refresh_failure_recorded`` below).
         failure = result.failure
-        settings = RefreshPolicySettings(
-            min_interval_seconds=get_refresh_min_interval_seconds(),
-            max_interval_seconds=get_refresh_max_interval_seconds(),
-            default_interval_seconds=get_default_refresh_interval_seconds(),
-        )
+        settings = RefreshPolicySettings.from_config()
         recorded = False
         try:
             decision = repo.record_refresh_failure(podcast_id, failure, settings)

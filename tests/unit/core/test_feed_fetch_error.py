@@ -97,6 +97,33 @@ def test_fetch_error_sentinel_without_kind_defaults_to_connectivity(tmp_path, mo
     assert result.failure.kind is RefreshFailureKind.CONNECTIVITY
 
 
+def test_youtube_outage_classifies_connectivity_end_to_end(tmp_path, monkeypatch):
+    """Spec #60 review regression: a yt-dlp network failure must propagate out
+    of YouTubeMediaSource (previously swallowed to [] one layer down in
+    youtube_downloader, faking a clean 'no new episodes' refresh) and classify
+    as connectivity in _refresh_single_podcast's catch-all."""
+    from unittest.mock import Mock
+
+    from yt_dlp.utils import DownloadError
+
+    from thestill.core.media_source import YouTubeMediaSource
+
+    fm = _feed_manager(tmp_path)
+    source = YouTubeMediaSource(str(tmp_path))
+    source.youtube_downloader.get_episodes_from_playlist = Mock(
+        side_effect=DownloadError("Unable to download webpage: <urlopen error [Errno 8] nodename nor servname>")
+    )
+    # detect_source is patched, so the podcast's stored URL is irrelevant —
+    # the YouTube source path is what's under test.
+    monkeypatch.setattr(fm.media_source_factory, "detect_source", lambda url: source)
+
+    result = fm._refresh_single_podcast(_podcast(), None, set())
+
+    assert result.failure is not None
+    assert result.failure.kind is RefreshFailureKind.CONNECTIVITY
+    assert result.new_episodes == []
+
+
 def test_successful_fetch_is_not_flagged(tmp_path, monkeypatch):
     # A 304 (not_modified) is NOT an error — must stay failure=None.
     fm = _feed_manager(tmp_path)

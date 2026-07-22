@@ -133,6 +133,28 @@ def test_http_error_parses_retry_after_seconds():
     assert failure.retry_after is not None
 
 
+def test_ytdlp_network_error_is_connectivity():
+    """Spec #60 review finding: yt-dlp wraps socket failures in its own
+    exception types — a YouTube outage must classify connectivity, not
+    INTERNAL (which would DLQ the feed task without retry)."""
+    from yt_dlp.utils import DownloadError
+
+    exc = DownloadError("Unable to download webpage: <urlopen error [Errno 8] nodename nor servname provided>")
+    failure = classify_fetch_exception(exc)
+    assert failure.kind is RefreshFailureKind.CONNECTIVITY
+    assert error_class_for_failure(failure) == "infra"
+
+
+def test_ytdlp_extractor_error_is_remote_transient_not_internal():
+    from yt_dlp.utils import DownloadError, ExtractorError
+
+    for exc in (DownloadError("ERROR: Video unavailable"), ExtractorError("Unsupported extractor change")):
+        failure = classify_fetch_exception(exc)
+        assert failure.kind is RefreshFailureKind.REMOTE_TRANSIENT
+        assert failure.is_internal is False
+        assert error_class_for_failure(failure) == "item"  # backs off, never fatal-DLQ
+
+
 # ---------------------------------------------------------------------------
 # classify_http_status
 # ---------------------------------------------------------------------------

@@ -47,6 +47,29 @@ import requests
 from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.url_guard import UnsafeDestinationError, UnsafeURLError, URLResolutionError
 
+try:  # yt-dlp is a hard dependency, but keep the pure module importable without it
+    from yt_dlp.utils import YoutubeDLError as _YoutubeDLError
+except ImportError:  # pragma: no cover
+    _YoutubeDLError = ()  # isinstance(x, ()) is always False
+
+# Network-shaped substrings inside a yt-dlp error message — yt-dlp wraps the
+# underlying socket/urllib failure into DownloadError text, so structural
+# isinstance checks can't see it. Kept conservative (same spirit as
+# error_classifier.INFRA_PATTERNS): unmatched yt-dlp errors classify
+# REMOTE_TRANSIENT (keep-trying), never INTERNAL/fatal.
+_YTDLP_NETWORK_SIGNATURES = (
+    "getaddrinfo",
+    "nodename nor servname",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "errno 8",
+    "unable to download webpage",
+    "connection refused",
+    "connection reset",
+    "timed out",
+    "network is unreachable",
+)
+
 if TYPE_CHECKING:
     from ..models.podcast import Episode, Podcast
 
@@ -118,6 +141,50 @@ class RefreshPolicySettings:
     min_interval_seconds: int
     max_interval_seconds: int
     default_interval_seconds: int
+
+    @classmethod
+    def from_config(cls) -> "RefreshPolicySettings":
+        """Build from the process env config — the one place the two writers
+        (handler per-attempt write, worker INTERNAL fallback) agree on."""
+        from ..utils.config import (
+            get_default_refresh_interval_seconds,
+            get_refresh_max_interval_seconds,
+            get_refresh_min_interval_seconds,
+        )
+
+        return cls(
+            min_interval_seconds=get_refresh_min_interval_seconds(),
+            max_interval_seconds=get_refresh_max_interval_seconds(),
+            default_interval_seconds=get_default_refresh_interval_seconds(),
+        )
+
+
+def resolve_streak_state(
+    prior_kind: Optional[str],
+    prior_consecutive: int,
+    streak_started_at: Optional[datetime],
+    new_kind: RefreshFailureKind,
+    now: datetime,
+) -> Tuple[datetime, int]:
+    """Shared streak bookkeeping for ``record_refresh_failure`` (both repos).
+
+    A change in failure kind restarts the streak — a feed that was 404ing
+    and is now unreachable is a NEW problem, not more of the old one.
+    Returns ``(streak_anchor, consecutive_before)``: the wall-clock streak
+    start to persist/judge against and the pre-increment failure count.
+    """
+    kind_changed = prior_kind is not None and prior_kind != new_kind.value
+    if kind_changed or streak_started_at is None:
+        return now, (0 if kind_changed else prior_consecutive)
+    return streak_started_at, prior_consecutive
+
+
+def compute_backoff_interval(current_interval_seconds: int, settings: RefreshPolicySettings) -> int:
+    """Failure backoff: lengthen ×1.5, clamped to the AIMD bounds (both repos)."""
+    return max(
+        settings.min_interval_seconds,
+        min(settings.max_interval_seconds, int(current_interval_seconds * 1.5)),
+    )
 
 
 def parse_retry_after(raw: Optional[str], now: datetime) -> Optional[datetime]:
@@ -203,7 +270,19 @@ def classify_fetch_exception(exc: BaseException) -> RefreshFailure:
     if isinstance(exc, requests.RequestException):
         return RefreshFailure(RefreshFailureKind.CONNECTIVITY, exception=repr(exc))
 
-    # 7. Everything else is OUR bug — loud, never condemns the feed.
+    # 7. yt-dlp failures (spec #60 review finding): a YouTube-source refresh
+    #    raises yt-dlp's own types, not requests'. Network-shaped messages
+    #    are connectivity; everything else yt-dlp raises (extractor changes,
+    #    "video unavailable", rate limits) is the remote side misbehaving —
+    #    REMOTE_TRANSIENT, never INTERNAL/fatal, so it backs off and stays
+    #    scheduled instead of DLQ-ing the feed task without retry.
+    if isinstance(exc, _YoutubeDLError):
+        msg = str(exc).lower()
+        if any(sig in msg for sig in _YTDLP_NETWORK_SIGNATURES):
+            return RefreshFailure(RefreshFailureKind.CONNECTIVITY, exception=repr(exc))
+        return RefreshFailure(RefreshFailureKind.REMOTE_TRANSIENT, exception=repr(exc))
+
+    # 8. Everything else is OUR bug — loud, never condemns the feed.
     return RefreshFailure(RefreshFailureKind.INTERNAL, exception=repr(exc), is_internal=True)
 
 

@@ -178,7 +178,7 @@ internal          # programming error in our code — must be loud, must NOT con
 | Kind | `error_class` (queue) | Feed action |
 |---|---|---|
 | `connectivity` | **`infra`** | Never park. Keep `next_refresh_at` set; exponential backoff. #49 breaker/healer own queue recovery. |
-| `remote_transient` | `infra` (5xx) / `item` (429) | Never park. Respect `Retry-After` → `next_refresh_at`. |
+| `remote_transient` | `item` (C+ correction: a 5xx from one feed host is that host's problem, not a shared-dependency outage — promoting it to `infra` would let a few unrelated broken feeds open the fleet-wide refresh breaker) | Never park. Respect `Retry-After` → `next_refresh_at`. |
 | `remote_gone` (410) | `fatal` | Quarantine with reason `feed_gone`. Decisive. |
 | `remote_gone` (404) | `item` | Quarantine **only after failures span a configured horizon** (not 3 retries in minutes). |
 | `authentication` | `item` | Pause with reason `auth_required` — distinct, actionable, surfaced to the user, not silently parked. |

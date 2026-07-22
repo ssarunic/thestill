@@ -61,7 +61,9 @@ from ..core.refresh_failure import (
     RefreshDecision,
     RefreshFailure,
     RefreshPolicySettings,
+    compute_backoff_interval,
     decide_refresh_action,
+    resolve_streak_state,
 )
 from ..models.podcast import Episode, FailureType, Podcast
 from ..utils.datetime_utils import ensure_utc, now_utc
@@ -1083,6 +1085,15 @@ class PodcastsMixin:
             ).fetchall()
             return [as_str(row["id"]) for row in rows]
 
+    # Spec #60 — the "active, followed, non-synthetic feed" predicate shared
+    # by the quarantine-probe and refresh-health queries below.
+    _ACTIVE_FEED_SQL = """
+                  COALESCE(synthetic, false) = false
+                  AND COALESCE(is_complete, false) = false
+                  AND (COALESCE(auto_added, false) = false
+                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+    """
+
     def get_quarantine_probe_due(
         self,
         probe_interval_seconds: int,
@@ -1099,15 +1110,12 @@ class PodcastsMixin:
         cutoff = now_dt - timedelta(seconds=probe_interval_seconds)
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND refresh_disabled_reason IN ('feed_gone', 'invalid_content')
                   AND (last_refresh_at IS NULL OR last_refresh_at <= %s)
-                  AND COALESCE(synthetic, false) = false
-                  AND COALESCE(is_complete, false) = false
-                  AND (COALESCE(auto_added, false) = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                  AND {self._ACTIVE_FEED_SQL}
                 ORDER BY last_refresh_at ASC
                 LIMIT %s
                 """,
@@ -1119,12 +1127,7 @@ class PodcastsMixin:
         """Spec #60 — one cheap aggregate for status surfacing (port of the
         SQLite implementation; see there for field semantics)."""
         now_dt = now or now_utc()
-        active_filter = """
-                  COALESCE(synthetic, false) = false
-                  AND COALESCE(is_complete, false) = false
-                  AND (COALESCE(auto_added, false) = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
-        """
+        active_filter = self._ACTIVE_FEED_SQL
         with self._get_connection() as conn:
             reason_rows = conn.execute(
                 f"""
@@ -1275,14 +1278,9 @@ class PodcastsMixin:
             prior_consecutive = (row["consecutive_refresh_failures"] or 0) if row else 0
             prior_kind = row["last_refresh_failure_kind"] if row else None
             streak_started = ensure_utc(row["refresh_failure_streak_started_at"]) if row else None
-
-            kind_changed = prior_kind is not None and prior_kind != failure.kind.value
-            if kind_changed or streak_started is None:
-                streak_for_decision = now_dt
-                consecutive_before = 0 if kind_changed else prior_consecutive
-            else:
-                streak_for_decision = streak_started
-                consecutive_before = prior_consecutive
+            streak_for_decision, consecutive_before = resolve_streak_state(
+                prior_kind, prior_consecutive, streak_started, failure.kind, now_dt
+            )
 
             decision = decide_refresh_action(
                 failure.kind,
@@ -1332,10 +1330,7 @@ class PodcastsMixin:
                 )
                 return decision
 
-            new_interval = max(
-                settings.min_interval_seconds,
-                min(settings.max_interval_seconds, int(current_interval * 1.5)),
-            )
+            new_interval = compute_backoff_interval(current_interval, settings)
             next_at_dt = now_dt + timedelta(seconds=new_interval)
             retry_after = ensure_utc(failure.retry_after)
             if retry_after is not None and retry_after > next_at_dt:
