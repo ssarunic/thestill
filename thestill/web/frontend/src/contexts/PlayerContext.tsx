@@ -52,8 +52,13 @@ export interface PlayerTrack {
 }
 
 export interface PlayOptions {
-  // Start playback at this offset in seconds. For a new track we defer
-  // the seek until the media element reports metadata (duration) is
+  // Start playback at this position in seconds ON THE ASSET'S TIMELINE
+  // (engine time), the same convention as seek(): callers already fold in
+  // the per-episode playback offset (transcript segments and summary
+  // citations both emit `segment.start + playback_time_offset_seconds`),
+  // so play() assigns it to the engine verbatim — adding the asset's
+  // timelineOffset here would double-apply it. For a new track the seek is
+  // deferred until the media element reports metadata (duration) is
   // available; browsers silently clamp seeks on unloaded media.
   startAt?: number
 }

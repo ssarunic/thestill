@@ -238,6 +238,31 @@ describe('playback session basics', () => {
     act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
     expect(video.currentTime).toBe(30)
   })
+
+  // startAt is ENGINE (asset-timeline) time, the same convention as seek():
+  // transcript segments and summary citations already fold the per-episode
+  // playback offset into the seconds they emit, so play() must assign it
+  // verbatim. Re-adding the asset's timelineOffset would double-apply it.
+  it('does not re-apply the asset timelineOffset to startAt on a new track', () => {
+    const { video } = renderPlayer()
+    // videoTrack's video asset carries timeline_offset: 2.
+    act(() => ctx.play(videoTrack, { startAt: 30 }))
+    act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
+    expect(video.currentTime).toBe(30) // not 32
+  })
+
+  it('does not re-apply the asset timelineOffset to startAt across a source transition', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play({ ...videoTrack, playback: null, audioUrl: 'https://cdn.test/old-ep2.mp3' }))
+    video.currentTime = 50
+    // Same episode replayed with the full manifest AND an explicit startAt:
+    // the explicit position wins over the carried-position conversion and is
+    // already on the target asset's timeline.
+    act(() => ctx.play(videoTrack, { startAt: 30 }))
+    expect(video.src).toBe('https://cdn.test/ep2.mp4')
+    act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
+    expect(video.currentTime).toBe(30) // not 32
+  })
 })
 
 describe('spec #61 §5 — source URL comparison on same-episode play', () => {

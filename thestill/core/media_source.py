@@ -1210,31 +1210,39 @@ class RSSMediaSource(MediaSource):
                 continue
         return images
 
-    def extract_episode_audio_urls(self, parsed_feed: Any) -> Dict[str, str]:
-        """Map every feed entry's ``external_id`` to its current enclosure URL.
+    def extract_episode_audio_urls(self, parsed_feed: Any) -> Dict[str, Tuple[str, Optional[str]]]:
+        """Map every feed entry's ``external_id`` to its current enclosure URL + MIME type.
 
         Used by the refresh path to re-sync stale ``audio_url``s: some hosts
         (e.g. BBC's mediaselector) re-publish an episode's audio under a new
         asset URL while keeping the same GUID, so the stored URL starts 404ing
         for episodes that haven't been fetched yet. The ``external_id`` key
         derivation mirrors :meth:`fetch_episodes` exactly so the keys line up
-        with stored episodes. Entries without an audio enclosure are omitted —
+        with stored episodes. Entries without an enclosure are omitted —
         a missing enclosure must never blank a stored URL.
+
+        Spec #61: enclosures may now be ``video/*``, and the playback manifest
+        classifies the rendition from ``audio_mime_type`` — so the MIME type
+        rides along and the batch writer updates both columns together. A
+        resync that wrote a video URL while leaving a stale ``audio/*`` MIME
+        type would make the manifest report an audio rendition for a video
+        asset.
 
         Args:
             parsed_feed: A feedparser result.
 
         Returns:
-            ``{external_id: audio_url}`` for every entry carrying an enclosure.
+            ``{external_id: (audio_url, mime_type)}`` for every entry carrying
+            an enclosure.
         """
-        audio_urls: Dict[str, str] = {}
+        audio_urls: Dict[str, Tuple[str, Optional[str]]] = {}
         for entry in parsed_feed.entries:
             try:
                 episode_date = self._parse_date(entry.get("published_parsed"))
                 external_id = entry.get("guid", entry.get("id", str(episode_date)))
-                audio_url = self._extract_audio_url(entry)
+                audio_url, _, mime_type = self._extract_enclosure_info(entry)
                 if audio_url:
-                    audio_urls[external_id] = audio_url
+                    audio_urls[external_id] = (audio_url, mime_type)
             except Exception:
                 # A malformed entry must not blank the whole audio-url sync.
                 continue

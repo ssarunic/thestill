@@ -296,11 +296,13 @@ class PodcastFeedManager:
             artwork from these (signed CDN URLs rotate and the stored ones go
             stale because new-episode discovery never revisits an existing row).
             ``audio_rows`` are the analogous ``(podcast_id, external_id,
-            audio_url)`` triples — some hosts (e.g. BBC mediaselector) re-publish
-            audio under a new URL while keeping the GUID, so stored enclosure
-            URLs 404 for episodes that haven't been fetched yet; the batch
-            writer repairs those with a guarded UPDATE scoped to not-yet-fetched
-            episodes.
+            audio_url, mime_type)`` rows — some hosts (e.g. BBC mediaselector)
+            re-publish audio under a new URL while keeping the GUID, so stored
+            enclosure URLs 404 for episodes that haven't been fetched yet; the
+            batch writer repairs those with a guarded UPDATE scoped to
+            not-yet-fetched episodes. The MIME type travels with the URL so
+            ``audio_mime_type`` keeps describing ``audio_url`` (spec #61 — the
+            playback manifest classifies the rendition from it).
         """
         podcast_start = time.perf_counter()
         failure: Optional[RefreshFailure] = None
@@ -309,7 +311,7 @@ class PodcastFeedManager:
         conditional_get_hit = False
         headers_rotated = False
         image_rows: List[Tuple[str, str, Optional[str]]] = []
-        audio_rows: List[Tuple[str, str, str]] = []
+        audio_rows: List[Tuple[str, str, str, Optional[str]]] = []
         try:
             rss_url_str = str(podcast.rss_url)
             source = self.media_source_factory.detect_source(rss_url_str)
@@ -429,8 +431,8 @@ class PodcastFeedManager:
                         # near-free when nothing changed.
                         feed_audio_urls = source.extract_episode_audio_urls(parsed_feed)
                         audio_rows = [
-                            (podcast.id, external_id, url)
-                            for external_id, url in feed_audio_urls.items()
+                            (podcast.id, external_id, url, mime_type)
+                            for external_id, (url, mime_type) in feed_audio_urls.items()
                             if external_id in known
                         ]
 
@@ -640,7 +642,7 @@ class PodcastFeedManager:
         changed_podcasts: List[Podcast] = []
         new_episode_rows: List[Episode] = []
         episode_image_updates: List[Tuple[str, str, Optional[str]]] = []
-        episode_audio_updates: List[Tuple[str, str, str]] = []
+        episode_audio_updates: List[Tuple[str, str, str, Optional[str]]] = []
         transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
 
         def _record_outcome(result: RefreshAttemptResult) -> None:

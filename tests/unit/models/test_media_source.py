@@ -1076,6 +1076,12 @@ class TestExtractEpisodeAudioUrls:
         <guid isPermaLink="false">guid-2</guid>
         <pubDate>Wed, 17 Jun 2026 14:30:00 +0000</pubDate>
       </item>
+      <item>
+        <title>Ep 3 (video enclosure)</title>
+        <guid isPermaLink="false">guid-3</guid>
+        <pubDate>Tue, 16 Jun 2026 14:30:00 +0000</pubDate>
+        <enclosure url="https://example.com/video/3-v2.mp4" length="900" type="video/mp4"/>
+      </item>
     </channel></rss>"""
 
     def test_maps_guid_to_enclosure_and_omits_missing(self, temp_storage):
@@ -1089,5 +1095,11 @@ class TestExtractEpisodeAudioUrls:
         audio_urls = source.extract_episode_audio_urls(parsed)
 
         # Same guid-based key derivation as fetch_episodes; entries without
-        # an enclosure are omitted rather than mapped to None.
-        assert audio_urls == {"guid-1": "https://example.com/audio/1-v2.mp3"}
+        # an enclosure are omitted rather than mapped to None. The MIME type
+        # rides along so the resync UPDATE keeps audio_mime_type describing
+        # audio_url (spec #61 — the playback manifest classifies the
+        # rendition from it), including video enclosures.
+        assert audio_urls == {
+            "guid-1": ("https://example.com/audio/1-v2.mp3", "audio/mpeg"),
+            "guid-3": ("https://example.com/video/3-v2.mp4", "video/mp4"),
+        }

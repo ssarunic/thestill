@@ -728,11 +728,12 @@ def test_save_refresh_batch_resyncs_drifted_audio_url(temp_db, sample_podcast, s
     temp_db.save_refresh_batch(
         [],
         [],
-        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, new_url)],
+        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, new_url, "audio/mpeg")],
     )
 
     after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
     assert str(after.audio_url) == new_url
+    assert after.audio_mime_type == "audio/mpeg"
 
 
 def test_save_refresh_batch_audio_update_is_noop_when_unchanged(temp_db, sample_podcast, sample_episode):
@@ -749,7 +750,7 @@ def test_save_refresh_batch_audio_update_is_noop_when_unchanged(temp_db, sample_
     temp_db.save_refresh_batch(
         [],
         [],
-        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, str(sample_episode.audio_url))],
+        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, str(sample_episode.audio_url), None)],
     )
 
     after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")
@@ -768,7 +769,9 @@ def test_save_refresh_batch_audio_update_skips_fetched_episodes(temp_db, sample_
     temp_db.save_refresh_batch(
         [],
         [],
-        episode_audio_updates=[(sample_podcast.id, sample_episode.external_id, "https://example.com/rotated.mp3")],
+        episode_audio_updates=[
+            (sample_podcast.id, sample_episode.external_id, "https://example.com/rotated.mp3", "audio/mpeg")
+        ],
     )
 
     after = temp_db.get_episode_by_external_id("https://example.com/feed.xml", "episode-guid-789")

@@ -2986,7 +2986,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         changed_podcasts: List[Podcast],
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
-        episode_audio_updates: Optional[List[Tuple[str, str, str]]] = None,
+        episode_audio_updates: Optional[List[Tuple[str, str, str, Optional[str]]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
@@ -3011,13 +3011,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 revisits an existing episode). New episodes inserted in this same
                 batch already carry the current URL, so their update is a no-op.
             episode_audio_updates: Optional ``(podcast_id, external_id,
-                audio_url)`` triples re-syncing existing episodes' enclosure
-                URLs (hosts like BBC re-publish audio under a new URL for the
-                same GUID, so the stored URL 404s before the episode is
-                fetched). Guarded the same way, and additionally scoped to
-                rows whose audio hasn't been downloaded or transcribed yet —
-                feeds that rotate enclosure URLs on every fetch must not churn
-                already-processed episodes.
+                audio_url, mime_type)`` rows re-syncing existing episodes'
+                enclosure URLs (hosts like BBC re-publish audio under a new URL
+                for the same GUID, so the stored URL 404s before the episode is
+                fetched). ``audio_mime_type`` is written with ``audio_url`` so
+                the pair stays consistent — the playback manifest classifies
+                the rendition from it (spec #61). Guarded the same way, and
+                additionally scoped to rows whose audio hasn't been downloaded
+                or transcribed yet — feeds that rotate enclosure URLs on every
+                fetch must not churn already-processed episodes.
         """
         if not changed_podcasts and not new_episodes and not episode_image_updates and not episode_audio_updates:
             return
@@ -3153,18 +3155,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 audio_params = [
                     (
                         audio_url,
+                        mime_type,
                         now_iso,
                         podcast_id,
                         external_id,
                         audio_url,
+                        mime_type,
                     )
-                    for podcast_id, external_id, audio_url in episode_audio_updates
+                    for podcast_id, external_id, audio_url, mime_type in episode_audio_updates
                 ]
                 conn.executemany(
                     """
                     UPDATE episodes
-                    SET audio_url = ?, updated_at = ?
-                    WHERE podcast_id = ? AND external_id = ? AND audio_url IS NOT ?
+                    SET audio_url = ?, audio_mime_type = ?, updated_at = ?
+                    WHERE podcast_id = ? AND external_id = ?
+                      AND (audio_url IS NOT ? OR audio_mime_type IS NOT ?)
                       AND audio_path IS NULL AND raw_transcript_path IS NULL
                     """,
                     audio_params,
