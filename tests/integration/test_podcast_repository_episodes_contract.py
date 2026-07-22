@@ -314,26 +314,40 @@ def test_save_refresh_batch_audio_url_resync(h):
         [],
         [],
         episode_audio_updates=[
-            (pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3"),
-            (pid, fetched.external_id, f"https://example.com/{uid}/2-rotated.mp3"),
+            (pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3", "audio/mpeg"),
+            (pid, fetched.external_id, f"https://example.com/{uid}/2-rotated.mp3", "audio/mpeg"),
         ],
     )
 
     repaired = h.repo.get_episode_by_external_id(rss, stale.external_id)
     assert str(repaired.audio_url) == f"https://example.com/{uid}/1-republished.mp3"
+    assert repaired.audio_mime_type == "audio/mpeg"
 
     untouched = h.repo.get_episode_by_external_id(rss, fetched.external_id)
     assert untouched.audio_url == fetched.audio_url
 
-    # Guarded no-op: re-sending the same URL leaves updated_at alone.
+    # Guarded no-op: re-sending the same URL + MIME leaves updated_at alone.
     before = h.repo.get_episode_by_external_id(rss, stale.external_id)
     h.repo.save_refresh_batch(
         [],
         [],
-        episode_audio_updates=[(pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3")],
+        episode_audio_updates=[(pid, stale.external_id, f"https://example.com/{uid}/1-republished.mp3", "audio/mpeg")],
     )
     after = h.repo.get_episode_by_external_id(rss, stale.external_id)
     assert after.updated_at == before.updated_at
+
+    # Spec #61: a feed that swaps an undownloaded episode's enclosure to a
+    # video rendition updates URL and MIME together — audio_mime_type must
+    # keep describing audio_url, or build_playback_manifest() classifies a
+    # video asset as an audio rendition.
+    h.repo.save_refresh_batch(
+        [],
+        [],
+        episode_audio_updates=[(pid, stale.external_id, f"https://example.com/{uid}/1-video.mp4", "video/mp4")],
+    )
+    swapped = h.repo.get_episode_by_external_id(rss, stale.external_id)
+    assert str(swapped.audio_url) == f"https://example.com/{uid}/1-video.mp4"
+    assert swapped.audio_mime_type == "video/mp4"
 
 
 def test_update_episode_image_urls_guarded(h):

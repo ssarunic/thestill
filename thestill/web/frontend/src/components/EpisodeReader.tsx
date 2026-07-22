@@ -11,6 +11,7 @@ const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
 const SegmentedTranscriptViewer = lazy(() => import('./SegmentedTranscriptViewer'))
 const SummaryViewer = lazy(() => import('./SummaryViewer'))
 import ExpandableDescription from './ExpandableDescription'
+import TheaterSurface from './TheaterSurface'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
 import PipelineActionButton from './PipelineActionButton'
@@ -294,29 +295,39 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
   }, [])
 
   const clearEntityFilter = useCallback(() => setFilterEntityIds(new Set()), [])
+
+  // One track object for every play entry point on this page (play button,
+  // segment seek, theater surface) — includes the spec #61 playback-asset
+  // manifest so video episodes start on the video rendition.
+  const playerTrack = useMemo(
+    () =>
+      episode
+        ? {
+            episodeId: episode.id,
+            podcastSlug: podcastSlug!,
+            episodeSlug: episodeSlug!,
+            title: episode.title,
+            podcastTitle: episode.podcast_title,
+            audioUrl: episode.audio_url,
+            artworkUrl: episode.image_url ?? episode.podcast_image_url,
+            durationHint: episode.duration,
+            playback: episode.playback ?? null,
+          }
+        : null,
+    [episode, podcastSlug, episodeSlug],
+  )
+
   const handleSegmentSeek = useCallback(
     (seconds: number) => {
-      if (!episode) return
+      if (!episode || !playerTrack) return
       if (player.isCurrent(episode.id)) {
         player.seek(seconds)
         if (!player.isPlaying) player.resume()
         return
       }
-      player.play(
-        {
-          episodeId: episode.id,
-          podcastSlug: podcastSlug!,
-          episodeSlug: episodeSlug!,
-          title: episode.title,
-          podcastTitle: episode.podcast_title,
-          audioUrl: episode.audio_url,
-          artworkUrl: episode.image_url ?? episode.podcast_image_url,
-          durationHint: episode.duration,
-        },
-        { startAt: seconds },
-      )
+      player.play(playerTrack, { startAt: seconds })
     },
-    [episode, podcastSlug, episodeSlug, player],
+    [episode, playerTrack, player],
   )
 
   const handleSummaryCitation = useCallback(
@@ -506,17 +517,8 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
               const handleClick = () => {
                 if (isCurrent) {
                   player.toggle()
-                } else {
-                  player.play({
-                    episodeId: episode.id,
-                    podcastSlug: podcastSlug!,
-                    episodeSlug: episodeSlug!,
-                    title: episode.title,
-                    podcastTitle: episode.podcast_title,
-                    audioUrl: episode.audio_url,
-                    artworkUrl: episode.image_url ?? episode.podcast_image_url,
-                    durationHint: episode.duration,
-                  })
+                } else if (playerTrack) {
+                  player.play(playerTrack)
                 }
               }
               return (
@@ -562,6 +564,18 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
           )}
         </div>
       ) : null}
+
+      {/* Spec #61 §2 — theater surface for video episodes: a 16:9 slot
+          above the transcript that the global media layer positions the
+          stable video node over. Karaoke transcript runs beneath exactly
+          as today; clicking a word still seeks. */}
+      {episode && playerTrack && episode.playback?.kind === 'video' && episode.playback.video && (
+        <TheaterSurface
+          episodeId={episode.id}
+          posterUrl={episode.playback.poster_url ?? episode.image_url ?? episode.podcast_image_url}
+          track={playerTrack}
+        />
+      )}
 
       {/* Spec #28 §5.2 — Key entities strip, above the fold. Empty
           state (zero entities) hides itself. */}

@@ -311,7 +311,7 @@ class EpisodesMixin:
         changed_podcasts: List[Podcast],
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
-        episode_audio_updates: Optional[List[Tuple[str, str, str]]] = None,
+        episode_audio_updates: Optional[List[Tuple[str, str, str, Optional[str]]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
@@ -460,18 +460,21 @@ class EpisodesMixin:
                 audio_params = [
                     (
                         audio_url,
+                        mime_type,
                         now,
                         podcast_id,
                         external_id,
                         audio_url,
+                        mime_type,
                     )
-                    for podcast_id, external_id, audio_url in episode_audio_updates
+                    for podcast_id, external_id, audio_url, mime_type in episode_audio_updates
                 ]
                 cur.executemany(
                     """
                     UPDATE episodes
-                    SET audio_url = %s, updated_at = %s
-                    WHERE podcast_id = %s AND external_id = %s AND audio_url IS DISTINCT FROM %s
+                    SET audio_url = %s, audio_mime_type = %s, updated_at = %s
+                    WHERE podcast_id = %s AND external_id = %s
+                      AND (audio_url IS DISTINCT FROM %s OR audio_mime_type IS DISTINCT FROM %s)
                       AND audio_path IS NULL AND raw_transcript_path IS NULL
                     """,
                     audio_params,

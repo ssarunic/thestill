@@ -26,6 +26,7 @@ from structlog import get_logger
 
 from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
+from ...services.playback import build_playback_manifest
 from ...services.podcast_service import extract_summary_preview
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
@@ -146,6 +147,8 @@ async def get_all_episodes(
                 "description_html": episode.description_html,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "audio_url": str(episode.audio_url),
+                # Spec #61 §4 — playback-asset manifest (audio/video renditions).
+                "playback": build_playback_manifest(episode),
                 "duration": episode.duration,
                 "duration_formatted": format_duration(episode.duration) if episode.duration else None,
                 "external_id": episode.external_id,

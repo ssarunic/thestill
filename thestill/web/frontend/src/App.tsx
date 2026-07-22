@@ -4,6 +4,7 @@ import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 import { PlayerProvider } from './contexts/PlayerContext'
+import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 
 // Lazy load pages for code splitting
@@ -143,6 +144,13 @@ function App() {
         } />
       </Route>
     </Routes>
+
+    {/* Spec #61 §2 — floating video tile for off-reader video playback.
+        Deliberately NOT mounted while the reader overlay is open: a global
+        tile above the z-50 overlay would fight its focus trap, one below
+        would vanish behind the scrim (§3). Unmounting unregisters the
+        floating slot, so playback simply continues audio-first. */}
+    {!backgroundLocation && <FloatingVideoTile />}
 
     {/* Overlay pass — only mounted while navigation state carries a
         background location. PlayerProvider sits above both passes so
