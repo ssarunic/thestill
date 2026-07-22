@@ -4715,7 +4715,13 @@ def server(ctx, host, port, reload, workers):
     # Create app with existing config to share services
     app = create_app(config)
 
-    # Run uvicorn
+    # Run uvicorn. ``timeout_graceful_shutdown`` caps the connection-drain
+    # wait on SIGTERM/SIGINT: the default (None) waits for in-flight requests
+    # FOREVER, and the SSE progress streams (/api/commands/task/*/progress)
+    # are effectively infinite requests — one open web-UI tab made SIGTERM
+    # hang for a full 30s keepalive cycle (measured), reading as "server
+    # ignores SIGTERM". 5s lets normal requests finish and force-closes
+    # long-lived streams (SSE clients auto-reconnect).
     uvicorn.run(
         app,
         host=host,
@@ -4723,6 +4729,7 @@ def server(ctx, host, port, reload, workers):
         reload=reload,
         workers=workers if not reload else 1,  # Can't use workers with reload
         log_level="info",
+        timeout_graceful_shutdown=5,
     )
 
 
