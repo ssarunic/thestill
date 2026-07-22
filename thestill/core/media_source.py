@@ -45,6 +45,7 @@ from urllib3.util.retry import Retry
 from ..models.podcast import Episode, TranscriptLink
 from ..utils.datetime_utils import ensure_utc, parse_struct_time_utc
 from ..utils.duration import parse_duration
+from ..utils.html_utils import resolve_description_variants
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
 from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
@@ -1114,9 +1115,11 @@ class RSSMediaSource(MediaSource):
         """
         Extract plain text and HTML descriptions from RSS entry.
 
-        RSS feeds may provide descriptions in multiple formats:
-        - entry.description: Usually plain text (links stripped)
-        - entry.content: List of content objects, may include HTML with <a> tags
+        Feeds provide the description in several fields (``description``,
+        ``content:encoded``, ``itunes:summary``) with no reliable convention
+        for which one carries markup, so all variants are handed to
+        ``resolve_description_variants`` which picks by content, not by
+        field position.
 
         Args:
             entry: Feedparser entry object
@@ -1124,19 +1127,11 @@ class RSSMediaSource(MediaSource):
         Returns:
             Tuple of (plain_text_description, html_description)
         """
-        plain_text = entry.get("description", "")
-        html_content = ""
+        candidates = [entry.get("description", "")]
+        for c in entry.get("content", []):
+            candidates.append(c.get("value", ""))
 
-        # Check for HTML content in entry.content
-        content_list = entry.get("content", [])
-        for c in content_list:
-            content_type = c.get("type", "")
-            content_value = c.get("value", "")
-            if content_type == "text/html" and content_value:
-                html_content = content_value
-                break
-
-        return plain_text, html_content
+        return resolve_description_variants(candidates)
 
     def _extract_episode_image(self, entry: Any) -> Optional[str]:
         """
