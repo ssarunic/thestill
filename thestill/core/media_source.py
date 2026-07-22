@@ -1061,33 +1061,42 @@ class RSSMediaSource(MediaSource):
 
     def _extract_enclosure_info(self, entry: Any) -> tuple[Optional[str], Optional[int], Optional[str]]:
         """
-        Extract audio enclosure info from feed entry.
+        Extract media enclosure info from feed entry.
 
         THES-145: Returns URL plus length and type attributes from enclosure tag.
+
+        Spec #61: ``video/*`` enclosures are accepted as a fallback — RSS
+        video episodes are the first legitimate video population for the
+        unified playback session. Audio enclosures still win when a feed
+        carries both, since the processing pipeline is audio-first and the
+        RSS spec allows only one enclosure per item anyway. The MIME type is
+        recorded on the episode so the playback manifest can classify the
+        rendition.
 
         Args:
             entry: Feedparser entry object
 
         Returns:
-            Tuple of (audio_url, file_size_bytes, mime_type)
+            Tuple of (media_url, file_size_bytes, mime_type)
         """
-        # Check links first
-        for link in entry.get("links", []):
-            mime_type = link.get("type", "")
-            if mime_type.startswith("audio/"):
-                href = link.get("href")
-                if href:
-                    length = self._parse_int_field(link.get("length"))
-                    return str(href), length, mime_type
+        video_fallback: Optional[tuple[str, Optional[int], str]] = None
 
-        # Check enclosures
-        for enclosure in entry.get("enclosures", []):
-            mime_type = enclosure.get("type", "")
+        # Links first, then enclosures — preserves the historical audio
+        # lookup order.
+        for candidate in list(entry.get("links", [])) + list(entry.get("enclosures", [])):
+            mime_type = candidate.get("type", "")
+            href = candidate.get("href")
+            if not href:
+                continue
             if mime_type.startswith("audio/"):
-                href = enclosure.get("href")
-                if href:
-                    length = self._parse_int_field(enclosure.get("length"))
-                    return str(href), length, mime_type
+                length = self._parse_int_field(candidate.get("length"))
+                return str(href), length, mime_type
+            if video_fallback is None and mime_type.startswith("video/"):
+                length = self._parse_int_field(candidate.get("length"))
+                video_fallback = (str(href), length, mime_type)
+
+        if video_fallback is not None:
+            return video_fallback
 
         return None, None, None
 

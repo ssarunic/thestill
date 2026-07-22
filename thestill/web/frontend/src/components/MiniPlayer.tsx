@@ -23,6 +23,8 @@ export default function MiniPlayer() {
     seek,
     skip,
     stop,
+    mediaKind,
+    setVideoPreference,
   } = usePlayer()
   const currentTime = usePlayerTime()
 
@@ -78,6 +80,24 @@ export default function MiniPlayer() {
             <p className="text-xs text-gray-500 truncate">{track.podcastTitle}</p>
           ) : null}
         </div>
+
+        {/* Spec #61 §2 — for video episodes the mini player keeps episode
+            artwork (no live thumbnail: one DOM video cannot render in two
+            places) and gains a "Show video" affordance. */}
+        {mediaKind === 'video' && (
+          <Link
+            to={episodePath}
+            onClick={() => setVideoPreference('shown')}
+            aria-label="Show video"
+            title="Show video"
+            className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2" y="6" width="14" height="12" rx="2" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M22 9l-6 3 6 3V9z" />
+            </svg>
+          </Link>
+        )}
 
         <div className="hidden sm:flex items-center gap-1 text-xs text-gray-500 tabular-nums min-w-[90px] justify-end">
           <span>{formatTime(currentTime)}</span>

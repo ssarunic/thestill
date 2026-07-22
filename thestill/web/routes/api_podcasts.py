@@ -28,6 +28,7 @@ from structlog import get_logger
 
 from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
+from ...services.playback import build_playback_manifest
 from ...utils.duration import format_duration
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
@@ -321,6 +322,10 @@ async def get_episode_by_slugs(
                 "slug": episode.slug,
                 "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
                 "audio_url": str(episode.audio_url),
+                # Spec #61 §4 — playback-asset manifest. Audio-only episodes
+                # emit kind 'audio' with the existing URL (no client break);
+                # RSS video-enclosure episodes emit a video asset + poster.
+                "playback": build_playback_manifest(episode),
                 "duration": episode.duration,
                 "duration_formatted": format_duration(episode.duration) if episode.duration else None,
                 "external_id": episode.external_id,

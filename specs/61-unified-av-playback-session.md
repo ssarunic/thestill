@@ -1,6 +1,8 @@
 # Unified Audio/Video Playback Session
 
-> **Status:** 📝 Draft (2026-07-22, post-review v2 — portal reparenting rejected, presentation state machine + playback-asset manifest adopted)
+> **Status:** 🚧 In progress (2026-07-22, post-review v2 — portal reparenting rejected, presentation state machine + playback-asset manifest adopted).
+> Implemented: Increment 1 (Media Session, stable `<video>` media layer, source-URL-compared resume); Increment 2 manifest + theater surface + RSS video-enclosure ingestion; Increment 3 floating tile, PiP button, hide-video toggle, offset-adjusted rendition switching, continuity regression tests.
+> Deferred: local range-serving route + S3 presigned manifest URLs (no locally-retained video renditions exist yet — manifests carry publisher enclosure URLs), YouTube iframe engine (gated on the product/legal decision, §6), `captionsUrl` production (open item).
 > **Created:** 2026-07-22
 > **Author:** Engineering (playback design)
 > **Related:** [#22 floating-media-player](22-floating-media-player.md) (owns `PlayerContext` + mini player — this spec is the "seam for future custom player" it promised), [#38 karaoke-word-highlighting](38-karaoke-word-highlighting.md) (consumes `getCurrentTime()` at rAF cadence — a hard constraint on any engine design), [#39 video-alternate-enclosure-player](39-video-alternate-enclosure-player.md) (its "unification with `PlayerContext`" non-goal is exactly this spec; #39 may still ship first as an interim step and its variant-selection logic feeds §5), [#23 transcript-playback-sync](23-transcript-playback-sync.md), [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) (presigned-URL delivery deferred there lands here), [#35 pluggable-file-storage](35-pluggable-file-storage.md)

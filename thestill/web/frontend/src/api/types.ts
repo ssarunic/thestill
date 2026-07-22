@@ -138,6 +138,35 @@ export interface PodcastDetailResponse {
   podcast: PodcastDetail
 }
 
+// ============================================================================
+// Spec #61 §4 — Playback-asset manifest
+// ============================================================================
+
+// One rendition of an episode's media. `timeline_offset` maps logical
+// (transcript) time t to asset time t + offset — the same convention the
+// karaoke word payload's `playback_time_offset_seconds` already uses, but
+// carried per-asset because renditions of the "same" content drift.
+export interface PlaybackAsset {
+  url: string
+  mime_type?: string | null
+  duration?: number | null
+  timeline_offset?: number
+  width?: number | null
+  height?: number | null
+}
+
+// One episode, multiple renditions, one logical playback session. Audio-only
+// episodes emit `kind: 'audio'` with the existing URL; RSS video-enclosure
+// episodes emit a `video` asset plus poster. `captions_url` is reserved
+// (spec #61 open item — WebVTT derived from the cleaned transcript).
+export interface PlaybackManifest {
+  kind: 'audio' | 'video'
+  audio?: PlaybackAsset | null
+  video?: PlaybackAsset | null
+  poster_url?: string | null
+  captions_url?: string | null
+}
+
 export interface Episode {
   id: string
   podcast_index: number
@@ -149,6 +178,7 @@ export interface Episode {
   description_html?: string  // HTML description with links (for web UI)
   pub_date: string | null
   audio_url: string
+  playback?: PlaybackManifest | null  // Spec #61 §4 playback-asset manifest
   duration: number | null  // Duration in seconds
   duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
   external_id: string
@@ -193,6 +223,7 @@ export interface EpisodeDetail {
   slug: string
   pub_date: string | null
   audio_url: string
+  playback?: PlaybackManifest | null  // Spec #61 §4 playback-asset manifest
   duration: number | null  // Duration in seconds
   duration_formatted: string | null  // Human-readable duration (e.g., '1:08:01')
   external_id: string
