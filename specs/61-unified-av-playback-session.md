@@ -2,7 +2,7 @@
 
 > **Status:** 🚧 In progress (2026-07-22, post-review v2 — portal reparenting rejected, presentation state machine + playback-asset manifest adopted).
 > Implemented: Increment 1 (Media Session, stable `<video>` media layer, source-URL-compared resume); Increment 2 manifest + theater surface + RSS video-enclosure ingestion; Increment 3 floating tile, PiP button, hide-video toggle, offset-adjusted rendition switching, continuity regression tests.
-> Deferred: local range-serving route + S3 presigned manifest URLs (no locally-retained video renditions exist yet — manifests carry publisher enclosure URLs), YouTube iframe engine (gated on the product/legal decision, §6), `captionsUrl` production (open item).
+> Deferred: local range-serving route + S3 presigned manifest URLs (no locally-retained video renditions exist yet — manifests carry publisher enclosure URLs), `captionsUrl` production (open item). The YouTube iframe engine §6 gated on a product/legal decision shipped as spec #62 (embed-only via the official IFrame API — the sanctioned path; decided 2026-07-22).
 > **Created:** 2026-07-22
 > **Updated:** 2026-07-22
 > **Author:** Engineering (playback design)

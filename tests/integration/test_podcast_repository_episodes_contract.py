@@ -40,7 +40,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from thestill.models.podcast import Episode, EpisodeState, Podcast, TranscriptLink
+from thestill.models.podcast import AlternateEnclosure, Episode, EpisodeState, Podcast, TranscriptLink
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
 PG_DSN = os.getenv("TEST_DATABASE_URL", "")
@@ -128,7 +128,9 @@ def h(request, tmp_path):
         _PG_SCHEMA_READY = True
 
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE episodes, episode_transcript_links, tasks, podcasts CASCADE")
+        conn.execute(
+            "TRUNCATE episodes, episode_transcript_links, episode_alternate_enclosures, tasks, podcasts CASCADE"
+        )
 
     def make_podcast(rss_url: str, title: str, slug: str) -> str:
         podcast_id = str(uuid.uuid4())
@@ -685,6 +687,88 @@ def test_transcript_links_download_lifecycle(h):
 
     h.repo.mark_transcript_downloaded(links[1].id, "external_transcripts/t2.srt")
     assert h.repo.get_episodes_with_undownloaded_transcript_links() == []
+
+
+# ---------------------------------------------------------------------------
+# Alternate enclosures (Podcasting 2.0, spec #62)
+# ---------------------------------------------------------------------------
+def test_save_refresh_batch_alternate_enclosures_observe_and_dedupe(h):
+    """Observation rows land in-transaction for both new and known episodes,
+    keyed by (podcast_id, external_id) → episode_id, and re-observation on a
+    later refresh is a no-op (ON CONFLICT / OR IGNORE on episode_id+source_uri)."""
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+
+    known = _mk_episode(pid, uid, 1)  # already tracked before this refresh
+    h.repo.save_episode(known)
+    new = _mk_episode(pid, uid, 2)  # discovered in this same refresh batch
+
+    def _alt(uri: str, **kw) -> AlternateEnclosure:
+        return AlternateEnclosure(source_uri=uri, mime_type="video/youtube", **kw)
+
+    h.repo.save_refresh_batch(
+        [],
+        [new],
+        episode_alternate_enclosures=[
+            (pid, known.external_id, _alt(f"https://youtu.be/known{uid[:5]}", is_default=True, height=1080)),
+            (pid, new.external_id, _alt(f"https://youtu.be/new{uid[:7]}")),
+            # Untracked GUID resolves to no episode → silently no-ops.
+            (pid, f"e2-{uid}-ghost", _alt(f"https://youtu.be/ghost{uid[:5]}")),
+        ],
+    )
+
+    got_known = h.repo.get_alternate_enclosures(known.id)
+    assert [a.source_uri for a in got_known] == [f"https://youtu.be/known{uid[:5]}"]
+    assert got_known[0].is_default is True
+    assert got_known[0].height == 1080
+    assert got_known[0].mime_type == "video/youtube"
+    assert got_known[0].episode_id == known.id
+    assert got_known[0].created_at is not None
+
+    got_new = h.repo.get_alternate_enclosures(new.id)
+    assert [a.source_uri for a in got_new] == [f"https://youtu.be/new{uid[:7]}"]
+
+    # Idempotent re-observation: the same rows on the next refresh add nothing.
+    h.repo.save_refresh_batch(
+        [],
+        [],
+        episode_alternate_enclosures=[
+            (pid, known.external_id, _alt(f"https://youtu.be/known{uid[:5]}", is_default=True, height=1080)),
+        ],
+    )
+    assert len(h.repo.get_alternate_enclosures(known.id)) == 1
+
+
+def test_get_alternate_enclosures_for_episodes_batched(h):
+    """Batched accessor returns every requested id, empty list when no rows."""
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    with_rows = _mk_episode(pid, uid, 1)
+    without_rows = _mk_episode(pid, uid, 2)
+    h.repo.save_episodes([with_rows, without_rows])
+
+    h.repo.save_refresh_batch(
+        [],
+        [],
+        episode_alternate_enclosures=[
+            (
+                pid,
+                with_rows.external_id,
+                AlternateEnclosure(source_uri=f"https://youtu.be/a{uid[:6]}", mime_type="video/youtube"),
+            ),
+            (
+                pid,
+                with_rows.external_id,
+                AlternateEnclosure(source_uri=f"https://cdn.example.com/{uid}/720.mp4", mime_type="video/mp4"),
+            ),
+        ],
+    )
+
+    batched = h.repo.get_alternate_enclosures_for_episodes([with_rows.id, without_rows.id])
+    assert set(batched.keys()) == {with_rows.id, without_rows.id}
+    assert {a.mime_type for a in batched[with_rows.id]} == {"video/youtube", "video/mp4"}
+    assert batched[without_rows.id] == []
+    assert h.repo.get_alternate_enclosures_for_episodes([]) == {}
 
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ from requests.adapters import HTTPAdapter
 from structlog import get_logger
 from urllib3.util.retry import Retry
 
-from ..models.podcast import Episode, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, TranscriptLink
 from ..utils.datetime_utils import ensure_utc, parse_struct_time_utc
 from ..utils.duration import parse_duration
 from ..utils.html_utils import resolve_description_variants
@@ -1248,6 +1248,25 @@ class RSSMediaSource(MediaSource):
                 continue
         return audio_urls
 
+    def _resolve_item_guid(self, item: Any) -> Optional[str]:
+        """Resolve an <item>'s GUID the way feedparser keys entries.
+
+        <guid> text first, atom-style <id> as fallback — shared by every
+        raw-XML extractor so their keys line up with stored episodes'
+        ``external_id``. The text is stripped: feedparser trims element
+        text before it becomes ``external_id``, so a pretty-printed
+        ``<guid>\\n  id\\n</guid>`` would otherwise never match and the
+        keyed rows (alternate enclosures, transcript links) would silently
+        drop.
+        """
+        guid_elem = item.find("guid")
+        if guid_elem is not None and guid_elem.text and guid_elem.text.strip():
+            return guid_elem.text.strip()
+        id_elem = item.find("id")
+        if id_elem is not None and id_elem.text and id_elem.text.strip():
+            return id_elem.text.strip()
+        return None
+
     def extract_transcript_links(self, rss_content: str) -> Dict[str, List[TranscriptLink]]:
         """
         Extract podcast:transcript links from raw RSS content.
@@ -1274,15 +1293,8 @@ class RSSMediaSource(MediaSource):
 
         # Find all items
         for item in root.findall(".//item"):
-            # Get episode GUID (same logic as feedparser)
-            guid_elem = item.find("guid")
-            id_elem = item.find("id")  # Fallback
-
-            if guid_elem is not None and guid_elem.text:
-                episode_guid = guid_elem.text
-            elif id_elem is not None and id_elem.text:
-                episode_guid = id_elem.text
-            else:
+            episode_guid = self._resolve_item_guid(item)
+            if episode_guid is None:
                 # Skip items without identifiable GUID
                 continue
 
@@ -1317,6 +1329,91 @@ class RSSMediaSource(MediaSource):
 
         if result:
             logger.info(f"Extracted transcript links for {len(result)} episodes")
+
+        return result
+
+    def extract_alternate_enclosures(self, rss_content: str) -> Dict[str, List[AlternateEnclosure]]:
+        """
+        Extract <podcast:alternateEnclosure> entries from raw RSS content (spec #62).
+
+        Feedparser doesn't expose Podcasting 2.0 namespace tags reliably, so the
+        raw XML is parsed — same approach as :meth:`extract_transcript_links`.
+        Each ``<podcast:alternateEnclosure>`` element may carry multiple
+        ``<podcast:source uri="…">`` children; one ``AlternateEnclosure`` is
+        emitted per source URI, sharing the parent's metadata (mime type,
+        height, bitrate, default flag).
+
+        Args:
+            rss_content: Raw RSS XML content.
+
+        Returns:
+            Dict mapping episode GUID -> list of AlternateEnclosure objects.
+        """
+        result: Dict[str, List[AlternateEnclosure]] = {}
+
+        try:
+            root = ET.fromstring(rss_content)
+        except ET.ParseError as e:
+            logger.warning(f"Failed to parse RSS XML for alternate-enclosure extraction: {e}")
+            return result
+
+        ns = {"podcast": "https://podcastindex.org/namespace/1.0"}
+
+        for item in root.findall(".//item"):
+            episode_guid = self._resolve_item_guid(item)
+            if episode_guid is None:
+                continue
+
+            alt_elems = item.findall("podcast:alternateEnclosure", ns)
+            if not alt_elems:
+                continue
+
+            entries: List[AlternateEnclosure] = []
+            for alt in alt_elems:
+                mime_type = alt.get("type")
+                if not mime_type:
+                    continue
+
+                length_attr = alt.get("length")
+                length = int(length_attr) if length_attr and length_attr.isdigit() else None
+
+                bitrate_attr = alt.get("bitrate")
+                try:
+                    bitrate = float(bitrate_attr) if bitrate_attr else None
+                except ValueError:
+                    bitrate = None
+
+                height_attr = alt.get("height")
+                height = int(height_attr) if height_attr and height_attr.isdigit() else None
+
+                is_default = (alt.get("default") or "").strip().lower() == "true"
+
+                shared = dict(
+                    mime_type=mime_type,
+                    length=length,
+                    bitrate=bitrate,
+                    height=height,
+                    title=alt.get("title"),
+                    rel=alt.get("rel"),
+                    language=alt.get("lang"),
+                    is_default=is_default,
+                )
+
+                for src in alt.findall("podcast:source", ns):
+                    uri = src.get("uri")
+                    if not uri:
+                        continue
+                    try:
+                        entries.append(AlternateEnclosure(source_uri=uri, **shared))
+                    except Exception as e:
+                        logger.debug(f"Failed to create AlternateEnclosure for {uri}: {e}")
+                        continue
+
+            if entries:
+                result[episode_guid] = entries
+
+        if result:
+            logger.info(f"Extracted alternate-enclosure entries for {len(result)} episodes")
 
         return result
 

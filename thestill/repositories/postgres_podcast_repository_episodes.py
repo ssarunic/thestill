@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import psycopg
 from structlog import get_logger
 
-from ..models.podcast import Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, EpisodeState, FailureType, Podcast, TranscriptLink
 from ..utils.datetime_utils import now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
@@ -312,17 +312,25 @@ class EpisodesMixin:
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
         episode_audio_updates: Optional[List[Tuple[str, str, str, Optional[str]]]] = None,
+        episode_alternate_enclosures: Optional[List[Tuple[str, str, AlternateEnclosure]]] = None,
     ) -> None:
         """
         Commit one refresh's worth of state in a single transaction (spec #19).
 
         Blind podcast-meta UPDATE keyed by id, ``ON CONFLICT DO NOTHING``
         episode inserts (the concurrent-refresh backstop that was
-        ``INSERT OR IGNORE`` on SQLite), and guarded artwork / enclosure-URL
+        ``INSERT OR IGNORE`` on SQLite), guarded artwork / enclosure-URL
         re-syncs (``IS DISTINCT FROM`` replaces SQLite's ``IS NOT ?``) so only
-        drifted rows write. See the SQLite docstring for the full rationale.
+        drifted rows write, and in-transaction alternate-enclosure observation
+        inserts (spec #62). See the SQLite docstring for the full rationale.
         """
-        if not changed_podcasts and not new_episodes and not episode_image_updates and not episode_audio_updates:
+        if (
+            not changed_podcasts
+            and not new_episodes
+            and not episode_image_updates
+            and not episode_audio_updates
+            and not episode_alternate_enclosures
+        ):
             return
 
         for ep in new_episodes:
@@ -478,6 +486,39 @@ class EpisodesMixin:
                       AND audio_path IS NULL AND raw_transcript_path IS NULL
                     """,
                     audio_params,
+                )
+
+            # Spec #62 — alternate-enclosure observation in the SAME
+            # transaction as the conditional-GET checkpoint (see SQLite
+            # docstring). INSERT..SELECT resolves external_id → episode_id
+            # in-transaction; ON CONFLICT makes re-observation a no-op.
+            if episode_alternate_enclosures:
+                alt_params = [
+                    (
+                        str(alt.source_uri),
+                        alt.mime_type,
+                        alt.length,
+                        alt.bitrate,
+                        alt.height,
+                        alt.title,
+                        alt.rel,
+                        alt.language,
+                        alt.is_default,
+                        podcast_id,
+                        external_id,
+                    )
+                    for podcast_id, external_id, alt in episode_alternate_enclosures
+                ]
+                cur.executemany(
+                    """
+                    INSERT INTO episode_alternate_enclosures
+                        (episode_id, source_uri, mime_type, length, bitrate, height,
+                         title, rel, language, is_default)
+                    SELECT id, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    FROM episodes WHERE podcast_id = %s AND external_id = %s
+                    ON CONFLICT (episode_id, source_uri) DO NOTHING
+                    """,
+                    alt_params,
                 )
 
     def update_episode_image_urls(self, updates: List[Tuple[str, Optional[str]]]) -> int:
@@ -1502,6 +1543,70 @@ class EpisodesMixin:
             language=row["language"],
             rel=row["rel"],
             downloaded_path=row["downloaded_path"],
+            created_at=row["created_at"],
+        )
+
+    # ------------------------------------------------------------------
+    # AlternateEnclosure methods (Podcasting 2.0, spec #62)
+    # ------------------------------------------------------------------
+
+    _ALT_ENCLOSURE_COLUMNS = (
+        "id, episode_id, source_uri, mime_type, length, bitrate, height, title, rel, language, is_default, created_at"
+    )
+
+    def get_alternate_enclosures(self, episode_id: str) -> List[AlternateEnclosure]:
+        """Get all alternate enclosures for an episode, observation order (spec #62)."""
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {self._ALT_ENCLOSURE_COLUMNS}
+                FROM episode_alternate_enclosures
+                WHERE episode_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (episode_id,),
+            ).fetchall()
+            return [self._row_to_alternate_enclosure(row) for row in rows]
+
+    def get_alternate_enclosures_for_episodes(self, episode_ids: List[str]) -> Dict[str, List[AlternateEnclosure]]:
+        """
+        Batched alternate-enclosure lookup for list endpoints (spec #62).
+
+        Every requested id is present in the result (empty list when the
+        episode has no rows), so callers can index without a default.
+        """
+        result: Dict[str, List[AlternateEnclosure]] = {episode_id: [] for episode_id in episode_ids}
+        if not episode_ids:
+            return result
+
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {self._ALT_ENCLOSURE_COLUMNS}
+                FROM episode_alternate_enclosures
+                WHERE episode_id = ANY(%s)
+                ORDER BY created_at ASC, id ASC
+                """,
+                (episode_ids,),
+            ).fetchall()
+            for row in rows:
+                result[as_str(row["episode_id"])].append(self._row_to_alternate_enclosure(row))
+        return result
+
+    def _row_to_alternate_enclosure(self, row: Dict[str, Any]) -> AlternateEnclosure:
+        """Convert database row to AlternateEnclosure model."""
+        return AlternateEnclosure(
+            id=row["id"],
+            episode_id=as_str(row["episode_id"]),
+            source_uri=row["source_uri"],
+            mime_type=row["mime_type"],
+            length=row["length"],
+            bitrate=row["bitrate"],
+            height=row["height"],
+            title=row["title"],
+            rel=row["rel"],
+            language=row["language"],
+            is_default=row["is_default"],
             created_at=row["created_at"],
         )
 

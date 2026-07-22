@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple
 
-from ..models.podcast import Episode, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, Podcast, TranscriptLink
 
 if TYPE_CHECKING:
     # Pure dataclasses from the core layer, imported type-only to keep the
@@ -247,6 +247,7 @@ class PodcastRepository(ABC):
         new_episodes: List[Episode],
         episode_image_updates: Optional[List[Tuple[str, str, Optional[str]]]] = None,
         episode_audio_updates: Optional[List[Tuple[str, str, str, Optional[str]]]] = None,
+        episode_alternate_enclosures: Optional[List[Tuple[str, str, "AlternateEnclosure"]]] = None,
     ) -> None:
         """
         Persist a refresh batch in a single transaction (spec #19).
@@ -276,6 +277,15 @@ class PodcastRepository(ABC):
                 as a guarded update scoped to episodes whose audio hasn't been
                 downloaded or transcribed yet, so a rotating-URL feed can't
                 churn already-processed rows.
+            episode_alternate_enclosures: Optional ``(podcast_id, external_id,
+                AlternateEnclosure)`` rows observed from the feed's
+                ``<podcast:alternateEnclosure>`` tags (spec #62), covering both
+                new and already-tracked episodes. Inserted in the same
+                transaction (``ON CONFLICT DO NOTHING`` keyed by
+                ``(episode_id, source_uri)``) so the observation lands together
+                with the conditional-GET checkpoint — a post-commit failure
+                here would be unrecoverable, since the next refresh 304s and
+                never re-parses this feed revision.
         """
         pass
 
@@ -292,6 +302,29 @@ class PodcastRepository(ABC):
 
         Returns:
             Number of links actually inserted (excludes duplicates)
+        """
+        pass
+
+    @abstractmethod
+    def get_alternate_enclosures(self, episode_id: str) -> List[AlternateEnclosure]:
+        """
+        Get all alternate enclosures for an episode (spec #62), observation order.
+
+        Args:
+            episode_id: Episode UUID
+        """
+        pass
+
+    @abstractmethod
+    def get_alternate_enclosures_for_episodes(self, episode_ids: List[str]) -> Dict[str, List[AlternateEnclosure]]:
+        """
+        Batched alternate-enclosure lookup (spec #62) for list endpoints.
+
+        Every requested id must be a key in the result (empty list when the
+        episode has no rows).
+
+        Args:
+            episode_ids: Episode UUIDs.
         """
         pass
 

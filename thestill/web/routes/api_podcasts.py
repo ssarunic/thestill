@@ -308,6 +308,7 @@ async def get_episode_by_slugs(
         not_found("Episode", f"{podcast_slug}/{episode_slug}")
 
     podcast, episode = result
+    alternate_enclosures = state.repository.get_alternate_enclosures(episode.id)
 
     return api_response(
         {
@@ -324,8 +325,10 @@ async def get_episode_by_slugs(
                 "audio_url": str(episode.audio_url),
                 # Spec #61 §4 — playback-asset manifest. Audio-only episodes
                 # emit kind 'audio' with the existing URL (no client break);
-                # RSS video-enclosure episodes emit a video asset + poster.
-                "playback": build_playback_manifest(episode),
+                # RSS video-enclosure episodes emit a video asset + poster;
+                # video/youtube alternate enclosures add the opt-in youtube
+                # asset (spec #62).
+                "playback": build_playback_manifest(episode, alternate_enclosures),
                 "duration": episode.duration,
                 "duration_formatted": format_duration(episode.duration) if episode.duration else None,
                 "external_id": episode.external_id,

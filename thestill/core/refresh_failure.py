@@ -110,7 +110,10 @@ class RefreshAttemptResult:
     conditional_hit: bool = False
     headers_rotated: bool = False
     image_rows: List[Tuple[str, str, Optional[str]]] = field(default_factory=list)
-    audio_rows: List[Tuple[str, str, str]] = field(default_factory=list)
+    audio_rows: List[Tuple[str, str, str, Optional[str]]] = field(default_factory=list)
+    # Spec #62 — (podcast_id, external_id, AlternateEnclosure) observation
+    # rows for the whole feed window (new + already-tracked episodes).
+    alt_enclosure_rows: List[Tuple[str, str, Any]] = field(default_factory=list)
     source: Optional[Any] = None
     failure: Optional[RefreshFailure] = None
 

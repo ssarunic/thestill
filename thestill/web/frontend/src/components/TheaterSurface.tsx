@@ -33,6 +33,9 @@ export default function TheaterSurface({ episodeId, posterUrl, track }: TheaterS
     activeRendition,
     canSwitchRendition,
     mediaKind,
+    activeEngine,
+    youtubeAvailable,
+    playYouTube,
     pipSupported,
     pipActive,
     requestPip,
@@ -41,11 +44,16 @@ export default function TheaterSurface({ episodeId, posterUrl, track }: TheaterS
 
   const isCurrent = player.isCurrent(episodeId)
   // The slot is "compatible" (§3) only while this episode is the session's
-  // track, the session is on the video rendition, and the user hasn't hidden
-  // video. Not registering is how "Hide video" works on the reader — the
-  // presentation machine then falls through to hidden/audio-first.
+  // track, the session is on a visual rendition (native video, or the
+  // YouTube engine regardless of manifest kind — spec #62), and the user
+  // hasn't hidden video. Not registering is how "Hide video" works on the
+  // reader — the presentation machine then falls through to
+  // hidden/audio-first (which, on the YouTube engine, triggers the §7
+  // switch to the audio rendition).
   const slotActive =
-    isCurrent && mediaKind === 'video' && activeRendition === 'video' && videoPreference === 'shown'
+    isCurrent &&
+    ((mediaKind === 'video' && activeRendition === 'video') || activeEngine === 'youtube') &&
+    videoPreference === 'shown'
 
   useEffect(() => {
     const el = slotRef.current
@@ -129,16 +137,42 @@ export default function TheaterSurface({ episodeId, posterUrl, track }: TheaterS
               Hide video
             </button>
           )}
-          {/* Spec #61 §5 — real rendition switch: saves data/battery. Only
-              offered when the manifest carries both renditions. */}
-          {canSwitchRendition && (
+          {/* Spec #62 §6 — leaving the YouTube rendition is always possible
+              (switchRendition's YouTube-exit path never bails; the §7
+              policy relies on that). Video-enclosure episodes land back on
+              the native video player; everything else on audio. */}
+          {activeEngine === 'youtube' ? (
             <button
               type="button"
-              onClick={() => switchRendition(activeRendition === 'video' ? 'audio' : 'video')}
+              onClick={() => switchRendition(track.playback?.video ? 'video' : 'audio')}
               className="rounded-md border border-gray-200 px-2.5 py-1.5 text-gray-600 hover:bg-gray-50 hover:text-gray-900"
             >
-              {activeRendition === 'video' ? 'Use audio rendition' : 'Use video rendition'}
+              {track.playback?.video ? 'Use video rendition' : 'Use audio rendition'}
             </button>
+          ) : (
+            <>
+              {/* Spec #61 §5 — real rendition switch: saves data/battery. Only
+                  offered when the manifest carries both renditions. */}
+              {canSwitchRendition && (
+                <button
+                  type="button"
+                  onClick={() => switchRendition(activeRendition === 'video' ? 'audio' : 'video')}
+                  className="rounded-md border border-gray-200 px-2.5 py-1.5 text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                >
+                  {activeRendition === 'video' ? 'Use audio rendition' : 'Use video rendition'}
+                </button>
+              )}
+              {/* Spec #62 §6 — opt into the YouTube rendition. */}
+              {youtubeAvailable && (
+                <button
+                  type="button"
+                  onClick={() => playYouTube(track)}
+                  className="rounded-md border border-gray-200 px-2.5 py-1.5 text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                >
+                  Play video on YouTube player
+                </button>
+              )}
+            </>
           )}
         </div>
       )}

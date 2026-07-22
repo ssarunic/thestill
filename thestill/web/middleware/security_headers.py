@@ -42,14 +42,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+# script-src/frame-src YouTube entries: spec #62's iframe playback engine
+# loads the IFrame Player API (www.youtube.com/iframe_api, which pulls its
+# player bundle from s.ytimg.com) and embeds the player itself in an
+# iframe. frame-src has no 'self' fallback issue — without the directive
+# it would inherit default-src 'self' and block the embed outright.
+# frame-ancestors 'none' is unrelated (it stops others framing US).
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self'; "
+    "script-src 'self' https://www.youtube.com https://s.ytimg.com; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
     "connect-src 'self'; "
     "media-src 'self' https:; "
+    "frame-src https://www.youtube.com; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "
     "form-action 'self'"

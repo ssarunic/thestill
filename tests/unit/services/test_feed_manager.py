@@ -335,6 +335,72 @@ class TestGetNewEpisodes:
         # The errored podcast must never reach the durable batch write.
         assert not mock_repository.save_refresh_batch.called
 
+    def test_refresh_observes_alternate_enclosures_for_new_and_known_episodes(self, feed_manager, mock_repository):
+        """Spec #62: <podcast:alternateEnclosure> rows ride the refresh batch.
+
+        Both the already-tracked episode (still in the feed window) and the
+        brand-new one discovered this refresh must be observed, and the rows
+        must reach ``save_refresh_batch`` in-transaction — never a post-batch
+        side write (a post-commit failure would be hidden forever behind the
+        advanced conditional-GET checkpoint).
+        """
+        import feedparser
+
+        from thestill.core.media_source import RSSMediaSource
+
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+<channel><title>AltCast</title>
+  <item>
+    <title>Known episode</title>
+    <guid isPermaLink="false">alt-known</guid>
+    <pubDate>Mon, 20 Jul 2026 10:00:00 +0000</pubDate>
+    <enclosure url="https://example.com/known.mp3" type="audio/mpeg"/>
+    <podcast:alternateEnclosure type="video/youtube">
+      <podcast:source uri="https://youtu.be/knownVID001"/>
+    </podcast:alternateEnclosure>
+  </item>
+  <item>
+    <title>New episode</title>
+    <guid isPermaLink="false">alt-new</guid>
+    <pubDate>Tue, 21 Jul 2026 10:00:00 +0000</pubDate>
+    <enclosure url="https://example.com/new.mp3" type="audio/mpeg"/>
+    <podcast:alternateEnclosure type="video/youtube" default="true">
+      <podcast:source uri="https://youtu.be/newVID00001"/>
+    </podcast:alternateEnclosure>
+  </item>
+</channel></rss>"""
+
+        podcast = Podcast(title="AltCast", description="", rss_url="https://example.com/alt.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = (
+            [podcast],
+            {podcast.id: {"alt-known"}},
+        )
+
+        source = RSSMediaSource()
+        result = Mock()
+        result.not_modified = False
+        result.error = None
+        result.content = rss
+        result.parsed_feed = feedparser.parse(rss)
+        result.status_code = 200
+        result.etag = None
+        result.last_modified = None
+        source.fetch_and_parse = Mock(return_value=result)
+        feed_manager.media_source_factory.detect_source.return_value = source
+
+        feed_manager.refresh_feeds()
+
+        assert mock_repository.save_refresh_batch.called
+        args = mock_repository.save_refresh_batch.call_args[0]
+        alt_rows = args[4]
+        observed = {(external_id, alt.source_uri) for _, external_id, alt in alt_rows}
+        assert observed == {
+            ("alt-known", "https://youtu.be/knownVID001"),
+            ("alt-new", "https://youtu.be/newVID00001"),
+        }
+        assert all(pid == podcast.id for pid, _, _ in alt_rows)
+
     @pytest.mark.parametrize(
         "stored_etag,response_etag,expect_persist",
         [

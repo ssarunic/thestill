@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import feedparser
 from structlog import get_logger
 
-from ..models.podcast import Episode, Podcast
+from ..models.podcast import AlternateEnclosure, Episode, Podcast
 from ..repositories.podcast_repository import PodcastRepository
 from ..utils.datetime_utils import ensure_utc, now_utc, parse_struct_time_utc
 from ..utils.duration import parse_duration
@@ -312,6 +312,7 @@ class PodcastFeedManager:
         headers_rotated = False
         image_rows: List[Tuple[str, str, Optional[str]]] = []
         audio_rows: List[Tuple[str, str, str, Optional[str]]] = []
+        alt_enclosure_rows: List[Tuple[str, str, AlternateEnclosure]] = []
         try:
             rss_url_str = str(podcast.rss_url)
             source = self.media_source_factory.detect_source(rss_url_str)
@@ -436,6 +437,22 @@ class PodcastFeedManager:
                             if external_id in known
                         ]
 
+                    # Spec #62 — observe <podcast:alternateEnclosure> for the
+                    # WHOLE feed window, not just known episodes: brand-new
+                    # episodes discovered this refresh must be captured on
+                    # first sight (they aren't in ``known`` yet, but their
+                    # rows insert in the same batch, so the writer's
+                    # INSERT..SELECT resolves them). Untracked GUIDs resolve
+                    # to no episode row and no-op — the tag is rare enough
+                    # that the extra executemany rows don't matter.
+                    if rss_content:
+                        alt_by_guid = source.extract_alternate_enclosures(rss_content)
+                        alt_enclosure_rows = [
+                            (podcast.id, external_id, alt)
+                            for external_id, entries in alt_by_guid.items()
+                            for alt in entries
+                        ]
+
             # Cap discovery only on a podcast's first-ever refresh — that's the
             # legitimate "don't backfill a 600-episode catalogue when adding a
             # feed" bound. On incremental refreshes the limit is dropped
@@ -534,6 +551,7 @@ class PodcastFeedManager:
             headers_rotated=headers_rotated,
             image_rows=image_rows,
             audio_rows=audio_rows,
+            alt_enclosure_rows=alt_enclosure_rows,
             source=source,
             failure=failure,
         )
@@ -643,6 +661,7 @@ class PodcastFeedManager:
         new_episode_rows: List[Episode] = []
         episode_image_updates: List[Tuple[str, str, Optional[str]]] = []
         episode_audio_updates: List[Tuple[str, str, str, Optional[str]]] = []
+        episode_alternate_enclosures: List[Tuple[str, str, AlternateEnclosure]] = []
         transcript_link_work: List[Tuple[Podcast, List[Episode], "RSSMediaSource"]] = []
 
         def _record_outcome(result: RefreshAttemptResult) -> None:
@@ -681,6 +700,8 @@ class PodcastFeedManager:
                 episode_image_updates.extend(result.image_rows)
             if result.audio_rows:
                 episode_audio_updates.extend(result.audio_rows)
+            if result.alt_enclosure_rows:
+                episode_alternate_enclosures.extend(result.alt_enclosure_rows)
             if eps:
                 new_episodes.append((podcast, eps))
                 new_episode_rows.extend(eps)
@@ -746,19 +767,27 @@ class PodcastFeedManager:
         # Single-transaction batch persist (spec #19). Runs even when
         # `new_episode_rows` is empty, because podcasts that saw a 200
         # response still need their refreshed cache headers saved.
-        if changed_podcasts or new_episode_rows or episode_image_updates or episode_audio_updates:
+        if (
+            changed_podcasts
+            or new_episode_rows
+            or episode_image_updates
+            or episode_audio_updates
+            or episode_alternate_enclosures
+        ):
             with log_phase_timing(
                 "persist_batch",
                 podcasts=len(changed_podcasts),
                 new_episodes=len(new_episode_rows),
                 image_updates=len(episode_image_updates),
                 audio_url_updates=len(episode_audio_updates),
+                alternate_enclosures=len(episode_alternate_enclosures),
             ):
                 self.repository.save_refresh_batch(
                     changed_podcasts,
                     new_episode_rows,
                     episode_image_updates,
                     episode_audio_updates,
+                    episode_alternate_enclosures,
                 )
 
         # Transcript links rely on the debug RSS file that was written
