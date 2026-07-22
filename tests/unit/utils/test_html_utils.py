@@ -16,7 +16,12 @@
 
 import pytest
 
-from thestill.utils.html_utils import extract_links_from_html, html_to_plain_text
+from thestill.utils.html_utils import (
+    extract_links_from_html,
+    html_to_plain_text,
+    resolve_description_variants,
+    unescape_entities_stable,
+)
 
 
 class TestHtmlToPlainText:
@@ -249,3 +254,86 @@ class TestExtractLinksFromHtml:
         assert "https://newsletter.com/episode-123" in urls
         assert "https://x.com/guest" in urls
         assert "https://linkedin.com/in/guest" in urls
+
+
+class TestResolveDescriptionVariants:
+    """Tests for resolve_description_variants (Guardian description-inversion fix)."""
+
+    # The Guardian's Today in Focus feed, as decoded by feedparser:
+    # <description> carries real HTML, <itunes:summary> (surfaced via
+    # entry.content) carries double-escaped tag remnants.
+    GUARDIAN_DESCRIPTION = (
+        "Journalist <strong>Amjed Tantesh </strong>talks about swimming. "
+        'Support us at <a href="https://www.theguardian.com/infocus">theguardian.com/infocus</a>'
+    )
+    GUARDIAN_ITUNES_SUMMARY = (
+        "Journalist Amjed Tantesh talks about swimming. "
+        "Support us at &lt;a href=&quot;https://www.theguardian.com/infocus&quot;&gt;"
+        "theguardian.com/infocus&lt;/a&gt;"
+    )
+
+    def test_guardian_style_feed_picks_real_html(self):
+        """The variant with real markup wins, regardless of field position."""
+        plain, html = resolve_description_variants([self.GUARDIAN_DESCRIPTION, self.GUARDIAN_ITUNES_SUMMARY])
+        assert html == self.GUARDIAN_DESCRIPTION
+        assert "<" not in plain and "&lt;" not in plain
+        assert "Amjed Tantesh" in plain
+        assert "theguardian.com/infocus" in plain
+
+    def test_normal_feed_plain_description_html_content(self):
+        """The common case: plain description + HTML content variant."""
+        plain_desc = "Episode about databases."
+        html_desc = "<p>Episode about <strong>databases</strong>.</p>"
+        plain, html = resolve_description_variants([plain_desc, html_desc])
+        assert html == html_desc
+        assert plain == "Episode about databases."
+
+    def test_plain_text_only_feed(self):
+        """No markup anywhere: plain passes through untouched, html stays empty."""
+        text = "Just a plain description. Tom & Jerry at 3 o'clock."
+        plain, html = resolve_description_variants([text])
+        assert plain == text
+        assert html == ""
+
+    def test_double_escaped_only_candidate_is_revealed(self):
+        """A feed whose only variant is double-escaped gets unescaped and used."""
+        escaped = "Visit &lt;a href=&quot;https://example.com&quot;&gt;our site&lt;/a&gt;"
+        plain, html = resolve_description_variants([escaped])
+        assert html == 'Visit <a href="https://example.com">our site</a>'
+        assert plain == "Visit our site (https://example.com)"
+
+    def test_prose_with_angle_brackets_is_not_markup(self):
+        """Math-like prose must not be mistaken for HTML and stripped."""
+        text = "We prove that for i<n and j>k the loop terminates."
+        plain, html = resolve_description_variants([text])
+        assert plain == text
+        assert html == ""
+
+    def test_empty_and_whitespace_candidates(self):
+        assert resolve_description_variants([]) == ("", "")
+        assert resolve_description_variants(["", "   "]) == ("", "")
+
+    def test_plain_only_feed_keeps_richest_variant(self):
+        """Two plain variants: the longer one survives, not just the first."""
+        teaser = "Short teaser."
+        notes = "Much longer show notes with the full story and guest details."
+        plain, html = resolve_description_variants([teaser, notes])
+        assert plain == notes
+        assert html == ""
+
+
+class TestUnescapeEntitiesStable:
+    """Tests for unescape_entities_stable."""
+
+    def test_single_escape(self):
+        assert unescape_entities_stable("&lt;p&gt;") == "<p>"
+
+    def test_double_escape(self):
+        assert unescape_entities_stable("&amp;lt;p&amp;gt;") == "<p>"
+
+    def test_plain_text_unchanged(self):
+        assert unescape_entities_stable("no entities here") == "no entities here"
+
+    def test_bounded_passes(self):
+        # Triple-escaped needs 3 passes; the cap stops it there.
+        assert unescape_entities_stable("&amp;amp;lt;p&amp;amp;gt;") == "<p>"

@@ -265,8 +265,11 @@ class Episode(BaseModel):
         """
         Get episode description as plain text.
 
-        The description field may contain HTML from RSS feeds. This property
-        converts it to readable plain text while preserving structure:
+        Since the description-inversion fix, ingest stores plain text in
+        ``description`` by construction (resolve_description_variants routes
+        markup to ``description_html``). This property remains as a safety
+        net for rows that predate the backfill; on already-plain text the
+        conversion is a no-op. When stripping does apply:
         - Paragraph breaks become double newlines
         - Links are formatted as "text (url)"
         - Lists become bullet points

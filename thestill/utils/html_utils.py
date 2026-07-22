@@ -16,7 +16,16 @@
 
 import html as html_module
 import re
-from typing import Optional
+from typing import Optional, Sequence
+
+# Tags that podcast feeds legitimately use in descriptions (mirrors the
+# frontend sanitizer allowlist, plus structural tags html_to_plain_text
+# understands). Recognition is restricted to these names so prose like
+# "i<n and j>k" is never mistaken for markup.
+_KNOWN_TAG_RE = re.compile(
+    r"</?(?:p|br|a|strong|b|em|i|u|ul|ol|li|div|span|h[1-6]|hr|img|blockquote)\b[^<>]*/?>",
+    re.IGNORECASE,
+)
 
 
 def html_to_plain_text(html_text: Optional[str]) -> str:
@@ -122,6 +131,65 @@ def html_to_plain_text(html_text: Optional[str]) -> str:
     text = text.strip()
 
     return text
+
+
+def count_html_tags(text: str) -> int:
+    """Count real (unescaped) HTML tags from the known-tag set in ``text``."""
+    return len(_KNOWN_TAG_RE.findall(text))
+
+
+def unescape_entities_stable(text: str, max_passes: int = 3) -> str:
+    """Unescape HTML entities repeatedly until the text stops changing.
+
+    Some feeds double-escape markup (e.g. The Guardian's ``itunes:summary``
+    carries ``&amp;lt;a href=...``, which is still ``&lt;a href=...`` after
+    feedparser's single XML decode). Bounded so a pathological input can't
+    loop forever.
+    """
+    for _ in range(max_passes):
+        unescaped = html_module.unescape(text)
+        if unescaped == text:
+            break
+        text = unescaped
+    return text
+
+
+def resolve_description_variants(candidates: Sequence[str]) -> tuple[str, str]:
+    """Pick the plain-text and HTML description from feed-provided variants.
+
+    RSS feeds offer the description in several places (``description``,
+    ``content:encoded``, ``itunes:summary``) with no reliable convention for
+    which one carries markup — The Guardian, for instance, puts real HTML in
+    ``description`` and escaped tag remnants in ``itunes:summary``. So instead
+    of trusting field position, inspect the content: the candidate with the
+    most real markup becomes the HTML variant, and the plain variant is
+    derived from it, making the pair consistent by construction.
+
+    Args:
+        candidates: Description variants in preference order (ties in markup
+            richness go to the earliest candidate).
+
+    Returns:
+        Tuple of (plain_text_description, html_description). The HTML slot is
+        ``""`` when no candidate contains markup, even after unescaping.
+    """
+    non_empty = [c.strip() for c in candidates if c and c.strip()]
+    if not non_empty:
+        return "", ""
+
+    best = max(non_empty, key=count_html_tags)
+    if count_html_tags(best) == 0:
+        # No real markup anywhere — but double-escaped feeds hide theirs
+        # behind entities, so check whether unescaping reveals tags.
+        revealed = max((unescape_entities_stable(c) for c in non_empty), key=count_html_tags)
+        if count_html_tags(revealed) == 0:
+            # Genuinely plain-text feed. Keep the richest variant — some
+            # feeds pair a short teaser with fuller plain-text notes, and
+            # dropping everything but the first candidate would lose them.
+            return max(non_empty, key=len), ""
+        best = revealed
+
+    return html_to_plain_text(best), best
 
 
 def extract_links_from_html(html_text: Optional[str]) -> list[dict[str, str]]:
