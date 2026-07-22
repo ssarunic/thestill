@@ -1,6 +1,6 @@
 # Video Player for `<podcast:alternateEnclosure>` Episodes
 
-**Status**: 📝 Draft
+**Status**: ⛔ Superseded by [#62 youtube-video-rendition](62-youtube-video-rendition.md) (2026-07-22) — the page-scoped embed predates spec #61's unified session; #62 rebuilds this on the engine-adapter boundary. The YouTube-ID extraction rules and variant-selection notes below remain the reference for #62 §4.
 **Created**: 2026-05-13
 **Updated**: 2026-05-13
 **Priority**: Low (small surface; current data is one show)
