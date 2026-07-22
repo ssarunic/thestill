@@ -355,6 +355,22 @@ class TaskWorker:
 
         logger.info("task_worker_loop_ended")
 
+    async def _sleep_unless_stopped(self, seconds: float) -> None:
+        """Sleep up to ``seconds``, waking within ~2s of ``stop()``.
+
+        The long periodic loops (stale reset: 60-600s, healer: 300s) used a
+        single ``asyncio.sleep(interval)`` that only noticed ``_running``
+        AFTER waking — so ``_async_worker_loop``'s gather couldn't finish and
+        ``stop()`` always burned its full join timeout, making every server
+        shutdown ~10s slower than it needed to be. Chunking the sleep keeps
+        shutdown prompt without cross-thread event plumbing.
+        """
+        remaining = seconds
+        while remaining > 0 and self._running:
+            step = min(2.0, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+
     async def _periodic_stale_task_reset(self) -> None:
         """Periodically reclaim tasks stuck in ``processing``.
 
@@ -372,7 +388,7 @@ class TaskWorker:
         logger.info("stale_task_reset_poll_started", interval_s=interval_s)
         try:
             while self._running:
-                await asyncio.sleep(interval_s)
+                await self._sleep_unless_stopped(interval_s)
                 if not self._running:
                     break
                 # ``_reset_stale_tasks`` already swallows exceptions; this
@@ -403,7 +419,7 @@ class TaskWorker:
         )
         try:
             while self._running:
-                await asyncio.sleep(self.heal_interval_s)
+                await self._sleep_unless_stopped(self.heal_interval_s)
                 if not self._running:
                     break
                 try:

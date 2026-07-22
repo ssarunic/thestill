@@ -134,7 +134,7 @@ class TestPeriodicStaleReset:
             if sleep_calls["n"] >= 3:
                 worker._running = False
 
-        monkeypatch.setattr("thestill.core.task_worker.asyncio.sleep", fast_sleep)
+        monkeypatch.setattr(worker, "_sleep_unless_stopped", fast_sleep)
 
         worker._running = True
         asyncio.run(worker._periodic_stale_task_reset())
@@ -161,9 +161,32 @@ class TestPeriodicStaleReset:
             if sleep_calls["n"] >= 3:
                 worker._running = False
 
-        monkeypatch.setattr("thestill.core.task_worker.asyncio.sleep", fast_sleep)
+        monkeypatch.setattr(worker, "_sleep_unless_stopped", fast_sleep)
 
         worker._running = True
         asyncio.run(worker._periodic_stale_task_reset())  # must not raise
 
         assert queue.reset_stale_tasks.call_count >= 2
+
+    def test_sleep_unless_stopped_wakes_promptly_on_stop(self):
+        """Clean-shutdown contract: a long periodic sleep must notice
+        ``stop()`` within one ~2s chunk, not after the full interval —
+        otherwise every server shutdown burns the worker join timeout."""
+        import time
+
+        worker = TaskWorker(queue_manager=MagicMock(), task_handlers={})
+        worker._running = True
+
+        async def scenario():
+            async def stop_soon():
+                await asyncio.sleep(0.1)
+                worker._running = False
+
+            stopper = asyncio.create_task(stop_soon())
+            start = time.monotonic()
+            await worker._sleep_unless_stopped(60.0)
+            await stopper
+            return time.monotonic() - start
+
+        elapsed = asyncio.run(scenario())
+        assert elapsed < 5.0  # one chunk (~2s), never the full 60s
