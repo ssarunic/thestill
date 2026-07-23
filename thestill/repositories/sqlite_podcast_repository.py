@@ -2397,9 +2397,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         refresh loop never needs the full Episode models — it just
         needs to know which externals are already tracked.
 
-        Skips synthetic parents and auto_added podcasts that no user
-        follows — auto-imports shouldn't drive recurring feed polls until
-        someone explicitly subscribes.
+        Skips synthetic parents and any podcast no user follows (spec
+        #63) — a feed with zero followers shouldn't drive recurring
+        feed polls until someone subscribes.
 
         Returns:
             ``(podcasts, known_external_ids_by_podcast)`` where each
@@ -2409,15 +2409,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         """
         with self._get_connection() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 SELECT p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
                        p.primary_category_id, p.secondary_category_id,
                        p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
                        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at
                 FROM podcasts p
-                WHERE p.synthetic = 0
-                  AND (p.auto_added = 0
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = p.id))
+                WHERE {self._active_feed_sql("p", require_incomplete=False)}
                 ORDER BY p.created_at DESC
                 """
             )
@@ -3305,15 +3303,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         now_iso = (now or now_utc()).isoformat()
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NOT NULL
                   AND next_refresh_at <= ?
                   AND (refresh_retry_after_at IS NULL OR refresh_retry_after_at <= ?)
-                  AND COALESCE(synthetic, 0) = 0
-                  AND COALESCE(is_complete, 0) = 0
-                  AND (COALESCE(auto_added, 0) = 0
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                  AND {self._active_feed_sql()}
                 ORDER BY next_refresh_at ASC
                 LIMIT ?
                 """,
@@ -3321,14 +3316,24 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             ).fetchall()
             return [row["id"] for row in rows]
 
-    # Spec #60 — the "active, followed, non-synthetic feed" predicate shared
-    # by the quarantine-probe and refresh-health queries below.
-    _ACTIVE_FEED_SQL = """
-                  COALESCE(synthetic, 0) = 0
-                  AND COALESCE(is_complete, 0) = 0
-                  AND (COALESCE(auto_added, 0) = 0
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
-    """
+    @staticmethod
+    def _active_feed_sql(alias: str = "podcasts", *, require_incomplete: bool = True) -> str:
+        """Spec #63 — the single source of truth for refresh eligibility.
+
+        A feed only receives recurring background work (bulk refresh,
+        due-scheduling, quarantine probes, health counts) while at least
+        one user follows it. Explicit single-podcast operations (a
+        concrete ``podcast_id`` supplied by the caller, e.g. the
+        post-add refresh) are deliberately NOT routed through this
+        predicate. ``require_incomplete=False`` preserves the spec #19
+        bulk loader's historical inclusion of completed shows.
+        """
+        incomplete = f"AND COALESCE({alias}.is_complete, 0) = 0 " if require_incomplete else ""
+        return (
+            f"COALESCE({alias}.synthetic, 0) = 0 "
+            f"{incomplete}"
+            f"AND EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = {alias}.id)"
+        )
 
     def get_quarantine_probe_due(
         self,
@@ -3353,7 +3358,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 WHERE next_refresh_at IS NULL
                   AND refresh_disabled_reason IN ('feed_gone', 'invalid_content')
                   AND (last_refresh_at IS NULL OR last_refresh_at <= ?)
-                  AND {self._ACTIVE_FEED_SQL}
+                  AND {self._active_feed_sql()}
                 ORDER BY last_refresh_at ASC
                 LIMIT ?
                 """,
@@ -3371,7 +3376,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         signal that unclassified parks still exist.
         """
         now_iso = (now or now_utc()).isoformat()
-        active_filter = self._ACTIVE_FEED_SQL
+        active_filter = self._active_feed_sql()
         with self._get_connection() as conn:
             reason_rows = conn.execute(
                 f"""
@@ -3598,15 +3603,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         now_dt = now or now_utc()
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND last_refresh_at IS NULL
                   AND last_refresh_error IS NULL
-                  AND COALESCE(synthetic, 0) = 0
-                  AND COALESCE(is_complete, 0) = 0
-                  AND (COALESCE(auto_added, 0) = 0
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                  AND {self._active_feed_sql()}
                 """
             ).fetchall()
             for row in rows:

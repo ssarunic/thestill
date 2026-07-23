@@ -28,6 +28,7 @@ Covers the queue/schema/cadence invariants the review rounds pinned:
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -82,7 +83,24 @@ def db(tmp_path: Path) -> str:
             ],
         )
     )
+    # Spec #63 — the due/seed queries require a follower for EVERY
+    # podcast; give the fixture podcast one so the scheduling tests
+    # exercise their actual subject.
+    _add_follower(db_path, PODCAST_ID)
     return db_path
+
+
+def _add_follower(db_path: str, podcast_id: str) -> str:
+    user_id = str(uuid.uuid4())
+    con = sqlite3.connect(db_path)
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.execute(
+        "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), user_id, podcast_id, now_utc().isoformat()),
+    )
+    con.commit()
+    con.close()
+    return user_id
 
 
 def _force_due(db_path: str, podcast_id: str = PODCAST_ID) -> None:
@@ -557,20 +575,27 @@ def test_handler_established_podcast_skips_cap(db: str) -> None:
     assert _excluded_count(db) == 0
 
 
-def test_due_query_excludes_unfollowed_auto_added(db: str) -> None:
-    """Scheduler must not poll auto-added feeds nobody follows (matches
-    get_podcasts_for_refresh eligibility)."""
+def test_due_query_excludes_unfollowed_podcast(db: str) -> None:
+    """Spec #63 — the scheduler must not poll ANY feed nobody follows
+    (matches get_podcasts_for_refresh eligibility), regardless of
+    auto_added."""
     import sqlite3 as _sq
 
     repo = SqlitePodcastRepository(db)
-    con = _sq.connect(db)
-    con.execute("UPDATE podcasts SET auto_added = 1 WHERE id = ?", (PODCAST_ID,))
-    con.commit()
-    con.close()
     repo.seed_unscheduled_feeds(3600)
     _force_due(db)
-    # auto_added with no follower -> not eligible.
+    assert PODCAST_ID in repo.get_due_podcasts()
+
+    # Remove the fixture follower -> not eligible, auto_added irrelevant.
+    con = _sq.connect(db)
+    con.execute("DELETE FROM podcast_followers WHERE podcast_id = ?", (PODCAST_ID,))
+    con.commit()
+    con.close()
     assert PODCAST_ID not in repo.get_due_podcasts()
+
+    # Re-follow -> eligible again.
+    _add_follower(db, PODCAST_ID)
+    assert PODCAST_ID in repo.get_due_podcasts()
 
 
 def test_recover_interrupted_resets_feed_task_to_pending(db: str) -> None:

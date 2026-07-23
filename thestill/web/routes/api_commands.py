@@ -155,16 +155,9 @@ def run_add_podcast_task(
 
         task_manager.update_progress(TaskType.ADD_PODCAST, 80, "Following podcast...")
 
-        # Auto-follow the podcast for the user
-        try:
-            logger.info(f"Attempting to follow podcast {podcast.id} for user {user_id}")
-            state.follower_service.follow(user_id, podcast.id)
-            followed = True
-            logger.info(f"Successfully followed podcast {podcast.id}")
-        except Exception as follow_error:
-            # May already be following - that's fine
-            logger.warning(f"Follow error (may already be following): {follow_error}")
-            followed = state.follower_service.is_following(user_id, podcast.id)
+        # Auto-follow the podcast for the user (already-following and any
+        # other follow failure are tolerated — spec #63 helper).
+        followed = state.follower_service.follow_best_effort(user_id, podcast.id)
 
         task_manager.update_progress(TaskType.ADD_PODCAST, 90, "Finalizing...")
 

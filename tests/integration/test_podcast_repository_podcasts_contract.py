@@ -412,6 +412,7 @@ def test_get_podcasts_for_refresh_and_single(repo):
     p.episodes = [e1, e2]
     repo.save(p)
     repo.save_podcast(p)  # save() drops cache headers; save_podcast persists them
+    _seed_user_and_follow(repo, p.id)  # spec #63: refresh requires a follower
 
     synthetic_id = repo.ensure_synthetic_audio_imports_parent()
     auto_url = f"https://p1.test/{_uniq()}/auto.xml"
@@ -442,9 +443,32 @@ def test_get_podcasts_for_refresh_and_single(repo):
     assert repo.get_podcast_for_refresh(str(uuid.uuid4())) is None
 
 
+def test_refresh_excludes_unfollowed_everywhere(repo):
+    """Spec #63 — a plain (non-auto_added) podcast with zero followers is
+    invisible to every bulk refresh surface: the spec #19 loader, the due
+    query, seeding, and the health counts."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    p = _mk_podcast()
+    repo.save(p)
+
+    assert p.id not in {x.id for x in repo.get_podcasts_for_refresh()[0]}
+    assert repo.seed_unscheduled_feeds(3600, now=base) == 0
+    assert p.id not in repo.get_due_podcasts(now=base + timedelta(days=1))
+    before = repo.get_refresh_health_counts(now=base)
+
+    # A follower flips every surface on.
+    _seed_user_and_follow(repo, p.id)
+    assert p.id in {x.id for x in repo.get_podcasts_for_refresh()[0]}
+    assert repo.seed_unscheduled_feeds(3600, now=base) == 1
+    assert p.id in repo.get_due_podcasts(now=base + timedelta(seconds=3600))
+    after = repo.get_refresh_health_counts(now=base + timedelta(days=1))
+    assert after["active"] >= before["active"] + 1
+
+
 def test_refresh_scheduling_bookkeeping(repo):
     p = _mk_podcast()
     repo.save(p)
+    _seed_user_and_follow(repo, p.id)  # spec #63: scheduling requires a follower
     base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     # Seed: only never-scheduled feeds; second run is a no-op.
@@ -617,6 +641,7 @@ def test_clear_podcast_refresh_failures_bulk(repo):
     for _ in range(3):
         p = _mk_podcast()
         repo.save(p)
+        _seed_user_and_follow(repo, p.id)  # spec #63
         repo.seed_unscheduled_feeds(3600, now=base)
         repo.record_refresh_failure(p.id, _gone_410(), _SETTINGS, now=base)
         parked.append(p.id)
@@ -639,11 +664,13 @@ def test_quarantine_probe_due_and_reasons(repo):
 
     gone = _mk_podcast()
     repo.save(gone)
+    _seed_user_and_follow(repo, gone.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=old)
     repo.record_refresh_failure(gone.id, _gone_410(), _SETTINGS, now=old)
 
     blocked = _mk_podcast()
     repo.save(blocked)
+    _seed_user_and_follow(repo, blocked.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=old)
     repo.record_refresh_failure(
         blocked.id, RefreshFailure(kind=RefreshFailureKind.SECURITY_POLICY, exception="ssrf"), _SETTINGS, now=old
@@ -651,6 +678,7 @@ def test_quarantine_probe_due_and_reasons(repo):
 
     fresh_gone = _mk_podcast()
     repo.save(fresh_gone)
+    _seed_user_and_follow(repo, fresh_gone.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=base)
     repo.record_refresh_failure(fresh_gone.id, _gone_410(), _SETTINGS, now=base)
 
@@ -665,15 +693,18 @@ def test_get_refresh_health_counts(repo):
 
     healthy = _mk_podcast()
     repo.save(healthy)
+    _seed_user_and_follow(repo, healthy.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=base)
 
     backing = _mk_podcast()
     repo.save(backing)
+    _seed_user_and_follow(repo, backing.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=base)
     repo.record_refresh_failure(backing.id, _connectivity(), _SETTINGS, now=base)
 
     quarantined = _mk_podcast()
     repo.save(quarantined)
+    _seed_user_and_follow(repo, quarantined.id)  # spec #63
     repo.seed_unscheduled_feeds(3600, now=base)
     repo.record_refresh_failure(quarantined.id, _gone_410(), _SETTINGS, now=base)
 

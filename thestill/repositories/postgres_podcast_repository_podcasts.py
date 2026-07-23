@@ -424,9 +424,9 @@ class PodcastsMixin:
         one for all podcasts (no episode hydration), one for every
         ``(podcast_id, external_id)`` pair used for in-memory dedup.
 
-        Skips synthetic parents and auto_added podcasts that no user
-        follows — auto-imports shouldn't drive recurring feed polls until
-        someone explicitly subscribes.
+        Skips synthetic parents and any podcast no user follows (spec
+        #63) — a feed with zero followers shouldn't drive recurring
+        feed polls until someone subscribes.
 
         Returns:
             ``(podcasts, known_external_ids_by_podcast)`` where each
@@ -439,9 +439,7 @@ class PodcastsMixin:
                 f"""
                 SELECT {_PODCAST_COLS_P}
                 FROM podcasts p
-                WHERE p.synthetic = false
-                  AND (p.auto_added = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = p.id))
+                WHERE {self._active_feed_sql("p", require_incomplete=False)}
                 ORDER BY p.created_at DESC
                 """
             ).fetchall()
@@ -1069,15 +1067,12 @@ class PodcastsMixin:
         now_dt = now or now_utc()
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NOT NULL
                   AND next_refresh_at <= %s
                   AND (refresh_retry_after_at IS NULL OR refresh_retry_after_at <= %s)
-                  AND COALESCE(synthetic, false) = false
-                  AND COALESCE(is_complete, false) = false
-                  AND (COALESCE(auto_added, false) = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                  AND {self._active_feed_sql()}
                 ORDER BY next_refresh_at ASC
                 LIMIT %s
                 """,
@@ -1085,14 +1080,21 @@ class PodcastsMixin:
             ).fetchall()
             return [as_str(row["id"]) for row in rows]
 
-    # Spec #60 — the "active, followed, non-synthetic feed" predicate shared
-    # by the quarantine-probe and refresh-health queries below.
-    _ACTIVE_FEED_SQL = """
-                  COALESCE(synthetic, false) = false
-                  AND COALESCE(is_complete, false) = false
-                  AND (COALESCE(auto_added, false) = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
-    """
+    @staticmethod
+    def _active_feed_sql(alias: str = "podcasts", *, require_incomplete: bool = True) -> str:
+        """Spec #63 — the single source of truth for refresh eligibility.
+
+        Faithful port of the SQLite implementation; see there for the
+        full rationale. A feed only receives recurring background work
+        while at least one user follows it; explicit single-podcast
+        operations bypass this predicate by design.
+        """
+        incomplete = f"AND COALESCE({alias}.is_complete, false) = false " if require_incomplete else ""
+        return (
+            f"COALESCE({alias}.synthetic, false) = false "
+            f"{incomplete}"
+            f"AND EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = {alias}.id)"
+        )
 
     def get_quarantine_probe_due(
         self,
@@ -1115,7 +1117,7 @@ class PodcastsMixin:
                 WHERE next_refresh_at IS NULL
                   AND refresh_disabled_reason IN ('feed_gone', 'invalid_content')
                   AND (last_refresh_at IS NULL OR last_refresh_at <= %s)
-                  AND {self._ACTIVE_FEED_SQL}
+                  AND {self._active_feed_sql()}
                 ORDER BY last_refresh_at ASC
                 LIMIT %s
                 """,
@@ -1127,7 +1129,7 @@ class PodcastsMixin:
         """Spec #60 — one cheap aggregate for status surfacing (port of the
         SQLite implementation; see there for field semantics)."""
         now_dt = now or now_utc()
-        active_filter = self._ACTIVE_FEED_SQL
+        active_filter = self._active_feed_sql()
         with self._get_connection() as conn:
             reason_rows = conn.execute(
                 f"""
@@ -1175,15 +1177,12 @@ class PodcastsMixin:
         now_dt = now or now_utc()
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND last_refresh_at IS NULL
                   AND last_refresh_error IS NULL
-                  AND COALESCE(synthetic, false) = false
-                  AND COALESCE(is_complete, false) = false
-                  AND (COALESCE(auto_added, false) = false
-                       OR EXISTS (SELECT 1 FROM podcast_followers pf WHERE pf.podcast_id = podcasts.id))
+                  AND {self._active_feed_sql()}
                 """
             ).fetchall()
             for row in rows:

@@ -6,8 +6,10 @@ Uses mocked external dependencies (network, LLM) to avoid costs and ensure repea
 """
 
 import json
+import sqlite3
 import tempfile
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -39,6 +41,24 @@ def _ok_fetch_result(content: str = "<rss>fake content</rss>") -> FetchRSSResult
 # Minimal MP3-shaped payload (ID3 magic + padding) that passes
 # ``assert_audio_file`` (>=32 bytes + recognised codec header).
 _FAKE_MP3_BYTES = b"ID3" + b"\x00" * 64
+
+
+def _follow_all(podcast_service):
+    """Spec #63 — the bulk refresh sweep only sees followed podcasts.
+
+    Mirrors the single-user auto-follow the production add path performs
+    (``add_podcast_and_auto_follow``) without dragging the auth/follower
+    service stack into these pipeline fixtures. Idempotent.
+    """
+    repo = podcast_service.repository
+    with sqlite3.connect(str(repo.db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for row in conn.execute("SELECT id FROM podcasts").fetchall():
+            conn.execute(
+                "INSERT OR IGNORE INTO podcast_followers (id, user_id, podcast_id, created_at)" " VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), "pipeline-test-user", row[0], datetime.now(timezone.utc).isoformat()),
+            )
+        conn.commit()
 
 
 @pytest.fixture
@@ -137,6 +157,7 @@ class TestPipelineAddAndRefresh:
 
         # Step 1: Add podcast
         podcast = podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         assert podcast is not None
         assert podcast.title == "Test Podcast"
 
@@ -168,6 +189,7 @@ class TestPipelineAddAndRefresh:
 
         # Add podcast
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
 
         # First refresh
         result1 = refresh_service.refresh()
@@ -194,6 +216,7 @@ class TestPipelineAddAndRefresh:
 
         # Add podcast
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
 
         # Refresh with limit of 1 episode per podcast
         result = refresh_service.refresh(max_episodes=1)
@@ -234,6 +257,7 @@ class TestPipelineDownload:
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         feed_manager.get_new_episodes()
 
         # Get episodes to download
@@ -291,6 +315,7 @@ class TestPipelineDownsample:
 
         # Add, refresh, and download
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         feed_manager.get_new_episodes()
         episodes_to_download = feed_manager.get_episodes_to_download(str(temp_storage))
         podcast, episodes = episodes_to_download[0]
@@ -334,6 +359,7 @@ class TestPipelineErrorRecovery:
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         feed_manager.get_new_episodes()
 
         # Simulate partial download failure: first episode downloaded, second failed
@@ -365,6 +391,7 @@ class TestPipelineErrorRecovery:
 
         # Add and refresh
         podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         feed_manager.get_new_episodes()
 
         podcast = podcast_service.get_podcast(1)
@@ -411,6 +438,7 @@ class TestFullPipelineIntegration:
 
         # Step 1: Add podcast
         podcast = podcast_service.add_podcast("https://example.com/feed.xml")
+        _follow_all(podcast_service)
         assert podcast is not None
 
         # Step 2: Refresh - discover episodes
@@ -515,7 +543,9 @@ class TestFullPipelineIntegration:
 
         # Add two podcasts
         result1 = podcast_service.add_podcast("https://example.com/podcast1.xml")
+        _follow_all(podcast_service)
         result2 = podcast_service.add_podcast("https://example.com/podcast2.xml")
+        _follow_all(podcast_service)
 
         assert result1 is not None
         assert result2 is not None

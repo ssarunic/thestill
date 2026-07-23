@@ -90,6 +90,7 @@ class CLIContext:
         entity_repository=None,
         search_backend=None,
         embedding_model=None,
+        follower_service=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -106,6 +107,8 @@ class CLIContext:
         self.follower_repository = follower_repository
         self.inbox_repository = inbox_repository
         self.inbox_service = inbox_service
+        # Spec #63 — follow business logic for the auto-follow-on-add path.
+        self.follower_service = follower_service
         # Spec #28 §1.5 — lazy ReFinED resolver, constructed on first
         # use by ``thestill resolve-entities`` and
         # ``rebuild-cooccurrences``; CLI invocations that don't touch
@@ -226,6 +229,11 @@ def main(ctx, config, quiet):
             queue_manager=repos.queue_manager,
             podcast_repository=repository,
         )
+        # Spec #63 — the auto-follow-on-add path needs full follow
+        # semantics (validation + inbox seed), mirroring the web wiring.
+        from .services.follower_service import FollowerService
+
+        follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
 
         # Spec #28 — entity-layer repository + search backend (backend-resolved).
         from .core.embedding_model import EmbeddingModel
@@ -255,6 +263,7 @@ def main(ctx, config, quiet):
             entity_repository=entity_repository,
             search_backend=search_backend,
             embedding_model=embedding_model,
+            follower_service=follower_service,
         )
 
     except Exception as e:
@@ -269,7 +278,15 @@ def main(ctx, config, quiet):
 @log_command
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
-    podcast = ctx.obj.podcast_service.add_podcast(rss_url)
+    from .services.podcast_add import add_podcast_and_auto_follow
+
+    podcast = add_podcast_and_auto_follow(
+        ctx.obj.podcast_service,
+        ctx.obj.follower_service,
+        ctx.obj.auth_service,
+        ctx.obj.config,
+        rss_url,
+    )
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
     else:
