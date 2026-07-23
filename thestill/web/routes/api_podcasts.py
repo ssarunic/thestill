@@ -29,6 +29,7 @@ from structlog import get_logger
 from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
+from ...services.podcast_add import add_podcast_and_auto_follow
 from ...utils.duration import format_duration
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
@@ -61,7 +62,9 @@ async def resolve_podcast(
     can navigate to the detail page immediately and watch episodes fill in.
 
     Unlike ``POST /api/commands/add``, this endpoint:
-      - does NOT auto-follow the podcast for the caller
+      - does NOT auto-follow the podcast for the caller in multi-user
+        mode (in single-user mode the default user is auto-followed —
+        spec #63, or the universal follower gate would never refresh it)
       - does NOT use the single-instance task manager, so multiple resolves
         can run in parallel (FastAPI runs sync defs in a threadpool)
       - returns the slug synchronously, never a job ID
@@ -81,7 +84,13 @@ async def resolve_podcast(
     # genuinely-new rows and stale rows that never finished discovery — both
     # cases want a background refresh.
     try:
-        podcast = state.podcast_service.add_podcast(url)
+        podcast = add_podcast_and_auto_follow(
+            state.podcast_service,
+            state.follower_service,
+            state.auth_service,
+            state.config,
+            url,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

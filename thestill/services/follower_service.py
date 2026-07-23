@@ -137,6 +137,29 @@ class FollowerService:
 
         return saved
 
+    def follow_best_effort(self, user_id: str, podcast_id: str) -> bool:
+        """Follow, tolerating "already following" and logging (not raising)
+        any other failure.
+
+        Spec #63 — used by the add paths, where a follow failure must not
+        surface as an add failure.
+
+        Returns:
+            True iff the user follows the podcast after this call.
+        """
+        try:
+            self.follow(user_id, podcast_id)
+            return True
+        except AlreadyFollowingError:
+            return True
+        except Exception:
+            logger.exception(
+                "follow_best_effort_failed",
+                user_id=user_id,
+                podcast_id=podcast_id,
+            )
+            return False
+
     def unfollow(self, user_id: str, podcast_id: str) -> bool:
         """
         User unfollows a podcast.

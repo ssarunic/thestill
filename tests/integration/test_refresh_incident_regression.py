@@ -27,6 +27,8 @@ parked feeds, and discovery must self-resume when the network returns.
 
 from __future__ import annotations
 
+import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -66,8 +68,21 @@ def _seed_fleet(repo: SqlitePodcastRepository, count: int, base: datetime) -> li
             )
         )
         ids.append(pid)
+    _follow_all(repo, ids, base)
     repo.seed_unscheduled_feeds(3600, now=base)
     return ids
+
+
+def _follow_all(repo: SqlitePodcastRepository, podcast_ids: list[str], base: datetime) -> None:
+    """Spec #63 — the due/seed queries require a follower per podcast."""
+    with sqlite3.connect(repo.db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for pid in podcast_ids:
+            conn.execute(
+                "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), "user-incident", pid, base.isoformat()),
+            )
+        conn.commit()
 
 
 def test_incident_regression_offline_window_parks_nothing(repo):

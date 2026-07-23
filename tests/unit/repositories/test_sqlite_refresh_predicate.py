@@ -13,15 +13,15 @@
 # limitations under the License.
 
 """
-Spec #31 — ``get_podcasts_for_refresh()`` predicate.
+Spec #31 / #63 — ``get_podcasts_for_refresh()`` predicate.
 
 Refresh must skip:
 - synthetic parents (the bare-audio fallback);
-- auto_added podcasts (real channel/feed rows inserted as a side-effect of
-  an import) when no user follows them.
+- ANY podcast no user follows (spec #63 — previously only ``auto_added``
+  rows required a follower; now the gate is universal).
 
-Once any user follows an auto_added podcast, it must show up in refresh
-again.
+Once any user follows a podcast — auto_added or not — it must show up in
+refresh again.
 """
 
 import sqlite3
@@ -31,10 +31,7 @@ from datetime import datetime, timezone
 import pytest
 
 from thestill.models.podcast import Podcast
-from thestill.repositories.sqlite_podcast_repository import (
-    SYNTHETIC_AUDIO_IMPORTS_ID,
-    SqlitePodcastRepository,
-)
+from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SqlitePodcastRepository
 
 
 @pytest.fixture
@@ -80,14 +77,26 @@ def _add_follower(db_path, podcast_id):
     return user_id
 
 
-def test_refresh_includes_normal_podcasts(repo, db_path):
+def test_refresh_includes_followed_podcasts(repo, db_path):
     pid = _insert_podcast(db_path, title="Real", rss_url="https://example.com/real.xml")
+    _add_follower(db_path, pid)
     podcasts, _ = repo.get_podcasts_for_refresh()
     assert [p.id for p in podcasts] == [pid]
 
 
+def test_refresh_excludes_unfollowed_podcast(repo, db_path):
+    """Spec #63 — a plain (non-auto_added) podcast with zero followers is
+    excluded from the bulk refresh sweep."""
+    pid = _insert_podcast(db_path, title="Real", rss_url="https://example.com/real.xml")
+    assert pid not in {p.id for p in repo.get_podcasts_for_refresh()[0]}
+
+    _add_follower(db_path, pid)
+    assert pid in {p.id for p in repo.get_podcasts_for_refresh()[0]}
+
+
 def test_refresh_excludes_synthetic_parent(repo, db_path):
-    _insert_podcast(db_path, title="Real", rss_url="https://example.com/real.xml")
+    pid = _insert_podcast(db_path, title="Real", rss_url="https://example.com/real.xml")
+    _add_follower(db_path, pid)
     # ensure synthetic parent exists
     repo.ensure_synthetic_audio_imports_parent()
     podcasts, _ = repo.get_podcasts_for_refresh()
@@ -96,9 +105,8 @@ def test_refresh_excludes_synthetic_parent(repo, db_path):
 
 def test_refresh_excludes_auto_added_without_followers(repo, db_path):
     real_id = _insert_podcast(db_path, title="Real", rss_url="https://example.com/real.xml")
-    auto_id = _insert_podcast(
-        db_path, title="Auto", rss_url="https://example.com/auto.xml", auto_added=1
-    )
+    _add_follower(db_path, real_id)
+    auto_id = _insert_podcast(db_path, title="Auto", rss_url="https://example.com/auto.xml", auto_added=1)
     podcasts, _ = repo.get_podcasts_for_refresh()
     ids = {p.id for p in podcasts}
     assert real_id in ids
@@ -106,9 +114,7 @@ def test_refresh_excludes_auto_added_without_followers(repo, db_path):
 
 
 def test_refresh_includes_auto_added_once_followed(repo, db_path):
-    auto_id = _insert_podcast(
-        db_path, title="Auto", rss_url="https://example.com/auto.xml", auto_added=1
-    )
+    auto_id = _insert_podcast(db_path, title="Auto", rss_url="https://example.com/auto.xml", auto_added=1)
     # No follower yet → excluded.
     assert auto_id not in {p.id for p in repo.get_podcasts_for_refresh()[0]}
 

@@ -123,6 +123,20 @@ def setup_tools(server: Server, storage_path: str):
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = repos.user
     auth_service = AuthService(config, user_repository)
+    # Spec #63 — an MCP add must auto-follow the default user in
+    # single-user mode, or the universal follower gate would leave the
+    # new podcast permanently unrefreshed (parity with CLI + web).
+    from ..services.follower_service import FollowerService
+    from ..services.inbox_service import InboxService
+
+    inbox_service = InboxService.from_config(
+        config,
+        repos.inbox,
+        repos.follower,
+        queue_manager=repos.queue_manager,
+        podcast_repository=repository,
+    )
+    follower_service = FollowerService(repos.follower, repository, inbox_service=inbox_service)
 
     @server.list_tools()
     @log_mcp_stdio
@@ -390,7 +404,9 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                podcast = podcast_service.add_podcast(url)
+                from ..services.podcast_add import add_podcast_and_auto_follow
+
+                podcast = add_podcast_and_auto_follow(podcast_service, follower_service, auth_service, config, url)
                 if podcast:
                     # Get the podcast index
                     podcasts = podcast_service.get_podcasts()
