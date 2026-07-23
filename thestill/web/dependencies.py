@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from ..services.briefing_service import BriefingService
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
+    from ..services.legacy_claim_service import LegacyClaimService
     from ..services.narration import NarrationRunner
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -154,6 +155,10 @@ class AppState:
     # ``narration_enabled`` is False; the API surface returns 503 in
     # that mode so callers can handle the rollout gate cleanly.
     narration_runner: "Optional[NarrationRunner]" = None
+    # Spec #64 — legacy local-account claim on first real login.
+    # ``Optional`` only so legacy test fixtures that construct AppState
+    # by hand don't have to update; production wiring always passes it.
+    legacy_claim_service: "Optional[LegacyClaimService]" = None
 
 
 def get_app_state(request: Request) -> AppState:

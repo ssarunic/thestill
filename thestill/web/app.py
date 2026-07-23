@@ -184,6 +184,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Initialize authentication services
     user_repository = repos.user
     auth_service = AuthService(config, user_repository)
+    # Spec #64 — first real login claims the legacy local account's data.
+    from ..services.legacy_claim_service import LegacyClaimService
+
+    legacy_claim_service = LegacyClaimService(repos.legacy_claim, user_repository)
 
     # Initialize follower + inbox services. The inbox service is injected
     # into FollowerService so ``follow`` can seed the new follower's inbox.
@@ -302,6 +306,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         narration_runner=_build_narration_runner(
             config, path_manager, repository, briefing_repository, inbox_repository
         ),
+        legacy_claim_service=legacy_claim_service,
     )
 
     # Create task worker with handlers that have access to app_state.

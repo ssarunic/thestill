@@ -91,6 +91,7 @@ class CLIContext:
         search_backend=None,
         embedding_model=None,
         follower_service=None,
+        legacy_claim_service=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -109,6 +110,8 @@ class CLIContext:
         self.inbox_service = inbox_service
         # Spec #63 — follow business logic for the auto-follow-on-add path.
         self.follower_service = follower_service
+        # Spec #64 — legacy local-account claim/discard (claim-local-user).
+        self.legacy_claim_service = legacy_claim_service
         # Spec #28 §1.5 — lazy ReFinED resolver, constructed on first
         # use by ``thestill resolve-entities`` and
         # ``rebuild-cooccurrences``; CLI invocations that don't touch
@@ -211,6 +214,11 @@ def main(ctx, config, quiet):
         user_repository = repos.user
         auth_service = AuthService(config_obj, user_repository)
 
+        # Spec #64 — legacy local-account claim (claim-local-user command).
+        from .services.legacy_claim_service import LegacyClaimService
+
+        legacy_claim_service = LegacyClaimService(repos.legacy_claim, user_repository)
+
         # Per-user briefing persistence (narration join key).
         briefing_repository = repos.briefing
         # Spec #40 — pending transcription operations (backend-resolved).
@@ -264,6 +272,7 @@ def main(ctx, config, quiet):
             search_backend=search_backend,
             embedding_model=embedding_model,
             follower_service=follower_service,
+            legacy_claim_service=legacy_claim_service,
         )
 
     except Exception as e:
@@ -4137,6 +4146,61 @@ def backfill_inbox(ctx, dry_run):
         click.echo(f"✓ Dry run: {count} inbox rows would be delivered.")
     else:
         click.echo(f"✓ Backfill complete: {count} inbox rows delivered.")
+
+
+@main.command("claim-local-user")
+@click.option("--to", "to_email", default=None, help="Email of the real user to transfer the local account into.")
+@click.option("--discard", is_flag=True, help="Delete the local account's data WITHOUT transferring.")
+@click.option("--dry-run", is_flag=True, help="Show what would change without writing.")
+@click.pass_context
+@require_config
+@log_command
+def claim_local_user(ctx, to_email, discard, dry_run):
+    """Transfer (or discard) the single-user local account's per-user data.
+
+    Spec #64 — after switching to MULTI_USER=true, the pre-auth local
+    account (local@thestill.me) still owns the follows/inbox/briefings it
+    accumulated in single-user mode. Run with --to <email> to move them
+    onto a real account (which also inherits admin), or --discard to wipe
+    them. Exactly one of --to / --discard is required. Idempotent — once
+    the local account is gone, both modes report nothing to do.
+    """
+    from .services.legacy_claim_service import LegacyClaimError
+
+    if bool(to_email) == bool(discard):
+        click.echo("❌ Pass exactly one of --to <email> or --discard", err=True)
+        ctx.exit(1)
+
+    svc = ctx.obj.legacy_claim_service
+
+    def _fmt(counts):
+        parts = [f"{counts.get('followers', 0)} follows", f"{counts.get('inbox', 0)} inbox rows"]
+        parts.append(f"{counts.get('briefings', 0)} briefings")
+        if counts.get("schedule"):
+            parts.append("1 briefing schedule")
+        return ", ".join(parts)
+
+    if discard:
+        result = svc.discard_by_cli(dry_run=dry_run)
+        if not result.found:
+            click.echo("✓ No local account found — nothing to do.")
+        elif dry_run:
+            click.echo(f"Dry run: would discard the local account ({_fmt(result.counts)}).")
+        else:
+            click.echo(f"✓ Local account discarded ({_fmt(result.counts)}).")
+        return
+
+    try:
+        result = svc.claim_by_cli(to_email=to_email, dry_run=dry_run)
+    except LegacyClaimError as e:
+        click.echo(f"❌ {e}", err=True)
+        ctx.exit(1)
+    if not result.found:
+        click.echo("✓ No local account found — nothing to do.")
+    elif dry_run:
+        click.echo(f"Dry run: would transfer to {to_email} ({_fmt(result.counts)}), then delete the local account.")
+    else:
+        click.echo(f"✓ Claimed local account into {to_email}: {_fmt(result.counts)} moved.")
 
 
 # ---------------------------------------------------------------------------

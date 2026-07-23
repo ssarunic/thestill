@@ -174,7 +174,7 @@ class AuthService:
         self,
         code: str,
         redirect_uri: str,
-    ) -> Tuple[User, str]:
+    ) -> Tuple[User, str, bool]:
         """
         Handle Google OAuth callback.
 
@@ -186,7 +186,9 @@ class AuthService:
             redirect_uri: The redirect URI used in the authorization request
 
         Returns:
-            Tuple of (User, JWT token)
+            Tuple of (User, JWT token, is_new_user). ``is_new_user`` is True
+            only when this call created a brand-new user row (spec #64 —
+            the route layer uses it to trigger the legacy-account claim).
 
         Raises:
             RuntimeError: If Google OAuth is not available in single-user mode
@@ -222,6 +224,7 @@ class AuthService:
             raise ValueError("Google did not return an email address")
 
         # Find or create user
+        is_new_user = False
         user = self.user_repository.get_by_google_id(google_id)
 
         if user:
@@ -257,12 +260,13 @@ class AuthService:
                 self.user_repository.save(user)
                 # Re-fetch to get correct ID (UPSERT may have updated existing user)
                 user = self.user_repository.get_by_email(email)
+                is_new_user = True
                 logger.info(f"Created new user: {user.email}")
 
         # Create JWT token
         jwt_token = self.create_jwt(user)
 
-        return user, jwt_token
+        return user, jwt_token, is_new_user
 
     def create_jwt(self, user: User) -> str:
         """
