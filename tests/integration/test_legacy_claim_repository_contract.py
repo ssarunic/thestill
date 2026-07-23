@@ -73,6 +73,7 @@ def claim_ctx(request, tmp_path):
             finally:
                 conn.close()
 
+        _exec.is_pg = False
         yield SqliteLegacyClaimRepository(db_path=db_path), _exec
         return
 
@@ -93,6 +94,7 @@ def claim_ctx(request, tmp_path):
             cur = conn.execute(sql.replace("?", "%s"), params)
             return [dict(r) for r in cur.fetchall()] if fetch else None
 
+    _exec.is_pg = True
     yield PostgresLegacyClaimRepository(PG_DSN), _exec
 
 
@@ -102,15 +104,17 @@ def claim_ctx(request, tmp_path):
 _NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _ts(dt=_NOW):
-    return dt.isoformat()
+def _ts(ex, dt=_NOW):
+    """Bind a timestamp per backend (spec #44): tz-aware datetime on PG,
+    ISO-8601 (+00:00) text on SQLite."""
+    return dt if getattr(ex, "is_pg", False) else dt.isoformat()
 
 
 def _mk_user(ex, email=None, is_admin=False) -> str:
     uid = str(uuid.uuid4())
     ex(
         "INSERT INTO users (id, email, created_at, is_admin) VALUES (?, ?, ?, ?)",
-        (uid, email or f"u-{uid[:8]}@p1.test", _ts(), is_admin),
+        (uid, email or f"u-{uid[:8]}@p1.test", _ts(ex), is_admin),
     )
     return uid
 
@@ -120,7 +124,7 @@ def _mk_podcast(ex) -> str:
     ex(
         "INSERT INTO podcasts (id, created_at, updated_at, rss_url, title, slug, description, language)"
         " VALUES (?, ?, ?, ?, ?, ?, '', 'en')",
-        (pid, _ts(), _ts(), f"https://p1.test/{pid[:8]}/feed.xml", f"P {pid[:8]}", f"p-{pid[:8]}"),
+        (pid, _ts(ex), _ts(ex), f"https://p1.test/{pid[:8]}/feed.xml", f"P {pid[:8]}", f"p-{pid[:8]}"),
     )
     return pid
 
@@ -130,7 +134,7 @@ def _mk_episode(ex, podcast_id: str) -> str:
     ex(
         "INSERT INTO episodes (id, podcast_id, created_at, updated_at, external_id, title, audio_url)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (eid, podcast_id, _ts(), _ts(), f"ep-{eid[:8]}", f"E {eid[:8]}", f"https://p1.test/{eid[:8]}.mp3"),
+        (eid, podcast_id, _ts(ex), _ts(ex), f"ep-{eid[:8]}", f"E {eid[:8]}", f"https://p1.test/{eid[:8]}.mp3"),
     )
     return eid
 
@@ -138,7 +142,7 @@ def _mk_episode(ex, podcast_id: str) -> str:
 def _follow(ex, user_id: str, podcast_id: str) -> None:
     ex(
         "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
-        (str(uuid.uuid4()), user_id, podcast_id, _ts()),
+        (str(uuid.uuid4()), user_id, podcast_id, _ts(ex)),
     )
 
 
@@ -146,7 +150,7 @@ def _inbox(ex, user_id: str, episode_id: str) -> None:
     ex(
         "INSERT INTO user_episode_inbox (id, user_id, episode_id, source, state, delivered_at)"
         " VALUES (?, ?, ?, 'follow_seed', 'unread', ?)",
-        (str(uuid.uuid4()), user_id, episode_id, _ts()),
+        (str(uuid.uuid4()), user_id, episode_id, _ts(ex)),
     )
 
 
@@ -155,7 +159,7 @@ def _briefing(ex, user_id: str) -> str:
     ex(
         "INSERT INTO user_briefings (id, user_id, cursor_from, cursor_to, episode_count, created_at)"
         " VALUES (?, ?, ?, ?, 1, ?)",
-        (bid, user_id, _ts(_NOW - timedelta(days=1)), _ts(), _ts()),
+        (bid, user_id, _ts(ex, _NOW - timedelta(days=1)), _ts(ex), _ts(ex)),
     )
     return bid
 
@@ -165,7 +169,7 @@ def _delivery(ex, briefing_id: str) -> str:
     ex(
         "INSERT INTO briefing_deliveries (id, briefing_id, channel, status, created_at)"
         " VALUES (?, ?, 'email', 'pending', ?)",
-        (did, briefing_id, _ts()),
+        (did, briefing_id, _ts(ex)),
     )
     return did
 
@@ -174,7 +178,7 @@ def _schedule(ex, user_id: str, tz="Europe/Berlin") -> None:
     ex(
         "INSERT INTO user_briefing_schedules (user_id, frequency, hour_local, timezone, created_at, updated_at)"
         " VALUES (?, 'daily', 8, ?, ?, ?)",
-        (user_id, tz, _ts(), _ts()),
+        (user_id, tz, _ts(ex), _ts(ex)),
     )
 
 

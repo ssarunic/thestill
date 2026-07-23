@@ -274,7 +274,7 @@ async def google_callback(
         # and self-limiting: a successful claim deletes the local row, so
         # later logins no-op. Never blocks login (claim_for_new_user
         # swallows all errors).
-        if is_new_user:
+        if is_new_user and app_state.legacy_claim_service is not None:
             app_state.legacy_claim_service.claim_for_new_user(user)
 
         # Best-effort region inference on first login. Failures are silent
