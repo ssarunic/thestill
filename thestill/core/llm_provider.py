@@ -674,6 +674,19 @@ class LLMProvider(ABC):
         """Get the current model name"""
         pass
 
+    def get_provider_name(self) -> str:
+        """Short lowercase provider identifier, e.g. ``"gemini"``.
+
+        Derived from the class name (``GeminiProvider`` -> ``gemini``) so
+        concrete providers don't each need to declare it. Used for
+        provenance records; override if a subclass name doesn't follow
+        the ``<Name>Provider`` convention.
+        """
+        name = type(self).__name__
+        if name.endswith("Provider"):
+            name = name[: -len("Provider")]
+        return name.lower()
+
     @abstractmethod
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""

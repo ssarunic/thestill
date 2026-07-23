@@ -33,6 +33,7 @@ function makeTranscript(segments: AnnotatedSegment[]): AnnotatedTranscriptDump {
     playback_time_offset_seconds: 0,
     algorithm_version: 'v1',
     transcript_source_duration_s: null,
+    cleaning: null,
   }
 }
 
