@@ -264,10 +264,18 @@ async def google_callback(
 
     try:
         redirect_uri = _get_redirect_uri(request, app_state)
-        user, jwt_token = await app_state.auth_service.handle_google_callback(
+        user, jwt_token, is_new_user = await app_state.auth_service.handle_google_callback(
             code=code,
             redirect_uri=redirect_uri,
         )
+
+        # Spec #64 — a brand-new real user claims the legacy single-user
+        # local account's data (follows, inbox, briefings). Best-effort
+        # and self-limiting: a successful claim deletes the local row, so
+        # later logins no-op. Never blocks login (claim_for_new_user
+        # swallows all errors).
+        if is_new_user and app_state.legacy_claim_service is not None:
+            app_state.legacy_claim_service.claim_for_new_user(user)
 
         # Best-effort region inference on first login. Failures are silent
         # and leave region NULL — the user can still pick one in settings.

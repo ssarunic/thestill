@@ -88,6 +88,7 @@ class RepositoryBundle:
     briefing: BriefingRepository
     briefing_schedule: BriefingScheduleRepository
     briefing_delivery: BriefingDeliveryRepository
+    legacy_claim: Any
     pending_ops: Any
     entity: Any
     queue_manager: Any
@@ -105,6 +106,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
         from .postgres_entity_repository import PostgresEntityRepository
         from .postgres_inbox_repository import PostgresInboxRepository
+        from .postgres_legacy_claim_repository import PostgresLegacyClaimRepository
         from .postgres_pending_operations_repository import PostgresPendingOperationsRepository
         from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
         from .postgres_podcast_repository import PostgresPodcastRepository
@@ -119,6 +121,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             briefing=PostgresBriefingRepository(dsn),
             briefing_schedule=PostgresBriefingScheduleRepository(dsn),
             briefing_delivery=PostgresBriefingDeliveryRepository(dsn),
+            legacy_claim=PostgresLegacyClaimRepository(dsn),
             pending_ops=PostgresPendingOperationsRepository(dsn),
             entity=PostgresEntityRepository(dsn),
             queue_manager=PostgresQueueManager(dsn),
@@ -131,6 +134,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
     from .sqlite_entity_repository import SqliteEntityRepository
     from .sqlite_inbox_repository import SqliteInboxRepository
+    from .sqlite_legacy_claim_repository import SqliteLegacyClaimRepository
     from .sqlite_pending_operations_repository import SqlitePendingOperationsRepository
     from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
     from .sqlite_podcast_repository import SqlitePodcastRepository
@@ -145,6 +149,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         briefing=SqliteBriefingRepository(db_path=db_path),
         briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
         briefing_delivery=SqliteBriefingDeliveryRepository(db_path=db_path),
+        legacy_claim=SqliteLegacyClaimRepository(db_path=db_path),
         pending_ops=SqlitePendingOperationsRepository(db_path=db_path),
         entity=SqliteEntityRepository(db_path=db_path),
         queue_manager=QueueManager(db_path),
