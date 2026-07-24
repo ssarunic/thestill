@@ -4789,7 +4789,7 @@ def server(ctx, host, port, reload, workers):
 
     click.echo("")
     click.echo(f"📡 Webhook URL: http://{host}:{port}/webhook/elevenlabs/speech-to-text")
-    click.echo(f"📊 Status URL: http://{host}:{port}/status")
+    click.echo(f"📊 Status URL: http://{host}:{port}/api/status")
     click.echo(f"📚 API Docs: http://{host}:{port}/docs")
     click.echo("")
 
