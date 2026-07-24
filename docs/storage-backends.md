@@ -231,8 +231,8 @@ through the application.
 ## Migrating from local to S3
 
 When flipping an existing deployment, existing local files don't
-auto-upload. A `thestill migrate-storage` CLI is on the spec roadmap
-(open question #3). Until then, sync manually:
+auto-upload. A dedicated storage-migration CLI command is on the spec
+roadmap (open question #3). Until then, sync manually:
 
 ```bash
 aws s3 sync ./data/ s3://thestill-data/prod/ \

@@ -1177,4 +1177,4 @@ Episodes need to go through the full pipeline before transcripts are available. 
 For more information, see:
 
 - [Main README](../README.md)
-- [Transcript Cleaning Guide](TRANSCRIPT_CLEANING.md)
+- [Transcript Cleaning Guide](transcript-cleaning.md)

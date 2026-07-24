@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-fast test-coverage lint format typecheck check clean clean-all run-mcp corpus-backfill rebuild-entity-pages
+.PHONY: help install install-dev test test-fast test-coverage docs-check lint format typecheck check clean clean-all run-mcp corpus-backfill rebuild-entity-pages
 
 # Default target
 .DEFAULT_GOAL := help
@@ -36,6 +36,9 @@ test-integration: ## Run integration tests only
 
 test-e2e: ## Run E2E tests (requires running server)
 	node tests/e2e/web/test_web_auth.cjs
+
+docs-check: ## Cross-check user docs against the code (doc-drift suite)
+	./venv/bin/pytest tests/docs -q --no-cov
 
 test-coverage: ## Run tests and open HTML coverage report
 	./venv/bin/pytest --cov=thestill --cov-report=html:reports/coverage --ignore=tests/e2e

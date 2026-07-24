@@ -442,6 +442,7 @@ The MCP server logs through the shared logging setup — use `LOG_LEVEL`,
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `URL_GUARD_ALLOWLIST` | Comma-separated hostnames exempted from the SSRF URL guard (e.g. a Dalston on `localhost`) | - (empty) |
+| `EDITOR` | Editor opened by the facts-editing CLI command | `nano` |
 
 ## Configuration Hierarchy
 
