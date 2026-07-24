@@ -1,336 +1,162 @@
-# Transcript Cleaning with Overlapping Chunking
+# Transcript Cleaning
 
 ## Overview
 
-The transcript cleaning feature uses small LLM models to improve the quality of transcribed text by:
+The transcript cleaning stage uses an LLM to turn raw diarised transcripts into readable, searchable text by:
 
-- Fixing spelling errors and transcription mistakes
-- Removing filler words (um, uh, hmm, like, you know, etc.)
-- Correcting grammar while maintaining conversational tone
-- Ensuring consistent spelling of names, companies, and acronyms
-- Preserving timestamps and all original content
+- Fixing spelling errors and transcription mistakes (homophones, misheard proper nouns, garbled words)
+- Replacing `SPEAKER_NN` labels with real speaker names
+- Tagging ad breaks with sponsor names (tagging, not redaction — the full ad text is preserved)
+- Flagging filler segments (um, uh, you know) so they can be dropped from rendered output
+- Tagging intros, outros, and music spans so the UI can toggle their visibility
+- Ensuring consistent spelling of names, companies, and acronyms via per-podcast facts
+- Preserving timestamps, speaker structure, and all original content
 
-## Why Overlapping Chunking?
+Cleaning is deliberately conservative: the LLM is instructed to keep output 95%+ identical to the input and never paraphrase or "improve" eloquence.
 
-Long podcast transcripts (>100K words) can exceed the context window of small models (typically 32K tokens for gemma3:1b/4b). The overlapping chunking strategy solves this by:
+## Two-Pass Facts-Based Pipeline
 
-1. **Splitting** the transcript into manageable chunks (~20K tokens each)
-2. **Overlapping** chunks by 10-20% to maintain context across boundaries
-3. **Cleaning** each chunk independently with global entity context
-4. **Stitching** results together, removing duplicate overlapping sections
+The entry point is `TranscriptCleaningProcessor` (`thestill/core/transcript_cleaning_processor.py`), which orchestrates two passes.
 
-This approach ensures consistency and quality even with very long transcripts while using resource-efficient small models.
+### Pass 1: Facts Extraction
+
+Before cleaning, the pipeline extracts structured facts from the transcript:
+
+- **Speaker mapping**: `SPEAKER_00` → "Scott Galloway"
+- **Guests**: who appears in this episode
+- **Keywords / mishearings**: proper nouns and terms the transcriber tends to mangle
+- **Ad sponsors**: sponsor names for ad tagging
+
+Facts are stored as human-editable Markdown files:
+
+- Podcast facts: `data/podcast_facts/{podcast_slug}.facts.md`
+- Episode facts: `data/episode_facts/{podcast_slug}/{episode_slug}.facts.md`
+
+If the facts files already exist they are reused, so you can correct a wrong speaker mapping by editing the file and re-running with `--force`. Unmapped `SPEAKER_NN` labels that survive to the output are a visible canary that facts extraction missed a speaker.
+
+### Pass 2: Segmented Cleaning
+
+The segmented cleaner (`TranscriptSegmenter` + `SegmentedTranscriptCleaner`) preserves transcript structure instead of rewriting free text:
+
+1. The segmenter converts the raw transcript into a deterministic `AnnotatedTranscript` — a grid of per-speaker segments with stable ids and timing.
+2. The cleaner walks the segment list in batches. Each batch is sized greedily up to a character budget (`batch_char_budget`, default 4000 characters; automatically widened 3x for providers without prompt caching).
+3. Each LLM call sees a JSON payload with three sections: `k_prev` already-cleaned preceding segments (default 2) for tone and speaker continuity, the target batch to patch, and `k_next` upcoming raw segments (default 2) as read-only forward context.
+4. The LLM returns one patch per target segment: corrected text, a segment `kind`, and an optional sponsor name. The patch schema deliberately omits the source anchors (`source_segment_ids`, `source_word_span`), so the LLM physically cannot rewrite them.
+5. After all patches apply, segment ids are reassigned positionally (0..N-1) so downstream consumers get a stable grid.
+
+The cacheable system prompt (cleaning rules + facts + speaker mapping + sponsors) is identical across every batch call for an episode, which makes provider prompt caching effective (Anthropic explicit caching, OpenAI/Gemini automatic caching).
+
+### Segment Kinds
+
+Each segment is tagged with a kind; rendering policy lives at the consumer layer:
+
+- `content` — the default narrative bucket
+- `filler` — um/uh/you-know noise; dropped from rendered output
+- `ad_break` — sponsor reads, tagged with the sponsor name; full ad text is kept
+- `music` — theme or interstitial music the transcriber produced text for
+- `intro` / `outro` — pre-roll openings and post-roll sign-offs
+
+### Degenerate Transcripts
+
+Transcripts that cannot feed the segmented cleaner (raw JSON that fails schema validation, or transcripts without real per-segment timing) raise `DegenerateTranscriptError` instead of silently degrading. The fix is upstream: re-transcribe with a provider that produces proper per-segment timing.
 
 ## Configuration
 
-Add these settings to your `.env` file:
+The `thestill clean-transcript` stage uses the main LLM configuration:
 
 ```bash
-# Enable transcript cleaning
-ENABLE_TRANSCRIPT_CLEANING=true
+# Provider for the cleaning stage (openai, ollama, gemini, or anthropic; Mistral also available)
+LLM_PROVIDER=gemini
 
-# Provider (ollama recommended for local, free processing)
-CLEANING_PROVIDER=ollama
-
-# Model selection
-CLEANING_MODEL=gemma3:4b
-# Options:
-# - gemma3:270m (fastest, 2-3 sec/chunk)
-# - gemma3:1b (fast, 5-8 sec/chunk)
-# - gemma3:4b (balanced, 10-15 sec/chunk) ✅ RECOMMENDED
-# - gemma3:12b (slower, highest quality)
-# - gpt-4o-mini (OpenAI, costs money but very high quality)
-
-# Chunking parameters
-CLEANING_CHUNK_SIZE=20000        # Max tokens per chunk
-CLEANING_OVERLAP_PCT=0.15        # 15% overlap between chunks
-CLEANING_EXTRACT_ENTITIES=true  # Extract names/acronyms for consistency
+# Model comes from the provider-specific setting, e.g.
+GEMINI_MODEL=gemini-3-pro-preview
+OLLAMA_MODEL=gemma3:4b
 ```
 
-## Two-Pass Algorithm
+A separate set of `CLEANING_*` variables configures the optional inline cleaning that runs during the transcription step (`ENABLE_TRANSCRIPT_CLEANING=true`):
 
-### Pass 1: Entity Extraction (Optional)
+```bash
+CLEANING_PROVIDER=gemini                  # Default: gemini
+CLEANING_MODEL=gemini-3-flash-preview     # Default: fast and cost-effective
+```
 
-The cleaner first analyzes the transcript (or first 10K tokens) to extract:
+### Context Sizing
 
-- **Names**: Dr. Sarah Johnson, Elon Musk
-- **Companies**: OpenAI, NASA, MIT
-- **Acronyms**: AI, LLM, CEO, FOMO
-- **Technical terms**: blockchain, neural networks
-- **Products**: ChatGPT, Tesla Model S
+Chunk size for facts extraction is auto-set from the provider's context window — chunking exists for budget and quality control, not because of tiny context windows:
 
-This creates a "glossary" used in all subsequent chunks for consistency.
+- Gemini Flash/Pro: 900K characters (~225K tokens from a 1M-token context)
+- Claude: 180K characters (~45K tokens from a 200K-token context)
+- GPT-4/GPT-5: 100K characters (~25K tokens from a 128K-token context)
+- Ollama and others: 30K characters (conservative default)
 
-### Pass 2: Chunk-by-Chunk Cleaning
+### Active Tuning Knobs
 
-For each overlapping chunk:
+The segmented cleaner's knobs are code-level defaults on `SegmentedTranscriptCleaner`, not environment variables:
 
-1. Add entity glossary to prompt
-2. Send to LLM with cleaning instructions
-3. Receive cleaned text
-4. Store with overlap boundaries
+- `k_prev` (default 2): preceding already-cleaned segments included as context
+- `k_next` (default 2): upcoming raw segments included as forward context
+- `batch_char_budget` (default 4000): target character budget per LLM call, widened 3x for providers without prompt caching
 
-### Pass 3: Reassembly
+### Legacy Settings
 
-- Keep full first chunk
-- For subsequent chunks, discard overlapping portion (already cleaned in previous chunk)
-- Append only unique content
+These apply only to the legacy inline-cleaning path during the transcription step, not to `thestill clean-transcript`:
+
+```bash
+CLEANING_CHUNK_SIZE=20000        # Legacy: max tokens per chunk
+CLEANING_OVERLAP_PCT=0.15        # Legacy: overlap between chunks
+CLEANING_EXTRACT_ENTITIES=true   # Legacy: entity extraction for consistency
+```
 
 ## Usage
 
-### Automatic (via CLI)
-
-The cleaning happens automatically when enabled:
+Run cleaning as its own pipeline stage:
 
 ```bash
-# Enable in .env
-ENABLE_TRANSCRIPT_CLEANING=true
-
-# Run normal processing
-thestill process
+thestill clean-transcript
 ```
 
-### Manual (Python API)
+Flags:
 
-```python
-from thestill.core.transcript_cleaner import TranscriptCleaner, TranscriptCleanerConfig
-from thestill.core.llm_provider import OllamaProvider
-
-# Create provider
-provider = OllamaProvider(
-    base_url="http://localhost:11434",
-    model="gemma3:4b"
-)
-
-# Configure cleaning
-config = TranscriptCleanerConfig(
-    chunk_size=20000,
-    overlap_pct=0.15,
-    extract_entities=True,
-    remove_filler_words=True,
-    fix_spelling=True,
-    fix_grammar=True
-)
-
-# Create cleaner
-cleaner = TranscriptCleaner(provider=provider, config=config)
-
-# Clean transcript
-result = cleaner.clean_transcript(
-    text=raw_transcript_text,
-    output_path="./data/transcripts/cleaned_transcript.txt"
-)
-
-print(f"Cleaned {result['chunks_processed']} chunks")
-print(f"Token change: {result['final_tokens'] - result['original_tokens']}")
-print(f"Entities found: {len(result['entities'])}")
-```
-
-## Performance
-
-### Processing Time (gemma3:4b on Apple M1)
-
-| Transcript Length | Chunks | Time | Cost (Ollama) |
-|------------------|--------|------|---------------|
-| 10K words | 1 | 10s | Free |
-| 50K words | 3 | 35s | Free |
-| 100K words | 6 | 70s | Free |
-| 200K words | 12 | 150s | Free |
-
-### With OpenAI (gpt-4o-mini)
-
-| Transcript Length | Chunks | Time | Cost |
-|------------------|--------|------|------|
-| 10K words | 1 | 3s | $0.01 |
-| 50K words | 3 | 8s | $0.04 |
-| 100K words | 6 | 15s | $0.08 |
-| 200K words | 12 | 30s | $0.16 |
+- `--dry-run` / `-d`: show what would be processed
+- `--max-episodes` / `-m`: maximum episodes to process (default: 5)
+- `--force` / `-f`: re-process even if a clean transcript exists
+- `--stream` / `-s`: stream LLM output in real-time
 
 ## Output
 
-The cleaned transcript is added to the transcript JSON:
+Cleaning produces two artifacts per episode:
 
-```json
-{
-  "text": "Original Whisper output...",
-  "segments": [...],
-  "cleaned_text": "Improved, cleaned transcript...",
-  "cleaning_metadata": {
-    "entities": [
-      {"term": "Dr. Sarah Johnson", "type": "name"},
-      {"term": "OpenAI", "type": "company"}
-    ],
-    "processing_time": 45.2,
-    "chunks_processed": 4,
-    "original_tokens": 25000,
-    "final_tokens": 22500
-  }
-}
-```
+1. **JSON sidecar** (`*_cleaned.json`): the canonical per-segment `AnnotatedTranscript`. Every segment carries its cleaned text, kind, speaker, timing, and source anchors. All segment kinds are preserved — including full ad text — so consumers filter by kind instead of relying on redaction. The web viewer renders from this when showing the full transcript.
+2. **Blended Markdown** (`*_cleaned.md`): an ads-stripped projection of the sidecar, fed to the summariser.
+
+Debug artifacts land in `data/clean_transcripts/debug/`:
+
+- `{base_name}.original.md` — formatted transcript before LLM cleaning (useful for diffing)
+- `{base_name}.speakers.json` — speaker mapping from episode facts
+
+## LLM Output Sanitization
+
+LLMs occasionally emit raw control characters — the motivating incident was Gemini returning U+0000 in place of an `é`, which SQLite stored silently and which then propagated invisibly into search chunks. Two guards protect the output:
+
+- **Control-character stripping at the schema boundary**: every patch's `cleaned_text` and `sponsor` pass through a Pydantic validator that strips C0/C1 control characters (tab, newline, and carriage return pass through). Stripping is never silent — it logs a `llm_control_chars_stripped` warning so a provider regression stays visible.
+- **Per-batch prohibited-content fallback**: if the provider refuses a batch on content grounds (e.g. Gemini `PROHIBITED_CONTENT`, raised as `ProhibitedContentError`), the batch falls back to its raw ASR text — no speaker mapping, no ad tagging — instead of failing the whole episode. The fallback is logged as `segmented_cleanup_prohibited_content`.
 
 ## Tips for Best Results
 
-### 1. Choose the Right Model
+### Choose the Right Provider
 
-- **gemma3:1b**: Fast, good for simple cleaning, may miss some errors
-- **gemma3:4b**: ✅ Best balance of speed and quality
-- **gemma3:12b**: Slower but highest quality for local inference
-- **gpt-4o-mini**: Excellent quality but costs money
+- **Gemini Flash**: fast, cheap, huge context — the recommended default
+- **Anthropic / OpenAI**: high quality; prompt caching keeps repeated-prefix costs down
+- **Ollama**: free and local, but slower; the batch budget is widened automatically to compensate for the lack of prompt caching
 
-### 2. Adjust Chunking Parameters
+### Fix Speaker Names via Facts
 
-For very small models (gemma3:270m, gemma3:1b):
-
-```bash
-CLEANING_CHUNK_SIZE=15000  # Smaller chunks
-CLEANING_OVERLAP_PCT=0.20   # More overlap for better context
-```
-
-For larger models (gemma3:12b, gpt-4):
+If speakers are mislabelled, edit the episode facts file (`data/episode_facts/{podcast_slug}/{episode_slug}.facts.md`), then re-run:
 
 ```bash
-CLEANING_CHUNK_SIZE=30000  # Larger chunks
-CLEANING_OVERLAP_PCT=0.10   # Less overlap needed
+thestill clean-transcript --force
 ```
 
-### 3. Entity Extraction Trade-offs
+### Keep Sponsors in Podcast Facts
 
-**Enable** (`CLEANING_EXTRACT_ENTITIES=true`):
-
-- ✅ Consistent spelling of names/terms across entire transcript
-- ✅ Better handling of uncommon names and technical terms
-- ❌ Adds ~10 seconds processing time
-
-**Disable** (`CLEANING_EXTRACT_ENTITIES=false`):
-
-- ✅ Faster processing
-- ❌ May have inconsistent spelling across chunks
-- ✅ Still effective for filler word removal and grammar fixes
-
-### 4. Filler Word Customization
-
-Customize the filler words list in your code:
-
-```python
-config = TranscriptCleanerConfig(
-    filler_words=["um", "uh", "like", "you know", "basically"]
-)
-```
-
-## Troubleshooting
-
-### Issue: Chunks have weird cuts mid-sentence
-
-**Solution**: The chunker uses `nltk.sent_tokenize()` to split on sentence boundaries. Make sure NLTK is installed:
-
-```bash
-pip install nltk
-```
-
-### Issue: Token count exceeds model limit
-
-**Solution**: Reduce chunk size:
-
-```bash
-CLEANING_CHUNK_SIZE=15000
-```
-
-### Issue: Inconsistent names across chunks
-
-**Solution**: Enable entity extraction:
-
-```bash
-CLEANING_EXTRACT_ENTITIES=true
-```
-
-### Issue: Processing too slow
-
-**Solutions**:
-
-1. Use smaller model: `CLEANING_MODEL=gemma3:1b`
-2. Disable entity extraction: `CLEANING_EXTRACT_ENTITIES=false`
-3. Reduce overlap: `CLEANING_OVERLAP_PCT=0.10`
-
-### Issue: Not removing enough filler words
-
-**Solution**: Use larger model (gemma3:4b or higher) or switch to OpenAI:
-
-```bash
-CLEANING_PROVIDER=openai
-CLEANING_MODEL=gpt-4o-mini
-```
-
-## Technical Details
-
-### Dependencies
-
-- `tiktoken` (optional): Accurate token counting for OpenAI models
-- `nltk` (optional): Better sentence splitting
-
-Install with:
-
-```bash
-pip install tiktoken nltk
-```
-
-### Token Estimation
-
-Without tiktoken, uses character-based estimation:
-
-```
-tokens ≈ characters / 4
-```
-
-This is 85-90% accurate for English text.
-
-### Overlap Calculation
-
-For a chunk size of 20K tokens and 15% overlap:
-
-- Chunk 1: tokens 0-20,000
-- Chunk 2: tokens 17,000-37,000 (3K overlap with chunk 1)
-- Chunk 3: tokens 34,000-54,000 (3K overlap with chunk 2)
-
-During reassembly:
-
-- Keep all of chunk 1
-- From chunk 2, discard first 3K tokens (already in chunk 1), keep rest
-- From chunk 3, discard first 3K tokens (already in chunk 2), keep rest
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   TranscriptCleaner                         │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  1. Extract Entities (optional)                            │
-│     ├─> Analyze first 10K tokens                           │
-│     └─> Build entity glossary                              │
-│                                                             │
-│  2. Create Overlapping Chunks                              │
-│     ├─> Split into sentences (nltk)                        │
-│     ├─> Group into ~20K token chunks                       │
-│     └─> Add 15% overlap                                    │
-│                                                             │
-│  3. Clean Each Chunk                                       │
-│     ├─> Add entity glossary to prompt                      │
-│     ├─> Send to LLM (gemma3/GPT)                          │
-│     └─> Receive cleaned text                               │
-│                                                             │
-│  4. Stitch Results                                         │
-│     ├─> Keep full chunk 1                                  │
-│     ├─> Discard overlap from chunks 2+                     │
-│     └─> Combine into final text                            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Future Enhancements
-
-- [ ] Speaker diarization integration (preserve speaker labels)
-- [ ] Custom entity dictionaries per podcast
-- [ ] Confidence scores for corrections
-- [ ] A/B testing framework for model comparison
-- [ ] Parallel chunk processing for faster throughput
-- [ ] Streaming mode for real-time cleaning
+Ad tagging works best when the podcast facts file lists known sponsors — the LLM populates the `sponsor` field from that list when possible.

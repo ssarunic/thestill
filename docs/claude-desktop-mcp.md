@@ -59,8 +59,8 @@ printf '%s\n%s\n' \
 
 Expected output: a JSON-RPC envelope listing
 `add_podcast`, `find_mentions`, `list_quotes_by`,
-`get_episode_clip`, `get_entity`, `list_episodes_by_entity`, plus the
-podcast tools.
+`get_episode_clip`, `get_entity`, `list_episodes_by_entity`,
+`search_corpus`, plus the podcast tools.
 
 ## Tool guide for the LLM
 
@@ -74,6 +74,7 @@ auto-discovers them, but here is a quick reference:
 | `get_episode_clip(episode_id, start_ms, ...)` | Turn an `(episode, t)` pointer into a quotable, playable citation |
 | `get_entity(id_or_name)` | Entity pages — record + counts + cooccurrences + recent quotes |
 | `list_episodes_by_entity(has_entity[])` | "Episodes containing both X and Y" |
+| `search_corpus(query, mode?, limit?, filters?)` | Non-entity-scoped questions — lexical/semantic/hybrid search ("episodes about agentic engineering") |
 
 Every result row carries an `episode_id`, `start_ms`, `quote`, and a
 `thestill://episode/<id>?t=<sec>` deeplink so Claude can compose

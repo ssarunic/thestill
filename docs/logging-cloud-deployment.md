@@ -86,7 +86,7 @@ Logs are emitted in Elastic Common Schema format:
 {
   "@timestamp": "2026-01-25T16:34:22.186Z",
   "log.level": "info",
-  "message": "Episode processed",
+  "message": "download_completed",
   "ecs.version": "1.6.0",
   "episode_id": 123,
   "duration_ms": 4500
@@ -232,14 +232,13 @@ Logs are emitted with CloudWatch-optimized field names:
 
 ```json
 {
-  "message": "Episode processed",
+  "message": "task_completed_successfully",
   "@timestamp": "2026-01-25T16:34:22.186Z",
-  "timestamp": "2026-01-25T16:34:22.186Z",
   "level": "INFO",
   "episode_id": 123,
-  "duration_ms": 4500,
-  "request_id": "abc123",
-  "worker_id": "worker-1"
+  "task_id": 456,
+  "stage": "transcribe",
+  "worker_id": "3fb0e2a4"
 }
 ```
 
@@ -326,26 +325,35 @@ spec:
 
 Logs are emitted in Google Cloud Logging format:
 
+Custom key-value pairs land flat in the JSON payload (rendered by `structlog-gcp`); the timestamp field is named `time`:
+
 ```json
 {
-  "message": "Episode processed",
+  "message": "download_completed",
   "time": "2026-01-25T16:34:04.073930Z",
   "severity": "INFO",
   "episode_id": 123,
   "duration_ms": 4500,
   "logging.googleapis.com/sourceLocation": {
-    "file": "thestill/core/transcriber.py",
-    "line": "142",
-    "function": "transcribe"
+    "file": "thestill/core/audio_downloader.py",
+    "line": "149",
+    "function": "download_episode"
   }
 }
 ```
 
 ## Correlation ID Tracing
 
+Thestill binds a distinct set of correlation fields per layer — there is no single `correlation_id` field:
+
+- **Web**: `request_id` (plus `method`, `endpoint`, `client_ip`)
+- **CLI**: `command_id` (plus `command_name`)
+- **MCP**: `request_id` (plus `mcp_method`, `transport`)
+- **Task worker**: `worker_id`, `task_id`, `episode_id`, `stage`, `retry_count`
+
 ### Adding Correlation IDs
 
-Use structlog's context variables to add correlation IDs for tracing requests across workers:
+The task worker binds its context at the start of each task; the same pattern applies to any custom multi-step operation:
 
 ```python
 import structlog
@@ -353,17 +361,17 @@ from thestill.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Bind correlation ID to logger context
+# Bind task context to logger context (as done in core/task_worker.py)
 structlog.contextvars.bind_contextvars(
-    correlation_id="abc-123",
-    episode_id=episode.id,
-    worker_id=worker.id
+    worker_id=worker_id,
+    task_id=task.id,
+    episode_id=task.episode_id,
+    stage=task.stage.value,
+    retry_count=task.retry_count,
 )
 
 # All subsequent logs will include these fields
-logger.info("Starting transcription")
-logger.info("Audio downloaded")
-logger.info("Transcription complete")
+logger.info("task_processing_started")
 
 # Clear context when done
 structlog.contextvars.clear_contextvars()
@@ -371,25 +379,31 @@ structlog.contextvars.clear_contextvars()
 
 ### Multi-Worker Tracing
 
-For distributed processing across multiple workers:
+Each pipeline stage (download, downsample, transcribe, clean, summarize) may be processed by a different worker, and each worker gets a fresh `worker_id` (an 8-character UUID slice). The stable join keys across workers are `episode_id` and `task_id`:
 
 ```python
-# Worker A: Download audio
+# Worker A: Download stage
 structlog.contextvars.bind_contextvars(
-    correlation_id=episode.id,
-    worker_id="worker-download-1"
+    worker_id="3fb0e2a4",
+    task_id=456,
+    episode_id=episode.id,
+    stage="download",
+    retry_count=0,
 )
-logger.info("Audio download started")
+logger.info("task_processing_started")
 
-# Worker B: Transcribe audio (use same correlation_id)
+# Worker B: Transcribe stage (same episode_id, new task_id and worker_id)
 structlog.contextvars.bind_contextvars(
-    correlation_id=episode.id,
-    worker_id="worker-transcribe-2"
+    worker_id="9c14d7b8",
+    task_id=457,
+    episode_id=episode.id,
+    stage="transcribe",
+    retry_count=0,
 )
-logger.info("Transcription started")
+logger.info("task_processing_started")
 ```
 
-Query both workers' logs using the shared `correlation_id` field.
+Query both workers' logs using the shared `episode_id` field (or `task_id` for a single stage attempt).
 
 ## Log Retention
 
@@ -429,22 +443,19 @@ LOG_FORMAT=ecs ./venv/bin/thestill status
 
 # Test GCP format
 LOG_FORMAT=gcp SERVICE_NAME=thestill ./venv/bin/thestill status
-
-# Run validation script
-./venv/bin/python test_cloud_logging.py
 ```
 
 ## Best Practices
 
 ### 1. Use Correlation IDs
 
-Always add correlation IDs for multi-step operations:
+Always bind the relevant entity IDs for multi-step operations so logs can be joined across layers:
 
 ```python
 structlog.contextvars.bind_contextvars(
-    correlation_id=episode.id,
-    user_id=user.id,
-    request_id=request.id
+    episode_id=episode.id,
+    task_id=task.id,
+    stage=task.stage.value,
 )
 ```
 
@@ -509,7 +520,7 @@ The logging system automatically redacts common sensitive fields, but explicit r
 
 1. Ensure no print() statements in code (use `ruff` to check)
 2. Verify all third-party libraries use structlog or stdlib logging
-3. Run local validation: `./venv/bin/python test_cloud_logging.py`
+3. Validate locally: `LOG_FORMAT=json ./venv/bin/thestill status 2>&1 | jq . > /dev/null && echo "Valid JSON"`
 
 ## See Also
 

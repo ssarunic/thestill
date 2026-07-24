@@ -18,29 +18,41 @@ thestill server --workers 4        # Multiple worker processes
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Service identification |
-| `/health` | GET | Health check for load balancers |
-| `/status` | GET | System statistics |
-| `/docs` | GET | OpenAPI documentation |
+| `/` | GET | Serves the React SPA (`index.html` via the catch-all route) |
+| `/health` | GET | Health check for load balancers (`{"status": "healthy"}` envelope) |
+| `/api/status` | GET | Detailed system statistics (same data as the CLI `status` command) |
+| `/docs` | GET | OpenAPI docs — only when `ENVIRONMENT=development` or `ENABLE_DOCS=true`; disabled in production |
+
+Any path that doesn't match an API route (including bare `/status`) falls
+through to the SPA catch-all and returns `index.html`.
 
 ### Podcasts (`/api/podcasts`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/podcasts` | GET | List followed podcasts (paginated; `?q=` filters by title/author) |
-| `/api/podcasts` | POST | Add new podcast `{url}` |
+| `/api/podcasts/resolve` | POST | Resolve a podcast URL `{url}` to a local slug, creating the row if needed |
 | `/api/podcasts/{slug}` | GET | Get podcast details |
-| `/api/podcasts/{slug}` | DELETE | Remove podcast |
-| `/api/podcasts/{slug}/refresh` | POST | Trigger feed refresh |
+| `/api/podcasts/{slug}/follow` | POST | Follow podcast |
+| `/api/podcasts/{slug}/follow` | DELETE | Unfollow podcast |
+| `/api/podcasts/{slug}/followers/count` | GET | Follower count for a podcast |
+
+Adding a podcast and triggering a feed refresh are commands, not podcast
+routes: `POST /api/commands/add` and `POST /api/commands/refresh` (see
+Commands below).
 
 ### Episodes (`/api/episodes`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/api/episodes` | GET | List episodes across all podcasts (filterable, paginated) |
+| `/api/episodes/failed` | GET | List episodes with pipeline failures |
+| `/api/episodes/bulk/process` | POST | Queue full pipeline processing for multiple episodes |
 | `/api/podcasts/{podcast_slug}/episodes` | GET | List episodes (filterable) |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details |
-| `/api/episodes/{id}/transcript` | GET | Get transcript content |
-| `/api/episodes/{id}/summary` | GET | Get summary content |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
 | `/api/episodes/{id}/failure` | GET | Get failure details |
 | `/api/episodes/{id}/retry` | POST | Clear failure and retry |
 
@@ -48,10 +60,30 @@ thestill server --workers 4        # Multiple worker processes
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/api/commands/refresh` | POST | Trigger feed refresh (all podcasts or one) |
+| `/api/commands/refresh/status` | GET | Status of the last refresh task |
+| `/api/commands/status` | GET | Status of all tracked command tasks |
+| `/api/commands/add` | POST | Add new podcast `{url}` as a background task |
+| `/api/commands/add/status` | GET | Status of the last add-podcast task |
+| `/api/commands/download` | POST | Queue audio download for an episode |
+| `/api/commands/downsample` | POST | Queue downsampling for an episode |
+| `/api/commands/transcribe` | POST | Queue transcription for an episode |
+| `/api/commands/clean` | POST | Queue transcript cleaning for an episode |
+| `/api/commands/summarize` | POST | Queue summarization for an episode |
 | `/api/commands/run-pipeline` | POST | Run full pipeline for episode |
+| `/api/commands/episode/{id}/cancel-pipeline` | POST | Cancel remaining pipeline stages for an episode |
+| `/api/commands/episode/{id}/tasks` | GET | List tasks for an episode |
+| `/api/commands/task/{id}` | GET | Get queued task status |
+| `/api/commands/task/{id}/progress` | GET | Stream task progress via Server-Sent Events |
+| `/api/commands/task/{id}/progress/current` | GET | Latest progress snapshot for a task |
+| `/api/commands/queue/status` | GET | Queue counts by state |
+| `/api/commands/queue/tasks` | GET | List queued tasks |
+| `/api/commands/queue/task/{id}/bump` | POST | Bump a queued task to the front |
+| `/api/commands/queue/task/{id}/cancel` | POST | Cancel a queued task |
 | `/api/commands/dlq` | GET | List dead letter queue tasks |
 | `/api/commands/dlq/{task_id}/retry` | POST | Retry dead task |
 | `/api/commands/dlq/{task_id}/skip` | POST | Skip/resolve dead task |
+| `/api/commands/dlq/retry-all` | POST | Retry all dead tasks |
 
 ### Briefings (`/api/briefings`)
 
@@ -77,15 +109,60 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/inbox/{episode_id}/state` | POST | Set row state explicitly. Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. 404 when no row exists |
 | `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available |
 
-### Authentication (`/auth`)
+### Dashboard (`/api/dashboard`)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/auth/status` | GET | Get authentication mode and user info |
-| `/auth/google/login` | GET | Initiate Google OAuth flow |
-| `/auth/google/callback` | GET | OAuth callback handler |
-| `/auth/logout` | POST | Clear authentication cookie |
-| `/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
+| `/api/dashboard/stats` | GET | Dashboard statistics |
+| `/api/dashboard/activity` | GET | Recent activity feed (paginated) |
+| `/api/dashboard/narration` | GET | Aggregated narration runs for the dashboard tile |
+
+### Search (`/api/search`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/search/corpus` | GET | Search the transcript corpus (`?q=`, `mode=lexical\|semantic\|hybrid`) |
+| `/api/search/related` | GET | Episodes related to a source episode (`?episode_id=`) |
+| `/api/search/quick` | GET | Grouped quick search across podcasts and episodes |
+
+### Entities (`/api`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/episodes/{episode_id}/entities` | GET | Entities mentioned in an episode |
+| `/api/entities/{entity_type}/{id_slug}` | GET | Entity page payload — record, aggregates, recent mentions |
+| `/api/entities/review-queue` | GET | Entities pending review |
+| `/api/entities/corrections` | POST | Submit an entity correction |
+
+### Narrations (`/api/narrations`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/narrations/{id}` | GET | JSON script + Markdown body for a stored narration |
+| `/api/narrations/{id}/script.json` | GET | Raw JSON script body for downstream TTS consumers |
+
+### Imports (`/api/imports`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/imports` | POST | Import a single episode by URL `{url}` — 201 with the episode + inbox row |
+
+### Top Podcasts (`/api/top-podcasts`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/top-podcasts` | GET | Top-podcasts chart (`?region=` ISO code, defaults to the user's region) |
+
+### Authentication (`/api/auth`)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/status` | GET | Get authentication mode and user info |
+| `/api/auth/google/login` | GET | Initiate Google OAuth flow |
+| `/api/auth/google/callback` | GET | OAuth callback handler |
+| `/api/auth/logout` | POST | Clear authentication cookie |
+| `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
+| `/api/auth/me` | PATCH | Update user region |
 
 ### Webhooks
 
@@ -96,6 +173,16 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/webhook/elevenlabs/results/{id}` | GET | Get specific result |
 | `/webhook/elevenlabs/results/{id}` | DELETE | Delete result |
 
+### Unsubscribe
+
+Root-level, signed-token routes used by briefing-email links (no auth cookie
+required).
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/unsubscribe/briefings` | GET | Confirm page for a signed link (read-only; mail gateways prefetch GETs) |
+| `/unsubscribe/briefings` | POST | Perform the unsubscribe (confirm button and RFC 8058 one-click) |
+
 ## Project Structure
 
 ```
@@ -103,14 +190,30 @@ thestill/web/
 ├── __init__.py              # Package init with create_app export
 ├── app.py                   # FastAPI application factory
 ├── dependencies.py          # Dependency injection (AppState, get_app_state)
+├── responses.py             # api_response envelope helpers
+├── task_manager.py          # Background task queue manager
+├── background_server.py     # Background server runner
+├── middleware/              # logging_middleware, security_headers, body_size, rate_limit
+├── services/                # Web-layer services (webhook transcript processor)
 ├── routes/
 │   ├── __init__.py
-│   ├── health.py            # Health check and status endpoints
+│   ├── health.py            # Health check endpoint
 │   ├── webhooks.py          # ElevenLabs webhook handlers
-│   ├── api_podcasts.py      # Podcast CRUD endpoints
+│   ├── auth.py              # Authentication endpoints (OAuth, JWT)
+│   ├── api_status.py        # System statistics
+│   ├── api_dashboard.py     # Dashboard stats, activity, narration tile
+│   ├── api_podcasts.py      # Podcast endpoints (resolve, follow, details)
+│   ├── api_transcript_words.py  # Word-level transcript timings
+│   ├── api_top_podcasts.py  # Top-podcasts chart
 │   ├── api_episodes.py      # Episode content endpoints
-│   ├── api_commands.py      # Processing commands (pipeline, DLQ)
-│   └── auth.py              # Authentication endpoints (OAuth, JWT)
+│   ├── api_entities.py      # Entity mentions, review queue, corrections
+│   ├── api_search.py        # Corpus, related, quick search
+│   ├── api_inbox.py         # Per-user inbox
+│   ├── api_briefings.py     # Briefing history, schedule, narration
+│   ├── api_narrations.py    # Stored narration scripts
+│   ├── api_imports.py       # Single-episode imports
+│   ├── api_commands.py      # Processing commands (pipeline, queue, DLQ)
+│   └── unsubscribe.py       # Signed one-click briefing-email unsubscribe
 ├── frontend/                # React SPA
 │   ├── src/
 │   │   ├── App.tsx
@@ -190,7 +293,7 @@ When `MULTI_USER=true`:
 
 1. User visits protected route → redirected to `/login`
 2. User clicks "Sign in with Google" → redirected to Google OAuth
-3. After Google approval → callback to `/auth/google/callback`
+3. After Google approval → callback to `/api/auth/google/callback`
 4. Server creates/updates user, issues JWT cookie
 5. User redirected to dashboard
 

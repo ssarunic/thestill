@@ -33,10 +33,18 @@ twice (or theme clustering errors out), the JSON carries `mode:
 | `NARRATION_DEFAULT_DURATION_SECONDS` | Target spoken runtime when the caller doesn't pass one (presets: 180/300/600). | `300` |
 | `LLM_PROVIDER` | Same provider as the rest of the pipeline (`anthropic` / `openai` / `gemini` / `mistral` / `ollama`). | (per `.env.example`) |
 
-The CLI also accepts `--no-narrate` to opt out per-run when you only
-want the link-index (e.g., offline testing). The `thestill narrate`
-standalone command always requires an LLM provider and a configured
-briefing record.
+The `thestill narrate` standalone command requires a configured
+briefing record and accepts:
+
+| Flag | Description |
+|------|-------------|
+| `--briefing <id>` | Required. Briefing id to narrate (see the inbox briefing card or `GET /api/briefings`). |
+| `--target-duration` | Target spoken duration (preset `short`/`medium`/`long`, or `5m` / `120s` / `0:05:00`). Defaults to `NARRATION_DEFAULT_DURATION_SECONDS`. |
+| `--slug` | Output filename slug (`data/narrations/<briefing_id>-<slug>.{json,md}`). Default: `morning`. |
+| `--dry-run` / `-d` | Run quote selection + theme clustering only; the LLM is skipped entirely (no provider is initialised). |
+
+An LLM provider is only required for full runs — `--dry-run` works
+without one (e.g., offline testing).
 
 ## Time-budget model
 

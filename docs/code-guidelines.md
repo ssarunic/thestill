@@ -6,37 +6,56 @@ Thestill is an automated podcast transcription and summarization pipeline built 
 
 ## Language and Toolchain
 
-**Python Version**: 3.9+
-**Package Manager**: pip with pyproject.toml (hatchling build system)
-**Key Dependencies**: pydantic, click, openai-whisper, whisperx, feedparser, yt-dlp, google-cloud-speech
+**Python Version**: 3.10+ (`requires-python = ">=3.10"`; `.python-version` pins 3.12.0 and CI runs 3.12)
+**Package Manager**: uv with a committed `uv.lock` (CI installs with `uv sync --frozen`); hatchling remains the build backend
+**Key Dependencies**: fastapi, uvicorn, pydantic, click, openai, anthropic, google-genai, mcp, structlog, authlib/PyJWT, feedparser, yt-dlp. Local Whisper/WhisperX live in the optional `[local-transcription]` extra, not in core dependencies.
 
 ### Development Tools
 
 ```bash
-# Formatting
-black thestill/
-isort thestill/
+# Linting — ruff is the only linter gated in CI
+ruff check thestill/
 
-# Type Checking
+# Formatting (local-only; format the files you touched)
+black thestill/ tests/
+isort thestill/ tests/
+
+# Type Checking (local-only)
 mypy thestill/
 
-# Linting
+# Linting (local-only)
 pylint thestill/
 
-# Testing
-pytest
+# Testing (e2e suite excluded by default)
+pytest --ignore=tests/e2e
 ```
+
+The repo is not currently black-clean — format only the files you edited rather than running repo-wide `make format`.
+
+### Make Targets
+
+The Makefile is the canonical interface for these tools:
+
+- `make test` — pytest with coverage (`--ignore=tests/e2e`)
+- `make test-unit` / `make test-integration` — scoped suites with coverage
+- `make test-e2e` — browser E2E (`node tests/e2e/web/test_web_auth.cjs`; requires a running server)
+- `make lint` — ruff + pylint + mypy
+- `make format` — black + isort over `thestill/` and `tests/`
+- `make check` — format → lint → typecheck → test
+- `make run-mcp` — run the MCP server
+- `make corpus-backfill` — embed and index cleaned transcripts into the chunk index
+- `make rebuild-entity-pages` — regenerate Obsidian entity Markdown pages
 
 ### Tool Configuration
 
-Create the following configuration files:
+Tool configuration lives in `pyproject.toml`; pylint additionally reads the `.pylintrc` that already exists at the repo root (py-version 3.12, message disables, naming rules).
 
-**pyproject.toml (add these sections)**:
+**pyproject.toml**:
 
 ```toml
 [tool.black]
 line-length = 120
-target-version = ['py39']
+target-version = ['py39', 'py310', 'py311']
 include = '\.pyi?$'
 
 [tool.isort]
@@ -45,34 +64,52 @@ line_length = 120
 multi_line_output = 3
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.9"  # note: lags the 3.10 floor in requires-python
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
-disallow_any_unimported = false
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-check_untyped_defs = true
+ignore_missing_imports = true
+no_strict_optional = true
+exclude = [
+    "tests/",
+    "data/",
+    ".venv/",
+]
 
-[tool.pylint]
+[tool.pylint.main]
 max-line-length = 120
 disable = [
-    "missing-docstring",
-    "too-few-public-methods",
-    "too-many-arguments",
-    "too-many-instance-attributes"
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "R0801",  # duplicate-code
+    "W0212",  # protected-access
+]
+ignore-paths = [
+    "^tests/.*$",
+    "^data/.*$",
+    "^\\.venv/.*$",
+]
+
+[tool.ruff]
+# Minimal ruff configuration: forbid print() and tz-naive datetimes.
+exclude = ["tests/", "data/", ".venv/"]
+
+[tool.ruff.lint]
+select = [
+    "T201",    # print() found
+    "DTZ001",  # datetime(...) without tzinfo
+    "DTZ002",  # datetime.today() (naive local)
+    "DTZ003",  # datetime.utcnow()
+    "DTZ004",  # datetime.utcfromtimestamp()
+    "DTZ005",  # datetime.now() without tz
+    "DTZ006",  # datetime.fromtimestamp() without tz
 ]
 ```
 
-**.pylintrc** (create at root):
-
-```ini
-[MASTER]
-max-line-length=120
-disable=missing-docstring,too-few-public-methods,too-many-arguments,too-many-instance-attributes,duplicate-code
-```
+CI gates only ruff (`uv run ruff check thestill/`) — the T201 print ban and the DTZ tz-naive datetime ban (spec #42). black, isort, pylint, and mypy are local-only checks run via `make`.
 
 ## Naming Conventions
 
@@ -104,45 +141,66 @@ disable=missing-docstring,too-few-public-methods,too-many-arguments,too-many-ins
 
 ## Project Structure
 
+The tree below is illustrative, not exhaustive — `core/` alone has grown to ~50 modules.
+
 ```
 thestill/
 ├── cli.py                    # Click CLI entry point
-├── core/                     # Core processing modules (single responsibility)
+├── logging.py                # structlog configuration
+├── core/                     # Core processing modules (~50, single responsibility)
 │   ├── feed_manager.py       # RSS/YouTube feed parsing
 │   ├── audio_downloader.py   # Audio download (atomic: only downloads)
 │   ├── audio_preprocessor.py # Audio downsampling (atomic: only downsamples)
-│   ├── transcriber.py        # Whisper transcription
-│   ├── google_transcriber.py # Google Cloud transcription
+│   ├── transcriber_factory.py # Whisper/Google/ElevenLabs/Dalston transcribers
 │   ├── transcript_cleaning_processor.py  # LLM-based cleaning
 │   ├── llm_provider.py       # Abstract LLM interface
+│   ├── task_worker.py        # Background task processing
+│   ├── queue_manager.py      # Task queue (SQLite + Postgres variants)
+│   ├── circuit_breaker.py    # Provider failure isolation
+│   ├── briefing_scheduler.py # Per-user scheduled briefings
+│   ├── entity_*.py           # Entity extraction/resolution pipeline
+│   ├── facts_*.py            # Podcast/episode facts pipeline
 │   └── ...
-├── models/                   # Pydantic data models
-│   └── podcast.py           # Episode, Podcast, Transcript models
+├── models/                   # Pydantic data models (podcast, user, briefing, ...)
+├── repositories/             # Persistence layer (spec #44) — dual SQLite/Postgres
+│   ├── factory.py            #   implementations selected behind factory.py
+│   ├── sqlite_*.py           #   via DATABASE_URL; a defining pattern of the codebase
+│   └── postgres_*.py
 ├── services/                 # Business logic layer
-│   ├── podcast_service.py   # Podcast CRUD operations
-│   └── stats_service.py     # Statistics and reporting
-├── utils/                    # Shared utilities
-│   ├── config.py            # Environment-based configuration
-│   ├── logger.py            # Logging setup
-│   └── path_manager.py      # Centralized path management
-├── mcp/                      # MCP server integration (optional)
-└── tests/                    # Test suite
-    ├── test_*.py
-    └── fixtures/
+│   ├── podcast_service.py    # Podcast CRUD operations
+│   ├── auth_service.py       # Multi-user authentication
+│   ├── follower_service.py   # Per-user podcast follows
+│   ├── briefing_service.py   # Briefing generation (+ narration/ for audio)
+│   └── ...
+├── search/                   # Semantic search: sqlite-vec + pgvector clients
+├── web/                      # FastAPI app + middleware + Vite/TS SPA
+│   ├── app.py
+│   ├── routes/               # api_*.py (incl. api_briefings.py), auth.py, webhooks.py
+│   ├── middleware/
+│   └── frontend/             # React SPA source (built output ships in web/static/)
+├── webhook/                  # Webhook delivery
+├── evals/                    # LLM-as-judge quality evals
+├── migrations/               # Alembic migrations (Postgres)
+├── mcp/                      # MCP server integration
+└── utils/                    # Config, PathManager, shared utilities
+
+tests/                        # Top-level test suite (sibling of thestill/, see Testing)
 ```
 
 ### Layer Separation
 
-1. **CLI Layer** (`cli.py`): User interface, argument parsing, output formatting
-2. **Service Layer** (`services/`): Business logic, orchestration, high-level operations
+1. **Interface Layer** (`cli.py`, `web/`, `mcp/`): User interfaces — CLI argument parsing, FastAPI routes/middleware and the React SPA, MCP tools
+2. **Service Layer** (`services/`): Business logic, orchestration, high-level operations (podcast, auth, follower, briefing, narration)
 3. **Core Layer** (`core/`): Atomic processors, single-responsibility workers
-4. **Model Layer** (`models/`): Data structures, validation, serialization
-5. **Infrastructure Layer** (`utils/`): Config, logging, paths, external integrations
+4. **Repository Layer** (`repositories/`): Persistence behind abstract interfaces; `factory.py` selects the SQLite or Postgres implementation from `DATABASE_URL` (spec #44)
+5. **Model Layer** (`models/`): Data structures, validation, serialization
+6. **Infrastructure Layer** (`utils/`, `logging.py`): Config, logging, paths, external integrations
 
 **Rules**:
 
 - CLI depends on Services and Core, never the reverse
 - Core modules should not depend on CLI
+- Depend on repository interfaces via the factory, never on a concrete backend
 - Use dependency injection for services and providers
 - Keep third-party API calls in Core or Utils, not in Models
 
@@ -370,9 +428,8 @@ logger.info(f"Task {task.id} started by worker {worker.id} for episode {episode.
 
 Logs automatically include correlation IDs from context:
 
-- `request_id`: HTTP requests (web layer)
+- `request_id`: HTTP requests (web layer) and MCP requests (with `mcp_method`)
 - `command_id`: CLI commands
-- `mcp_request_id`: MCP tool invocations
 - `task_id`, `worker_id`, `episode_id`: Task processing
 
 **Never Log**:
@@ -406,15 +463,35 @@ except ProcessingError as e:
 
 ### Test Organization
 
+Tests live in a top-level `tests/` directory (a sibling of `thestill/`, not inside it), organized by test type and then by package:
+
 ```
 tests/
-├── test_feed_manager.py       # Unit tests for FeedManager
-├── test_audio_downloader.py   # Unit tests for AudioDownloader
-├── test_cleaning.py           # Integration tests for cleaning
-├── conftest.py                # Pytest fixtures
+├── unit/                      # Per-package unit tests
+│   ├── core/
+│   ├── web/
+│   ├── services/
+│   ├── repositories/
+│   ├── mcp/
+│   ├── models/
+│   ├── cli/
+│   ├── search/
+│   ├── providers/
+│   ├── security/
+│   ├── utils/
+│   └── evals/
+├── integration/               # Cross-component tests
+│   ├── pipeline/
+│   ├── auth/
+│   ├── web/
+│   ├── follower/
+│   ├── cli/
+│   └── test_*_contract.py     # Dual-backend repository contract suites (spec #44)
+├── e2e/
+│   └── web/                   # Browser tests (Node; requires a running server)
+├── perf/                      # Latency budget suite (separate CI job)
+├── conftest.py                # Shared pytest fixtures
 └── fixtures/
-    ├── sample_feed.xml
-    └── sample_audio.mp3
 ```
 
 ### Test Naming
@@ -453,10 +530,12 @@ def test_mark_episode_downloaded():
 
 ### Coverage Target
 
-- **Minimum coverage**: 70%
-- **Core modules**: Target 90%+ (feed_manager, audio_downloader, transcriber)
+- **Minimum coverage**: 70% (aspirational — no `--cov-fail-under` is configured anywhere, so coverage is reported but not enforced)
+- **Core modules**: Target 90%+ (feed_manager, audio_downloader, transcriber) — also aspirational
 - **Focus on**: Public APIs, error paths, edge cases
 - **Skip**: CLI formatting, logging statements, simple getters/setters
+
+Note: `pytest.ini` is the active pytest configuration (markers, addopts, coverage via `.coveragerc`); the `[tool.pytest.ini_options]` block in `pyproject.toml` is shadowed by it and effectively dead.
 
 ### Test Types
 
@@ -633,7 +712,7 @@ chore/update-dependencies
 
 Track these metrics to measure code health:
 
-- **Test coverage**: Target 70%+ overall, 90%+ for core modules
+- **Test coverage**: Target 70%+ overall, 90%+ for core modules (aspirational; not CI-enforced)
 - **Build time**: Keep under 2 minutes for full test suite
 - **Cyclomatic complexity**: Target < 10 per function
 - **Duplication**: Track with tools like `radon` or `pylint`
@@ -659,13 +738,13 @@ Track these metrics to measure code health:
 Before committing:
 
 - [ ] Code compiles (no syntax errors)
-- [ ] All tests pass locally (`pytest`)
-- [ ] Linter runs clean (`pylint thestill/`)
-- [ ] Formatter applied (`black thestill/ && isort thestill/`)
-- [ ] No new type errors (`mypy thestill/`)
+- [ ] All tests pass locally (`pytest`) — CI-gated
+- [ ] ruff runs clean (`ruff check thestill/`) — the only CI-gated linter
+- [ ] Formatter applied to the files you touched (`black`/`isort` — local-only; the repo is not fully black-clean, so avoid repo-wide formatting)
+- [ ] No new pylint or mypy errors in touched code (local-only checks)
 - [ ] No public API changes (unless documented)
 - [ ] No new dependencies (unless justified)
-- [ ] No secrets in code or config files
+- [ ] No secrets in code or config files (CI runs a gitleaks scan)
 
 ## Review Checklist
 
@@ -684,7 +763,8 @@ When reviewing PRs:
 
 A change is ready to merge when:
 
-- All automated checks pass (tests, linting, type checking)
+- CI passes: ruff lint, pytest (including the Postgres contract suites), frontend (vitest + build), gitleaks secret scan, Docker build, and the latency budget job
+- Local-only checks (black, isort, pylint, mypy) are clean for the files you touched — CI does not gate them
 - Code review approved by at least one maintainer
 - Documentation updated for user-facing changes
 - No merge conflicts with main branch

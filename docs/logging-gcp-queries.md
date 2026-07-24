@@ -14,20 +14,23 @@ Thestill logs use the following GCP Cloud Logging format:
 
 ```json
 {
-  "message": "Episode processed",
+  "message": "task_completed_successfully",
   "time": "2026-01-25T16:34:04.073930Z",
   "severity": "INFO",
   "episode_id": 123,
-  "duration_ms": 4500,
-  "worker_id": "worker-transcribe-2",
-  "correlation_id": "episode-abc-123",
+  "task_id": 456,
+  "stage": "transcribe",
+  "retry_count": 0,
+  "worker_id": "3fb0e2a4",
   "logging.googleapis.com/sourceLocation": {
-    "file": "thestill/core/transcriber.py",
-    "line": "142",
-    "function": "transcribe"
+    "file": "thestill/core/task_worker.py",
+    "line": "666",
+    "function": "_process_task"
   }
 }
 ```
+
+The `message` field holds the structlog event name (e.g. `task_processing_started`, `download_completed`, `http_request_completed`). Correlation fields are per-layer: `request_id` (HTTP/MCP), `command_id` (CLI), and `worker_id`/`task_id`/`episode_id`/`stage`/`retry_count` (task worker). Generated IDs are bare 8-character UUID slices such as `a7f2c1d9`.
 
 ## Query Language
 
@@ -61,13 +64,13 @@ gcloud logging read "jsonPayload.episode_id=123" \
 Debug what a specific worker is doing:
 
 ```
-jsonPayload.worker_id="worker-a7f2"
+jsonPayload.worker_id="a7f2c1d9"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.worker_id="worker-a7f2"' \
+gcloud logging read 'jsonPayload.worker_id="a7f2c1d9"' \
   --format=json \
   --limit=100
 ```
@@ -101,46 +104,46 @@ resource.labels.service_name="thestill"
 
 ### Complete Episode Journey
 
-Trace an episode through the entire pipeline:
+Trace an episode through the entire pipeline using the `episode_id` bound by the task worker:
 
 ```
-jsonPayload.correlation_id="episode-abc-123"
+jsonPayload.episode_id="abc-123"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.correlation_id="episode-abc-123"' \
+gcloud logging read 'jsonPayload.episode_id="abc-123"' \
   --format=json \
   --order=asc
 ```
 
-**Expected log sequence:**
+**Expected log sequence** (each stage repeats the `task_processing_started` / `task_completed_successfully` pair with a different `stage` value):
 
-1. Download started
-2. Download complete
-3. Downsample started
-4. Downsample complete
-5. Transcribe started
-6. Transcribe complete
-7. Clean transcript started
-8. Clean transcript complete
-9. Summarize started
-10. Summarize complete
+1. `task_processing_started` (stage=download)
+2. `downloading_episode` / `download_completed`
+3. `task_completed_successfully` (stage=download)
+4. `task_processing_started` (stage=downsample) ... `task_completed_successfully`
+5. `task_processing_started` (stage=transcribe) ... `task_completed_successfully`
+6. `task_processing_started` (stage=clean) ... `task_completed_successfully`
+7. `task_processing_started` (stage=summarize) ... `task_completed_successfully`
+
+Handlers also emit human-readable messages such as `Download completed for episode: <title>` and `Transcription completed for episode: <title>`.
 
 ### Episode Processing in Last Hour
 
-Find recent episode processing:
+There is no single canonical "episode done" event — `task_completed_successfully` fires once per stage, so filter on the final pipeline stage (`summarize`) to count fully processed episodes:
 
 ```
-jsonPayload.message="Episode processed"
+jsonPayload.message="task_completed_successfully"
+jsonPayload.stage="summarize"
 timestamp>="2026-01-25T15:00:00Z"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.message="Episode processed" AND timestamp>="2026-01-25T15:00:00Z"' \
+gcloud logging read 'jsonPayload.message="task_completed_successfully" AND jsonPayload.stage="summarize" AND timestamp>="2026-01-25T15:00:00Z"' \
   --format=json
 ```
 
@@ -148,17 +151,17 @@ gcloud logging read 'jsonPayload.message="Episode processed" AND timestamp>="202
 
 ### All Transcription Failures
 
-Find episodes that failed transcription:
+Task failures are logged as `task_fatal_error` (dead-lettered) or `task_transient_error` (will retry), with the bound `stage` field identifying the pipeline stage:
 
 ```
-severity=ERROR
-jsonPayload.error_type="TranscriptionFailed"
+jsonPayload.message="task_fatal_error"
+jsonPayload.stage="transcribe"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'severity=ERROR AND jsonPayload.error_type="TranscriptionFailed"' \
+gcloud logging read 'jsonPayload.message="task_fatal_error" AND jsonPayload.stage="transcribe"' \
   --format=json \
   --freshness=7d
 ```
@@ -166,30 +169,30 @@ gcloud logging read 'severity=ERROR AND jsonPayload.error_type="TranscriptionFai
 ### Failed Episodes in Last 24 Hours
 
 ```
-severity=ERROR
-jsonPayload.error_type="TranscriptionFailed"
+jsonPayload.message="task_fatal_error"
+jsonPayload.stage="transcribe"
 timestamp>="2026-01-24T16:00:00Z"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'severity=ERROR AND jsonPayload.error_type="TranscriptionFailed" AND timestamp>="2026-01-24T16:00:00Z"' \
+gcloud logging read 'jsonPayload.message="task_fatal_error" AND jsonPayload.stage="transcribe" AND timestamp>="2026-01-24T16:00:00Z"' \
   --format=json
 ```
 
 ### Worker Retry Attempts
 
-Find logs with retry attempts:
+Find logs from retry attempts using the bound `retry_count` field:
 
 ```
-jsonPayload.attempt>1
+jsonPayload.retry_count>0
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.attempt>1' \
+gcloud logging read 'jsonPayload.retry_count>0' \
   --format=json \
   --limit=50
 ```
@@ -254,17 +257,17 @@ print(f"P95: {statistics.quantiles(durations, n=20)[18]:.2f}ms")
 
 ### All Workers Processing an Episode
 
-Find which workers handled an episode:
+Find which workers handled an episode — each stage may run on a different worker, so join on the shared `episode_id`:
 
 ```
-jsonPayload.correlation_id="episode-abc-123"
+jsonPayload.episode_id="abc-123"
 jsonPayload.worker_id:*
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.correlation_id="episode-abc-123"' \
+gcloud logging read 'jsonPayload.episode_id="abc-123"' \
   --format="value(jsonPayload.worker_id, jsonPayload.stage, timestamp)" \
   --order=asc
 ```
@@ -274,13 +277,13 @@ gcloud logging read 'jsonPayload.correlation_id="episode-abc-123"' \
 Visualize when an episode moved between workers:
 
 ```
-jsonPayload.correlation_id="episode-abc-123"
+jsonPayload.episode_id="abc-123"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.correlation_id="episode-abc-123"' \
+gcloud logging read 'jsonPayload.episode_id="abc-123"' \
   --format="table(timestamp, jsonPayload.worker_id, jsonPayload.stage, jsonPayload.message)" \
   --order=asc
 ```
@@ -358,8 +361,8 @@ Count processed episodes:
 
 ```bash
 gcloud logging metrics create thestill_episodes_processed \
-  --description="Episodes processed count" \
-  --log-filter='jsonPayload.message="Episode processed"'
+  --description="Episodes processed count (final pipeline stage completed)" \
+  --log-filter='jsonPayload.message="task_completed_successfully" AND jsonPayload.stage="summarize"'
 ```
 
 ## Alerting
@@ -385,17 +388,17 @@ Create alert for episodes with no progress:
 
 **Log-based alert:**
 
-- Filter: `jsonPayload.message="Processing started"`
+- Filter: `jsonPayload.message="task_processing_started"`
 - Condition: No matching logs for specific episode_id in 30 minutes
 
 ### Alert on Worker Failures
 
-Alert when workers crash or fail:
+Alert when task processing fails unexpectedly (`task_fatal_error` for dead-lettered tasks, `task_unexpected_error` for unclassified exceptions):
 
 ```bash
 gcloud logging metrics create thestill_worker_failures \
   --description="Worker failure count" \
-  --log-filter='severity=ERROR AND jsonPayload.error_type="WorkerCrashed"'
+  --log-filter='severity=ERROR AND (jsonPayload.message="task_fatal_error" OR jsonPayload.message="task_unexpected_error")'
 ```
 
 ## Logs Explorer Features
@@ -456,15 +459,17 @@ ORDER BY avg_duration_ms DESC
 ```
 
 ```sql
--- Episode failure analysis
+-- Episode failure analysis by pipeline stage
 SELECT
-  jsonPayload.error_type,
+  jsonPayload.stage,
+  jsonPayload.message,
   COUNT(DISTINCT jsonPayload.episode_id) as failed_episodes,
   COUNT(*) as total_failures
 FROM `YOUR_PROJECT.thestill_logs.cloudrun_googleapis_com_stderr_*`
 WHERE severity = 'ERROR'
+  AND jsonPayload.message IN ('task_fatal_error', 'task_transient_error', 'task_unexpected_error')
   AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-GROUP BY jsonPayload.error_type
+GROUP BY jsonPayload.stage, jsonPayload.message
 ORDER BY failed_episodes DESC
 ```
 
@@ -472,10 +477,10 @@ ORDER BY failed_episodes DESC
 
 ### 1. Use Correlation IDs
 
-Always query with correlation_id for tracing:
+Always query with the layer's correlation field for tracing — `episode_id`/`task_id` for pipeline work, `request_id` for HTTP/MCP, `command_id` for CLI:
 
 ```
-jsonPayload.correlation_id="episode-abc-123"
+jsonPayload.episode_id="abc-123"
 ```
 
 ### 2. Limit Time Range

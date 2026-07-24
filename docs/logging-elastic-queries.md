@@ -16,15 +16,17 @@ Thestill logs use the following ECS field structure:
 {
   "@timestamp": "2026-01-25T16:34:22.186Z",
   "log.level": "info",
-  "message": "Episode processed",
+  "message": "task_completed_successfully",
   "ecs.version": "1.6.0",
   "episode_id": 123,
-  "duration_ms": 4500,
-  "worker_id": "worker-transcribe-2",
-  "correlation_id": "abc-123",
-  "error_type": "TranscriptionFailed"
+  "task_id": 456,
+  "stage": "transcribe",
+  "retry_count": 0,
+  "worker_id": "3fb0e2a4"
 }
 ```
+
+The `message` field holds the structlog event name (e.g. `task_processing_started`, `download_completed`, `http_request_completed`). Correlation fields are per-layer: `request_id` (HTTP/MCP), `command_id` (CLI), and `worker_id`/`task_id`/`episode_id`/`stage`/`retry_count` (task worker). Generated IDs are bare 8-character UUID slices such as `a7f2c1d9`.
 
 ## Basic Queries
 
@@ -61,7 +63,7 @@ GET /thestill-logs-*/_search
 {
   "query": {
     "term": {
-      "worker_id": "worker-a7f2"
+      "worker_id": "a7f2c1d9"
     }
   },
   "sort": [
@@ -74,7 +76,7 @@ GET /thestill-logs-*/_search
 **Kibana Query (KQL):**
 
 ```
-worker_id: "worker-a7f2"
+worker_id: "a7f2c1d9"
 ```
 
 ### Error Logs Only
@@ -105,14 +107,14 @@ log.level: error
 
 ### Complete Episode Journey
 
-Trace an episode through the entire pipeline using correlation ID:
+Trace an episode through the entire pipeline using the `episode_id` bound by the task worker:
 
 ```json
 GET /thestill-logs-*/_search
 {
   "query": {
     "term": {
-      "correlation_id": "episode-abc-123"
+      "episode_id": "abc-123"
     }
   },
   "sort": [
@@ -122,18 +124,17 @@ GET /thestill-logs-*/_search
 }
 ```
 
-**Expected log sequence:**
+**Expected log sequence** (each stage repeats the `task_processing_started` / `task_completed_successfully` pair with a different `stage` value):
 
-1. Download started
-2. Download complete
-3. Downsample started
-4. Downsample complete
-5. Transcribe started
-6. Transcribe complete
-7. Clean transcript started
-8. Clean transcript complete
-9. Summarize started
-10. Summarize complete
+1. `task_processing_started` (stage=download)
+2. `downloading_episode` / `download_completed`
+3. `task_completed_successfully` (stage=download)
+4. `task_processing_started` (stage=downsample) ... `task_completed_successfully`
+5. `task_processing_started` (stage=transcribe) ... `task_completed_successfully`
+6. `task_processing_started` (stage=clean) ... `task_completed_successfully`
+7. `task_processing_started` (stage=summarize) ... `task_completed_successfully`
+
+Handlers also emit human-readable messages such as `Download completed for episode: <title>` and `Transcription completed for episode: <title>`.
 
 ### Episode Processing Time
 
@@ -176,7 +177,7 @@ GET /thestill-logs-*/_search
 
 ### Group Errors by Type
 
-Identify the most common error types:
+Identify the most common error types. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `validation_error`, ...). Task worker failures are the events `task_fatal_error` / `task_transient_error` and carry `error_class` (`infra` vs `item`) instead:
 
 ```json
 GET /thestill-logs-*/_search
@@ -204,7 +205,7 @@ Create a pie chart showing error distribution by type.
 
 ### Failed Episodes in Last 24 Hours
 
-Find episodes that failed transcription:
+Find episodes that failed transcription (dead-lettered tasks in the transcribe stage):
 
 ```json
 GET /thestill-logs-*/_search
@@ -212,8 +213,8 @@ GET /thestill-logs-*/_search
   "query": {
     "bool": {
       "must": [
-        { "term": { "log.level": "error" } },
-        { "term": { "error_type": "TranscriptionFailed" } },
+        { "term": { "message": "task_fatal_error" } },
+        { "term": { "stage": "transcribe" } },
         {
           "range": {
             "@timestamp": {
@@ -236,15 +237,17 @@ GET /thestill-logs-*/_search
 
 ### Retry Patterns
 
-Find episodes with multiple retry attempts:
+Find episodes with multiple retry attempts using the bound `retry_count` field:
 
 ```json
 GET /thestill-logs-*/_search
 {
   "size": 0,
   "query": {
-    "exists": {
-      "field": "attempt"
+    "range": {
+      "retry_count": {
+        "gt": 0
+      }
     }
   },
   "aggs": {
@@ -254,9 +257,9 @@ GET /thestill-logs-*/_search
         "size": 20
       },
       "aggs": {
-        "max_attempt": {
+        "max_retry_count": {
           "max": {
-            "field": "attempt"
+            "field": "retry_count"
           }
         }
       }
@@ -378,7 +381,7 @@ GET /thestill-logs-*/_search
 
 ### Episodes Processed Per Hour
 
-Track system throughput:
+Track system throughput. There is no single canonical "episode done" event — `task_completed_successfully` fires once per stage, so filter on the final pipeline stage (`summarize`) to count fully processed episodes:
 
 ```json
 GET /thestill-logs-*/_search
@@ -387,7 +390,8 @@ GET /thestill-logs-*/_search
   "query": {
     "bool": {
       "must": [
-        { "term": { "message": "Episode processed" } },
+        { "term": { "message": "task_completed_successfully" } },
+        { "term": { "stage": "summarize" } },
         {
           "range": {
             "@timestamp": {
@@ -456,7 +460,7 @@ GET /thestill-logs-*/_search
 
 ### Find All Workers Processing an Episode
 
-Trace which workers handled an episode:
+Trace which workers handled an episode — each stage may run on a different worker, so join on the shared `episode_id`:
 
 ```json
 GET /thestill-logs-*/_search
@@ -464,7 +468,7 @@ GET /thestill-logs-*/_search
   "size": 0,
   "query": {
     "term": {
-      "correlation_id": "episode-abc-123"
+      "episode_id": "abc-123"
     }
   },
   "aggs": {
@@ -493,7 +497,7 @@ GET /thestill-logs-*/_search
 {
   "query": {
     "term": {
-      "correlation_id": "episode-abc-123"
+      "episode_id": "abc-123"
     }
   },
   "sort": [
@@ -596,7 +600,7 @@ Create a dashboard with:
 
 ## Best Practices
 
-1. **Use correlation_id** for multi-worker tracing
+1. **Use episode_id / task_id** for multi-worker tracing (and request_id / command_id for HTTP / CLI)
 2. **Add stage field** to all processing logs
 3. **Include duration_ms** for performance analysis
 4. **Use keyword fields** for aggregations (add `.keyword` suffix)

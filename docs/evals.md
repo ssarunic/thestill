@@ -50,7 +50,7 @@ the manifest `pinned: false`. Per-run overrides: `--judge-provider`,
 # Judge the golden set (pinned episodes spanning 5 podcasts)
 thestill eval run --rubric summary \
     --episodes-file tests/fixtures/eval/golden_episodes.json \
-    --label baseline --note "summarizer prompt v1, pipeline gemini-3-flash"
+    --label baseline --note "summarizer prompt v1, pipeline gemini-3-flash-preview"
 
 # Judge recent episodes of one podcast
 thestill eval run --rubric clean-transcript --podcast-id 3 --max-episodes 5

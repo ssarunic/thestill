@@ -136,9 +136,8 @@ LOG_FORMAT=json thestill status 2>&1 | jq .
 
 Logs automatically include correlation IDs for request tracking:
 
-- `request_id`: HTTP requests (web layer)
+- `request_id`: HTTP requests (web layer) and MCP requests (with `mcp_method`)
 - `command_id`: CLI commands
-- `mcp_request_id`: MCP tool invocations
 - `task_id`, `worker_id`, `episode_id`: Task processing
 
 These IDs enable tracing requests across all layers of the application.

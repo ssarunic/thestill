@@ -14,16 +14,25 @@ This guide explains how to use the Thestill MCP server with Claude Desktop, Chat
 
 ```bash
 cd /path/to/thestill
-pip install -e .
+pip install -e ".[entities]"
 ```
 
-This installs both the CLI tool (`thestill`) and the MCP server (`thestill-mcp`).
+This installs both the CLI tool (`thestill`) and the MCP server (`thestill-mcp`). The `entities` extra is required: the MCP server unconditionally initializes the embedding/search backend at startup, and it also powers the entity and corpus search tools (`find_mentions`, `search_corpus`, etc.).
 
 1. **Verify installation:**
 
 ```bash
-thestill-mcp --help  # Should show help (once implemented)
+# The console script should be on your PATH
+command -v thestill-mcp
+
+# Optional: verify the server answers a tools/list over stdio
+printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | thestill-mcp
 ```
+
+Note: `thestill-mcp` takes no arguments — it speaks MCP over stdio and blocks waiting for a client, so there is no `--help` flag.
 
 ## Configuration
 
@@ -36,10 +45,9 @@ STORAGE_PATH=./data
 # Optional (for transcription features)
 OPENAI_API_KEY=sk-...
 WHISPER_MODEL=base
-
-# MCP-specific (optional)
-MCP_LOG_LEVEL=INFO
 ```
+
+The MCP server uses the shared logging configuration (`LOG_LEVEL`, `LOG_FORMAT`) — see [logging-configuration.md](logging-configuration.md).
 
 ## Setting Up with Claude Desktop
 
@@ -184,10 +192,11 @@ Claude: "The latest episode is 'Nigel Farage and Reform' published on Jan 15, 20
   "description": "...",
   "pub_date": "2025-01-15T06:00:00Z",
   "duration": "45:30",
-  "guid": "abc123-def456",
-  "processed": true,
+  "external_id": "abc123-def456",
+  "state": "summarized",
   "audio_url": "https://...",
   "transcript_available": true,
+  "clean_transcript_available": true,
   "summary_available": true
 }
 ```
@@ -207,7 +216,7 @@ Claude: [displays the full cleaned Markdown transcript]
 **Returns**:
 
 - Cleaned Markdown transcript (if processed)
-- `"N/A - Episode not yet processed"` (if not processed)
+- `"N/A - No transcript available"` (if not processed)
 
 ### Episode Audio Reference
 
@@ -378,8 +387,9 @@ Claude: "In the last 24 hours, there were 2 new episodes:
       "title": "Nigel Farage and Reform",
       "pub_date": "2025-01-15T06:00:00Z",
       "duration": "45:30",
-      "processed": true,
-      "transcript_available": true
+      "state": "summarized",
+      "transcript_available": true,
+      "summary_available": true
     }
   ]
 }
@@ -689,6 +699,249 @@ Claude: [Displays the comprehensive summary with executive summary, quotes, and 
 ```
 
 **Response:** Returns the summary Markdown content directly, or an error message if not available.
+
+---
+
+## Entity & Search Tools
+
+The following tools query the entity layer (resolved mentions of people, companies, products, and topics) and the search index. They require installing with the `entities` extra (`pip install -e ".[entities]"`) and a corpus that has been through entity resolution and indexing.
+
+Most of these tools return **citation-shaped rows**: each row carries `episode_id`, `podcast_title`, `episode_title`, `published_at`, `start_ms`, `end_ms`, `speaker`, `quote`, a `thestill://episode/<id>?t=<sec>` deeplink, and a `web_url` — so Claude can compose narrative answers from cited, playable clips.
+
+### 15. `find_mentions`
+
+Find every resolved mention of an entity (person, company, product, or topic) across the corpus.
+
+**Parameters:**
+
+- `entity` (string, required): Entity name — canonical name, alias, or id like `person:elon-musk`
+- `entity_type` (string, optional): One of `person`, `company`, `product`, `topic` — disambiguation hint when multiple entities share a name
+- `podcast_id` (string, optional): Restrict to one podcast (UUID or slug)
+- `date_from` (string, optional): ISO-8601 lower bound on episode pub_date (inclusive)
+- `date_to` (string, optional): ISO-8601 upper bound on episode pub_date (inclusive)
+- `role` (string, optional): One of `host`, `guest`, `mentioned`, `self` — filter by how the entity was named
+- `limit` (integer, optional, default=50): Maximum rows to return
+
+**Example Usage:**
+
+```
+User: "What episodes mention Elon Musk?"
+Claude: [calls find_mentions with entity="Elon Musk"]
+Claude: "Elon Musk is mentioned in 12 clips across 5 episodes..."
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "matched_entity": {
+    "id": "person:elon-musk",
+    "type": "person",
+    "canonical_name": "Elon Musk",
+    "wikidata_qid": "Q317521",
+    "aliases": ["Musk"],
+    "description": "..."
+  },
+  "results": [
+    {
+      "episode_id": "...",
+      "podcast_title": "The Rest is Politics",
+      "episode_title": "...",
+      "published_at": "2025-01-15T06:00:00Z",
+      "start_ms": 754000,
+      "end_ms": 761000,
+      "speaker": "Rory Stewart",
+      "quote": "...",
+      "score": 1.0,
+      "match_type": "entity",
+      "deeplink": "thestill://episode/<id>?t=754",
+      "web_url": "/episodes/<id>?t=754"
+    }
+  ]
+}
+```
+
+### 16. `list_quotes_by`
+
+List resolved mentions where a specific speaker said something, optionally filtered by topic. Speaker matching is case-insensitive substring.
+
+**Parameters:**
+
+- `speaker` (string, required): Speaker name (matches the diarised label)
+- `topic` (string, optional): Topic name or entity id — restricts to episodes where the topic was also mentioned
+- `podcast_id` (string, optional): Restrict to one podcast
+- `date_from` (string, optional): ISO-8601 lower bound on pub_date
+- `date_to` (string, optional): ISO-8601 upper bound on pub_date
+- `limit` (integer, optional, default=50): Maximum rows to return
+
+**Example Usage:**
+
+```
+User: "What has Scott Galloway said about data centres?"
+Claude: [calls list_quotes_by with speaker="Scott Galloway", topic="data centres"]
+Claude: "Here are Scott Galloway's quotes on data centres, with citations..."
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "speaker": "Scott Galloway",
+  "topic_entity_id": "topic:data-centres",
+  "results": [
+    { "...": "citation-shaped rows, as in find_mentions" }
+  ]
+}
+```
+
+### 17. `get_episode_clip`
+
+Return one citation-shaped row for a specific clip in an episode. Turns an `(episode_id, start_ms)` pointer into a playable, quoted reference.
+
+**Parameters:**
+
+- `episode_id` (string, required): Episode UUID
+- `start_ms` (integer, required): Position to anchor the clip at (milliseconds)
+- `end_ms` (integer, optional): Explicit end (otherwise the segment's end_ms)
+- `plus_minus_sec` (integer, optional): Symmetric window around `start_ms` in seconds — widens the resulting clip
+
+**Example Usage:**
+
+```
+User: "Give me a playable citation for that quote"
+Claude: [calls get_episode_clip with episode_id="...", start_ms=754000]
+Claude: "Here's the clip: 'quote...' — thestill://episode/<id>?t=754"
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "result": { "...": "one citation-shaped row, as in find_mentions" }
+}
+```
+
+### 18. `get_entity`
+
+Return an entity record plus its mention count, top co-occurring entities, and recent mentions. Useful for entity pages and to disambiguate before calling `find_mentions`.
+
+**Parameters:**
+
+- `id_or_name` (string, required): Canonical id (`person:elon-musk`), canonical name (`Elon Musk`), or alias (`Musk`) — resolved in that order
+- `entity_type` (string, optional): One of `person`, `company`, `product`, `topic` — disambiguation hint
+
+**Example Usage:**
+
+```
+User: "Who is Sam Altman in my corpus?"
+Claude: [calls get_entity with id_or_name="Sam Altman"]
+Claude: "Sam Altman has 34 mentions, often co-occurring with OpenAI and Elon Musk..."
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "result": {
+    "entity": {
+      "id": "person:sam-altman",
+      "type": "person",
+      "canonical_name": "Sam Altman",
+      "wikidata_qid": "...",
+      "aliases": ["Altman"],
+      "description": "..."
+    },
+    "mention_count": 34,
+    "cooccurring": [
+      {"entity": {"id": "company:openai", "...": "..."}, "episode_count": 8, "last_seen_at": "..."}
+    ],
+    "recent_mentions": [
+      { "...": "citation-shaped rows, as in find_mentions" }
+    ]
+  }
+}
+```
+
+### 19. `list_episodes_by_entity`
+
+List episodes that contain at least one mention of every entity in `has_entity` (set intersection, AND-semantics).
+
+**Parameters:**
+
+- `has_entity` (array of strings, required): Entity ids or names — all must appear in the episode
+- `podcast_id` (string, optional): Restrict to one podcast
+- `date_from` (string, optional): ISO-8601 lower bound on pub_date
+- `date_to` (string, optional): ISO-8601 upper bound on pub_date
+- `limit` (integer, optional, default=50): Maximum rows to return
+
+**Example Usage:**
+
+```
+User: "Which episodes feature both Scott Galloway and Andrew Yang?"
+Claude: [calls list_episodes_by_entity with has_entity=["Scott Galloway", "Andrew Yang"]]
+Claude: "Both appear together in 3 episodes..."
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "matched_entity_ids": ["person:scott-galloway", "person:andrew-yang"],
+  "results": [
+    {
+      "episode_id": "...",
+      "episode_title": "...",
+      "published_at": "2025-01-15T06:00:00Z",
+      "podcast_id": "...",
+      "podcast_title": "The Rest is Politics",
+      "podcast_slug": "the-rest-is-politics"
+    }
+  ]
+}
+```
+
+### 20. `search_corpus`
+
+Lexical, semantic, or hybrid search over the podcast corpus. Use this when the question isn't entity-scoped (e.g. "episodes about agentic engineering" rather than "what has Karpathy said" — for entity-scoped queries prefer `find_mentions`).
+
+**Parameters:**
+
+- `query` (string, required): Free-form search text; lexical mode supports BM25 syntax (`"quoted phrase"`, `-negation`)
+- `mode` (string, optional, default=`hybrid`): One of:
+  - `lexical` — BM25 keyword match; fast, exact terms
+  - `semantic` — vector similarity; concept-level recall
+  - `hybrid` — reciprocal rank fusion over both; best recall on novel phrasings
+- `limit` (integer, optional, default=10): Maximum rows to return
+- `filters` (object, optional): WHERE-clause filters pushed to SQL:
+  - `podcast_id` (string)
+  - `date_range` (object with ISO-8601 `from` / `to`)
+  - `has_entity` (array of entity ids that must appear in the episode)
+
+**Example Usage:**
+
+```
+User: "Find episodes about agentic engineering"
+Claude: [calls search_corpus with query="agentic engineering"]
+Claude: "3 episodes discuss agentic engineering, here are the key clips..."
+```
+
+**Response:**
+
+```json
+{
+  "query": "agentic engineering",
+  "mode": "hybrid",
+  "results": [
+    { "...": "citation-shaped rows, as in find_mentions" }
+  ],
+  "total": 3
+}
+```
 
 ---
 

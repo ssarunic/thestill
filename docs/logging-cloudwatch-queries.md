@@ -14,16 +14,18 @@ Thestill logs use the following CloudWatch-optimized format:
 
 ```json
 {
-  "message": "Episode processed",
+  "message": "task_completed_successfully",
   "@timestamp": "2026-01-25T16:34:22.186Z",
-  "timestamp": "2026-01-25T16:34:22.186Z",
   "level": "INFO",
   "episode_id": "abc123",
-  "duration_ms": 4500,
-  "worker_id": "worker-transcribe-2",
-  "request_id": "r-abc123"
+  "task_id": 456,
+  "stage": "transcribe",
+  "retry_count": 0,
+  "worker_id": "3fb0e2a4"
 }
 ```
+
+The `message` field holds the structlog event name (e.g. `task_processing_started`, `download_completed`, `http_request_completed`). Generated IDs (`request_id`, `command_id`, `worker_id`) are bare 8-character UUID slices such as `a7f2c1d9`.
 
 ## Basic Queries
 
@@ -53,7 +55,7 @@ Debug what a specific worker is doing:
 
 ```sql
 fields @timestamp, level, message, episode_id
-| filter worker_id = "worker-a7f2"
+| filter worker_id = "a7f2c1d9"
 | sort @timestamp desc
 | limit 100
 ```
@@ -91,26 +93,25 @@ fields @timestamp, level, message, worker_id, duration_ms
 | sort @timestamp asc
 ```
 
-**Expected log sequence:**
+**Expected log sequence** (each stage repeats the `task_processing_started` / `task_completed_successfully` pair with a different `stage` value):
 
-1. Download started
-2. Download complete
-3. Downsample started
-4. Downsample complete
-5. Transcribe started
-6. Transcribe complete
-7. Clean transcript started
-8. Clean transcript complete
-9. Summarize started
-10. Summarize complete
+1. `task_processing_started` (stage=download)
+2. `downloading_episode` / `download_completed`
+3. `task_completed_successfully` (stage=download)
+4. `task_processing_started` (stage=downsample) ... `task_completed_successfully`
+5. `task_processing_started` (stage=transcribe) ... `task_completed_successfully`
+6. `task_processing_started` (stage=clean) ... `task_completed_successfully`
+7. `task_processing_started` (stage=summarize) ... `task_completed_successfully`
+
+Handlers also emit human-readable messages such as `Download completed for episode: <title>` and `Transcription completed for episode: <title>`.
 
 ### Episode Processing in Last Hour
 
-Find recent episode processing:
+There is no single canonical "episode done" event — `task_completed_successfully` fires once per stage. Filter on the final pipeline stage (`summarize`) to count fully processed episodes:
 
 ```sql
-fields @timestamp, message, episode_id, duration_ms
-| filter message = "Episode processed"
+fields @timestamp, message, episode_id, stage
+| filter message = "task_completed_successfully" and stage = "summarize"
 | filter @timestamp > ago(1h)
 | sort @timestamp desc
 ```
@@ -130,17 +131,17 @@ fields @timestamp, message, episode_id, duration_ms
 
 ### All Transcription Failures
 
-Find episodes that failed transcription:
+Task failures are logged as `task_fatal_error` (dead-lettered) or `task_transient_error` (will retry), with the bound `stage` field identifying the pipeline stage:
 
 ```sql
-fields @timestamp, message, episode_id, error, error_type
-| filter level = "ERROR" and message like /transcri/
+fields @timestamp, message, episode_id, error, error_class
+| filter message in ["task_fatal_error", "task_transient_error"] and stage = "transcribe"
 | sort @timestamp desc
 ```
 
 ### Error Count by Type (Last 24 Hours)
 
-Aggregate errors by type:
+Aggregate errors by exception type. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `resource_not_found`, `validation_error`, `tool_execution_error`, `unknown_error`). Task worker failures carry `error_class` (`infra` vs `item`) instead:
 
 ```sql
 filter level = "ERROR"
@@ -189,7 +190,7 @@ Find transcriptions taking longer than 5 minutes:
 
 ```sql
 fields @timestamp, episode_id, duration_ms
-| filter message like /transcri/ and duration_ms > 300000
+| filter stage = "transcribe" and duration_ms > 300000
 | sort duration_ms desc
 ```
 
@@ -221,10 +222,10 @@ filter duration_ms > 0
 
 ### Episodes Processed Per Hour
 
-Track system throughput:
+Track system throughput (stage completions per hour; add `and stage = "summarize"` to count only fully finished episodes):
 
 ```sql
-filter message = "Episode processed"
+filter message = "task_completed_successfully"
 | stats count_distinct(episode_id) as episodes by bin(1h)
 ```
 
@@ -406,7 +407,7 @@ aws logs put-metric-filter \
 aws logs put-metric-filter \
   --log-group-name /ecs/thestill \
   --filter-name TranscriptionFailures \
-  --filter-pattern '{ $.level = "ERROR" && $.message = "*transcri*" }' \
+  --filter-pattern '{ $.level = "ERROR" && $.stage = "transcribe" }' \
   --metric-transformations \
     metricName=TranscriptionFailures,metricNamespace=Thestill,metricValue=1
 ```

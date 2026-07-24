@@ -4,17 +4,17 @@ This guide covers setup and configuration for all supported transcription provid
 
 ## Provider Comparison
 
-| Feature | Whisper (Local) | Parakeet (Local) | Google Cloud | ElevenLabs |
-|---------|----------------|------------------|--------------|------------|
-| **Cost** | Free (local CPU/GPU) | Free (local CPU/GPU) | ~$0.024-0.048/min | Per audio hour |
-| **Privacy** | Fully local | Fully local | Audio sent to Google | Audio sent to ElevenLabs |
-| **Speed** | Depends on hardware | Fast on GPU | Fast (cloud) | Fast (cloud) |
-| **Diarization** | Requires HuggingFace + pyannote | Not supported | Built-in | Built-in |
-| **Accuracy** | Good | Good | Excellent | Excellent |
-| **Languages** | Multi-language | English only | Multi-language | Multi-language |
-| **Max Speakers** | Depends on model | N/A | Varies | 32 |
-| **Max File Size** | Memory limited | Memory limited | Chunked via GCS | 2GB |
-| **Network** | Not required | Not required | Required | Required |
+| Feature | Whisper (Local) | Parakeet (Local) | Google Cloud | ElevenLabs | Dalston (Self-hosted) |
+|---------|----------------|------------------|--------------|------------|----------------------|
+| **Cost** | Free (local CPU/GPU) | Free (local CPU/GPU) | ~$0.024-0.048/min | Per audio hour | Free (your hardware) |
+| **Privacy** | Fully local | Fully local | Audio sent to Google | Audio sent to ElevenLabs | Stays on your infrastructure |
+| **Speed** | Depends on hardware | Fast on GPU | Fast (cloud) | Fast (cloud) | Depends on server hardware |
+| **Diarization** | Requires HuggingFace + pyannote | Not supported | Built-in | Built-in | Built-in |
+| **Accuracy** | Good | Good | Excellent | Excellent | Depends on model |
+| **Languages** | Multi-language | English only | Multi-language | Multi-language | Depends on model |
+| **Max Speakers** | Depends on model | N/A | Varies | 32 | Depends on model |
+| **Max File Size** | Memory limited | Memory limited | Chunked via GCS | 2GB | Server limited |
+| **Network** | Not required | Not required | Required | Required | Local network only |
 
 ## Whisper (Local Transcription)
 
@@ -60,9 +60,9 @@ WhisperXTranscriber with diarization enabled:
 ### Setup
 
 ```bash
-# Install dependencies
+# Install dependencies (torch, transformers, librosa)
 pip install -e .
-pip install transformers librosa
+pip install '.[local-transcription]'
 
 # Configure .env
 TRANSCRIPTION_PROVIDER=parakeet
@@ -128,6 +128,7 @@ WHISPER_DEVICE=auto  # Options: auto, cpu, cuda
    TRANSCRIPTION_PROVIDER=elevenlabs
    ELEVENLABS_API_KEY=your-api-key-here
    ELEVENLABS_MODEL=scribe_v1  # Options: scribe_v1, scribe_v1_experimental
+   ELEVENLABS_BASE_URL=  # Optional: override API base URL (for ElevenLabs-compatible servers like Dalston)
    ENABLE_DIARIZATION=true  # Built-in diarization (up to 32 speakers)
    ```
 
@@ -140,10 +141,44 @@ WHISPER_DEVICE=auto  # Options: auto, cpu, cuda
 - Language auto-detection (or specify with language code)
 - Optional audio event detection (laughter, applause, etc.)
 
+### Async / Webhook Mode
+
+For long episodes, the CLI submits ElevenLabs jobs asynchronously instead of blocking on a synchronous request. Optional settings:
+
+```bash
+ELEVENLABS_ASYNC_THRESHOLD_MB=0     # Use async mode for files larger than N MB (0 = always async when async mode is active)
+ELEVENLABS_WEBHOOK_SECRET=          # HMAC secret for verifying webhook callback signatures
+ELEVENLABS_WEBHOOK_REQUIRE_METADATA=true  # Require episode_id metadata in webhook callbacks (default: true)
+```
+
+Async mode is enabled by the caller: the CLI uses async (polling or webhook), while the web worker transcribes synchronously.
+
 ### Pricing
 
 - See: <https://elevenlabs.io/pricing>
 - Billed per audio hour
+
+## Dalston (Self-Hosted Transcription Server)
+
+### Setup
+
+1. Run a Dalston transcription server on your own hardware
+2. Configure .env:
+
+   ```bash
+   TRANSCRIPTION_PROVIDER=dalston
+   DALSTON_BASE_URL=http://localhost:8000  # Dalston server URL
+   DALSTON_API_KEY=  # Optional: API key for Dalston authentication
+   DALSTON_MODEL=    # Optional: transcription model/engine (e.g., whisper-large-v3)
+   ENABLE_DIARIZATION=true  # Built-in diarization
+   ```
+
+### How it works
+
+- Sends audio to your self-hosted Dalston server for transcription
+- Supports speaker diarization
+- `DALSTON_BASE_URL` is required; `DALSTON_API_KEY` and `DALSTON_MODEL` are optional
+- Audio never leaves your infrastructure
 
 ## Common Configuration
 
@@ -157,6 +192,7 @@ WHISPER_DEVICE=auto  # Options: auto, cpu, cuda
 ### Configuration Options (all providers)
 
 - `ENABLE_DIARIZATION`: Enable/disable speaker identification
+- `DIARIZATION_MODEL`: Diarization model for local pyannote-based diarization (default: `pyannote/speaker-diarization-3.1`)
 - `MIN_SPEAKERS`: Minimum speakers (leave empty for auto-detect)
 - `MAX_SPEAKERS`: Maximum speakers (leave empty for auto-detect)
 

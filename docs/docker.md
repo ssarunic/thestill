@@ -50,6 +50,21 @@ cp .env.example .env
 # overrides them to /data so state lives on the mounted volume.
 ```
 
+The committed `docker-compose.yml` mounts `./data:/data`, i.e.
+`~/thestill/data` under the repo clone. To put state on the SSD path
+created above, edit the `volumes:` entry in `docker-compose.yml` before
+the first `docker compose up`:
+
+```yaml
+    volumes:
+      - /srv/thestill/data:/data
+```
+
+The rest of this page assumes the `/srv/thestill/data` mount. If you
+skip this edit, substitute `~/thestill/data` wherever
+`/srv/thestill/data` appears below (and note that data then lives on
+whatever disk holds the repo clone).
+
 ## Importing existing data from a laptop
 
 ```bash
@@ -74,11 +89,13 @@ docker compose up -d
 docker compose ps          # should show (healthy) after ~20s
 ```
 
-Verify the server:
+Verify the server. Compose maps host port `8001` to the container's
+internal `8000` (`"8001:8000"` — host 8000 is left free for a local
+dalston-gateway):
 
 ```bash
-curl -sS http://localhost:8000/health          # 200 {"status":"healthy", ...}
-curl -sS http://localhost:8000/ | head -5      # SPA HTML
+curl -sS http://localhost:8001/health          # 200 {"status":"healthy", ...}
+curl -sS http://localhost:8001/ | head -5      # SPA HTML
 docker exec thestill thestill status
 ```
 

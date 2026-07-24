@@ -42,8 +42,8 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
 | `LOG_LEVEL` | DEBUG, INFO, WARNING, ERROR, CRITICAL | INFO | Minimum log level to emit |
 | `LOG_FORMAT` | console, json, ecs, gcp, cloudwatch, auto | auto | Output format (auto detects TTY) |
 | `LOG_FILE` | file path | none | Optional file output path (rotates at 100MB) |
-| `SERVICE_NAME` | string | thestill | Service name for cloud logs |
-| `SERVICE_VERSION` | string | 1.0.0 | Service version for cloud logs |
+| `SERVICE_NAME` | string | thestill | Service name for GCP format logs (`LOG_FORMAT=gcp` only) |
+| `SERVICE_VERSION` | string | 1.0.0 | Service version for GCP format logs (`LOG_FORMAT=gcp` only) |
 
 ### LOG_FORMAT Options
 
@@ -91,7 +91,7 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
   "@timestamp": "2026-01-25T16:42:31.123Z",
   "log.level": "info",
   "message": "Episode downloaded",
-  "ecs.version": "8.0.0",
+  "ecs.version": "1.6.0",
   "episode_id": "abc123",
   "file_size_mb": 45.2
 }
@@ -99,14 +99,15 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
 
 ### GCP (Google Cloud)
 
+Custom key-value pairs land flat in the JSON payload (rendered by `structlog-gcp`), not nested under labels. The timestamp field is named `time`:
+
 ```json
 {
-  "severity": "INFO",
   "message": "Episode downloaded",
-  "timestamp": "2026-01-25T16:42:31.123456Z",
-  "logging.googleapis.com/labels": {
-    "episode_id": "abc123"
-  }
+  "time": "2026-01-25T16:42:31.123456Z",
+  "severity": "INFO",
+  "episode_id": "abc123",
+  "file_size_mb": 45.2
 }
 ```
 
@@ -122,7 +123,7 @@ A simpler, cheaper alternative to ECS format for AWS deployments. Works with Clo
   "level": "INFO",
   "episode_id": "abc123",
   "file_size_mb": 45.2,
-  "request_id": "r-abc123"
+  "request_id": "a7f2c1d9"
 }
 ```
 
@@ -138,24 +139,26 @@ Thestill uses correlation IDs to track requests across all layers. These IDs are
 
 ### 4 Correlation Layers
 
-1. **Web Layer** (`request_id`): HTTP requests
-2. **CLI Layer** (`command_id`): CLI command invocations
-3. **MCP Layer** (`mcp_request_id`): MCP tool invocations
-4. **Task Layer** (`task_id`, `worker_id`, `episode_id`): Background processing
+1. **Web Layer** (`request_id`): HTTP requests (plus `method`, `endpoint`, `client_ip`)
+2. **CLI Layer** (`command_id`): CLI command invocations (plus `command_name`)
+3. **MCP Layer** (`request_id`): MCP tool invocations (plus `mcp_method`, and `transport="stdio"` for the stdio adapter)
+4. **Task Layer** (`worker_id`, `task_id`, `episode_id`, `stage`, `retry_count`): Background processing
+
+Generated IDs (`request_id`, `command_id`, `worker_id`) are bare 8-character UUID slices (`str(uuid.uuid4())[:8]`, e.g. `a7f2c1d9`) — there are no `r-`/`cmd-`/`w-` prefixes.
 
 ### Correlation Flow Example
 
 ```
-HTTP Request (request_id=r-123)
+HTTP Request (request_id=a7f2c1d9)
   ↓
-Task Created (task_id=t-456, request_id=r-123)
+Task Created (task_id=456, request_id=a7f2c1d9)
   ↓
-Worker Processes (worker_id=w-789, task_id=t-456)
+Worker Processes (worker_id=3fb0e2a4, task_id=456, stage=transcribe)
   ↓
-Episode Transcribed (episode_id=abc, worker_id=w-789, task_id=t-456)
+Episode Transcribed (episode_id=abc, worker_id=3fb0e2a4, task_id=456)
 ```
 
-All logs in this chain will include the relevant correlation IDs, enabling you to trace the entire request lifecycle.
+Each layer clears its context when it finishes, so `request_id` does not survive into the background worker — join HTTP-side and worker-side logs on `episode_id` or `task_id`.
 
 ## Usage Examples
 
@@ -202,7 +205,7 @@ Request logging is automatic via middleware. Each HTTP request gets a unique `re
 ```python
 # Automatic via middleware
 # GET /api/podcasts/123
-# → request_id=r-abc123, method=GET, path=/api/podcasts/123
+# → request_id=a7f2c1d9, method=GET, endpoint=/api/podcasts/123
 
 # Manual logging in routes
 from structlog import get_logger
@@ -216,18 +219,20 @@ async def get_podcast(podcast_id: int):
 
 ### MCP Layer Logging
 
-MCP tool invocations are tracked with `mcp_request_id`:
+MCP tool invocations are tracked with `request_id` and `mcp_method`. The stdio transport uses the `log_mcp_stdio` decorator, which emits `mcp_stdio_request`, `mcp_stdio_completed`, and `mcp_stdio_failed` events (the HTTP transport emits `mcp_request_started`, `mcp_request_completed`, and `mcp_request_failed`):
 
 ```python
-# Automatic via middleware
+# Automatic via the log_mcp_stdio decorator
 # Tool: search_episodes, Args: {"query": "python"}
-# → mcp_request_id=mcp-xyz789, tool_name=search_episodes
+# → request_id=b3e91f04, mcp_method=search_episodes, transport=stdio
 
 # Manual logging in MCP tools
-@server.call_tool()
+from thestill.mcp.middleware.stdio_adapter import log_mcp_stdio
+
+@log_mcp_stdio
 async def search_episodes(query: str):
     logger.info("Searching episodes", query=query, search_type="fulltext")
-    # mcp_request_id is automatically included
+    # request_id and mcp_method are automatically included
 ```
 
 ### CLI Layer Logging
@@ -237,17 +242,17 @@ CLI commands are tracked with `command_id`:
 ```python
 # Automatic via CLI logging wrapper
 # thestill transcribe --podcast-id 1
-# → command_id=cmd-def456, command_name=transcribe
+# → command_id=c4d81a2e, command_name=transcribe
 
 # Manual logging in CLI commands
 import click
 from structlog import get_logger
-from thestill.utils.cli_logging import with_command_logging
+from thestill.utils.cli_logging import log_command
 
 logger = get_logger()
 
 @click.command()
-@with_command_logging
+@log_command
 def transcribe(podcast_id: int):
     logger.info("Starting transcription", podcast_id=podcast_id)
     # command_id is automatically included from context
@@ -370,15 +375,15 @@ thestill status 2>&1 | jq . 1>/dev/null
 ```python
 # Ensure middleware is enabled
 # Web: LoggingMiddleware in app.middleware
-# MCP: LoggingMiddleware in mcp.server
-# CLI: @with_command_logging decorator
+# MCP (stdio transport): @log_mcp_stdio decorator on tool handlers
+# CLI: @log_command decorator
 
 # Check context binding
 from structlog import get_logger
 logger = get_logger()
 
 # Bind context explicitly if not using middleware
-logger = logger.bind(request_id="r-123")
+logger = logger.bind(request_id="a7f2c1d9")
 logger.info("Now includes request_id in all logs")
 ```
 
@@ -456,41 +461,45 @@ severity="ERROR"
 
 ```bash
 # Find request_id from initial HTTP log
-# → request_id=r-abc123
+# → request_id=a7f2c1d9
 
 # Elastic
 GET /logs/_search
 {
-  "query": { "match": { "request_id": "r-abc123" } },
+  "query": { "match": { "request_id": "a7f2c1d9" } },
   "sort": [ { "@timestamp": "asc" } ]
 }
 
 # GCP
-jsonPayload.request_id="r-abc123"
+jsonPayload.request_id="a7f2c1d9"
 | timestamp asc
 ```
 
 ### MCP Tool Usage Analytics
 
+Completed MCP calls are logged as `mcp_stdio_completed` (stdio transport) or `mcp_request_completed` (HTTP transport), with the tool name in `mcp_method`:
+
 ```bash
 # Elastic
 GET /logs/_search
 {
-  "query": { "match": { "event": "mcp_tool_invoked" } },
+  "query": { "match": { "event": "mcp_stdio_completed" } },
   "aggs": {
-    "by_tool": {
-      "terms": { "field": "tool_name.keyword" }
+    "by_method": {
+      "terms": { "field": "mcp_method.keyword" }
     }
   }
 }
 
 # GCP
-jsonPayload.event="mcp_tool_invoked"
-| fields jsonPayload.tool_name
-| group_by jsonPayload.tool_name
+jsonPayload.message="mcp_stdio_completed"
+| fields jsonPayload.mcp_method
+| group_by jsonPayload.mcp_method
 ```
 
 ### API Performance Monitoring
+
+`http_request_completed` events carry `status_code` and `duration_ms`:
 
 ```bash
 # Elastic - Average latency by endpoint
@@ -501,17 +510,17 @@ GET /logs/_search
     "by_endpoint": {
       "terms": { "field": "endpoint.keyword" },
       "aggs": {
-        "avg_latency": { "avg": { "field": "latency_ms" } }
+        "avg_latency": { "avg": { "field": "duration_ms" } }
       }
     }
   }
 }
 
 # GCP
-jsonPayload.event="http_request_completed"
-| fields jsonPayload.endpoint, jsonPayload.latency_ms
+jsonPayload.message="http_request_completed"
+| fields jsonPayload.endpoint, jsonPayload.duration_ms
 | group_by jsonPayload.endpoint
-| avg(jsonPayload.latency_ms)
+| avg(jsonPayload.duration_ms)
 ```
 
 ## File Logging

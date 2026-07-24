@@ -10,8 +10,13 @@ pages, briefings) through a pluggable backend abstraction defined in spec
 - **`s3`** — AWS S3 (or any S3-compatible store via `S3_ENDPOINT_URL`).
   The v1 cloud production target.
 
-SQLite (`podcasts.db`) is always on local disk regardless of backend.
-Database state is not file state.
+The application database is independent of the file-storage backend.
+In the default setup it is SQLite (`podcasts.db`) on local disk; when
+`DATABASE_URL` is set the database is Postgres instead
+(`repositories/factory.py` selects the backend via `uses_postgres` /
+`make_repositories` — spec #44, installed with the `[postgres]` extra).
+Either way, database state is not file state and `STORAGE_BACKEND`
+does not affect it.
 
 > **What this page does NOT cover:** GCS is deferred per spec #35.
 > Multi-region replication is not in v1 — use S3 Cross-Region Replication
@@ -237,8 +242,11 @@ aws s3 sync ./data/ s3://thestill-data/prod/ \
   --storage-class STANDARD
 ```
 
-The `--exclude` flags skip the SQLite database files — those stay on
-local disk regardless of backend.
+The `--exclude` flags skip the SQLite database files — in the default
+SQLite setup those stay on local disk regardless of file-storage
+backend. On a Postgres deployment (`DATABASE_URL` set) there are no
+`*.db` files to sync in the first place; the excludes are harmless to
+keep.
 
 ## Troubleshooting
 

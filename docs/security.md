@@ -9,7 +9,7 @@ upgrades, fast-patch response, and how the supply-chain protections
 | Layer | Mechanism | Why |
 |---|---|---|
 | Python deps | [`uv.lock`](../uv.lock) — every package pinned with sha256 | A compromised PyPI publish can't ambush a fresh install: hash mismatch → install fails. |
-| Python install | CI: `uv sync --frozen`. Docker: `pip wheel --require-hashes` | Both honour the lockfile; nothing in CI or in the shipped image floats. |
+| Python install | CI: `uv sync --frozen`. Docker: `uv export --frozen --no-hashes` → `pip wheel` — hashes intentionally omitted because the git-pinned `dalston-sdk` dep can't be sha256-pinned; version pinning comes from the frozen lockfile export | Both honour the lockfile; nothing in CI or in the shipped image floats. |
 | Docker base images | All `FROM` lines digest-pinned (`@sha256:…`) in [Dockerfile](../Dockerfile) | Tags (`:slim`, `:latest`) are mutable. Without a digest, every build pulls "whatever Docker Hub points at right now". |
 | Frontend deps | `package-lock.json` committed; `npm ci` in CI | npm-ecosystem equivalent of the Python lockfile. |
 | Upgrade cadence | [Dependabot](../.github/dependabot.yml) — weekly Mondays for pip / npm / docker | Bot opens grouped minor/patch PRs; humans review and merge. Avoids drift while keeping a paper trail. |
