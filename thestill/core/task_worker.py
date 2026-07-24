@@ -644,6 +644,14 @@ class TaskWorker:
                 # Execute the handler with optional progress callback
                 handler(task, progress_callback)
 
+                # Spec #49 L1 — a success closes the stage's breaker (and is the
+                # signal that a half-open probe passed: dependency recovered).
+                # Recorded before the claim-lease check below: a lost claim
+                # changes who owns the row, not the fact that the dependency
+                # answered — returning early must not leak the probe slot.
+                if self._breaker is not None:
+                    self._breaker.record_success(task.stage.value)
+
                 # Handler completed successfully - mark task complete under the
                 # claim lease. If the watchdog abandoned an earlier attempt on
                 # this row and a different worker has since reclaimed it, our
@@ -656,11 +664,6 @@ class TaskWorker:
                     )
                     return
                 logger.info("task_completed_successfully")
-
-                # Spec #49 L1 — a success closes the stage's breaker (and is the
-                # signal that a half-open probe passed: dependency recovered).
-                if self._breaker is not None:
-                    self._breaker.record_success(task.stage.value)
 
                 # Feed-scoped (REFRESH_FEED) tasks have no episode and do
                 # their own dynamic DOWNLOAD fan-out inside the handler;
@@ -698,6 +701,12 @@ class TaskWorker:
                     destination="dlq",
                     exc_info=True,
                 )
+                # A fatal verdict means the dependency answered — this item is
+                # bad, the stage is not. If this task was the half-open probe,
+                # the breaker must not stay wedged with ``probe_in_flight`` set
+                # (2026-07-24: a probe DLQ'd on a Dalston schema error froze
+                # the transcribe queue until restart).
+                self._resolve_tripped_breaker(task.stage.value)
                 self._safe_mark_dead(task, error_msg, "fatal")
                 self._mark_episode_failed(task, error_msg, "fatal", exc=e)
                 self._report_failure(task.id, error_msg)
@@ -953,7 +962,27 @@ class TaskWorker:
                         task.id, error_msg, error_class, claim_started_at=claim
                     )
                 return self.queue_manager.reschedule_without_budget(task.id, error_msg, error_class)
+        else:
+            # Non-infra ('item') failure: the dependency answered, the item is
+            # at fault. If this task was the half-open probe, release the slot
+            # — otherwise the breaker stays HALF_OPEN forever and the stage
+            # never dispatches again.
+            self._resolve_tripped_breaker(task.stage.value)
         return self._safe_schedule_retry(task, error_msg, error_class)
+
+    def _resolve_tripped_breaker(self, stage: str) -> None:
+        """Close a tripped breaker after a definitive non-infra outcome.
+
+        A task that reaches a fatal or item-class verdict got an answer from
+        the stage's dependency — the outage the breaker was guarding against
+        is over. Crucially, if that task was the single half-open probe, the
+        slot MUST be released: every non-infra exit path that skips this
+        leaves ``probe_in_flight`` set and wedges the stage until restart.
+        A CLOSED breaker is left untouched so item failures never affect the
+        infra failure window.
+        """
+        if self._breaker is not None and self._breaker.is_tripped(stage):
+            self._breaker.record_success(stage)
 
     def _safe_schedule_retry(self, task: Task, error_msg: str, error_class: Optional[str] = None) -> Optional[Task]:
         """Schedule a retry without leaving the row stuck in ``processing``.
