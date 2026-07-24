@@ -39,6 +39,7 @@ The Makefile is the canonical interface for these tools:
 - `make test` — pytest with coverage (`--ignore=tests/e2e`)
 - `make test-unit` / `make test-integration` — scoped suites with coverage
 - `make test-e2e` — browser E2E (`node tests/e2e/web/test_web_auth.cjs`; requires a running server)
+- `make docs-check` — doc-drift suite (`tests/docs/`): cross-checks docs against code identifiers
 - `make lint` — ruff + pylint + mypy
 - `make format` — black + isort over `thestill/` and `tests/`
 - `make check` — format → lint → typecheck → test
