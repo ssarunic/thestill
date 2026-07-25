@@ -28,7 +28,7 @@ _APPLE_EPISODE_URL = "https://podcasts.apple.com/us/podcast/the-daily/id12003617
 
 
 def _resolver_with(info):
-    return ApplePodcastsResolver(episode_lookup=lambda track_id, collection_id=None: info)
+    return ApplePodcastsResolver(episode_lookup=lambda track_id, collection_id=None, page_url=None: info)
 
 
 # ============================================================================
@@ -119,7 +119,7 @@ def test_resolve_falls_back_to_preview_url_when_episode_url_missing(fake_apple_e
 
 def test_resolve_rejects_show_only_link():
     """Apple URLs without ``?i=<track_id>`` point at a show, not an episode."""
-    resolver = ApplePodcastsResolver(episode_lookup=lambda tid, cid=None: {})
+    resolver = ApplePodcastsResolver(episode_lookup=lambda tid, cid=None, url=None: {})
     with pytest.raises(ResolverError) as exc_info:
         resolver.resolve("https://podcasts.apple.com/us/podcast/the-daily/id1200361736")
     assert "single episode" in str(exc_info.value)
@@ -134,20 +134,27 @@ def test_resolve_raises_when_audio_url_missing(fake_apple_episode_info):
     assert "audio URL" in str(exc_info.value)
 
 
-def test_lookup_receives_collection_id_for_fallback():
+def test_lookup_receives_collection_id_and_page_url_for_fallbacks():
     """The resolver hands the show id to the lookup so it can fall back
     when Apple's direct trackId index returns empty (regression: many
     older episodes are not indexed by trackId and the lookup returns
-    resultCount=0; the show-level query with limit=200 finds them)."""
+    resultCount=0; the show-level query with limit=200 finds them), and
+    the pasted URL so the page-scrape fallback can run when the episode
+    is outside the show-level 200-episode window (spec #65)."""
     captured: dict = {}
 
-    def fake_lookup(track_id, collection_id=None):
+    def fake_lookup(track_id, collection_id=None, page_url=None):
         captured["track_id"] = track_id
         captured["collection_id"] = collection_id
+        captured["page_url"] = page_url
         return {
             "trackName": "Episode",
             "episodeUrl": "https://cdn.example.com/e.mp3",
         }
 
     ApplePodcastsResolver(episode_lookup=fake_lookup).resolve(_APPLE_EPISODE_URL)
-    assert captured == {"track_id": "1000620312000", "collection_id": "1200361736"}
+    assert captured == {
+        "track_id": "1000620312000",
+        "collection_id": "1200361736",
+        "page_url": _APPLE_EPISODE_URL,
+    }

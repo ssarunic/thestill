@@ -27,6 +27,8 @@ the same protocol.
 """
 
 import hashlib
+import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, List, Literal, Optional, Protocol, Sequence, Tuple
@@ -313,11 +315,12 @@ class YouTubeResolver:
         )
 
 
-AppleEpisodeLookup = Callable[[str, Optional[str]], dict]
+AppleEpisodeLookup = Callable[[str, Optional[str], Optional[str]], dict]
 """Function that returns the iTunes Search lookup payload for an Apple
 episode track id, optionally given the show's ``collectionId`` for a
-fallback lookup. Indirection lets tests inject canned responses without
-hitting Apple's servers.
+fallback lookup and the pasted episode page URL for the page-scrape
+fallback (spec #65). Indirection lets tests inject canned responses
+without hitting Apple's servers.
 
 The expected response shape is the iTunes Search ``results[0]`` object
 for a ``podcastEpisode`` entity: ``trackId``, ``trackName``, ``feedUrl``,
@@ -327,10 +330,10 @@ fields we ignore).
 """
 
 
-def _itunes_lookup(params: str, *, label: str) -> list:
+def _guarded_get(url: str, *, label: str):
+    """GET through the SSRF-guarded session with the browser UA + retries."""
     import requests
 
-    url = f"https://itunes.apple.com/lookup?{params}"
     retry = Retry(
         total=3,
         backoff_factor=0.5,
@@ -342,9 +345,17 @@ def _itunes_lookup(params: str, *, label: str) -> list:
         with guarded_session(user_agent=_ITUNES_USER_AGENT, retries=retry) as session:
             resp = session.get(url, timeout=10)
     except requests.RequestException as exc:
-        raise ResolverError(f"iTunes lookup failed for {label}: {exc}") from exc
+        raise ResolverError(f"{label} fetch failed: {exc}") from exc
     if resp.status_code != 200:
-        raise ResolverError(f"iTunes lookup returned HTTP {resp.status_code} for {label}")
+        raise ResolverError(f"{label} returned HTTP {resp.status_code}")
+    return resp
+
+
+def _itunes_lookup(params: str, *, label: str) -> list:
+    resp = _guarded_get(
+        f"https://itunes.apple.com/lookup?{params}",
+        label=f"iTunes lookup for {label}",
+    )
     try:
         payload = resp.json()
     except ValueError as exc:
@@ -352,34 +363,290 @@ def _itunes_lookup(params: str, *, label: str) -> list:
     return payload.get("results") or []
 
 
-def _default_apple_episode_lookup(track_id: str, collection_id: Optional[str] = None) -> dict:
-    # Apple's lookup endpoint is unreliable when keyed on episode ``trackId``:
-    # many episodes (especially older ones) are not indexed and the call
-    # returns ``resultCount: 0``. Looking up the show by ``collectionId`` with
-    # ``entity=podcastEpisode&limit=200`` and filtering locally is the reliable
-    # path. We try the direct trackId lookup first as a fast path.
+def _fetch_apple_episode_page(url: str) -> str:
+    return _guarded_get(url, label="Apple episode page").text
+
+
+def _fetch_apple_feed(url: str) -> bytes:
+    return _guarded_get(url, label="Show RSS feed").content
+
+
+_SERIALIZED_SERVER_DATA_RE = re.compile(
+    r'<script[^>]*\bid="serialized-server-data"[^>]*>(.*?)</script>',
+    re.DOTALL,
+)
+
+
+def _apple_page_scrape_error(reason: str) -> ResolverError:
+    return ResolverError(
+        "This episode is older than the newest 200 the iTunes API can return, "
+        f"and Apple's episode page could not be used instead: {reason}. "
+        "Paste the show's RSS feed and import the episode from there."
+    )
+
+
+def _iter_dicts(node: Any):
+    """Depth-first walk yielding every dict in a nested JSON structure."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            yield current
+            stack.extend(current.values())
+        elif isinstance(current, list):
+            stack.extend(current)
+
+
+def _apple_page_episode_lookup(
+    page_url: str,
+    track_id: str,
+    *,
+    show_record: Optional[dict] = None,
+    fetch: Optional[Callable[[str], str]] = None,
+) -> dict:
+    """Tier 3 of the Apple episode lookup (spec #65): scrape the pasted
+    ``podcasts.apple.com`` page and return an iTunes-lookup-shaped dict.
+
+    The page embeds a ``serialized-server-data`` JSON payload whose episode
+    nodes carry the title, release date, duration, and the real enclosure
+    ``streamUrl``. The payload's structure is unversioned Apple internals, so
+    every extraction is defensive: the episode node is found by walking the
+    whole tree for a dict whose own ``id``/``adamId`` is the track id (fixed
+    key paths would break on Apple's next layout shuffle), and any missing
+    required field raises a ``ResolverError`` naming the RSS-feed escape
+    hatch — never a ``KeyError``.
+
+    ``show_record`` is the show-level entry from the Tier-2 lookup (present
+    even when the episode itself is outside the 200-episode window); its
+    ``feedUrl``/``collectionName``/artwork are merged in so the parent
+    podcast bootstrap works exactly as in Tiers 1–2.
+    """
+
+    def _fail(reason_tag: str, message: str) -> ResolverError:
+        logger.warning("apple_page_parse_failed", track_id=track_id, page_url=page_url, reason=reason_tag)
+        return _apple_page_scrape_error(message)
+
+    try:
+        html = (fetch or _fetch_apple_episode_page)(page_url)
+    except ResolverError as exc:
+        raise _fail("fetch_failed", str(exc)) from exc
+
+    match = _SERIALIZED_SERVER_DATA_RE.search(html)
+    if not match:
+        raise _fail("no_serialized_server_data", "the page carries no serialized-server-data payload")
+    try:
+        payload = json.loads(match.group(1))
+    except ValueError as exc:
+        raise _fail("payload_not_json", "the embedded page payload is not valid JSON") from exc
+
+    node: Optional[dict] = None
+    for candidate in _iter_dicts(payload):
+        if str(candidate.get("id")) != str(track_id) and str(candidate.get("adamId")) != str(track_id):
+            continue
+        if not isinstance(candidate.get("title"), str):
+            continue
+        if not isinstance(candidate.get("mediaEnclosures"), list):
+            continue
+        node = candidate
+        break
+    if node is None:
+        raise _fail(
+            "episode_node_not_found",
+            f"no episode entry for trackId {track_id} in the page payload",
+        )
+
+    stream_url: Optional[str] = None
+    duration_ms: Optional[int] = None
+    for enclosure in node["mediaEnclosures"]:
+        if not isinstance(enclosure, dict):
+            continue
+        candidate_url = enclosure.get("streamUrl")
+        if isinstance(candidate_url, str) and candidate_url.startswith(("http://", "https://")):
+            stream_url = candidate_url
+            duration = enclosure.get("duration")
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0:
+                duration_ms = int(duration * 1000)
+            break
+    if not stream_url:
+        raise _fail(
+            "no_stream_url",
+            "the episode entry has no playable audio URL " "(subscriber-only episodes cannot be imported)",
+        )
+
+    info: dict = {
+        "wrapperType": "podcastEpisode",
+        "trackId": track_id,
+        "trackName": node["title"],
+        "episodeUrl": stream_url,
+    }
+    if duration_ms is not None:
+        info["trackTimeMillis"] = duration_ms
+    release_date = node.get("releaseDate")
+    if isinstance(release_date, str):
+        info["releaseDate"] = release_date
+    summary = node.get("summary")
+    if isinstance(summary, str):
+        info["description"] = summary
+    if show_record:
+        for key in ("feedUrl", "collectionName", "collectionId", "artworkUrl600", "artworkUrl100"):
+            value = show_record.get(key)
+            if value is not None:
+                info.setdefault(key, value)
+    return info
+
+
+def _apple_rss_cross_match(
+    feed_url: str,
+    scraped: dict,
+    track_id: str,
+    *,
+    fetch: Optional[Callable[[str], bytes]] = None,
+) -> Optional[dict]:
+    """Best-effort: find the Tier-3-scraped episode in the show's RSS feed.
+
+    Match order: enclosure URL (path component, query ignored) → exact
+    title → pub-date (±24 h) + casefolded title. Returns an override dict
+    (the feed's canonical enclosure as ``episodeUrl``) or ``None``. Never
+    raises — the cross-match improves canonicality, it must not block an
+    import the page scrape already resolved.
+    """
+    import feedparser
+
+    try:
+        raw = (fetch or _fetch_apple_feed)(feed_url)
+        feed = feedparser.parse(raw)
+        entries = list(getattr(feed, "entries", None) or [])
+
+        def enclosure_urls(entry) -> list:
+            urls = []
+            for link in entry.get("links") or []:
+                href = link.get("href")
+                if link.get("rel") == "enclosure" and isinstance(href, str) and href:
+                    urls.append(href)
+            return urls
+
+        scraped_path = urlparse(scraped.get("episodeUrl") or "").path
+        scraped_title = scraped.get("trackName") or ""
+        release_dt = _apple_pub_date(scraped.get("releaseDate"))
+
+        matched_by: Optional[str] = None
+        matched_url: Optional[str] = None
+        for entry in entries:
+            urls = enclosure_urls(entry)
+            if scraped_path and any(urlparse(u).path == scraped_path for u in urls):
+                matched_by, matched_url = "enclosure_url", urls[0]
+                break
+        if matched_url is None and scraped_title:
+            for entry in entries:
+                if entry.get("title") == scraped_title:
+                    urls = enclosure_urls(entry)
+                    if urls:
+                        matched_by, matched_url = "title", urls[0]
+                        break
+        if matched_url is None and scraped_title and release_dt is not None:
+            for entry in entries:
+                published = entry.get("published_parsed")
+                title = entry.get("title") or ""
+                if not published or title.casefold() != scraped_title.casefold():
+                    continue
+                pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
+                if abs((pub_dt - release_dt).total_seconds()) <= 86400:
+                    urls = enclosure_urls(entry)
+                    if urls:
+                        matched_by, matched_url = "pub_date_and_title", urls[0]
+                        break
+
+        if matched_url is None:
+            logger.warning(
+                "apple_rss_cross_match_miss",
+                track_id=track_id,
+                feed_url=feed_url,
+                feed_entries=len(entries),
+                reason="no_matching_item",
+            )
+            return None
+        logger.info(
+            "apple_rss_cross_match",
+            track_id=track_id,
+            feed_url=feed_url,
+            matched_by=matched_by,
+        )
+        return {"episodeUrl": matched_url}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "apple_rss_cross_match_miss",
+            track_id=track_id,
+            feed_url=feed_url,
+            reason="fetch_or_parse_error",
+            error=str(exc),
+        )
+        return None
+
+
+def _default_apple_episode_lookup(
+    track_id: str,
+    collection_id: Optional[str] = None,
+    episode_page_url: Optional[str] = None,
+) -> dict:
+    # Three tiers (spec #65), each tried only when the previous one misses.
+    #
+    # Tier 1 — direct trackId lookup. Fast path, but Apple's per-episode
+    # index is not comprehensive: many episodes (especially older ones)
+    # return ``resultCount: 0``.
     direct = _itunes_lookup(
         f"id={track_id}&entity=podcastEpisode",
         label=f"trackId {track_id}",
     )
     for entry in direct:
         if entry.get("wrapperType") == "podcastEpisode":
+            logger.info("apple_lookup_resolved", apple_lookup_tier=1, track_id=track_id)
             return entry
 
-    if not collection_id:
-        raise ResolverError(f"iTunes lookup found no episode for trackId {track_id}")
+    # Tier 2 — show-level window. Hard-capped at the newest 200 episodes;
+    # ``offset`` is silently ignored by the endpoint, so deeper history is
+    # unreachable through the iTunes API. A lookup error here must not be
+    # terminal — Tier 3 can still resolve from the page alone.
+    show_results: list = []
+    show_lookup_error: Optional[str] = None
+    if collection_id:
+        try:
+            show_results = _itunes_lookup(
+                f"id={collection_id}&entity=podcastEpisode&limit=200",
+                label=f"collectionId {collection_id}",
+            )
+        except ResolverError as exc:
+            show_lookup_error = str(exc)
+        for entry in show_results:
+            if entry.get("wrapperType") == "podcastEpisode" and str(entry.get("trackId")) == str(track_id):
+                logger.info("apple_lookup_resolved", apple_lookup_tier=2, track_id=track_id)
+                return entry
 
-    show_results = _itunes_lookup(
-        f"id={collection_id}&entity=podcastEpisode&limit=200",
-        label=f"collectionId {collection_id}",
+    # Tier 3 — scrape the pasted episode page, then best-effort confirm the
+    # enclosure against the show's full-history RSS feed.
+    if not episode_page_url:
+        raise ResolverError(
+            f"iTunes lookup found no episode for trackId {track_id} "
+            f"(searched {len(show_results)} entries under collectionId {collection_id})"
+        )
+    logger.info(
+        "apple_lookup_fallback_to_page",
+        track_id=track_id,
+        collection_id=collection_id,
+        show_window_entries=len(show_results),
+        show_lookup_error=show_lookup_error,
     )
-    for entry in show_results:
-        if entry.get("wrapperType") == "podcastEpisode" and str(entry.get("trackId")) == str(track_id):
-            return entry
-    raise ResolverError(
-        f"iTunes lookup found no episode for trackId {track_id} "
-        f"(searched {len(show_results)} entries under collectionId {collection_id})"
+    show_record = next(
+        (e for e in show_results if e.get("wrapperType") != "podcastEpisode" and e.get("feedUrl")),
+        None,
     )
+    info = _apple_page_episode_lookup(episode_page_url, track_id, show_record=show_record)
+    feed_url = info.get("feedUrl")
+    if isinstance(feed_url, str) and feed_url:
+        override = _apple_rss_cross_match(feed_url, info, track_id)
+        if override:
+            info.update(override)
+    logger.info("apple_lookup_resolved", apple_lookup_tier=3, track_id=track_id)
+    return info
 
 
 def _apple_pub_date(raw: Any) -> Optional[datetime]:
@@ -402,9 +669,11 @@ class ApplePodcastsResolver:
 
     Uses Apple's public iTunes Search API ``lookup`` endpoint to translate
     the share link's ``?i=<track_id>`` into an episode payload that includes
-    the audio URL and the show's RSS feed. The download stage then fetches
-    the audio directly via the regular HTTP path — the iTunes API is only
-    consulted at resolve time.
+    the audio URL and the show's RSS feed. Episodes deeper than the newest
+    200 (the iTunes API's hard, un-paginatable window) fall back to scraping
+    the pasted episode page itself — see ``_apple_page_episode_lookup``
+    (spec #65). The download stage then fetches the audio directly via the
+    regular HTTP path — Apple is only consulted at resolve time.
 
     Show-only Apple links (``/idNNN`` with no ``?i=``) are not single
     episodes and therefore not supported by this resolver — paste the RSS
@@ -430,9 +699,11 @@ class ApplePodcastsResolver:
         # iTunes response can't reattach the import to the wrong show. It is
         # also passed to the lookup so it can fall back to a show-level query
         # when the direct trackId lookup misses (Apple's per-episode index is
-        # not comprehensive — many older episodes return resultCount=0).
+        # not comprehensive — many older episodes return resultCount=0). The
+        # pasted URL rides along for the Tier-3 page-scrape fallback when the
+        # episode is outside the show-level 200-episode window (spec #65).
         collection_id = extract_apple_podcast_id(url)
-        info = self._lookup(episode_id, collection_id)
+        info = self._lookup(episode_id, collection_id, url)
         track_name = info.get("trackName") or "Untitled Apple episode"
         episode_audio = info.get("episodeUrl") or info.get("previewUrl")
         if not isinstance(episode_audio, str) or not episode_audio:
