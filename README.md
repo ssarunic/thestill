@@ -45,6 +45,7 @@ Each step is independent. Failed at transcription? Fix it and continue - no need
 **Transcription** - Pick your engine:
 
 - Whisper (local, free, private)
+- Parakeet (local, NVIDIA NeMo TDT)
 - Google Cloud Speech-to-Text (fast, accurate)
 - ElevenLabs Scribe (great quality)
 - Dalston (self-hosted)
@@ -66,9 +67,12 @@ Each step is independent. Failed at transcription? Fix it and continue - no need
 ## Quick Start
 
 ```bash
-# Install
+# Install (uv, recommended — uses the committed lockfile)
 git clone https://github.com/ssarunic/thestill.git
 cd thestill
+uv sync --frozen
+
+# ...or with pip
 pip install -e .
 
 # Configure (edit .env with your API keys)
@@ -98,6 +102,12 @@ thestill server
 | [MCP Usage](docs/mcp-usage.md) | Claude Desktop integration |
 | [Transcript Cleaning](docs/transcript-cleaning.md) | LLM-based cleanup options |
 | [Logging](docs/logging-configuration.md) | Structured logging setup |
+| [Docker](docs/docker.md) | Container deployment (slim/full images, compose) |
+| [Storage Backends](docs/storage-backends.md) | Local disk or S3 for pipeline artefacts |
+| [Security](docs/security.md) | Supply-chain and secret-scanning posture |
+| [Narration](docs/narration.md) | Text-to-speech briefing narration |
+| [Imports](docs/imports.md) | Importing episodes from URLs and audio files |
+| [Evals](docs/evals.md) | LLM-as-judge quality evaluation runs |
 
 ## CLI Reference
 
@@ -120,7 +130,9 @@ thestill summarize          # Generate summaries
 thestill server             # Start on localhost:8000
 ```
 
-All commands support `--podcast-id`, `--max-episodes`, and `--dry-run`.
+The pipeline commands support `--max-episodes` and `--dry-run`;
+`refresh`/`download`/`downsample`/`transcribe` also take `--podcast-id`.
+Run any command with `--help` for its full flag list.
 
 ## Output
 
@@ -132,8 +144,12 @@ data/
 ├── clean_transcripts/   # Cleaned Markdown
 ├── summaries/           # Episode analysis
 ├── briefings/           # Per-user morning briefings
-└── podcasts.db          # SQLite database
+└── podcasts.db          # SQLite database (local default)
 ```
+
+Set `DATABASE_URL` to a Postgres connection string to use Postgres instead
+of SQLite (the production setup); file artefacts can likewise go to S3 via
+`STORAGE_BACKEND=s3` — see [storage-backends.md](docs/storage-backends.md).
 
 ## Development
 
