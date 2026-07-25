@@ -1,6 +1,6 @@
 # Apple Deep-History Import Specification
 
-> **Status:** 📋 Planned (2026-07-25)
+> **Status:** 🚧 Implemented on `feat/65-apple-deep-history-import` (2026-07-25); pending merge
 > **Created:** 2026-07-25
 > **Updated:** 2026-07-25
 > **Author:** Product & Engineering
