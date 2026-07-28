@@ -121,6 +121,52 @@ podcasts (tech monologue, product, news, opinion essay, conversational
 history), all short enough that summaries stay single-chunk. Don't rotate
 members casually — longitudinal comparison assumes stable inputs.
 
+## Eval backlog: host/role attribution
+
+Conclusions from the 2026-07-28 host-misattribution incident (Elad Gil
+shown as host of 13 Cheeky Pint episodes), written down for when a
+role-attribution rubric gets built.
+
+**Failure mode.** Podcast-level facts (`## Hosts`) are extracted once,
+from whichever episode is cleaned first, and never revisited. An LLM
+seeing a single transcript cannot distinguish a one-off guest co-host
+from a permanent host — the prompt's "appears in EVERY or MOST episodes"
+criterion is unanswerable from one sample. Three live instances found in
+one audit: Elad Gil on Cheeky Pint (guest co-host on the first-cleaned
+episode), John Collison on Dwarkesh Podcast (crossover episode), and
+three non-hosts on Unsupervised Learning. The error then multiplies:
+the UI reports podcast-level hosts against *every* episode of the
+podcast, so one bad bullet reads as "host of 13 episodes".
+
+**Signal quality (measured against live data, 2026-07-28).**
+
+- `entity_mentions` speaking coverage is *unusable* as ground truth:
+  legitimate hosts routinely score 0 (Neil deGrasse Tyson 0/31 on
+  StarTalk, Bill Gurley 0/3 on BG2) because mention extraction only tags
+  `speaking` when the transcript names the person.
+- Episode facts `Name (Host)` speaker-mapping annotations are reliable:
+  they corroborated every legitimate host checked (41/41 StarTalk, 8/8
+  Tool Use, 7/51 for emeritus-style Reid Hoffman) and cleanly separated
+  all three bad entries (1/8, 0/26, 0–1/12). Name variants ("Neil de
+  Grasse Tyson") cost some recall but not enough to matter.
+
+**Guardrail shipped** (`role_linker.collect_host_evidence`): at link
+time, demote a podcast-level host candidate when ≥5 episode facts files
+carry host annotations and the candidate appears in <2 — never emptying
+the list. Re-runs after every episode clean, so it self-heals as
+evidence accumulates.
+
+**Eval ideas.**
+
+- LLM-judge rubric: given a podcast's episode facts speaker mappings,
+  score the podcast facts `## Hosts` list for precision/recall.
+  Ground truth is cheap: the aggregated `(Host)` annotation counts.
+- Regression metric worth tracking: hosts listed at podcast level with
+  zero corroborating episode facts appearances (should stay at 0).
+- The initial-extraction prompt should be evaluated on
+  first-episode-is-atypical inputs (crossover episodes, guest
+  co-hosts, panel episodes) — that's exactly where it fails.
+
 ## Deprecated commands
 
 `thestill evaluate-raw-transcript` and `evaluate-clean-transcript` remain

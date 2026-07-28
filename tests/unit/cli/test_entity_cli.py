@@ -227,3 +227,35 @@ class TestEntityMergeCli:
         result = _run(["entity", "merge", "person:elon-musk", "person:nobody"])
         assert result.exit_code == 1
         assert "Loser" in result.output
+
+
+class TestPodcastSetHostsCli:
+    """Regression: a module-level ``def list`` click command used to shadow
+    the ``list`` builtin, so ``set-hosts`` invoked the *list command* with
+    the entity ids as argv and never wrote the column."""
+
+    def _podcast_id(self, storage):
+        conn = sqlite3.connect(str(storage / "podcasts.db"))
+        try:
+            return conn.execute("SELECT id FROM podcasts").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_set_hosts_writes_column(self, tmp_db_with_entities):
+        pid = self._podcast_id(tmp_db_with_entities)
+        result = _run(["podcast", "set-hosts", pid, "person:elon-musk"])
+        assert result.exit_code == 0
+        assert "hosts = person:elon-musk" in result.output
+
+        conn = sqlite3.connect(str(tmp_db_with_entities / "podcasts.db"))
+        try:
+            row = conn.execute("SELECT host_entity_ids FROM podcasts WHERE id = ?", (pid,)).fetchone()
+        finally:
+            conn.close()
+        assert row[0] == '["person:elon-musk"]'
+
+    def test_set_hosts_unknown_entity_exits_nonzero(self, tmp_db_with_entities):
+        pid = self._podcast_id(tmp_db_with_entities)
+        result = _run(["podcast", "set-hosts", pid, "person:nobody"])
+        assert result.exit_code == 1
+        assert "Unknown entity ids" in result.output
