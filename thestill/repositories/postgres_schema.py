@@ -507,15 +507,32 @@ CREATE TABLE IF NOT EXISTS top_podcasts_meta (
 """
 
 
+# Fixed application-wide advisory-lock key serializing schema bootstrap
+# across PROCESSES. The in-process guard in factory._ensure_pg_schema is not
+# enough: two entry points starting together (two MCP servers, MCP + web
+# server, CLI + server) each run the multi-statement DDL below in one
+# transaction, and their exclusive locks interleave into a deadlock
+# (2026-07-28 incident: two thestill-mcp instances deadlocked on `podcasts`
+# and the MCP server died at startup). Any stable bigint works; this one is
+# arbitrary but must never be reused for another advisory lock in this app.
+SCHEMA_BOOTSTRAP_LOCK_KEY = 0x7E5711
+_LOCK_SQL = "SELECT pg_advisory_xact_lock(%s)"
+
+
 def ensure_schema(dsn: str, *, embedding_dim: int = DEFAULT_EMBEDDING_DIM) -> None:
     """Idempotently create the full typed schema on ``dsn``.
 
     Single bootstrap call used by the repository factory and tests; replaced
     by alembic migrations once those land. ``embedding_dim`` sizes the
     pgvector columns (must match the configured embedding model).
+
+    Concurrent callers (other processes bootstrapping the same database)
+    serialize on a transaction-scoped advisory lock: the second caller waits
+    for the first to commit, then runs the same DDL as a fast no-op.
     """
     import psycopg
 
     with psycopg.connect(dsn) as conn:
+        conn.execute(_LOCK_SQL, (SCHEMA_BOOTSTRAP_LOCK_KEY,))
         conn.execute(SCHEMA_SQL.format(dim=embedding_dim))
     logger.info("postgres_schema_ensured", embedding_dim=embedding_dim)
