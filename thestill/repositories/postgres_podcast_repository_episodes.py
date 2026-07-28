@@ -617,11 +617,13 @@ class EpisodesMixin:
             return [(as_str(row["id"]), row["audio_url"]) for row in rows]
 
     def get_recent_unqueued_unprocessed_episodes(self, podcast_id: str, limit: int) -> List[Tuple[str, Optional[str]]]:
-        """The podcast's ``limit`` most-recent un-started episodes, by air date.
+        """Un-started episodes WITHIN the podcast's ``limit`` most recent.
 
         Drives the subscribe-time transcription backlog (see the SQLite
-        docstring): ordered by ``COALESCE(pub_date, published_at) DESC``,
-        untouched orphans only, not time-windowed.
+        docstring for the window-first rationale): the ``limit`` newest by
+        ``COALESCE(pub_date, published_at) DESC``, filtered to untouched
+        orphans — old skipped episodes outside the window are never
+        resurrected.
         """
         if limit <= 0:
             return []
@@ -630,8 +632,13 @@ class EpisodesMixin:
                 """
                 SELECT e.id, e.audio_url
                 FROM episodes e
-                WHERE e.podcast_id = %s
-                  AND e.failed_at_stage IS NULL
+                JOIN (
+                    SELECT id FROM episodes
+                    WHERE podcast_id = %s
+                    ORDER BY COALESCE(pub_date, published_at) DESC
+                    LIMIT %s
+                ) recent ON recent.id = e.id
+                WHERE e.failed_at_stage IS NULL
                   AND e.auto_process_excluded = false
                   AND e.audio_path IS NULL
                   AND e.downsampled_audio_path IS NULL
@@ -640,7 +647,6 @@ class EpisodesMixin:
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
                 ORDER BY COALESCE(e.pub_date, e.published_at) DESC
-                LIMIT %s
                 """,
                 (podcast_id, limit),
             ).fetchall()

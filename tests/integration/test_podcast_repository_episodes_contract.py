@@ -418,6 +418,39 @@ def test_recent_unqueued_unprocessed_ordering_and_limit(h):
     assert h.repo.get_recent_unqueued_unprocessed_episodes(pid, limit=0) == []
 
 
+def test_recent_unqueued_unprocessed_is_window_not_resurrection(h):
+    """The selection is "unprocessed WITHIN the N most recent", never "N most
+    recent among the unprocessed". A podcast whose recent episodes are all
+    processed yields nothing — old skipped episodes are not resurrected on
+    follow (2026-07-28 prod incident: a follow enqueued months-old
+    stragglers because everything recent was already summarized)."""
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    straggler = _mk_episode(pid, uid, 1)  # oldest, never processed
+    mid = _mk_episode(pid, uid, 2, summary_path=f"{uid}/2_summary.md")
+    newest = _mk_episode(pid, uid, 3, summary_path=f"{uid}/3_summary.md")
+    h.repo.save_episodes([straggler, mid, newest])
+
+    # Recent window (2 newest) is fully processed → nothing to enqueue,
+    # even though an unprocessed straggler exists further back.
+    assert h.repo.get_recent_unqueued_unprocessed_episodes(pid, limit=2) == []
+
+    # A window wide enough to reach the straggler still returns it — the
+    # window bounds the reach, the unprocessed filter does the rest.
+    got = h.repo.get_recent_unqueued_unprocessed_episodes(pid, limit=3)
+    assert [eid for eid, _ in got] == [straggler.id]
+
+    # Dormant-podcast case: the newest episode itself is unprocessed →
+    # it is inside any window and still gets picked up.
+    dormant_uid = _nonce()
+    dormant_pid = _mk_parent(h, dormant_uid)
+    old_done = _mk_episode(dormant_pid, dormant_uid, 1, summary_path=f"{dormant_uid}/1_summary.md")
+    latest_pending = _mk_episode(dormant_pid, dormant_uid, 2)
+    h.repo.save_episodes([old_done, latest_pending])
+    got = h.repo.get_recent_unqueued_unprocessed_episodes(dormant_pid, limit=2)
+    assert [eid for eid, _ in got] == [latest_pending.id]
+
+
 def test_mark_episodes_auto_process_excluded(h):
     uid = _nonce()
     pid = _mk_parent(h, uid)

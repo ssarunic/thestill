@@ -544,6 +544,42 @@ def test_refresh_scheduling_bookkeeping(repo):
     assert p.id in repo.get_due_podcasts(now=base + timedelta(days=2))
 
 
+def test_reschedule_unscheduled_feed_on_follow_signal(repo):
+    """A follow re-arms a feed stranded with stale failure state (the feed
+    parked while it had no followers, so ``seed_unscheduled_feeds`` refuses
+    to revive it); quarantined feeds stay parked."""
+    base = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Legacy-parked feed: unscheduled + stale error, NO disabled reason.
+    p = _mk_podcast()
+    repo.save(p)
+    _exec(
+        repo,
+        "UPDATE podcasts SET last_refresh_at = ?, last_refresh_error = ? WHERE id = ?",
+        (_ts(repo, base - timedelta(days=13)), "Feed refresh failed", p.id),
+    )
+    _seed_user_and_follow(repo, p.id)
+
+    # Seeding refuses (prior attempt recorded)…
+    assert repo.seed_unscheduled_feeds(3600, now=base) == 0
+    assert p.id not in repo.get_due_podcasts(now=base + timedelta(days=365))
+    # …but the explicit follow signal revives it, effective immediately.
+    assert repo.reschedule_unscheduled_feed(p.id, now=base) is True
+    assert p.id in repo.get_due_podcasts(now=base)
+    # Already scheduled → no-op.
+    assert repo.reschedule_unscheduled_feed(p.id, now=base) is False
+
+    # Quarantined feed: the follow signal must NOT revive it.
+    q = _mk_podcast()
+    repo.save(q)
+    _seed_user_and_follow(repo, q.id)
+    repo.seed_unscheduled_feeds(3600, now=base)
+    decision = repo.record_refresh_failure(q.id, _gone_410(), _SETTINGS, now=base)
+    assert decision.disabled_reason == "feed_gone"
+    assert repo.reschedule_unscheduled_feed(q.id, now=base) is False
+    assert q.id not in repo.get_due_podcasts(now=base + timedelta(days=365))
+
+
 def test_record_refresh_failure_policy_matrix(repo):
     """Decisive kinds quarantine on first sight; internal never touches the
     schedule; success resets the streak (both backends)."""

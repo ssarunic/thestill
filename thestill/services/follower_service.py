@@ -122,6 +122,17 @@ class FollowerService:
             # Handle race condition where another request created the relationship
             raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}") from e
 
+        # Spec #63 gates background refresh on followers, and the scheduler
+        # never revives a feed that already has a failure record — so a feed
+        # that parked while unfollowed would stay dark forever after this
+        # follow. A follow is an explicit signal to resume; re-arm the
+        # schedule best-effort (quarantined feeds stay parked).
+        try:
+            if self.podcast_repository.reschedule_unscheduled_feed(podcast_id):
+                logger.info("follow_rescheduled_feed", podcast_id=podcast_id)
+        except Exception:
+            logger.exception("follow_reschedule_failed", podcast_id=podcast_id)
+
         # Seed the new follower's inbox best-effort. The follow itself has
         # already committed; a seed failure must not surface as a follow
         # failure to the caller.
