@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Episode, EpisodeWithPodcast, FailureType, PipelineStage } from '../api/types'
 import { STAGE_LABEL, STAGE_LABEL_ACTIVE } from '../constants/stages'
+import { useAuth } from '../contexts/AuthContext'
 import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
@@ -71,6 +72,9 @@ export default function EpisodeCard({
   processingStage,
 }: EpisodeCardProps) {
   const [showFailureModal, setShowFailureModal] = useState(false)
+  // Retry mirrors the server-side require_admin gate on
+  // POST /api/episodes/{id}/retry (always satisfied in single-user mode).
+  const { isAdmin } = useAuth()
   const retryMutation = useRetryFailedEpisode()
 
   const isFailed = episode.is_failed && episode.failure_type
@@ -280,7 +284,7 @@ export default function EpisodeCard({
           failureReason={episode.failure_reason ?? null}
           failureType={episode.failure_type}
           failedAt={episode.failed_at ?? null}
-          onRetry={handleRetry}
+          onRetry={isAdmin ? handleRetry : undefined}
           isRetrying={retryMutation.isPending}
         />
       )}

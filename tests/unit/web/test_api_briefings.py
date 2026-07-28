@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from thestill.models.briefing import Briefing
@@ -63,7 +63,10 @@ def mock_app_state():
 @pytest.fixture
 def test_app(mock_app_state, mock_user):
     app = FastAPI()
-    app.include_router(api_briefings.router, prefix="/api/briefings")
+    # Mount like app.py does: router-level require_auth (default-deny).
+    app.include_router(
+        api_briefings.router, prefix="/api/briefings", dependencies=[Depends(api_briefings.require_auth)]
+    )
     app.dependency_overrides[api_briefings.get_app_state] = lambda: mock_app_state
     app.dependency_overrides[api_briefings.require_auth] = lambda: mock_user
     return app

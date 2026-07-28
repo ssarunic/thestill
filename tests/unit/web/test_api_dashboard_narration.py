@@ -19,10 +19,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from thestill.utils.path_manager import PathManager
+from thestill.web.dependencies import require_auth
 from thestill.web.routes import api_dashboard
 
 
@@ -45,7 +46,9 @@ def mock_app_state(storage):
 @pytest.fixture
 def client(mock_app_state):
     app = FastAPI()
-    app.include_router(api_dashboard.router, prefix="/api/dashboard")
+    # Mount like app.py does: router-level require_auth (default-deny).
+    # The MagicMock auth_service resolves any token to a truthy user.
+    app.include_router(api_dashboard.router, prefix="/api/dashboard", dependencies=[Depends(require_auth)])
     app.dependency_overrides[api_dashboard.get_app_state] = lambda: mock_app_state
     return TestClient(app)
 

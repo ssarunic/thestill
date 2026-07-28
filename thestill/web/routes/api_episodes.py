@@ -26,10 +26,11 @@ from structlog import get_logger
 
 from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
+from ...models.user import User
 from ...services.playback import build_playback_manifest
 from ...services.podcast_service import extract_summary_preview
 from ...utils.duration import format_duration
-from ..dependencies import AppState, get_app_state
+from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import bad_request, conflict, not_found, paginated_response, parse_iso_datetime
 from .api_commands import _get_starting_stage
 
@@ -184,6 +185,7 @@ async def get_all_episodes(
 async def bulk_process_episodes(
     request: BulkProcessRequest,
     app_state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> BulkProcessResponse:
     """
     Queue full pipeline processing for multiple episodes.
@@ -383,6 +385,7 @@ async def get_episode_failure(
 async def retry_failed_episode(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> EpisodeRetryResponse:
     """
     Retry a failed episode.

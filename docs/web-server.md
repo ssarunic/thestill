@@ -168,10 +168,10 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/webhook/elevenlabs/speech-to-text` | POST | Receive transcription callback |
-| `/webhook/elevenlabs/results` | GET | List webhook results |
-| `/webhook/elevenlabs/results/{id}` | GET | Get specific result |
-| `/webhook/elevenlabs/results/{id}` | DELETE | Delete result |
+| `/webhook/elevenlabs/speech-to-text` | POST | Receive transcription callback (HMAC-verified, no session) |
+| `/webhook/elevenlabs/results` | GET | List webhook results (admin only) |
+| `/webhook/elevenlabs/results/{id}` | GET | Get specific result (admin only) |
+| `/webhook/elevenlabs/results/{id}` | DELETE | Delete result (admin only) |
 
 ### Unsubscribe
 
@@ -270,6 +270,26 @@ CLI (cli.py)                    Web (web/app.py)
 ## Authentication
 
 The web server supports two authentication modes:
+
+### Default-Deny API Access
+
+Every `/api` router except `/api/auth` is registered in `app.py` with a
+router-level `require_auth` dependency, so any new endpoint requires a
+session unless it is consciously opted out. On top of that floor, the
+operator-only surface requires an admin session (`require_admin`):
+
+- Manual pipeline triggers: `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}` and `POST /api/commands/episode/{id}/cancel-pipeline`
+- Queue and DLQ management: `/api/commands/queue/*`, `/api/commands/dlq*`
+- Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
+- Stored webhook payload inspection: `GET`/`DELETE` `/webhook/elevenlabs/results*`
+
+Ordinary users never drive the pipeline manually — it runs automatically
+when they follow a podcast or import an episode. In single-user mode both
+checks always pass (the local user is the operator). In multi-user mode,
+`require_admin` needs a user whose `is_admin` flag is set. The frontend
+mirrors these gates (`AdminRoute` pages plus `isAdmin`-conditional action
+buttons), and `tests/integration/web/test_default_deny_auth.py` audits the
+route table so an unauthenticated endpoint cannot ship unnoticed.
 
 ### Single-User Mode (Default)
 

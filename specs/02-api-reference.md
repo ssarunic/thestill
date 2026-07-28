@@ -8,6 +8,24 @@ This document describes the REST API endpoints provided by the Thestill web serv
 - **Authentication**: Cookie-based JWT or Bearer token (multi-user mode only)
 - **Content-Type**: `application/json`
 
+### Authorization Levels
+
+Every `/api` route except `/api/auth` requires an authenticated session
+(enforced at router registration — default-deny). Endpoints that control
+the processing pipeline additionally require an admin user in multi-user
+mode; in single-user mode all checks pass. Admin-only endpoints:
+
+- `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}`
+- `POST /api/commands/episode/{id}/cancel-pipeline`
+- `/api/commands/queue/*` and `/api/commands/dlq*` (queue + DLQ management)
+- `POST /api/episodes/bulk/process` and `POST /api/episodes/{id}/retry`
+- `GET`/`DELETE` `/webhook/elevenlabs/results*` (stored payload inspection)
+
+Deliberately public (no session): `/health`, `/unsubscribe/briefings`
+(signed token), and `POST /webhook/elevenlabs/speech-to-text`
+(HMAC-verified). The canonical machine-checked list lives in
+`tests/integration/web/test_default_deny_auth.py`.
+
 ## Response Format
 
 All responses follow a standard envelope format:
