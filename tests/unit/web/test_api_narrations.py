@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from thestill.models.briefing import Briefing
@@ -83,7 +83,10 @@ def mock_app_state(storage, mock_user):
 @pytest.fixture
 def client(mock_app_state, mock_user):
     app = FastAPI()
-    app.include_router(api_narrations.router, prefix="/api/narrations")
+    # Mount like app.py does: router-level require_auth (default-deny).
+    app.include_router(
+        api_narrations.router, prefix="/api/narrations", dependencies=[Depends(api_narrations.require_auth)]
+    )
     app.dependency_overrides[api_narrations.get_app_state] = lambda: mock_app_state
     app.dependency_overrides[api_narrations.require_auth] = lambda: mock_user
     return TestClient(app)

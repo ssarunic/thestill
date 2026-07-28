@@ -50,7 +50,6 @@ class ResolvePodcastRequest(BaseModel):
 async def resolve_podcast(
     request: ResolvePodcastRequest,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_auth),
 ) -> dict:
     """
     Resolve a podcast URL to a local slug, creating the row if needed.

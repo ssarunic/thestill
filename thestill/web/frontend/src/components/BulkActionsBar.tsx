@@ -1,3 +1,4 @@
+import { useAuth } from '../contexts/AuthContext'
 import { useBulkProcess } from '../hooks/useApi'
 
 interface BulkActionsBarProps {
@@ -6,6 +7,9 @@ interface BulkActionsBarProps {
 }
 
 export default function BulkActionsBar({ selectedIds, onClearSelection }: BulkActionsBarProps) {
+  // Bulk processing mirrors the server-side require_admin gate on
+  // POST /api/episodes/bulk/process (always satisfied in single-user mode).
+  const { isAdmin } = useAuth()
   const bulkProcess = useBulkProcess()
 
   const handleProcessAll = async () => {
@@ -32,7 +36,7 @@ export default function BulkActionsBar({ selectedIds, onClearSelection }: BulkAc
     }
   }
 
-  if (selectedIds.size === 0) return null
+  if (!isAdmin || selectedIds.size === 0) return null
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">

@@ -113,3 +113,49 @@ class TestWebhookPayloadFileMode:
         assert path.exists()
         mode = stat.S_IMODE(os.stat(path).st_mode)
         assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+# Stored webhook payloads contain raw transcript text; the results
+# inspection endpoints live on webhooks.admin_router and require an admin
+# session (the HMAC-verified ingress POST stays unauthenticated).
+class TestResultsEndpointsAdminGating:
+    ENDPOINTS = [
+        ("GET", "/webhook/elevenlabs/results"),
+        ("GET", "/webhook/elevenlabs/results/t-1"),
+        ("DELETE", "/webhook/elevenlabs/results/t-1"),
+    ]
+
+    @staticmethod
+    def _client(*, multi_user, current_user):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from tests.unit.web.auth_harness import auth_state
+        from thestill.web.dependencies import get_app_state
+
+        # Mounted like app.py: bare prefix, no router-level require_auth —
+        # the admin gate is baked into admin_router itself.
+        app = FastAPI()
+        app.include_router(webhook_route.admin_router, prefix="/webhook")
+        state = auth_state(multi_user=multi_user, current_user=current_user)
+        app.dependency_overrides[get_app_state] = lambda: state
+        return TestClient(app, raise_server_exceptions=False)
+
+    @pytest.mark.parametrize("method,path", ENDPOINTS)
+    def test_anonymous_gets_401(self, method, path):
+        client = self._client(multi_user=True, current_user=None)
+        assert client.request(method, path).status_code == 401
+
+    @pytest.mark.parametrize("method,path", ENDPOINTS)
+    def test_non_admin_gets_403(self, method, path):
+        from tests.unit.web.auth_harness import PLAIN_USER
+
+        client = self._client(multi_user=True, current_user=PLAIN_USER)
+        assert client.request(method, path).status_code == 403
+
+    @pytest.mark.parametrize("method,path", ENDPOINTS)
+    def test_admin_passes_gate(self, method, path):
+        from tests.unit.web.auth_harness import ADMIN_USER
+
+        client = self._client(multi_user=True, current_user=ADMIN_USER)
+        assert client.request(method, path).status_code not in (401, 403)

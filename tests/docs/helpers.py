@@ -223,21 +223,22 @@ def extract_fastapi_routes() -> set[tuple[str, str]]:
         if node.func.attr != "include_router" or not node.args:
             continue
         arg = node.args[0]
-        if not (isinstance(arg, ast.Attribute) and arg.attr == "router"):
+        # Modules may expose several routers (e.g. router + admin_router).
+        if not (isinstance(arg, ast.Attribute) and arg.attr.endswith("router")):
             continue
         module_name = ast.unparse(arg.value).split(".")[-1]
         prefix = ""
         for kw in node.keywords:
             if kw.arg == "prefix":
                 prefix = _literal_str(kw.value) or ""
-        mounts.append((module_name, prefix))
+        mounts.append((module_name, arg.attr, prefix))
 
     import importlib
 
     routes: set[tuple[str, str]] = set()
-    for module_name, prefix in mounts:
+    for module_name, router_attr, prefix in mounts:
         module = importlib.import_module(f"thestill.web.routes.{module_name}")
-        for route in module.router.routes:
+        for route in getattr(module, router_attr).routes:
             for method in route.methods - {"HEAD", "OPTIONS"}:
                 routes.add((method, prefix + route.path))
     return routes

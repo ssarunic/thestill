@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import { useQueuePipelineTask, useEpisodeTasks, useRunPipeline, useCancelPipeline } from '../hooks/useApi'
 import type { PipelineStage, ExtendedPipelineTaskStatus } from '../api/types'
 import { STAGE_BUTTON_COLOR } from '../constants/stages'
@@ -233,6 +234,7 @@ export default function PipelineActionButton({
   episodeState,
   onTaskComplete,
 }: PipelineActionButtonProps) {
+  const { isAdmin } = useAuth()
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -411,6 +413,13 @@ export default function PipelineActionButton({
       },
     })
   }, [cancelPipelineMutation, episodeId])
+
+  // Manual pipeline actions mirror the server-side require_admin gate
+  // (always satisfied in single-user mode). Ordinary users see passive
+  // progress instead — the pipeline advances automatically for them.
+  if (!isAdmin) {
+    return null
+  }
 
   // If already summarized, don't show any action (Ready badge shown elsewhere)
   if (episodeState === 'summarized') {

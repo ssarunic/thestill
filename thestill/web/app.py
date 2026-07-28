@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,7 +56,7 @@ from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
-from .dependencies import AppState
+from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
     api_briefings,
@@ -615,30 +615,56 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Spec #51 — signed one-click unsubscribe. No /api prefix: the URL
     # lives in email bodies and List-Unsubscribe headers.
     app.include_router(unsubscribe.router, tags=["unsubscribe"])
+    # Public webhook ingress (HMAC-verified inside the handler); the
+    # admin_router carries the stored-payload inspection endpoints.
     app.include_router(webhooks.router, prefix="/webhook", tags=["webhooks"])
+    app.include_router(webhooks.admin_router, prefix="/webhook", tags=["webhooks", "admin"])
 
-    # API routes for web UI (all under /api prefix)
+    # API routes for web UI (all under /api prefix).
+    #
+    # Default-deny: every /api router except auth is registered with a
+    # router-level require_auth, so a new endpoint (or a whole new router
+    # added to this block) requires a session unless someone consciously
+    # opts it out. Admin-only surfaces layer require_admin on top via
+    # dedicated admin routers (api_commands.admin_router) or per-endpoint
+    # dependencies. In single-user mode both checks always pass.
+    require_session = [Depends(require_auth)]
+    # Operator dashboards: system-wide pipeline activity, storage paths and
+    # provider configuration. The frontend already gates the /status page
+    # behind AdminRoute — the API matches.
+    require_operator = [Depends(require_admin)]
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-    app.include_router(api_status.router, prefix="/api/status", tags=["status"])
-    app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
-    app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"])
+    app.include_router(api_status.router, prefix="/api/status", tags=["status", "admin"], dependencies=require_operator)
+    app.include_router(
+        api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
+    )
+    app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"], dependencies=require_session)
     # spec #38 karaoke wipe: separate file, but URL pattern slots in next to
     # api_podcasts so it mounts under the same /api/podcasts prefix.
-    app.include_router(api_transcript_words.router, prefix="/api/podcasts", tags=["transcript-words"])
-    app.include_router(api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"])
-    app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"])
+    app.include_router(
+        api_transcript_words.router, prefix="/api/podcasts", tags=["transcript-words"], dependencies=require_session
+    )
+    app.include_router(
+        api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"], dependencies=require_session
+    )
+    app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"], dependencies=require_session)
     # Spec #28 §5.2 — episode-page entity UX (mention list per episode +
     # entity summary). Routes span /api/episodes/.../entities and
     # /api/entities/..., so the router declares full paths internally
     # and mounts under the bare /api prefix.
-    app.include_router(api_entities.router, prefix="/api", tags=["entities"])
+    app.include_router(api_entities.router, prefix="/api", tags=["entities"], dependencies=require_session)
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
-    app.include_router(api_search.router, prefix="/api/search", tags=["search"])
-    app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"])
-    app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"])
-    app.include_router(api_narrations.router, prefix="/api/narrations", tags=["narrations"])
-    app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"])
-    app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"])
+    app.include_router(api_search.router, prefix="/api/search", tags=["search"], dependencies=require_session)
+    app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"], dependencies=require_session)
+    app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"], dependencies=require_session)
+    app.include_router(
+        api_narrations.router, prefix="/api/narrations", tags=["narrations"], dependencies=require_session
+    )
+    app.include_router(api_imports.router, prefix="/api/imports", tags=["imports"], dependencies=require_session)
+    app.include_router(api_commands.router, prefix="/api/commands", tags=["commands"], dependencies=require_session)
+    app.include_router(
+        api_commands.admin_router, prefix="/api/commands", tags=["commands", "admin"], dependencies=require_session
+    )
 
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"

@@ -274,8 +274,9 @@ def require_admin(
     """
     FastAPI dependency that requires an admin user.
 
-    Gates the operator-only pipeline endpoints (task queue + dead-letter
-    queue). In single-user mode the local user is always the operator, so
+    Gates the operator-only surfaces: manual pipeline triggers, the task
+    queue + dead-letter queue, and stored webhook payload inspection.
+    In single-user mode the local user is always the operator, so
     this always passes — regardless of the stored ``is_admin`` flag, which
     keeps pre-existing single-user databases working. In multi-user mode it
     requires an authenticated user whose ``is_admin`` flag is set (flipped

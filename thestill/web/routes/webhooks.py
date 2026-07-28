@@ -24,6 +24,10 @@ Security:
 
 These endpoints receive transcription results from external services
 when async transcription jobs complete.
+
+Split across two routers: ``router`` for the unauthenticated (but
+HMAC-verified) ingress POST, and ``admin_router`` for inspecting stored
+payloads, which contain raw transcript text and are operator-only.
 """
 
 import hashlib
@@ -40,7 +44,7 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ...webhook import get_tracker
-from ..dependencies import AppState, get_app_state
+from ..dependencies import AppState, get_app_state, require_admin
 from ..middleware import WEBHOOK_LIMIT, rate_limit_dependency
 from ..services import WebhookTranscriptProcessor
 
@@ -56,6 +60,16 @@ _DEV_ALLOW_UNSIGNED_ENV = "DEV_ALLOW_UNSIGNED_WEBHOOKS"
 # Per-IP rate limit on webhook ingress. Replay guards and signature
 # verification sit inside the handler; the limiter is the outer moat.
 router = APIRouter(dependencies=[Depends(rate_limit_dependency(WEBHOOK_LIMIT, "webhook"))])
+
+# Stored webhook payloads contain raw transcript text — operator-only.
+# Separate router because the ingress POST above must stay reachable by
+# ElevenLabs without a session (it is HMAC-verified instead).
+admin_router = APIRouter(
+    dependencies=[
+        Depends(rate_limit_dependency(WEBHOOK_LIMIT, "webhook")),
+        Depends(require_admin),
+    ]
+)
 
 
 def _get_webhook_secret(state: AppState) -> str:
@@ -378,7 +392,7 @@ async def elevenlabs_webhook(
     return response
 
 
-@router.get("/elevenlabs/results")
+@admin_router.get("/elevenlabs/results")
 async def list_webhook_results(state: AppState = Depends(get_app_state)):
     """
     List all received webhook results.
@@ -414,7 +428,7 @@ async def list_webhook_results(state: AppState = Depends(get_app_state)):
     return {"results": results, "count": len(results)}
 
 
-@router.get("/elevenlabs/results/{transcription_id}")
+@admin_router.get("/elevenlabs/results/{transcription_id}")
 async def get_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
     """
     Get a specific webhook result by transcription ID.
@@ -439,7 +453,7 @@ async def get_webhook_result(transcription_id: str, state: AppState = Depends(ge
         return json.load(f)
 
 
-@router.delete("/elevenlabs/results/{transcription_id}")
+@admin_router.delete("/elevenlabs/results/{transcription_id}")
 async def delete_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
     """
     Delete a webhook result by transcription ID.

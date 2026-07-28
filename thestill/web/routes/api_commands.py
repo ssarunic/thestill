@@ -17,6 +17,10 @@ Command API endpoints for Thestill web UI.
 
 Provides endpoints for executing CLI-like commands (refresh, download, etc.)
 with concurrency protection and progress tracking.
+
+Split across two routers: ``router`` for plain-auth reads and ``/add``,
+and ``admin_router`` for the operator-only surface (manual pipeline
+triggers, queue + DLQ management). Both mount under ``/api/commands``.
 """
 
 import asyncio
@@ -41,7 +45,16 @@ from ..task_manager import TaskStatus, TaskType
 
 logger = get_logger(__name__)
 
+# Plain-auth commands (session required via the router-level require_auth
+# applied at registration in app.py).
 router = APIRouter()
+
+# Operator-only commands: manual pipeline triggers and queue/DLQ surgery.
+# Ordinary users never drive the pipeline by hand — it runs automatically
+# via follows/imports — so everything here requires an admin session
+# (always satisfied in single-user mode). Mounted under the same
+# /api/commands prefix in app.py.
+admin_router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 # Request/Response models
@@ -265,7 +278,7 @@ def run_refresh_task(
 # API endpoints
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@admin_router.post("/refresh", response_model=RefreshResponse)
 async def refresh_feeds(
     request: RefreshRequest,
     background_tasks: BackgroundTasks,
@@ -696,7 +709,7 @@ def _validate_episode_for_stage(
     return podcast, episode
 
 
-@router.post("/download", response_model=QueueTaskResponse)
+@admin_router.post("/download", response_model=QueueTaskResponse)
 async def queue_download(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
@@ -734,7 +747,7 @@ async def queue_download(
     )
 
 
-@router.post("/downsample", response_model=QueueTaskResponse)
+@admin_router.post("/downsample", response_model=QueueTaskResponse)
 async def queue_downsample(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
@@ -760,7 +773,7 @@ async def queue_downsample(
     )
 
 
-@router.post("/transcribe", response_model=QueueTaskResponse)
+@admin_router.post("/transcribe", response_model=QueueTaskResponse)
 async def queue_transcribe(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
@@ -786,7 +799,7 @@ async def queue_transcribe(
     )
 
 
-@router.post("/clean", response_model=QueueTaskResponse)
+@admin_router.post("/clean", response_model=QueueTaskResponse)
 async def queue_clean(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
@@ -812,7 +825,7 @@ async def queue_clean(
     )
 
 
-@router.post("/summarize", response_model=QueueTaskResponse)
+@admin_router.post("/summarize", response_model=QueueTaskResponse)
 async def queue_summarize(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
@@ -847,7 +860,7 @@ class CancelPipelineResponse(BaseModel):
     cancelled_tasks: int
 
 
-@router.post("/run-pipeline", response_model=RunPipelineResponse)
+@admin_router.post("/run-pipeline", response_model=RunPipelineResponse)
 async def run_pipeline(
     request: RunPipelineRequest,
     state: AppState = Depends(get_app_state),
@@ -951,7 +964,7 @@ async def run_pipeline(
     )
 
 
-@router.post("/episode/{episode_id}/cancel-pipeline", response_model=CancelPipelineResponse)
+@admin_router.post("/episode/{episode_id}/cancel-pipeline", response_model=CancelPipelineResponse)
 async def cancel_pipeline(
     episode_id: str,
     state: AppState = Depends(get_app_state),
@@ -1032,10 +1045,9 @@ async def get_queued_task_status(
     )
 
 
-@router.get("/queue/status", response_model=QueueStatusResponse)
+@admin_router.get("/queue/status", response_model=QueueStatusResponse)
 async def get_queue_status(
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> QueueStatusResponse:
     """
     Get the overall queue and worker status.
@@ -1053,11 +1065,10 @@ async def get_queue_status(
     )
 
 
-@router.get("/queue/tasks", response_model=QueueTasksResponse)
+@admin_router.get("/queue/tasks", response_model=QueueTasksResponse)
 async def get_queue_tasks(
     completed_limit: int = 10,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> QueueTasksResponse:
     """
     Get detailed queue tasks with episode and podcast context.
@@ -1211,11 +1222,10 @@ async def get_queue_tasks(
     )
 
 
-@router.post("/queue/task/{task_id}/bump", response_model=BumpTaskResponse)
+@admin_router.post("/queue/task/{task_id}/bump", response_model=BumpTaskResponse)
 async def bump_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> BumpTaskResponse:
     """
     Bump a pending task to the front of the queue.
@@ -1247,11 +1257,10 @@ async def bump_queue_task(
     )
 
 
-@router.post("/queue/task/{task_id}/cancel", response_model=CancelTaskResponse)
+@admin_router.post("/queue/task/{task_id}/cancel", response_model=CancelTaskResponse)
 async def cancel_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> CancelTaskResponse:
     """
     Cancel a pending task and remove it from the queue.
@@ -1492,12 +1501,11 @@ class DLQBulkRetryResponse(BaseModel):
     task_ids: list[str]
 
 
-@router.get("/dlq", response_model=DLQListResponse)
+@admin_router.get("/dlq", response_model=DLQListResponse)
 async def list_dlq_tasks(
     limit: int = 100,
     branch: str = "all",
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> DLQListResponse:
     """
     List tasks in the Dead Letter Queue (status='dead' or 'failed').
@@ -1613,11 +1621,10 @@ async def list_dlq_tasks(
     )
 
 
-@router.post("/dlq/{task_id}/retry", response_model=DLQActionResponse)
+@admin_router.post("/dlq/{task_id}/retry", response_model=DLQActionResponse)
 async def retry_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> DLQActionResponse:
     """
     Retry a task from the Dead Letter Queue.
@@ -1668,11 +1675,10 @@ async def retry_dlq_task(
     )
 
 
-@router.post("/dlq/{task_id}/skip", response_model=DLQActionResponse)
+@admin_router.post("/dlq/{task_id}/skip", response_model=DLQActionResponse)
 async def skip_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> DLQActionResponse:
     """
     Skip (resolve) a task from the Dead Letter Queue.
@@ -1715,11 +1721,10 @@ async def skip_dlq_task(
     )
 
 
-@router.post("/dlq/retry-all", response_model=DLQBulkRetryResponse)
+@admin_router.post("/dlq/retry-all", response_model=DLQBulkRetryResponse)
 async def retry_all_dlq_tasks(
     request: Optional[DLQBulkRetryRequest] = None,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
 ) -> DLQBulkRetryResponse:
     """
     Retry multiple tasks from the Dead Letter Queue.
