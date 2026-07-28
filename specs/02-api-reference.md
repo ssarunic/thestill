@@ -19,6 +19,8 @@ mode; in single-user mode all checks pass. Admin-only endpoints:
 - `POST /api/commands/episode/{id}/cancel-pipeline`
 - `/api/commands/queue/*` and `/api/commands/dlq*` (queue + DLQ management)
 - `POST /api/episodes/bulk/process` and `POST /api/episodes/{id}/retry`
+- `GET /api/entities/review-queue` and `POST /api/entities/corrections` (global entity-resolution surgery)
+- `GET /api/status` and `GET /api/dashboard/*` (operator dashboards)
 - `GET`/`DELETE` `/webhook/elevenlabs/results*` (stored payload inspection)
 
 Deliberately public (no session): `/health`, `/unsubscribe/briefings`

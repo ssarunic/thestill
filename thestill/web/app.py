@@ -56,7 +56,7 @@ from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
-from .dependencies import AppState, require_auth
+from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .routes import (
     api_briefings,
@@ -629,9 +629,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # dedicated admin routers (api_commands.admin_router) or per-endpoint
     # dependencies. In single-user mode both checks always pass.
     require_session = [Depends(require_auth)]
+    # Operator dashboards: system-wide pipeline activity, storage paths and
+    # provider configuration. The frontend already gates the /status page
+    # behind AdminRoute — the API matches.
+    require_operator = [Depends(require_admin)]
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-    app.include_router(api_status.router, prefix="/api/status", tags=["status"], dependencies=require_session)
-    app.include_router(api_dashboard.router, prefix="/api/dashboard", tags=["dashboard"], dependencies=require_session)
+    app.include_router(api_status.router, prefix="/api/status", tags=["status", "admin"], dependencies=require_operator)
+    app.include_router(
+        api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
+    )
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"], dependencies=require_session)
     # spec #38 karaoke wipe: separate file, but URL pattern slots in next to
     # api_podcasts so it mounts under the same /api/podcasts prefix.

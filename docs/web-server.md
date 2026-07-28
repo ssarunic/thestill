@@ -281,6 +281,8 @@ operator-only surface requires an admin session (`require_admin`):
 - Manual pipeline triggers: `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}` and `POST /api/commands/episode/{id}/cancel-pipeline`
 - Queue and DLQ management: `/api/commands/queue/*`, `/api/commands/dlq*`
 - Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
+- Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
+- Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)
 - Stored webhook payload inspection: `GET`/`DELETE` `/webhook/elevenlabs/results*`
 
 Ordinary users never drive the pipeline manually — it runs automatically

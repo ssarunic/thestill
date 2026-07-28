@@ -38,7 +38,8 @@ from structlog import get_logger
 from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
 from ...core.wikidata_client import WikidataClient
 from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
-from ..dependencies import AppState, get_app_state
+from ...models.user import User
+from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import api_response
 
 logger = get_logger(__name__)
@@ -626,6 +627,7 @@ class CorrectionRequest(BaseModel):
 def get_review_queue(
     limit: int = Query(50, ge=1, le=200),
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> ReviewQueueResponse:
     """Ranked list of likely-wrong entity resolutions (admin review queue).
 
@@ -656,6 +658,7 @@ def get_review_queue(
 def post_correction(
     request: CorrectionRequest,
     state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> dict:
     """Apply an admin correction (blacklist / override) and re-resolve.
 
