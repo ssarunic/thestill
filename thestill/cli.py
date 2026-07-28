@@ -315,11 +315,11 @@ def remove(ctx, podcast_id):
         click.echo("❌ Podcast not found", err=True)
 
 
-@main.command()
+@main.command("list")
 @click.pass_context
 @require_config
 @log_command
-def list(ctx):
+def list_podcasts(ctx):
     """List all tracked podcasts"""
 
     podcasts = ctx.obj.podcast_service.get_podcasts()
@@ -3480,7 +3480,6 @@ def repair_entity_types(ctx, min_mentions, min_majority_ratio, dry_run):
             continue
 
         if existing_target is None:
-            # ``list`` is a registered click command at module scope; spread instead.
             repo.upsert_entity(
                 EntityRecord(
                     id=new_id,

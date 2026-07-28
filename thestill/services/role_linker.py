@@ -59,6 +59,25 @@ _GENERIC_ROLE_NAMES = frozenset(
     )
 )
 
+# Podcast-level hosts come from a single-episode LLM extraction, so a
+# one-off guest co-host can be misfiled under ``## Hosts`` (e.g. a guest
+# who co-interviews on the first episode cleaned). Episode facts files
+# carry per-episode ``Name (Host)`` speaker-mapping annotations; we use
+# them as corroborating evidence and demote podcast-level host candidates
+# who almost never appear as a host across episodes. Thresholds are
+# deliberately conservative: mention-level speaking coverage is unusable
+# here (legitimate hosts often have zero linked speaking mentions), and a
+# false demotion is worse than a false keep.
+HOST_EVIDENCE_MIN_FILES = 5
+HOST_EVIDENCE_MIN_APPEARANCES = 2
+
+# Bullet in an episode facts speaker mapping naming a host, e.g.
+# ``- SPEAKER_01: John Collison (Host)`` or ``- Chuck Nice (Co-Host)``.
+_SPEAKER_HOST_RE = re.compile(
+    r"^\s*[-*]\s*(?:SPEAKER[_ ]?\S+\s*:\s*)?(?P<name>.+?)\s*\(\s*(?:co[-\s]?)?host\s*\)\s*$",
+    re.IGNORECASE,
+)
+
 # Heading variants we accept for each section. Lowercased before lookup
 # so a stray capitalisation doesn't drop a section.
 _HOST_HEADINGS = ("hosts", "host")
@@ -85,6 +104,7 @@ class LinkResult:
     recurring: List[str] = field(default_factory=list)
     created_entities: List[str] = field(default_factory=list)
     skipped_names: List[str] = field(default_factory=list)
+    demoted_hosts: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +228,73 @@ def _resolve_or_create_person(
 
 
 # ---------------------------------------------------------------------------
+# Host evidence (episode facts speaker mappings)
+# ---------------------------------------------------------------------------
+
+
+def collect_host_evidence(
+    *,
+    podcast_slug: str,
+    entity_repo: SqliteEntityRepository,
+    path_manager: PathManager,
+) -> Tuple[int, dict]:
+    """Aggregate ``Name (Host)`` speaker-mapping annotations across a
+    podcast's episode facts files.
+
+    Returns ``(files_with_host_annotations, {entity_id: n_files})`` where
+    each file counts an entity at most once. Names are resolved read-only
+    via ``find_entity_by_name`` — unresolved name variants simply
+    contribute no evidence; nothing is created here.
+    """
+    episode_dir = path_manager.episode_facts_dir() / podcast_slug
+    if not episode_dir.is_dir():
+        return 0, {}
+    files_with_hosts = 0
+    counts: dict = {}
+    name_cache: dict = {}
+    for facts_file in sorted(episode_dir.glob("*.facts.md")):
+        try:
+            content = facts_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        file_entity_ids = set()
+        for line in content.splitlines():
+            match = _SPEAKER_HOST_RE.match(line)
+            if not match:
+                continue
+            name = match.group("name").strip()
+            if not _is_real_person_name(name):
+                continue
+            if name not in name_cache:
+                existing = entity_repo.find_entity_by_name(name)
+                name_cache[name] = existing.id if existing is not None else None
+            if name_cache[name] is not None:
+                file_entity_ids.add(name_cache[name])
+        if file_entity_ids:
+            files_with_hosts += 1
+            for entity_id in file_entity_ids:
+                counts[entity_id] = counts.get(entity_id, 0) + 1
+    return files_with_hosts, counts
+
+
+def _filter_hosts_by_evidence(hosts: List[str], evidence_files: int, counts: dict) -> Tuple[List[str], List[str]]:
+    """Split podcast-level host candidates into ``(kept, demoted)``.
+
+    Skips entirely (keeps everyone) when there aren't enough annotated
+    episode facts to judge, and when demotion would empty the host list —
+    an all-fail result means the evidence itself is unreliable for this
+    podcast, not that it has no hosts.
+    """
+    if evidence_files < HOST_EVIDENCE_MIN_FILES:
+        return hosts, []
+    kept = [h for h in hosts if counts.get(h, 0) >= HOST_EVIDENCE_MIN_APPEARANCES]
+    if not kept:
+        return hosts, []
+    demoted = [h for h in hosts if h not in kept]
+    return kept, demoted
+
+
+# ---------------------------------------------------------------------------
 # Linkers
 # ---------------------------------------------------------------------------
 
@@ -233,6 +320,21 @@ def link_podcast_roles(
     result.created_entities.extend(created_recurring)
     result.skipped_names.extend(skipped_recurring)
     if result.hosts:
+        evidence_files, host_counts = collect_host_evidence(
+            podcast_slug=podcast_slug,
+            entity_repo=entity_repo,
+            path_manager=path_manager,
+        )
+        result.hosts, result.demoted_hosts = _filter_hosts_by_evidence(result.hosts, evidence_files, host_counts)
+        if result.demoted_hosts:
+            logger.warning(
+                "podcast_hosts_demoted",
+                podcast_id=podcast_id,
+                podcast_slug=podcast_slug,
+                demoted=result.demoted_hosts,
+                evidence_files=evidence_files,
+                appearances={h: host_counts.get(h, 0) for h in result.demoted_hosts},
+            )
         entity_repo.set_podcast_hosts(podcast_id, result.hosts)
     if result.recurring:
         entity_repo.set_podcast_recurring(podcast_id, result.recurring)

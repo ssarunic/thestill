@@ -253,3 +253,118 @@ def test_backfill_all_iterates_podcasts_and_episodes(tmp_path):
     assert summary.episodes_with_guests == 1
     # 2 person entities created (Alex Host, Sarah Guest) — Ad Narrator was filtered.
     assert summary.entities_created == 2
+
+
+# ---------------------------------------------------------------------------
+# Host evidence guardrail (episode facts speaker mappings)
+# ---------------------------------------------------------------------------
+
+
+def _write_episode_host_facts(storage: Path, podcast_slug: str, slug: str, lines: list[str]) -> None:
+    pm = PathManager(str(storage))
+    ep_dir = pm.episode_facts_dir() / podcast_slug
+    ep_dir.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(f"- {line}" for line in lines)
+    (ep_dir / f"{slug}.facts.md").write_text(
+        f"""# Episode
+
+## Speaker Mapping
+{body}
+"""
+    )
+
+
+def _podcast_facts_with_hosts(storage: Path, podcast_slug: str, host_lines: list[str]) -> None:
+    pm = PathManager(str(storage))
+    pm.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
+    body = "\n".join(f"- {line}" for line in host_lines)
+    pm.podcast_facts_file(podcast_slug).write_text(
+        f"""## Hosts
+{body}
+"""
+    )
+
+
+def test_one_off_cohost_demoted_by_episode_evidence(tmp_path):
+    """The Cheeky Pint failure: a guest co-host on the first-cleaned episode
+    lands in ``## Hosts`` and would otherwise read as host of every episode."""
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _podcast_facts_with_hosts(tmp_path, podcast_slug, ["Alex Host - the regular", "Elad Guest - one-off co-host"])
+    # Six episode facts corroborate Alex; Elad appears as host in only one.
+    for i in range(6):
+        lines = ["SPEAKER_01: Alex Host (Host)"]
+        if i == 0:
+            lines.append("SPEAKER_03: Elad Guest (Host)")
+        _write_episode_host_facts(tmp_path, podcast_slug, f"ep-{i}", lines)
+
+    er = SqliteEntityRepository(db_path=str(db_path))
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+
+    assert result.hosts == ["person:alex-host"]
+    assert result.demoted_hosts == ["person:elad-guest"]
+    with sqlite3.connect(str(db_path)) as conn:
+        row = conn.execute("SELECT host_entity_ids FROM podcasts").fetchone()
+    assert row[0] == '["person:alex-host"]'
+
+
+def test_hosts_kept_when_too_few_annotated_episodes(tmp_path):
+    """Below the evidence minimum the LLM's host list is trusted as-is."""
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _podcast_facts_with_hosts(tmp_path, podcast_slug, ["Alex Host - the regular", "Elad Guest - one-off co-host"])
+    for i in range(3):
+        _write_episode_host_facts(tmp_path, podcast_slug, f"ep-{i}", ["SPEAKER_01: Alex Host (Host)"])
+
+    er = SqliteEntityRepository(db_path=str(db_path))
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+
+    assert result.hosts == ["person:alex-host", "person:elad-guest"]
+    assert result.demoted_hosts == []
+
+
+def test_hosts_kept_when_demotion_would_empty_list(tmp_path):
+    """If no listed host survives the evidence check, the evidence itself is
+    suspect for this podcast — keep the original list rather than emptying it."""
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _podcast_facts_with_hosts(tmp_path, podcast_slug, ["Alex Host - the regular"])
+    # Six annotated episodes, but they all corroborate someone not listed.
+    er = SqliteEntityRepository(db_path=str(db_path))
+    from thestill.models.entities import EntityRecord, EntityType
+
+    er.upsert_entity(EntityRecord(id="person:real-host", type=EntityType.PERSON, canonical_name="Real Host"))
+    for i in range(6):
+        _write_episode_host_facts(tmp_path, podcast_slug, f"ep-{i}", ["SPEAKER_01: Real Host (Host)"])
+
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+
+    assert result.hosts == ["person:alex-host"]
+    assert result.demoted_hosts == []
+
+
+def test_collect_host_evidence_counts_and_ignores_guests(tmp_path):
+    from thestill.models.entities import EntityRecord, EntityType
+    from thestill.services.role_linker import collect_host_evidence
+
+    db_path, _, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    for eid, name in [("person:jane-doe", "Jane Doe"), ("person:john-roe", "John Roe")]:
+        er.upsert_entity(EntityRecord(id=eid, type=EntityType.PERSON, canonical_name=name))
+
+    _write_episode_host_facts(
+        tmp_path,
+        podcast_slug,
+        "ep-0",
+        ["SPEAKER_01: Jane Doe (Host)", "SPEAKER_02: John Roe (Co-Host)", "SPEAKER_03: Guesty McGuest (Guest)"],
+    )
+    _write_episode_host_facts(tmp_path, podcast_slug, "ep-1", ["Jane Doe (Host)"])
+
+    files, counts = collect_host_evidence(
+        podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+    assert files == 2
+    assert counts == {"person:jane-doe": 2, "person:john-roe": 1}
