@@ -3623,6 +3623,27 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 logger.info("Seeded refresh schedule for unscheduled feeds", count=len(rows))
             return len(rows)
 
+    def reschedule_unscheduled_feed(self, podcast_id: str, now: Optional[datetime] = None) -> bool:
+        """Re-arm one unscheduled feed on an explicit follow (see interface).
+
+        Deliberately ignores ``last_refresh_at``/``last_refresh_error`` —
+        that stale state is exactly what strands a feed that parked before
+        it had followers. Only a quarantine (``refresh_disabled_reason``)
+        blocks the revival.
+        """
+        now_iso = (now or now_utc()).isoformat()
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE podcasts SET next_refresh_at = ?
+                WHERE id = ?
+                  AND next_refresh_at IS NULL
+                  AND refresh_disabled_reason IS NULL
+                """,
+                (now_iso, podcast_id),
+            )
+            return cur.rowcount > 0
+
     def record_refresh_success(
         self,
         podcast_id: str,

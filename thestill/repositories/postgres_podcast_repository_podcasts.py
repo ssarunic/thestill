@@ -1197,6 +1197,22 @@ class PodcastsMixin:
                 logger.info("Seeded refresh schedule for unscheduled feeds", count=len(rows))
             return len(rows)
 
+    def reschedule_unscheduled_feed(self, podcast_id: str, now: Optional[datetime] = None) -> bool:
+        """Re-arm one unscheduled feed on an explicit follow (port of the
+        SQLite implementation; see there for the rationale)."""
+        now_dt = now or now_utc()
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """
+                UPDATE podcasts SET next_refresh_at = %s
+                WHERE id = %s
+                  AND next_refresh_at IS NULL
+                  AND refresh_disabled_reason IS NULL
+                """,
+                (now_dt, podcast_id),
+            )
+            return cur.rowcount > 0
+
     def record_refresh_success(
         self,
         podcast_id: str,

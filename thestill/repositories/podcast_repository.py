@@ -357,6 +357,16 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def reschedule_unscheduled_feed(self, podcast_id: str, now: Optional[datetime] = None) -> bool:
+        """Re-arm ONE unscheduled feed in response to an explicit user signal
+        (a new follow). Unlike ``seed_unscheduled_feeds`` this also revives
+        feeds with a stale failure record — a feed that fell out of the
+        schedule before it had followers must resume when someone follows it.
+        Quarantined feeds (``refresh_disabled_reason`` set) stay parked; they
+        have their own probe/operator path. Returns True if rescheduled."""
+        pass
+
+    @abstractmethod
     def record_refresh_success(
         self,
         podcast_id: str,

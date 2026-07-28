@@ -99,6 +99,37 @@ def test_podcast(podcast_repo):
     return podcast
 
 
+class TestFollowReschedulesRefresh:
+    """Following a feed that fell out of the refresh schedule re-arms it.
+
+    Spec #63 gates background refresh on followers, and the scheduler never
+    revives a feed with a prior failure record — without this hook, a feed
+    that parked while unfollowed would stay dark forever after a follow.
+    """
+
+    def test_follow_rearms_parked_feed(self, follower_service, podcast_repo, test_user, test_podcast):
+        with podcast_repo._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET next_refresh_at = NULL, last_refresh_error = 'stale failure' WHERE id = ?",
+                (test_podcast.id,),
+            )
+
+        follower_service.follow(test_user.id, test_podcast.id)
+
+        assert test_podcast.id in podcast_repo.get_due_podcasts()
+
+    def test_follow_leaves_quarantined_feed_parked(self, follower_service, podcast_repo, test_user, test_podcast):
+        with podcast_repo._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET next_refresh_at = NULL, refresh_disabled_reason = 'feed_gone' WHERE id = ?",
+                (test_podcast.id,),
+            )
+
+        follower_service.follow(test_user.id, test_podcast.id)
+
+        assert test_podcast.id not in podcast_repo.get_due_podcasts()
+
+
 class TestFollowerServiceFlow:
     """End-to-end tests for the follow/unfollow flow (THES-121)."""
 
