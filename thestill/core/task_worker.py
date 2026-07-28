@@ -513,11 +513,22 @@ class TaskWorker:
                         if self._breaker is not None and not self._breaker.allow_dispatch(stage):
                             break
 
-                        task = self.queue_manager.get_next_task(
-                            stage=stage,
-                            exclude_episode_ids=exclude_eps,
-                            exclude_podcast_ids=exclude_pods,
-                        )
+                        try:
+                            task = self.queue_manager.get_next_task(
+                                stage=stage,
+                                exclude_episode_ids=exclude_eps,
+                                exclude_podcast_ids=exclude_pods,
+                            )
+                        except Exception:
+                            # A poll error here (e.g. the DB going down mid
+                            # half-open probe) skips both the empty-queue and
+                            # dispatch paths, so the reservation taken by
+                            # allow_dispatch above would leak and wedge the
+                            # stage until a restart. Release it, then let the
+                            # loop's handler deal with the error.
+                            if self._breaker is not None:
+                                self._breaker.cancel_dispatch(stage)
+                            raise
                         if task is None:
                             if self._breaker is not None:
                                 self._breaker.cancel_dispatch(stage)

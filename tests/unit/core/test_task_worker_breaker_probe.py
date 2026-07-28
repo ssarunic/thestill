@@ -28,6 +28,7 @@ failure during the probe must still re-open it.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -120,6 +121,40 @@ class TestProbeReleaseOnNonInfraOutcome:
         # The lease guard still held: no successor fan-out happened.
         worker.queue_manager.supersede_stale_tasks.assert_not_called()
         worker.queue_manager.add_task.assert_not_called()
+
+
+class TestProbeReleaseOnPollError:
+    def test_poll_error_mid_probe_releases_reservation(self):
+        """2026-07-27 incident: Postgres shut down seconds before the transcribe
+        breaker's cooldown elapsed. The poller's ``allow_dispatch`` promoted the
+        breaker to HALF_OPEN and reserved the probe, then ``get_next_task``
+        raised — skipping both the empty-queue ``cancel_dispatch`` and the
+        dispatch path — so ``probe_in_flight`` stayed set and the stage
+        dispatched nothing until a process restart. A poll error while the
+        probe slot is reserved must revert the breaker to OPEN so a later
+        probe can run."""
+        worker = _make_worker(MagicMock())
+        worker.poll_interval = 0
+        breaker = worker._breaker
+        breaker.record_failure(STAGE.value)  # threshold=1 → OPEN
+        assert breaker.state(STAGE.value) == CircuitState.OPEN
+
+        def db_down_mid_probe(**_kwargs):
+            worker._running = False  # let the loop exit after this iteration
+            raise RuntimeError("connection refused")
+
+        worker.queue_manager.get_next_task.side_effect = db_down_mid_probe
+
+        async def run():
+            worker._running = True
+            await worker._stage_poll_loop(STAGE, asyncio.Semaphore(1))
+
+        asyncio.run(run())
+
+        # Not wedged: reservation released, breaker re-opened, and (cooldown=0)
+        # the next poll may take a fresh probe.
+        assert breaker.state(STAGE.value) == CircuitState.OPEN
+        assert breaker.allow_dispatch(STAGE.value) is True
 
 
 class TestExistingBreakerSemanticsPreserved:
