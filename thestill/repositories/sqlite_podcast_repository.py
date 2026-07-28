@@ -3496,20 +3496,23 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             return [(row["id"], row["audio_url"]) for row in rows]
 
     def get_recent_unqueued_unprocessed_episodes(self, podcast_id: str, limit: int) -> List[Tuple[str, Optional[str]]]:
-        """The podcast's ``limit`` most-recent un-started episodes, by air date.
+        """Un-started episodes WITHIN the podcast's ``limit`` most recent.
 
-        Returns ``(episode_id, audio_url)`` for the newest episodes (ordered by
-        ``COALESCE(pub_date, published_at) DESC`` — the listener's notion of
-        "recent", matching the inbox seed) that are still untouched orphans: no
-        artifact paths, not failed, and with no task row.
+        Returns ``(episode_id, audio_url)`` for episodes inside the window of
+        the ``limit`` newest by ``COALESCE(pub_date, published_at) DESC`` (the
+        listener's notion of "recent", matching the inbox seed) that are still
+        untouched orphans: no artifact paths, not failed, and with no task row.
 
-        This drives the subscribe-time transcription backlog. Unlike
-        ``recent_published_episode_ids`` it does NOT require ``published_at`` —
-        a brand-new podcast's episodes are all unpublished until the pipeline
-        runs, so gating on publish state would (wrongly) enqueue nothing. And
-        unlike ``get_discovered_unqueued_episodes`` it is NOT time-windowed:
-        following a podcast should transcribe its recent backlog even when the
-        latest episode aired weeks ago.
+        The window comes FIRST, then the unprocessed filter — never the other
+        way around. "N newest among the unprocessed" would resurrect old
+        skipped episodes whenever the recent ones are already done (a follow
+        once enqueued months-old stragglers this way); "unprocessed among the
+        N newest" yields nothing in that case, while a brand-new or dormant
+        podcast — whose newest episodes are exactly the unprocessed ones —
+        still gets its recent backlog. Deliberately not time-windowed, and
+        unlike ``recent_published_episode_ids`` it does NOT require
+        ``published_at`` — a brand-new podcast's episodes are all unpublished
+        until the pipeline runs.
         """
         if limit <= 0:
             return []
@@ -3518,8 +3521,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
                 SELECT e.id, e.audio_url
                 FROM episodes e
-                WHERE e.podcast_id = ?
-                  AND e.failed_at_stage IS NULL
+                JOIN (
+                    SELECT id FROM episodes
+                    WHERE podcast_id = ?
+                    ORDER BY COALESCE(pub_date, published_at) DESC
+                    LIMIT ?
+                ) recent ON recent.id = e.id
+                WHERE e.failed_at_stage IS NULL
                   AND e.auto_process_excluded = 0
                   AND e.audio_path IS NULL
                   AND e.downsampled_audio_path IS NULL
@@ -3528,7 +3536,6 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
                 ORDER BY COALESCE(e.pub_date, e.published_at) DESC
-                LIMIT ?
                 """,
                 (podcast_id, limit),
             ).fetchall()
