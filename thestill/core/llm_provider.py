@@ -1174,13 +1174,23 @@ class OllamaProvider(LLMProvider):
         if "num_ctx" not in options:
             options["num_ctx"] = 32768  # Increase context window for longer responses
 
+        # Map response_format to Ollama's ``format`` parameter. A dict
+        # schema (from ``generate_structured``) enables schema-constrained
+        # decoding (Ollama >= 0.5); ``json_object`` keeps legacy JSON mode.
+        ollama_format = None
+        if response_format:
+            if response_format.get("type") == "json_schema":
+                ollama_format = response_format["schema"]
+            elif response_format.get("type") == "json_object":
+                ollama_format = "json"
+
         try:
             # Use generate API for better compatibility
             response = self.client.generate(
                 model=self.model,
                 prompt=prompt,
                 stream=False,
-                format="json" if response_format and response_format.get("type") == "json_object" else None,
+                format=ollama_format,
                 options=options if options else None,
             )
 
@@ -1260,8 +1270,8 @@ class OllamaProvider(LLMProvider):
         return f"Ollama {self.model}"
 
     def supports_structured_output(self) -> bool:
-        """Ollama doesn't support native structured output"""
-        return False
+        """Ollama supports schema-constrained decoding via ``format`` (>= 0.5)"""
+        return True
 
     def generate_structured(
         self,
@@ -1271,18 +1281,20 @@ class OllamaProvider(LLMProvider):
         max_tokens: Optional[int] = None,
     ) -> T:
         """
-        Generate a structured response using JSON mode fallback.
+        Generate a structured response using schema-constrained decoding.
 
-        Ollama doesn't support native schema-validated output, so we use
-        JSON mode and validate with Pydantic after parsing.
+        Ollama (>= 0.5) accepts a JSON schema as the ``format`` parameter
+        and constrains decoding to it, making shape mismatches (e.g. a
+        dict where the schema wants a list) impossible. Pydantic still
+        validates the parsed result as a second line of defence.
         """
-        logger.debug("Ollama using JSON mode fallback for structured output")
+        logger.debug("Ollama using schema-constrained structured output")
 
         response = self.chat_completion(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},
+            response_format={"type": "json_schema", "schema": response_model.model_json_schema()},
         )
 
         # Parse JSON and validate with Pydantic
@@ -2442,9 +2454,17 @@ class GeminiProvider(LLMProvider):
             if response_text:
                 logger.warning("Gemini flagged potential recitation but returned content")
             else:
-                raise RuntimeError(
-                    "Gemini blocked response due to potential recitation (copyrighted content). "
-                    "Try adjusting the prompt or use a different model."
+                # Model-side content block, same handling contract as
+                # PROHIBITED_CONTENT: retrying the same provider cannot
+                # help, so raise the refusal type callers (segmented
+                # cleaner, summariser) already catch for per-batch
+                # fallback (spec #41 option B) instead of a plain
+                # RuntimeError that fails the whole episode.
+                raise ProhibitedContentError(
+                    "Gemini refused: RECITATION (potential copyrighted content)",
+                    provider="gemini",
+                    model=self.model,
+                    finish_reason=str(finish_reason),
                 )
         if "MAX_TOKENS" in finish_reason_str and not response_text:
             raise RuntimeError(
@@ -2458,7 +2478,20 @@ class GeminiProvider(LLMProvider):
                 f"prompt_feedback={getattr(response, 'prompt_feedback', None)!r})"
             )
 
-        data = json.loads(response_text)
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as parse_error:
+            if "MAX_TOKENS" in finish_reason_str:
+                # Truncated mid-JSON: the partial text can never parse, and
+                # with greedy decoding a retry truncates at the same spot.
+                # Surface the cause instead of a bare JSONDecodeError so the
+                # operator knows to raise max_tokens or shrink batches.
+                raise RuntimeError(
+                    f"Gemini truncated structured response at max_tokens={max_tokens or 'default'} "
+                    f"({len(response_text)} chars of unparseable partial JSON). "
+                    "Increase max_tokens or reduce input size."
+                ) from parse_error
+            raise
         return response_model(**data)
 
     def chat_completion_streaming(
