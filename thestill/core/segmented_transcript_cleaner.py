@@ -136,6 +136,7 @@ class SegmentedTranscriptCleaner:
         k_next: int = 2,
         batch_char_budget: int = 4000,
         temperature: float = 0.0,
+        omit_unchanged: bool = True,
     ) -> None:
         """
         Args:
@@ -152,6 +153,12 @@ class SegmentedTranscriptCleaner:
                 amortise the repeated prefix across fewer, bigger calls.
             temperature: Sampling temperature. Default 0 for deterministic
                 output; evaluators can bump this for A/B measurements.
+            omit_unchanged: When True (default), the prompt instructs the
+                model to emit patches only for segments it is changing or
+                tagging; verbatim-clean plain-content segments are omitted
+                and pass through unchanged. Cuts output tokens roughly in
+                half on typical episodes. False restores the legacy
+                one-patch-per-segment contract (A/B control and rollback).
 
         Raises:
             ValueError: When any argument is outside its valid range.
@@ -167,6 +174,7 @@ class SegmentedTranscriptCleaner:
         self.k_prev = k_prev
         self.k_next = k_next
         self.temperature = temperature
+        self.omit_unchanged = omit_unchanged
 
         # Widen the batch budget for providers without caching so the
         # repeated prefix gets amortised across fewer calls. The 3x
@@ -203,6 +211,7 @@ class SegmentedTranscriptCleaner:
 
         cleaned: List[AnnotatedSegment] = []
         total = len(source)
+        total_patches_emitted = 0
         index = 0
         while index < total:
             batch_end = self._pick_batch_end(source, start=index)
@@ -237,6 +246,15 @@ class SegmentedTranscriptCleaner:
                     temperature=self.temperature,
                 )
                 patched = self._apply_patches(target, patch_batch.patches)
+                total_patches_emitted += len(patch_batch.patches)
+                logger.debug(
+                    "segmented_cleanup_batch_coverage",
+                    episode_id=annotated.episode_id,
+                    batch_start=index,
+                    batch_end=batch_end,
+                    target_count=len(target),
+                    patches_emitted=len(patch_batch.patches),
+                )
             except ProhibitedContentError as e:
                 # Provider refused this batch on content grounds (e.g. Gemini
                 # PROHIBITED_CONTENT). Retrying the same provider can't help.
@@ -259,6 +277,17 @@ class SegmentedTranscriptCleaner:
                 patched = list(target)
             cleaned.extend(patched)
             index = batch_end
+
+        # Under the omit-unchanged contract, a collapse in this ratio is
+        # the observable symptom of model laziness (skipping segments it
+        # should have fixed) — eval runs and log review key off this line.
+        logger.info(
+            "segmented_cleanup_coverage",
+            episode_id=annotated.episode_id,
+            segments=total,
+            patches_emitted=total_patches_emitted,
+            omit_unchanged=self.omit_unchanged,
+        )
 
         # Reassign positional ids so the returned transcript remains
         # 0..N-1 after any filler-drop / ad-merge surgery that Phase D's
@@ -316,8 +345,9 @@ class SegmentedTranscriptCleaner:
           hallucinations referencing neighbour-context ids) are silently
           dropped with a debug log.
         - Target segments with no corresponding patch pass through
-          unchanged and emit a debug log so missing-patch symptoms are
-          visible when tracing a single batch.
+          unchanged. Under the omit-unchanged contract this is the
+          expected path for verbatim-clean content segments; the debug
+          log remains for tracing a single batch.
         """
         by_id: Dict[int, CleanupPatch] = {p.id: p for p in patches}
         out: List[AnnotatedSegment] = []
@@ -371,6 +401,29 @@ class SegmentedTranscriptCleaner:
 
         facts_block = self._render_facts_block(podcast_facts, episode_facts)
 
+        if self.omit_unchanged:
+            target_contract = (
+                "the segments to review. You MUST review every target "
+                "segment, but emit patches only where needed (see OUTPUT SHAPE)."
+            )
+            emission_contract = (
+                "Emit a patch for a target segment ONLY when at least one "
+                "of these holds:\n"
+                "- you are changing its text, or\n"
+                "- its kind is anything other than 'content' (filler, "
+                "  ad_break, music, intro, outro), or\n"
+                "- it has a sponsor.\n"
+                "Omit patches for verbatim-clean plain-content segments — "
+                "omitted segments pass through unchanged. Omitting a "
+                "segment asserts it is already perfectly clean: no filler "
+                "words, no stutters or repeated words, no misheard or "
+                "garbled words, no spelling errors. When in doubt, emit "
+                "the patch.\n"
+            )
+        else:
+            target_contract = "the segments you must patch. Output one patch per target segment."
+            emission_contract = ""
+
         return (
             "You are an expert podcast transcript editor. You receive batches "
             "of diarised transcript segments as structured JSON and return "
@@ -383,12 +436,12 @@ class SegmentedTranscriptCleaner:
             "You will receive a JSON object with three keys:\n"
             "- 'previous_cleaned': already-cleaned segments for tone and "
             "  speaker continuity. Do NOT output patches for these.\n"
-            "- 'target': the segments you must patch. Output one patch per "
-            "  target segment.\n"
+            f"- 'target': {target_contract}\n"
             "- 'next_raw': upcoming raw segments for forward context. Do NOT "
             "  output patches for these.\n\n"
             "OUTPUT SHAPE:\n"
-            "Return a JSON object with a 'patches' array. Each patch has:\n"
+            f"Return a JSON object with a 'patches' array. {emission_contract}"
+            "Each patch has:\n"
             "- 'id': integer, copied from the target segment's id field.\n"
             "- 'cleaned_text': string, the corrected text. Empty string only "
             "  for filler-only segments.\n"
