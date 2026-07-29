@@ -609,3 +609,54 @@ class TestSpeakerMappingIntegration:
         payload = provider.calls[0]["payload"]
         assert payload["target"][0]["speaker"] == "Lenny Rachitsky"
         assert "SPEAKER_01" not in payload["target"][0]["speaker"]
+
+
+class TestOmitUnchangedContract:
+    """The omit-unchanged output contract (default) vs the legacy one."""
+
+    def _system_prompt(self, cleaner: SegmentedTranscriptCleaner) -> str:
+        provider = cleaner.provider
+        cleaner.clean(
+            annotated=_annotated([_segment(seg_id=0)]),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="en",
+        )
+        return next(m["content"] for m in provider.calls[0]["messages"] if m["role"] == "system")
+
+    def test_default_prompt_allows_omitting_clean_content_segments(self) -> None:
+        provider = FakeProvider()
+        prompt = self._system_prompt(SegmentedTranscriptCleaner(provider))
+        assert "Emit a patch for a target segment ONLY" in prompt
+        assert "omitted segments pass through unchanged" in prompt
+        assert "MUST review every target segment" in prompt
+        assert "Output one patch per target segment" not in prompt
+
+    def test_legacy_contract_restores_one_patch_per_segment(self) -> None:
+        provider = FakeProvider()
+        prompt = self._system_prompt(SegmentedTranscriptCleaner(provider, omit_unchanged=False))
+        assert "Output one patch per target segment" in prompt
+        assert "Emit a patch for a target segment ONLY" not in prompt
+
+    def test_partial_patch_batch_passes_unpatched_segments_through(self) -> None:
+        """With the new contract the model legitimately returns fewer
+        patches than target segments; unpatched ones keep their raw text."""
+        provider = FakeProvider()
+        provider.patch_factory = lambda target_ids: [CleanupPatch(id=target_ids[0], cleaned_text="fixed text")]
+        cleaner = SegmentedTranscriptCleaner(provider)
+
+        result = cleaner.clean(
+            annotated=_annotated(
+                [
+                    _segment(seg_id=0, text="needs fixing"),
+                    _segment(seg_id=1, text="already clean"),
+                ]
+            ),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="en",
+        )
+
+        assert result.segments[0].text == "fixed text"
+        assert result.segments[1].text == "already clean"
+        assert result.segments[1].kind == "content"

@@ -259,10 +259,22 @@ class FactsExtractor:
             # Return minimal facts on parse failure
             return EpisodeFacts(episode_title=episode_title)
 
-        # Build EpisodeFacts from response
+        # Build EpisodeFacts from response. Models may return
+        # speaker_mapping in either the schema shape (list of
+        # {speaker_id, name} entries, as the prompt example shows) or the
+        # legacy dict shape — normalise both to the dict EpisodeFacts wants.
+        raw_mapping = result.get("speaker_mapping", {})
+        if isinstance(raw_mapping, list):
+            raw_mapping = {
+                entry["speaker_id"]: entry.get("name", "")
+                for entry in raw_mapping
+                if isinstance(entry, dict) and entry.get("speaker_id")
+            }
+        elif not isinstance(raw_mapping, dict):
+            raw_mapping = {}
         return EpisodeFacts(
             episode_title=episode_title,
-            speaker_mapping=result.get("speaker_mapping", {}),
+            speaker_mapping=raw_mapping,
             guests=result.get("guests", []),
             topics_keywords=result.get("topics_keywords", []),
             ad_sponsors=result.get("ad_sponsors", []),
@@ -489,10 +501,10 @@ IMPORTANT GUIDELINES:
 
 Return your analysis as JSON with this structure:
 {{
-  "speaker_mapping": {{
-    "SPEAKER_00": "Name (Role)",
-    "SPEAKER_01": "Name (Role)"
-  }},
+  "speaker_mapping": [
+    {{"speaker_id": "SPEAKER_00", "name": "Name (Role)"}},
+    {{"speaker_id": "SPEAKER_01", "name": "Name (Role)"}}
+  ],
   "guests": ["Name - Role/Company"],
   "topics_keywords": ["keyword1", "keyword2"],
   "ad_sponsors": ["Sponsor1", "Sponsor2"]
