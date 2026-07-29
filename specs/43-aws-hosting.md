@@ -1,8 +1,11 @@
 # AWS Hosting (Phase 1 — beta)
 
-> **Status:** 📝 Draft (2026-05-22)
+> **Status:** 📝 Draft (2026-05-22) — Phase-1 sizing superseded by
+> [66-aws-single-ec2-hosting.md](66-aws-single-ec2-hosting.md) (operator-scale
+> single-EC2 deployment; #44 has since shipped and Dalston is already on AWS).
+> The audio-caching design and Phase-2/3 growth path here remain current.
 > **Created:** 2026-05-22
-> **Updated:** 2026-05-22
+> **Updated:** 2026-07-29
 > **Author:** Engineering
 > **Priority:** High — unblocks hosted beta
 > **Related:** [05-docker-deployment.md](05-docker-deployment.md) (slim/full image), [35-pluggable-file-storage.md](35-pluggable-file-storage.md) (S3 backend), [40-storage-routing-ephemeral-vs-persistent.md](40-storage-routing-ephemeral-vs-persistent.md), [25-security-audit-and-hardening.md](25-security-audit-and-hardening.md), [26-pre-deploy-security-checklist.md](26-pre-deploy-security-checklist.md), [44-postgres-migration.md](44-postgres-migration.md) (DB prerequisite), [42-robustness-and-failure-mode-hardening.md](42-robustness-and-failure-mode-hardening.md), [19-refresh-performance.md](19-refresh-performance.md)
