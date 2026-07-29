@@ -90,3 +90,40 @@ class TestGeminiStructuredFailureModes:
 
         with pytest.raises(json.JSONDecodeError):
             self._call(p)
+
+
+class TestThinkingLevelModelMatching:
+    """thinking_level must apply to dotted Gemini 3.x generations.
+
+    The old plain-prefix list matched only gemini-3-pro/gemini-3-flash, so
+    gemini-3.5-flash and gemini-3.6-flash silently ignored the configured
+    level and ran at the default (full) thinking — slower and pricier.
+    """
+
+    def _provider(self, model, level="minimal"):
+        with patch("thestill.core.llm_provider.genai.Client"):
+            return GeminiProvider(api_key="test-key", model=model, thinking_level=level)
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini-3-flash-preview",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
+        ],
+    )
+    def test_minimal_thinking_applies_to_flash_generations(self, model):
+        config = self._provider(model)._get_thinking_config()
+        assert config is not None, f"thinking config dropped for {model}"
+
+    def test_pro_models_match_with_pro_levels(self):
+        config = self._provider("gemini-3.5-pro", level="low")._get_thinking_config()
+        assert config is not None
+
+    @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-2.0-flash"])
+    def test_pre_gemini3_models_get_no_thinking_config(self, model):
+        assert self._provider(model)._get_thinking_config() is None
+
+    def test_flash_detection_for_dotted_ids(self):
+        assert self._provider("gemini-3.6-flash")._is_gemini_3_flash() is True
+        assert self._provider("gemini-3.5-pro", level="low")._is_gemini_3_flash() is False

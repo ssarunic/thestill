@@ -17,6 +17,7 @@ Abstract LLM provider interface and implementations for OpenAI, Ollama, Gemini, 
 """
 
 import json
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, NamedTuple, Optional, Type, TypeVar
@@ -2049,11 +2050,12 @@ class AnthropicProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     """Google Gemini API provider using the new google.genai SDK"""
 
-    # Gemini 3 models that support thinking_level parameter
-    GEMINI_3_MODELS = [
-        "gemini-3-pro",
-        "gemini-3-flash",
-    ]
+    # Gemini 3+ models that support the thinking_level parameter. Matches
+    # dotted generations too (gemini-3.5-flash, gemini-3.6-flash, future
+    # gemini-4-*): the old plain prefix list silently dropped
+    # thinking_level for gemini-3.5+/3.6+ ids, so those models ran at
+    # their (pricier, slower) default thinking level.
+    GEMINI_THINKING_MODEL_RE = re.compile(r"^gemini-[3-9](\.\d+)?-(pro|flash)")
 
     # Valid thinking levels per model type
     # Pro: "low", "high" (default)
@@ -2091,15 +2093,13 @@ class GeminiProvider(LLMProvider):
         self.client = genai.Client(api_key=api_key)
 
     def _is_gemini_3_model(self) -> bool:
-        """Check if the current model is a Gemini 3 model that supports thinking_level"""
-        for model_prefix in self.GEMINI_3_MODELS:
-            if self.model.startswith(model_prefix):
-                return True
-        return False
+        """Check if the current model supports thinking_level (Gemini 3+, incl. 3.5/3.6)"""
+        return self.GEMINI_THINKING_MODEL_RE.match(self.model) is not None
 
     def _is_gemini_3_flash(self) -> bool:
-        """Check if the current model is Gemini 3 Flash"""
-        return self.model.startswith("gemini-3-flash")
+        """Check if the current model is a Gemini 3+ Flash variant"""
+        match = self.GEMINI_THINKING_MODEL_RE.match(self.model)
+        return match is not None and match.group(2) == "flash"
 
     def _get_thinking_config(self) -> Optional[genai_types.ThinkingConfig]:
         """
