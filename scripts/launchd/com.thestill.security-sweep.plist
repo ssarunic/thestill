@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.thestill.security-sweep</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd /Users/sasasarunic/_Sources/thestill &amp;&amp; /Users/sasasarunic/.local/bin/claude --dangerously-skip-permissions -p "/security-sweep"</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>7</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/sasasarunic/Library/Logs/thestill-security-sweep.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sasasarunic/Library/Logs/thestill-security-sweep.log</string>
+</dict>
+</plist>
