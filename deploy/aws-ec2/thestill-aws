@@ -6,7 +6,7 @@ rather than Terraform/CDK, split into a cheap idempotent ``setup`` phase and
 a billable ``launch`` phase, so re-running ``setup`` is always safe.
 
 Usage:
-    thestill-aws setup --domain D [--dalston-sg sg-...] [--dalston-port P]
+    thestill-aws setup --domain D [--alias D2 ...] [--dalston-sg sg-...]
     thestill-aws secrets put --from-env-file FILE     # seed SSM from a .env
     thestill-aws secrets list                          # names only, never values
     thestill-aws launch                                # EC2 + cloud-init bootstrap
@@ -18,7 +18,7 @@ Usage:
     thestill-aws teardown [--yes]                      # delete everything but S3
 
 Typical first deploy:
-    thestill-aws setup --domain thestill.example.com --dalston-sg sg-0abc
+    thestill-aws setup --domain thestill.ai --alias thestill.me --dalston-sg sg-0abc
     thestill-aws secrets put --from-env-file prod-secrets.env
     thestill-aws launch
     thestill-aws dns
@@ -63,7 +63,9 @@ import secrets as pysecrets
 import shlex
 import subprocess
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
+from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NoReturn, Optional
@@ -213,6 +215,10 @@ def audit(action: str, **details: Any) -> None:
 class Deployment:
     region: str = DEFAULT_REGION
     domain: str = ""
+    # Alias domains that 301 to ``domain``. Only the canonical domain is
+    # ever served, so sessions, OAuth callbacks and email links stay
+    # single-origin no matter how many aliases point at the box.
+    aliases: list = dataclass_field(default_factory=list)
     vpc_id: str = ""
     subnet_id: str = ""
     sg_id: str = ""
@@ -769,7 +775,14 @@ def preflight_secrets(region: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_user_data(region: str, bucket: str, image_tag: str, kit_ref: str = "main") -> str:
+def build_user_data(
+    region: str,
+    bucket: str,
+    image_tag: str,
+    kit_ref: str = "main",
+    canonical_domain: str = "",
+    aliases: Optional[list] = None,
+) -> str:
     """Compose the bootstrap script.
 
     Structure follows dalston: a fixed header, one f-string block holding
@@ -796,6 +809,9 @@ def build_user_data(region: str, bucket: str, image_tag: str, kit_ref: str = "ma
                 f"CONTAINER_UID={CONTAINER_UID}",
                 f"BOOTSTRAP_MARKER={shlex.quote(BOOTSTRAP_MARKER)}",
                 f"BACKUP_ONCALENDAR={shlex.quote(BACKUP_ONCALENDAR)}",
+                f"CANONICAL_DOMAIN={shlex.quote(canonical_domain)}",
+                # Comma-space joined: valid Caddy multi-address site syntax.
+                f"REDIRECT_DOMAINS={shlex.quote(', '.join(aliases or []))}",
             ]
         )
         + "\n"
@@ -824,6 +840,19 @@ chmod +x fetch-secrets.sh backup.sh
 
 # The container runs as a non-root uid; the bind mount must be writable by it.
 install -d -o "$CONTAINER_UID" -g "$CONTAINER_UID" "$REMOTE_DIR/data"
+
+# Alias domains 301 to the canonical one. The Caddyfile imports this file
+# unconditionally, so it must exist even when empty — and it must exist
+# BEFORE `docker compose up`, or the bind mount would create a directory.
+if [ -n "$REDIRECT_DOMAINS" ]; then
+    {
+        printf '%s {\n' "$REDIRECT_DOMAINS"
+        printf '\tredir https://%s{uri} permanent\n' "$CANONICAL_DOMAIN"
+        printf '}\n'
+    } > redirects.caddy
+else
+    : > redirects.caddy
+fi
 
 ./fetch-secrets.sh
 # Delete-then-append so re-running this script can't accumulate duplicate
@@ -1021,6 +1050,16 @@ def cmd_setup(args: argparse.Namespace) -> None:
     if not domain or "." not in domain:
         die(f"--domain must be a fully-qualified hostname (got {args.domain!r})")
 
+    aliases = []
+    for raw in args.alias:
+        alias = raw.strip().lower().rstrip(".")
+        if not alias or "." not in alias:
+            die(f"--alias must be a fully-qualified hostname (got {raw!r})")
+        if alias == domain:
+            die(f"--alias {alias} is the same as --domain; aliases redirect TO the canonical domain")
+        if alias not in aliases:
+            aliases.append(alias)
+
     existing = load_state()
     if existing and existing.instance_id:
         log("Existing deployment found — verifying infrastructure")
@@ -1078,6 +1117,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
     state = existing or Deployment()
     state.region = region
     state.domain = domain
+    state.aliases = aliases
     state.vpc_id = vpc_id
     state.subnet_id = subnet_id
     state.sg_id = sg_id
@@ -1173,7 +1213,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     step("3/4  Launching instance")
     kit_ref = args.kit_ref or default_kit_ref()
     log(f"Deploy kit pinned to {kit_ref[:12] if len(kit_ref) > 12 else kit_ref}")
-    user_data = build_user_data(region, state.bucket, args.image_tag, kit_ref)
+    user_data = build_user_data(region, state.bucket, args.image_tag, kit_ref, state.domain, state.aliases)
     ec2 = client("ec2", region)
     instance = retry_aws(
         ec2.run_instances,
@@ -1272,10 +1312,31 @@ def cmd_dns(args: argparse.Namespace) -> None:
     ip = inst.get("PublicIpAddress", "")
     if not ip:
         die(f"Instance {inst['InstanceId']} has no public IP yet — retry shortly.")
-    upsert_a_record(state.domain, ip, wait=not args.no_wait)
+
+    # Aliases need their own A records too — each may live in a different
+    # hosted zone (thestill.me and thestill.ai are separate zones), which
+    # find_hosted_zone resolves per domain.
+    failures: list[str] = []
+    for domain in [state.domain, *state.aliases]:
+        try:
+            upsert_a_record(domain, ip, wait=not args.no_wait)
+        except SystemExit:
+            # find_hosted_zone die()s when no zone covers the domain; keep
+            # going so one externally-hosted alias can't block the rest.
+            failures.append(domain)
+
     print()
     log(f"https://{state.domain} will serve once Caddy obtains its certificate.")
-    print("  Watch it: thestill-aws logs --service caddy")
+    if state.aliases:
+        log(f"301 -> {state.domain}: {', '.join(state.aliases)}")
+    if failures:
+        warn(
+            "No Route53 zone found for: "
+            + ", ".join(failures)
+            + f"\n  Point each at {ip} manually at its DNS provider; Caddy will "
+            "issue a certificate on first request."
+        )
+    print("  Watch certificate issuance: thestill-aws logs --service caddy")
 
 
 def cmd_reconcile(args: argparse.Namespace) -> None:
@@ -1302,7 +1363,7 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
     code, out = run_remote(
         region,
         inst["InstanceId"],
-        build_user_data(region, state.bucket, image_tag, kit_ref),
+        build_user_data(region, state.bucket, image_tag, kit_ref, state.domain, state.aliases),
         timeout=600,
         output_bucket=state.bucket,
     )
@@ -1333,6 +1394,8 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"  Instance:  {instance_id} ({inst['State']['Name']}, {inst['InstanceType']})")
     print(f"  Public IP: {ip}")
     print(f"  Domain:    {state.domain}")
+    if state.aliases:
+        print(f"  Aliases:   {', '.join(state.aliases)} (301 -> {state.domain})")
     print(f"  Image tag: {state.image_tag}")
     print(f"  Bucket:    {state.bucket}")
 
@@ -1542,7 +1605,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_setup = sub.add_parser("setup", help="provision shared infra (idempotent, no billable resources)")
-    p_setup.add_argument("--domain", required=True, help="FQDN the app will serve, e.g. thestill.example.com")
+    p_setup.add_argument("--domain", required=True, help="canonical FQDN the app serves, e.g. thestill.ai")
+    p_setup.add_argument(
+        "--alias",
+        action="append",
+        default=[],
+        metavar="FQDN",
+        help="domain that 301s to --domain (repeatable, e.g. --alias thestill.me)",
+    )
     p_setup.add_argument("--region", default=DEFAULT_REGION)
     p_setup.add_argument("--dalston-sg", default="", help="Dalston's security group id (derives the VPC)")
     p_setup.add_argument("--dalston-port", type=int, default=8080, help="Dalston service port (default 8080)")

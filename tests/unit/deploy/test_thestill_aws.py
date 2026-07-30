@@ -160,6 +160,59 @@ class TestUserDataIdempotency:
             assert convergent in user_data
 
 
+class TestAliasDomains:
+    """Option A multi-domain: one canonical origin, N aliases that 301 to it.
+
+    Only the canonical domain is ever served, so sessions, OAuth callbacks
+    and email links stay single-origin however many aliases exist.
+    """
+
+    @pytest.fixture(scope="class")
+    def with_aliases(self, cli) -> str:
+        return cli.build_user_data(
+            "eu-west-2", "bkt", "prod-latest", "main", "thestill.ai", ["thestill.me", "www.thestill.ai"]
+        )
+
+    def test_aliases_are_joined_as_caddy_site_addresses(self, with_aliases):
+        assert "REDIRECT_DOMAINS='thestill.me, www.thestill.ai'" in with_aliases
+        assert "CANONICAL_DOMAIN=thestill.ai" in with_aliases
+
+    def test_generates_a_permanent_redirect_to_the_canonical_domain(self, with_aliases):
+        assert "redir https://%s{uri} permanent" in with_aliases
+        assert "> redirects.caddy" in with_aliases
+
+    def test_redirects_file_is_written_even_with_no_aliases(self, cli):
+        # The Caddyfile imports it unconditionally; a missing file is a hard
+        # parse error, so the empty case must still create it.
+        plain = cli.build_user_data("eu-west-2", "bkt", "prod-latest", "main", "thestill.ai", [])
+        assert "REDIRECT_DOMAINS=''" in plain
+        assert ": > redirects.caddy" in plain
+
+    def test_redirects_file_is_created_before_compose_up(self, with_aliases):
+        # Compose would create a *directory* at the bind-mount path otherwise.
+        assert with_aliases.index("redirects.caddy") < with_aliases.index(
+            "docker compose -f docker-compose.prod.yml up -d"
+        )
+
+    def test_caddyfile_imports_the_redirects_file(self):
+        caddyfile = (SCRIPT.parent / "Caddyfile").read_text()
+        assert "import /etc/caddy/redirects.caddy" in caddyfile
+
+    def test_compose_mounts_the_redirects_file(self):
+        compose = (SCRIPT.parent / "docker-compose.prod.yml").read_text()
+        assert "./redirects.caddy:/etc/caddy/redirects.caddy:ro" in compose
+
+    def test_setup_accepts_repeatable_aliases(self, cli):
+        args = cli.build_parser().parse_args(
+            ["setup", "--domain", "thestill.ai", "--alias", "thestill.me", "--alias", "thestill.dev"]
+        )
+        assert args.alias == ["thestill.me", "thestill.dev"]
+
+    def test_setup_defaults_to_no_aliases(self, cli):
+        args = cli.build_parser().parse_args(["setup", "--domain", "thestill.ai"])
+        assert args.alias == []
+
+
 class TestDeployKitPinning:
     """A mutable 'main' ref would let reconcile pull a compose file newer
     than the image the box runs — silent version skew."""

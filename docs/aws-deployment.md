@@ -19,7 +19,8 @@ alias thestill-aws='./venv/bin/python deploy/aws-ec2/thestill-aws'
 
 # 1. Shared infra: S3 bucket, IAM role/profile, security groups, derived
 #    secrets. No billable resources. Safe to re-run at any time.
-thestill-aws setup --domain thestill.example.com --dalston-sg sg-0abc123
+#    --alias is repeatable; each alias 301s to the canonical --domain.
+thestill-aws setup --domain thestill.ai --alias thestill.me --dalston-sg sg-0abc123
 
 # 2. Your own secrets (API keys, Dalston credentials) from a local file
 thestill-aws secrets put --from-env-file prod-secrets.env
@@ -56,6 +57,34 @@ What the script deliberately does **not** do: the data migration (section 4
 — restoring your dump is a decision, not a step), the Google OAuth redirect
 URI (no API exists), and the cutover scheduler flip (section 6). Those stay
 manual and deliberate.
+
+### Multiple domains
+
+One domain is canonical; every other domain permanently redirects to it:
+
+```bash
+thestill-aws setup --domain thestill.ai \
+  --alias thestill.me --alias www.thestill.ai --alias thestill.dev
+thestill-aws reconcile     # regenerate the redirects on a running box
+thestill-aws dns           # A records for the canonical domain AND every alias
+```
+
+Caddy serves only the canonical domain and 301s the aliases to it, so
+sessions, the OAuth callback, briefing-email links and `ALLOWED_ORIGINS`
+all stay single-origin — you register **one** redirect URI in the Google
+console and users keep one session no matter which domain they typed.
+
+This is deliberate rather than incidental. Serving two domains as co-equal
+origins is not a config change: `thestill.me` and `thestill.ai` are
+different registrable domains with separate cookie jars, so a user would
+have to log in once per domain, and briefing emails — which have no request
+context — would still have to pick one domain for their links.
+
+Each domain needs its own A record. `dns` resolves the hosted zone per
+domain, so aliases in a different Route53 zone work automatically; any
+alias hosted outside Route53 is reported with the IP to point it at, and
+does not block the others. Caddy issues a certificate per domain on first
+request, so DNS must resolve before the redirect works.
 
 The rest of this document is the manual equivalent — useful for
 understanding what the script does, for a non-Route53 DNS provider, or for

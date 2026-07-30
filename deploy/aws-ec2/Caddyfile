@@ -1,6 +1,11 @@
 # TLS termination for the single-EC2 deployment (spec #66).
 # PUBLIC_DOMAIN comes from compose (.env); certificates are provisioned
 # automatically via Let's Encrypt and persisted in ./caddy-data.
+#
+# Only the canonical domain is served. Alias domains (thestill.me ->
+# thestill.ai, www, ...) 301 to it via redirects.caddy, which the bootstrap
+# generates — always, empty when there are no aliases, because `import` of
+# a missing file is a hard parse error.
 
 {$PUBLIC_DOMAIN} {
 	# SSE progress streams must not be buffered; flush_interval -1 turns
@@ -16,3 +21,5 @@
 		format json
 	}
 }
+
+import /etc/caddy/redirects.caddy
