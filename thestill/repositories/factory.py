@@ -62,12 +62,17 @@ def ping(config: "Config") -> None:
         return
 
     import sqlite3
+    from pathlib import Path
 
     # mode=rw refuses to create a missing file — a deleted database must
     # never probe as ready (default connect() would silently create an
     # empty one and pass). Requiring the podcasts table also fails an
     # empty shell file that no repository has ever bootstrapped.
-    conn = sqlite3.connect(f"file:{config.database_path}?mode=rw", uri=True, timeout=3)
+    # as_uri() percent-encodes URI delimiters (?, #, %) in the path, so a
+    # filename containing them can't smuggle in query parameters and
+    # silently drop mode=rw.
+    db_uri = Path(config.database_path).resolve().as_uri() + "?mode=rw"
+    conn = sqlite3.connect(db_uri, uri=True, timeout=3)
     try:
         row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='podcasts'").fetchone()
         if row is None:

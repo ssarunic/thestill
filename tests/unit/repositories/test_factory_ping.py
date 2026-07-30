@@ -62,6 +62,25 @@ class TestSqlitePing:
         with pytest.raises(RuntimeError, match="podcasts table"):
             ping(config)
 
+    def test_path_with_uri_delimiters_is_escaped(self, tmp_path):
+        from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+
+        # Unescaped, the '?' would start the URI query string: mode=rw gets
+        # dropped and sqlite opens/creates the truncated sibling path.
+        tricky = tmp_path / "podcasts?tenant=one.db"
+        config = Config(storage_path=tmp_path, database_path=str(tricky))
+        SqlitePodcastRepository(db_path=str(tricky))
+        ping(config)  # must probe the real file, not a truncated sibling
+        assert not (tmp_path / "podcasts").exists()
+
+    def test_missing_path_with_uri_delimiters_still_refuses_create(self, tmp_path):
+        config = Config(storage_path=tmp_path, database_path=str(tmp_path / "gone?x=1.db"))
+        with pytest.raises(sqlite3.OperationalError):
+            ping(config)
+        # Neither the file nor a ?-truncated sibling may have been created
+        # (Config itself pre-creates storage subdirectories — ignore those).
+        assert list(tmp_path.glob("gone*")) == []
+
     def test_raises_when_database_directory_missing(self, tmp_path):
         config = Config(
             storage_path=tmp_path,
