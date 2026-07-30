@@ -1,8 +1,8 @@
 # AWS Hosting on a Single EC2 Node (operator-scale)
 
-> **Status:** 📝 Draft (2026-07-29)
+> **Status:** 🚧 Deployability implemented (2026-07-30) — `[search]` extra, `prod` image target + GHCR multi-arch publish, `MIGRATE_ON_STARTUP`, `/health/ready`, `deploy/aws-ec2/` kit, [docs/aws-deployment.md](../docs/aws-deployment.md) runbook. EC2 provisioning + cutover (§Migration) pending.
 > **Created:** 2026-07-29
-> **Updated:** 2026-07-29
+> **Updated:** 2026-07-30
 > **Author:** Engineering
 > **Priority:** High — moves the production instance off the dev machine
 > **Related:** [43-aws-hosting.md](43-aws-hosting.md) (beta-scale plan; this spec supersedes its Phase-1 sizing), [05-docker-deployment.md](05-docker-deployment.md) (slim/full image), [44-postgres-migration.md](44-postgres-migration.md) (✅ done — unblocks everything here), [35-pluggable-file-storage.md](35-pluggable-file-storage.md) / [40-storage-routing-ephemeral-vs-persistent.md](40-storage-routing-ephemeral-vs-persistent.md) (S3 backend, optional here), [25-security-audit-and-hardening.md](25-security-audit-and-hardening.md), [26-pre-deploy-security-checklist.md](26-pre-deploy-security-checklist.md), [51-briefing-email-delivery.md](51-briefing-email-delivery.md) (SES phase)

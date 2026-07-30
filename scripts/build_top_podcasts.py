@@ -46,7 +46,8 @@ import yt_dlp
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-CATEGORIES_FILE = DATA_DIR / "podcast_categories.json"
+# Moved into the package (spec #66) so installed wheels ship the taxonomy.
+CATEGORIES_FILE = ROOT / "thestill" / "utils" / "podcast_categories.json"
 
 # Reuse the canonical name-normalization from the package so this script and the
 # DB resolver match exactly. ROOT must be on sys.path before importing.

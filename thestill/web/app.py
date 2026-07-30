@@ -77,6 +77,7 @@ from .routes import (
     unsubscribe,
     webhooks,
 )
+from .services import HealthService
 from .task_manager import get_task_manager
 
 logger = structlog.get_logger(__name__)
@@ -153,11 +154,21 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     if config is None:
         config = load_config()
 
+    # Spec #66 — opt-in self-migration before anything touches the schema.
+    # Runs ahead of make_repositories so ensure_schema's IF NOT EXISTS DDL
+    # becomes a no-op against an already-at-head database. Synchronous and
+    # fail-fast: a broken migration stops the server here, not mid-request.
+    from ..repositories.factory import make_repositories, uses_postgres
+    from ..utils.config import is_migrate_on_startup_enabled
+
+    if uses_postgres(config) and is_migrate_on_startup_enabled():
+        from ..repositories.postgres_schema import run_alembic_upgrade
+
+        run_alembic_upgrade(config.database_url)
+
     # Initialize shared services (same pattern as CLI). Spec #44 — all
     # persistence resolves through the backend factory: SQLite by default,
     # Postgres when DATABASE_URL is set.
-    from ..repositories.factory import make_repositories
-
     repos = make_repositories(config)
     path_manager = PathManager(str(config.storage_path))
     repository = repos.podcast
@@ -307,6 +318,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             config, path_manager, repository, briefing_repository, inbox_repository
         ),
         legacy_claim_service=legacy_claim_service,
+        health_service=HealthService(config),
     )
 
     # Create task worker with handlers that have access to app_state.

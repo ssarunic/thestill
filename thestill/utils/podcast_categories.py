@@ -15,9 +15,12 @@
 """
 Apple Podcasts category taxonomy and validation.
 
-The canonical taxonomy lives in ``data/podcast_categories.json`` (Apple's
-official 19 main categories + ~80 subcategories, plus the ``genre_id`` Apple
-uses on its iTunes chart APIs). This module loads that JSON at import time and
+The canonical taxonomy lives in ``podcast_categories.json`` next to this
+module (Apple's official 19 main categories + ~80 subcategories, plus the
+``genre_id`` Apple uses on its iTunes chart APIs). It sits inside the
+package — not the repo-level ``data/`` directory — so installed wheels
+(the Docker images, spec #66) ship it; a repo-root path would only exist
+in editable checkouts. This module loads the JSON at import time and
 exposes the same validation helpers the codebase has always used, so call
 sites do not need to change.
 
@@ -32,9 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# Resolve the JSON file relative to the repo root (this module lives in
-# thestill/utils/, so the data dir is two parents up + /data/).
-_TAXONOMY_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "podcast_categories.json"
+# Packaged next to this module so it ships in the wheel.
+_TAXONOMY_PATH = Path(__file__).resolve().with_name("podcast_categories.json")
 
 
 def _load_taxonomy_and_genre_ids() -> tuple[dict[str, set[str]], dict[str, int]]:

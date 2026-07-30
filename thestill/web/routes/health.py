@@ -20,9 +20,14 @@ This endpoint is mounted at the root level (not under /api) because:
 - Infrastructure endpoints follow different conventions than application APIs
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+from structlog import get_logger
 
+from ..dependencies import AppState, get_app_state
 from ..responses import api_response
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -32,7 +37,38 @@ async def health_check():
     """
     Health check endpoint for load balancers and monitoring.
 
+    Liveness only — no dependency checks, so it stays cheap for probes
+    that fire every few seconds. Readiness (DB reachability) is
+    /health/ready.
+
     Returns:
         Health status with timestamp.
     """
     return api_response({}, status="healthy")
+
+
+@router.get("/health/ready")
+async def readiness_check(state: AppState = Depends(get_app_state)):
+    """
+    Readiness probe (spec #66): one cheap DB round-trip against the
+    configured backend. Compose healthchecks and future ALB target groups
+    point here so a container with a dead database stops reporting ready.
+
+    Returns:
+        200 with status "ready", or 503 with status "unready". The failure
+        detail goes to the log, not the response — this endpoint is
+        unauthenticated and must not leak DSNs or driver internals.
+    """
+    service = state.health_service
+    if service is None:
+        # Hand-built test fixtures may not wire the service; construct on
+        # the fly from config so the probe still answers truthfully.
+        from ..services import HealthService
+
+        service = HealthService(state.config)
+    try:
+        service.ping_database()
+    except Exception as exc:  # noqa: BLE001 — any failure means "not ready"
+        logger.warning("readiness_check_failed", error=str(exc), exc_info=True)
+        return JSONResponse(status_code=503, content=api_response({}, status="unready"))
+    return api_response({}, status="ready")

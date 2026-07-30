@@ -47,6 +47,29 @@ def uses_postgres(config: "Config") -> bool:
     return bool(getattr(config, "database_url", "") or "")
 
 
+def ping(config: "Config") -> None:
+    """Cheap DB round-trip for readiness probes (spec #66). Raises on failure.
+
+    Backend-resolved like every other helper here; deliberately opens a
+    fresh short-lived connection rather than borrowing a repository, so a
+    wedged pool or a dead server both surface.
+    """
+    if uses_postgres(config):
+        import psycopg
+
+        with psycopg.connect(config.database_url, connect_timeout=3) as conn:
+            conn.execute("SELECT 1")
+        return
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(config.database_path), timeout=3)
+    try:
+        conn.execute("SELECT 1")
+    finally:
+        conn.close()
+
+
 _schema_lock = threading.Lock()
 _schema_ready: set[str] = set()
 

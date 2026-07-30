@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from ..services.narration import NarrationRunner
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
+    from .services import HealthService
     from .task_manager import TaskManager
 
 
@@ -159,6 +160,9 @@ class AppState:
     # ``Optional`` only so legacy test fixtures that construct AppState
     # by hand don't have to update; production wiring always passes it.
     legacy_claim_service: "Optional[LegacyClaimService]" = None
+    # Spec #66 — readiness probes behind /health/ready. ``Optional`` only
+    # for hand-built test fixtures; production wiring always passes it.
+    health_service: "Optional[HealthService]" = None
 
 
 def get_app_state(request: Request) -> AppState:
