@@ -7,6 +7,60 @@ Operator runbook for the spec #66 topology: one EC2 instance running the
 this document is the *how*. The compose file and scripts referenced here are
 in [deploy/aws-ec2/](../deploy/aws-ec2/).
 
+## Quick path: `thestill-aws`
+
+[`deploy/aws-ec2/thestill-aws`](../deploy/aws-ec2/thestill-aws) automates
+everything in sections 1–3 and 5 below. Same shape as dalston's
+`dalston-aws`: a single-file boto3 CLI, split into a cheap idempotent
+`setup` and a billable `launch`.
+
+```bash
+alias thestill-aws='./venv/bin/python deploy/aws-ec2/thestill-aws'
+
+# 1. Shared infra: S3 bucket, IAM role/profile, security groups, derived
+#    secrets. No billable resources. Safe to re-run at any time.
+thestill-aws setup --domain thestill.example.com --dalston-sg sg-0abc123
+
+# 2. Your own secrets (API keys, Dalston credentials) from a local file
+thestill-aws secrets put --from-env-file prod-secrets.env
+
+# 3. The instance + full cloud-init bootstrap (docker, compose, deploy kit,
+#    secrets fetch, containers, nightly backup timer)
+thestill-aws launch
+
+# 4. Point the domain at it (Route53)
+thestill-aws dns
+
+# 5. Watch it come up
+thestill-aws status
+```
+
+**Every command is idempotent.** `setup` is get-or-create throughout;
+`launch` no-ops when an instance is already running and starts it when
+stopped; `dns` skips a record that already matches; `reconcile` replays the
+same converging bootstrap over SSM. After any failure, re-run the command
+rather than unpicking partial state.
+
+Day-2 operations:
+
+| Command | Purpose |
+|---|---|
+| `thestill-aws status` | instance state, bootstrap progress, containers, `/health/ready` |
+| `thestill-aws logs --service thestill --lines 100` | container logs via SSM |
+| `thestill-aws ssh` | shell via SSM Session Manager (no key pair, no port 22) |
+| `thestill-aws reconcile --image-tag prod-<sha>` | upgrade or re-apply on-box config in place |
+| `thestill-aws secrets list` | parameter names under `/thestill/prod/` (never values) |
+| `thestill-aws teardown` | delete instance/SG/IAM; keeps S3, secrets and DNS |
+
+What the script deliberately does **not** do: the data migration (section 4
+— restoring your dump is a decision, not a step), the Google OAuth redirect
+URI (no API exists), and the cutover scheduler flip (section 6). Those stay
+manual and deliberate.
+
+The rest of this document is the manual equivalent — useful for
+understanding what the script does, for a non-Route53 DNS provider, or for
+recovering when something needs doing by hand.
+
 ## 1. Provision
 
 1. **Instance**: `t4g.medium` (Graviton/arm64), 30 GB gp3, Amazon Linux 2023

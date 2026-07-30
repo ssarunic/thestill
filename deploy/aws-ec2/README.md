@@ -2,10 +2,16 @@
 
 Operational assets for running thestill on one EC2 instance:
 
+- `thestill-aws` — **the provisioning CLI**. Creates and manages every AWS
+  resource (S3, IAM, security groups, EC2, Route53) and bootstraps the box.
+  Idempotent throughout; run `thestill-aws --help` for the subcommands.
 - `docker-compose.prod.yml` — app (GHCR `prod` image) + Postgres (pgvector) + Caddy (auto-TLS)
 - `Caddyfile` — HTTPS termination, SSE-safe proxying
 - `fetch-secrets.sh` — materializes `.env` from SSM Parameter Store
-- `backup.sh` — nightly `pg_dump` + artifact sync to S3 (run from cron)
+- `backup.sh` — nightly `pg_dump` + artifact sync to S3 (systemd timer)
+
+The last four are fetched onto the instance by `thestill-aws launch`; they
+also work standalone if you provision by hand.
 
 The step-by-step runbook — provisioning, first deploy, data migration,
 backup/restore drill, upgrades — lives in
