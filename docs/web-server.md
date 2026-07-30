@@ -19,7 +19,8 @@ thestill server --workers 4        # Multiple worker processes
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Serves the React SPA (`index.html` via the catch-all route) |
-| `/health` | GET | Health check for load balancers (`{"status": "healthy"}` envelope) |
+| `/health` | GET | Liveness check for load balancers (`{"status": "healthy"}` envelope; no dependency checks) |
+| `/health/ready` | GET | Readiness probe (spec #66): one cheap DB round-trip; `200`/`"ready"` or `503`/`"unready"` |
 | `/api/status` | GET | Detailed system statistics (same data as the CLI `status` command) |
 | `/docs` | GET | OpenAPI docs — only when `ENVIRONMENT=development` or `ENABLE_DOCS=true`; disabled in production |
 

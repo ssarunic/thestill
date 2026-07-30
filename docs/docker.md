@@ -3,18 +3,27 @@
 Cloud-transcription-only Docker image for home-server deployment (tested on
 Raspberry Pi 5, `linux/arm64`).
 
+> **Deploying to AWS?** The production topology (spec #66 — GHCR `prod`
+> image + Postgres + Caddy on one EC2 instance) has its own runbook:
+> [aws-deployment.md](aws-deployment.md), with the compose kit in
+> [deploy/aws-ec2/](../deploy/aws-ec2/).
+
 ## Image variants
 
-Both variants are built from the same `Dockerfile` via multi-stage targets:
+All variants are built from the same `Dockerfile` via multi-stage targets:
 
 | Tag         | Contents                                                  | Use when                                     |
 | ----------- | --------------------------------------------------------- | -------------------------------------------- |
 | `:slim`     | Cloud deps only, no `ffmpeg`                              | Dalston is your only transcription provider |
 | `:full`     | `:slim` + static `ffmpeg` and `ffprobe` (~80 MB more)     | You need Google Cloud Speech or ElevenLabs  |
+| `:prod`     | `:full` built with `EXTRAS=postgres,s3,ses,search` (multi-GB — pulls CPU `torch`) | AWS production (spec #66); published to GHCR by CI |
 
-Neither image includes `torch`, `openai-whisper`, `whisperx`, or
+`slim` and `full` include no `torch`, `openai-whisper`, `whisperx`, or
 `pyannote.audio`. Local transcription requires building your own image that
-installs the `local-transcription` optional-dependencies extra.
+installs the `local-transcription` optional-dependencies extra. All targets
+set `HF_HOME=/data/.cache/huggingface` (only relevant to `prod`, which is
+the one shipping HuggingFace libraries) so the sentence-transformers model
+download persists on the mounted volume.
 
 ## Prerequisites
 

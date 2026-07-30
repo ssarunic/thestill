@@ -14,6 +14,7 @@
 
 """Web services for background processing and data transformation."""
 
+from .health_service import HealthService
 from .webhook_transcript_processor import WebhookTranscriptProcessor
 
-__all__ = ["WebhookTranscriptProcessor"]
+__all__ = ["HealthService", "WebhookTranscriptProcessor"]

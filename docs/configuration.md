@@ -16,6 +16,7 @@ cp .env.example .env
 | `STORAGE_PATH` | Base directory for all data | `./data` |
 | `DATABASE_URL` | Postgres connection string; when set, the Postgres repositories are used (spec #44) | - (empty = SQLite) |
 | `DATABASE_PATH` | SQLite database location; ignored when `DATABASE_URL` is set | `{STORAGE_PATH}/podcasts.db` |
+| `MIGRATE_ON_STARTUP` | Run `alembic upgrade head` in-process before the web server starts serving (spec #66; Postgres only, advisory-lock-safe) | `false` |
 
 `DATABASE_URL` selects the persistence backend via
 `repositories/factory.py`: empty means SQLite at `DATABASE_PATH`, any

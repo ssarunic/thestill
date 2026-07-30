@@ -320,7 +320,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
 
         # Spec #20 Migration: normalize categories into a lookup table.
         # 1. Create categories table (top-level + subcategories) if missing.
-        # 2. Seed it from data/podcast_categories.json (Apple's official taxonomy).
+        # 2. Seed it from thestill/utils/podcast_categories.json (Apple's official taxonomy).
         # 3. Add primary_category_id / secondary_category_id FK columns to podcasts.
         # 4. Backfill FKs from the legacy free-text columns (best-effort match).
         # 5. Drop the four legacy free-text columns and their indexes.
@@ -1998,7 +1998,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             -- ========================================================================
             -- Self-referential lookup: top-level categories have parent_id NULL
             -- and a populated apple_genre_id; subcategory rows have parent_id
-            -- pointing at their top-level. Seeded from data/podcast_categories.json.
+            -- pointing at their top-level. Seeded from thestill/utils/podcast_categories.json.
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,

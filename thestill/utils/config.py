@@ -116,6 +116,18 @@ def get_briefing_scheduler_max_per_tick() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Spec #66 — AWS deployment knobs. Same standalone-getter pattern; ships dark.
+# ---------------------------------------------------------------------------
+def is_migrate_on_startup_enabled() -> bool:
+    """When true (and DATABASE_URL is set), the web server runs
+    ``alembic upgrade head`` in-process before serving, so a freshly pulled
+    container self-migrates instead of drifting behind the codebase (the
+    spec #57 incident: a deployed schema four revisions behind). Default:
+    off — operators run migrations out of band."""
+    return _env_bool("MIGRATE_ON_STARTUP", False)
+
+
+# ---------------------------------------------------------------------------
 # Spec #49 — queue auto-healing. The worker auto-requeues infra-class
 # ``failed`` tasks (DNS / model-runtime / provider outages) once their
 # dependency recovers, bounded per-task by a heal-attempt cap. Ships ON for
@@ -789,6 +801,20 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "redirect URI could be derived from the attacker-controllable "
             "Host header when trusted proxies omit X-Forwarded-Host."
         )
+
+    # Spec #66 — psycopg lives in the [postgres] extra and every import of it
+    # is lazy, so a Postgres DSN without the extra installed would otherwise
+    # surface as a raw ModuleNotFoundError deep inside the repository factory.
+    # Fail here, at config load, with the remedy.
+    if config_data["database_url"]:
+        try:
+            import psycopg  # noqa: F401  pylint: disable=unused-import
+        except ImportError as exc:
+            raise ValueError(
+                "DATABASE_URL is set but the Postgres driver is not installed. "
+                "Install the extra: pip install 'thestill[postgres]' "
+                "(the Docker 'prod' image target already includes it)."
+            ) from exc
 
     return Config(**config_data)
 

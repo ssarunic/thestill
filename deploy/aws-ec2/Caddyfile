@@ -1,0 +1,18 @@
+# TLS termination for the single-EC2 deployment (spec #66).
+# PUBLIC_DOMAIN comes from compose (.env); certificates are provisioned
+# automatically via Let's Encrypt and persisted in ./caddy-data.
+
+{$PUBLIC_DOMAIN} {
+	# SSE progress streams must not be buffered; flush_interval -1 turns
+	# proxy buffering off so events reach the browser as they happen.
+	reverse_proxy thestill:8000 {
+		flush_interval -1
+	}
+
+	encode gzip
+
+	log {
+		output stdout
+		format json
+	}
+}

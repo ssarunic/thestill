@@ -47,6 +47,40 @@ def uses_postgres(config: "Config") -> bool:
     return bool(getattr(config, "database_url", "") or "")
 
 
+def ping(config: "Config") -> None:
+    """Cheap DB round-trip for readiness probes (spec #66). Raises on failure.
+
+    Backend-resolved like every other helper here; deliberately opens a
+    fresh short-lived connection rather than borrowing a repository, so a
+    wedged pool or a dead server both surface.
+    """
+    if uses_postgres(config):
+        import psycopg
+
+        with psycopg.connect(config.database_url, connect_timeout=3) as conn:
+            conn.execute("SELECT 1")
+        return
+
+    import sqlite3
+    from pathlib import Path
+
+    # mode=rw refuses to create a missing file — a deleted database must
+    # never probe as ready (default connect() would silently create an
+    # empty one and pass). Requiring the podcasts table also fails an
+    # empty shell file that no repository has ever bootstrapped.
+    # as_uri() percent-encodes URI delimiters (?, #, %) in the path, so a
+    # filename containing them can't smuggle in query parameters and
+    # silently drop mode=rw.
+    db_uri = Path(config.database_path).resolve().as_uri() + "?mode=rw"
+    conn = sqlite3.connect(db_uri, uri=True, timeout=3)
+    try:
+        row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='podcasts'").fetchone()
+        if row is None:
+            raise RuntimeError("sqlite database exists but is missing the podcasts table")
+    finally:
+        conn.close()
+
+
 _schema_lock = threading.Lock()
 _schema_ready: set[str] = set()
 

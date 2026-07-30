@@ -129,6 +129,16 @@ local-transcription = [
     # path drops them (spec #18 Parakeet word-timestamp fix).
     "nemo_toolkit[asr]>=2.0.0",
 ]
+search = [
+    # Spec #66 — the in-process search stack on its own, for deployments
+    # (the AWS ``prod`` Docker target) that need semantic search but not
+    # the GLiNER/ReFinED entity-extraction stack in [entities]. The pins
+    # are duplicated in [entities] (which remains a superset) because
+    # PEP 621 optional-dependencies has no extra-requires-extra; keep the
+    # two lists in lockstep when bumping versions.
+    "sentence-transformers>=3.0.0",
+    "scikit-learn>=1.3.0",
+]
 entities = [
     # Spec #28 — entity extraction via GLiNER zero-shot NER. Downloads
     # a ~400MB transformer on first use; pulls torch transitively.
@@ -180,6 +190,13 @@ entities = [
 conflicts = [
     [
         { extra = "entities" },
+        { extra = "local-transcription" },
+    ],
+    # Spec #66 — [search] duplicates [entities]' sentence-transformers
+    # pin (torch transitively), so it forks against the transcription
+    # stack for the same reason [entities] does.
+    [
+        { extra = "search" },
         { extra = "local-transcription" },
     ],
 ]

@@ -1,0 +1,108 @@
+# Production compose for the single-EC2 deployment (spec #66).
+#
+# Topology: caddy (TLS termination) -> thestill:8000, postgres reachable
+# only on the compose network. The app image is pulled from GHCR (built by
+# the docker-publish CI job), never built on the box.
+#
+# Secrets and instance-specific values come from ./.env, materialized from
+# SSM Parameter Store by fetch-secrets.sh — see deploy/aws-ec2/README.md
+# and docs/aws-deployment.md.
+
+networks:
+  thestill-net:
+    driver: bridge
+
+# Docker's default json-file driver is unbounded and would eventually fill
+# the 30 GB host disk with app/Postgres/Caddy output, taking down both the
+# application and the database. The local driver compresses and rotates.
+x-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  thestill:
+    image: "ghcr.io/ssarunic/thestill:${THESTILL_IMAGE_TAG:-prod-latest}"
+    container_name: thestill
+    restart: unless-stopped
+    logging: *bounded-logging
+    env_file:
+      - .env
+    environment:
+      # Hard overrides that must win over .env (compose applies
+      # `environment:` after `env_file:`). STORAGE_PATH must point at the
+      # mounted volume; DATABASE_URL is assembled here so the password
+      # lives in exactly one .env key (POSTGRES_PASSWORD).
+      #
+      # POSTGRES_PASSWORD is interpolated raw into the URI, so it must
+      # contain only URI-safe characters — generate it with
+      # `openssl rand -hex 32` (never base64: `/`, `+`, `=` break the DSN).
+      STORAGE_PATH: /data
+      DATABASE_URL: "postgresql://thestill:${POSTGRES_PASSWORD}@postgres:5432/thestill"
+      TRANSCRIPTION_PROVIDER: dalston
+      ENVIRONMENT: production
+      COOKIE_SECURE: "true"
+      LOG_FORMAT: json
+      # Spec #66 — the container self-migrates (alembic upgrade head,
+      # advisory-lock-safe) before serving.
+      MIGRATE_ON_STARTUP: "true"
+    volumes:
+      - ./data:/data
+    networks:
+      - thestill-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Readiness, not liveness: a container whose database died stops
+      # reporting healthy and restart policies/monitoring can react.
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: thestill-postgres
+    restart: unless-stopped
+    logging: *bounded-logging
+    environment:
+      POSTGRES_USER: thestill
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: thestill
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    networks:
+      - thestill-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thestill -d thestill"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2
+    container_name: thestill-caddy
+    restart: unless-stopped
+    logging: *bounded-logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      # Bare hostname for the Caddyfile site address, e.g. thestill.example.com
+      PUBLIC_DOMAIN: "${PUBLIC_DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+    networks:
+      - thestill-net
+    depends_on:
+      - thestill

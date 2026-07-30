@@ -1,15 +1,24 @@
 # syntax=docker/dockerfile:1.7
 
-# Multi-stage build producing two targets from a single Dockerfile:
+# Multi-stage build producing three targets from a single Dockerfile:
 #   - slim: Dalston-only, no ffmpeg (~200-250 MB)
 #   - full: slim + static ffmpeg/ffprobe (~280-330 MB)
+#   - prod: full built with EXTRAS=postgres,s3,ses,search — the AWS
+#     deployment image (spec #66). Includes psycopg/alembic, boto3, and
+#     sentence-transformers (which pulls CPU torch, so this target is
+#     multi-GB where slim/full stay under ~350 MB).
 #
-# Neither image includes torch, openai-whisper, whisperx, or pyannote.audio.
+# slim/full include no torch, openai-whisper, whisperx, or pyannote.audio.
 # For local transcription, build your own image with
 # `pip install ".[local-transcription]"`.
+#
+# EXTRAS is a comma-separated list of pyproject optional-dependency groups
+# baked into the wheel set (default: none). The prod target expects
+# `--build-arg EXTRAS=postgres,s3,ses,search`.
 
 ARG THESTILL_UID=1000
 ARG THESTILL_GID=1000
+ARG EXTRAS=""
 
 # ---------- Stage 1: build the React SPA ----------
 # Spec #25 item 5.1: every base image is digest-pinned. Tags are mutable —
@@ -50,10 +59,17 @@ COPY --from=frontend-builder /src/thestill/web/static ./thestill/web/static
 # commit, so substitution would require compromising the git host — a
 # strictly harder attack than PyPI maintainer takeover. The project wheel
 # itself is built last with ``--no-deps`` so pip doesn't re-resolve.
-RUN pip install --no-cache-dir uv \
- && uv export --frozen --no-emit-project --no-hashes --format requirements-txt > /tmp/reqs.txt \
- && pip wheel --wheel-dir /wheels -r /tmp/reqs.txt \
- && pip wheel --wheel-dir /wheels --no-deps .
+# EXTRAS (top-level ARG, re-declared here — ARGs before the first FROM
+# don't propagate into stages) expands to repeated ``--extra`` flags so
+# the prod target's wheel set comes from the same frozen lockfile.
+ARG EXTRAS=""
+RUN set -eux; \
+    EXTRA_FLAGS=""; \
+    for e in $(echo "$EXTRAS" | tr ',' ' '); do EXTRA_FLAGS="$EXTRA_FLAGS --extra $e"; done; \
+    pip install --no-cache-dir uv; \
+    uv export --frozen --no-emit-project --no-hashes $EXTRA_FLAGS --format requirements-txt > /tmp/reqs.txt; \
+    pip wheel --wheel-dir /wheels -r /tmp/reqs.txt; \
+    pip wheel --wheel-dir /wheels --no-deps .
 
 # ---------- Stage 4: runtime base ----------
 FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS base
@@ -66,7 +82,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STORAGE_PATH=/data \
     DATABASE_PATH=/data/podcasts.db \
     LOG_FORMAT=json \
-    LOG_LEVEL=INFO
+    LOG_LEVEL=INFO \
+    HF_HOME=/data/.cache/huggingface
 # On macOS, `id -g` returns 20 (staff), which collides with the `dialout`
 # group baked into python:3.12-slim. Reuse any existing group with that GID
 # instead of failing, then create the `thestill` user inside it so the later
@@ -104,3 +121,11 @@ USER root
 COPY --from=ffmpeg-src /ffmpeg  /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-src /ffprobe /usr/local/bin/ffprobe
 USER thestill
+
+# ---------- Target: prod (spec #66 — the AWS deployment image) ----------
+# Identical to full; the difference lives entirely in the shared builder's
+# EXTRAS arg. Build with:
+#   docker build --target prod --build-arg EXTRAS=postgres,s3,ses,search .
+# HF_HOME (set in base) lands the ~470 MB sentence-transformers download on
+# the /data volume so container replacements don't re-fetch it.
+FROM full AS prod

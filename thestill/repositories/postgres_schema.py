@@ -34,6 +34,8 @@ idempotent bootstrap used by the repository factory at startup and by tests.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -536,3 +538,40 @@ def ensure_schema(dsn: str, *, embedding_dim: int = DEFAULT_EMBEDDING_DIM) -> No
         conn.execute(_LOCK_SQL, (SCHEMA_BOOTSTRAP_LOCK_KEY,))
         conn.execute(SCHEMA_SQL.format(dim=embedding_dim))
     logger.info("postgres_schema_ensured", embedding_dim=embedding_dim)
+
+
+def run_alembic_upgrade(dsn: str) -> None:
+    """Run ``alembic upgrade head`` in-process against ``dsn`` (spec #66).
+
+    Sibling of :func:`ensure_schema`: the same bootstrap-lock key serializes
+    the two paths across processes, so a migrating container and a plain
+    ``ensure_schema`` boot can never interleave DDL. The lock here is
+    **session-level** (not the xact-scoped variant ``ensure_schema`` uses)
+    because alembic opens its own transaction per revision — the lock must
+    outlive any single transaction and is released in the ``finally`` (and,
+    belt-and-braces, when the lock connection closes).
+
+    The alembic config is built programmatically — ``alembic.ini`` is not
+    shipped in the wheel — pointing ``script_location`` at the installed
+    ``thestill/migrations`` package. The DSN travels via
+    ``config.attributes`` which ``migrations/env.py`` resolves FIRST, ahead
+    of any ambient ``DATABASE_URL``: the advisory lock below is held on
+    ``dsn``, so alembic must never be redirected to a different database.
+    """
+    import psycopg
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+
+    script_location = Path(__file__).resolve().parent.parent / "migrations"
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(script_location))
+    cfg.attributes["thestill_dsn"] = dsn
+
+    with psycopg.connect(dsn, autocommit=True) as lock_conn:
+        lock_conn.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_BOOTSTRAP_LOCK_KEY,))
+        try:
+            logger.info("alembic_upgrade_started")
+            command.upgrade(cfg, "head")
+            logger.info("alembic_upgrade_finished")
+        finally:
+            lock_conn.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_BOOTSTRAP_LOCK_KEY,))
