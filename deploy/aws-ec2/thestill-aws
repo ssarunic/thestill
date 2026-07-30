@@ -1,0 +1,1615 @@
+#!/usr/bin/env python3
+"""thestill-aws — provision and manage the single-EC2 deployment (spec #66).
+
+Mirrors the shape of dalston's ``dalston-aws``: a single-file boto3 CLI
+rather than Terraform/CDK, split into a cheap idempotent ``setup`` phase and
+a billable ``launch`` phase, so re-running ``setup`` is always safe.
+
+Usage:
+    thestill-aws setup --domain D [--dalston-sg sg-...] [--dalston-port P]
+    thestill-aws secrets put --from-env-file FILE     # seed SSM from a .env
+    thestill-aws secrets list                          # names only, never values
+    thestill-aws launch                                # EC2 + cloud-init bootstrap
+    thestill-aws dns                                   # Route53 A record -> instance
+    thestill-aws reconcile [--image-tag T]             # re-apply on-box config / upgrade
+    thestill-aws status                                # instance + bootstrap + health
+    thestill-aws logs [--service thestill] [--lines N]
+    thestill-aws ssh                                   # SSM Session Manager shell
+    thestill-aws teardown [--yes]                      # delete everything but S3
+
+Typical first deploy:
+    thestill-aws setup --domain thestill.example.com --dalston-sg sg-0abc
+    thestill-aws secrets put --from-env-file prod-secrets.env
+    thestill-aws launch
+    thestill-aws dns
+    thestill-aws status
+
+Prerequisites:
+    - AWS credentials that can call sts:GetCallerIdentity
+    - boto3 (already in thestill's [s3]/[dev] extras: ./venv/bin/python this-script)
+
+Design notes:
+    - Every command is idempotent. ``setup`` is get-or-create throughout;
+      ``launch`` converges on one running instance (no-op if it is already
+      up, start if stopped); ``dns`` skips a record that already matches;
+      ``reconcile`` replays the same converging bootstrap over SSM. Re-run
+      anything after a failure rather than unpicking partial state.
+    - Access is SSM Session Manager only. No key pair, no port 22, ever.
+    - IMDSv2 is required on the instance and the encrypted root mapping is
+      resolved from the AMI's own RootDeviceName. Both are dalston M93
+      findings (IMDSv1 left enabled; a hard-coded /dev/xvda mapping that
+      silently produced an unencrypted root plus an idle encrypted volume).
+    - EC2 tags are the source of truth for discovery; ~/.thestill/aws-state.json
+      is a convenience cache. Deleting it does NOT delete AWS resources.
+"""
+
+from __future__ import annotations
+
+import sys
+
+if sys.version_info < (3, 10):  # noqa: UP036 — runtime guard against a 3.9 shebang pickup
+    sys.stderr.write(
+        "thestill-aws requires Python >= 3.10 "
+        f"(got {sys.version_info.major}.{sys.version_info.minor}).\n"
+        "Invoke with the project venv, e.g.\n"
+        "  ./venv/bin/python deploy/aws-ec2/thestill-aws ...\n"
+    )
+    sys.exit(1)
+
+import argparse
+import json
+import re
+import secrets as pysecrets
+import shlex
+import subprocess
+import time
+from dataclasses import asdict, dataclass, fields
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, NoReturn, Optional
+
+try:
+    import boto3
+    from botocore.exceptions import ClientError, WaiterError
+except ImportError:  # pragma: no cover - environment guard
+    sys.stderr.write(
+        "boto3 is not installed. Install it with:\n" "  ./venv/bin/pip install boto3      # or: uv sync --extra s3\n"
+    )
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+NAME_PREFIX = "thestill"
+STATE_DIR = Path.home() / ".thestill"
+STATE_FILE = STATE_DIR / "aws-state.json"
+AUDIT_LOG = STATE_DIR / "audit.log"
+
+DEFAULT_REGION = "eu-west-2"
+INSTANCE_TYPE = "t4g.medium"
+ROOT_VOLUME_SIZE = 30
+SSM_PREFIX = "/thestill/prod/"
+
+# AL2023 arm64, resolved through the public SSM parameter so we never pin a
+# stale AMI id (Graviton — the image is arm64 and so is the prod container).
+AL2023_ARM64_SSM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+
+GITHUB_REPO = "ssarunic/thestill"
+DEPLOY_KIT_PATH = "deploy/aws-ec2"
+DEFAULT_IMAGE_TAG = "prod-latest"
+
+
+def deploy_kit_base(ref: str) -> str:
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/{ref}/{DEPLOY_KIT_PATH}"
+
+
+def default_kit_ref() -> str:
+    """Pin the deploy kit to this checkout's commit when it is public.
+
+    Fetching from ``main`` would mean a ``reconcile`` months from now
+    silently pulls a compose file newer than the image tag the box is
+    running — version skew that appears as a mystery boot failure. A commit
+    SHA makes both launch and reconcile reproducible. Falls back to ``main``
+    only when the SHA is not on the remote (nothing to fetch otherwise).
+    """
+    repo = Path(__file__).resolve().parents[2]
+    try:
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "-C", str(repo), "branch", "-r", "--contains", sha],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        warn("Not a git checkout — pinning the deploy kit to 'main'.")
+        return "main"
+    if "origin/main" not in remote:
+        warn(
+            f"HEAD ({sha[:8]}) is not on origin/main, so the instance could not "
+            "fetch it — pinning the deploy kit to 'main'. Push first, or pass "
+            "--kit-ref <sha>, for a reproducible bootstrap."
+        )
+        return "main"
+    return sha
+
+
+BOOTSTRAP_MARKER = "/var/lib/thestill-bootstrap-complete"
+REMOTE_DIR = "/srv/thestill"
+BACKUP_ONCALENDAR = "*-*-* 03:00:00"
+
+# Container's non-root user (Dockerfile THESTILL_UID/GID) — the bind-mounted
+# /data must be owned by it or every write fails.
+CONTAINER_UID = 1000
+
+# Secrets the app cannot start without. Checked before launch so a missing
+# key surfaces in a one-line error instead of a crash-looping container.
+REQUIRED_SECRETS = (
+    "JWT_SECRET_KEY",
+    "DALSTON_BASE_URL",
+    "POSTGRES_PASSWORD",
+    "PUBLIC_DOMAIN",
+    "PUBLIC_BASE_URL",
+    "ALLOWED_ORIGINS",
+)
+# At least one of these must be present (LLM provider credential).
+LLM_SECRETS = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")
+
+_RED, _GREEN, _YELLOW, _BLUE, _NC = (
+    "\033[0;31m",
+    "\033[0;32m",
+    "\033[1;33m",
+    "\033[0;34m",
+    "\033[0m",
+)
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+
+def log(msg: str) -> None:
+    print(f"{_GREEN}[thestill-aws]{_NC} {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"{_YELLOW}[thestill-aws]{_NC} {msg}")
+
+
+def err(msg: str) -> None:
+    print(f"{_RED}[thestill-aws]{_NC} {msg}", file=sys.stderr)
+
+
+def die(msg: str) -> NoReturn:
+    err(msg)
+    sys.exit(1)
+
+
+def step(msg: str) -> None:
+    print(f"{_BLUE}==>{_NC} {msg}")
+
+
+def audit(action: str, **details: Any) -> None:
+    """Append-only JSONL trail of every mutating action."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    entry = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": action, **details}
+    with AUDIT_LOG.open("a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Deployment:
+    region: str = DEFAULT_REGION
+    domain: str = ""
+    vpc_id: str = ""
+    subnet_id: str = ""
+    sg_id: str = ""
+    dalston_sg: str = ""
+    dalston_port: int = 0
+    bucket: str = ""
+    role_name: str = ""
+    profile_name: str = ""
+    instance_id: str = ""
+    image_tag: str = DEFAULT_IMAGE_TAG
+    kit_ref: str = "main"
+    created_at: str = ""
+
+
+def save_state(state: Deployment) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    STATE_FILE.write_text(json.dumps(asdict(state), indent=2) + "\n")
+    STATE_FILE.chmod(0o600)
+
+
+def load_state() -> Optional[Deployment]:
+    if not STATE_FILE.exists():
+        return None
+    data = json.loads(STATE_FILE.read_text() or "{}")
+    # Filter unknown keys so an older state file still loads forward.
+    known = {f.name for f in fields(Deployment)}
+    return Deployment(**{k: v for k, v in data.items() if k in known})
+
+
+def require_state() -> Deployment:
+    state = load_state()
+    if state is None:
+        die("No deployment found. Run 'thestill-aws setup --domain <your-domain>' first.")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# boto3 clients
+# ---------------------------------------------------------------------------
+
+_clients: dict[str, Any] = {}
+
+
+def client(service: str, region: str = "") -> Any:
+    key = f"{service}:{region}"
+    if key not in _clients:
+        _clients[key] = boto3.client(service, region_name=region or None)
+    return _clients[key]
+
+
+_account_id: Optional[str] = None
+
+
+def account_id(region: str) -> str:
+    global _account_id
+    if _account_id is None:
+        _account_id = client("sts", region).get_caller_identity()["Account"]
+    return _account_id
+
+
+_NON_RETRYABLE = frozenset({"InstanceLimitExceeded", "VcpuLimitExceeded", "UnauthorizedOperation"})
+
+
+def retry_aws(func, *args, max_retries: int = 4, **kwargs):
+    """Retry transient AWS errors; fail fast on quota/permission errors."""
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in _NON_RETRYABLE or attempt >= max_retries:
+                raise
+            warn(f"Attempt {attempt} failed ({code}), retrying in {delay}s...")
+            time.sleep(delay)
+            delay *= 2
+
+
+def base_tags(role: str) -> list[dict]:
+    return [
+        {"Key": "Name", "Value": f"{NAME_PREFIX}-{role}"},
+        {"Key": "Project", "Value": NAME_PREFIX},
+        {"Key": f"{NAME_PREFIX}:role", "Value": role},
+        {"Key": f"{NAME_PREFIX}:managed-by", "Value": "thestill-aws"},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# EC2 lookups
+# ---------------------------------------------------------------------------
+
+
+def describe_instance(region: str, instance_id: str) -> Optional[dict]:
+    """Describe one instance. Returns None ONLY when AWS confirms it is gone —
+    every other error propagates, because callers use the result to decide
+    whether to skip a terminate call."""
+    try:
+        resp = client("ec2", region).describe_instances(InstanceIds=[instance_id])
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "InvalidInstanceID.NotFound":
+            return None
+        raise
+    try:
+        return resp["Reservations"][0]["Instances"][0]
+    except (IndexError, KeyError):
+        return None
+
+
+def instance_state(region: str, instance_id: str) -> str:
+    inst = describe_instance(region, instance_id)
+    return inst["State"]["Name"] if inst else "terminated"
+
+
+def discover_instance(region: str) -> Optional[dict]:
+    """Find the app instance by tag — EC2 is the source of truth, not the
+    local state file (which a second laptop would not have)."""
+    resp = client("ec2", region).describe_instances(
+        Filters=[
+            {"Name": f"tag:{NAME_PREFIX}:role", "Values": ["app"]},
+            {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+        ]
+    )
+    for reservation in resp.get("Reservations", []):
+        for inst in reservation.get("Instances", []):
+            return inst
+    return None
+
+
+def resolve_ami(region: str) -> tuple[str, str]:
+    """Return (ami_id, root_device_name) for the latest AL2023 arm64 image.
+
+    The root device name comes from the AMI itself. dalston hard-coded
+    /dev/xvda against an image whose root was /dev/sda1, which silently
+    produced an unencrypted root volume plus an idle encrypted one (M93).
+    """
+    ami_id = client("ssm", region).get_parameter(Name=AL2023_ARM64_SSM)["Parameter"]["Value"]
+    images = client("ec2", region).describe_images(ImageIds=[ami_id])["Images"]
+    if not images:
+        die(f"AMI {ami_id} resolved from SSM but describe_images returned nothing")
+    return ami_id, images[0].get("RootDeviceName", "/dev/xvda")
+
+
+# ---------------------------------------------------------------------------
+# S3
+# ---------------------------------------------------------------------------
+
+
+def ensure_bucket(region: str) -> str:
+    bucket = f"{NAME_PREFIX}-backups-{account_id(region)}"
+    s3 = client("s3", region)
+    try:
+        s3.head_bucket(Bucket=bucket)
+        log(f"S3 bucket {bucket} already exists")
+        return bucket
+    except ClientError:
+        pass
+
+    log(f"Creating S3 bucket: {bucket}")
+    kwargs: dict[str, Any] = {"Bucket": bucket}
+    if region != "us-east-1":
+        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
+    s3.create_bucket(**kwargs)
+
+    s3.put_public_access_block(
+        Bucket=bucket,
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
+    s3.put_bucket_encryption(
+        Bucket=bucket,
+        ServerSideEncryptionConfiguration={
+            "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
+        },
+    )
+    # Versioning is the fat-finger/ransomware guard for the only copy of the
+    # database; the lifecycle rule keeps 30 days of noncurrent versions.
+    s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+    s3.put_bucket_lifecycle_configuration(
+        Bucket=bucket,
+        LifecycleConfiguration={
+            "Rules": [
+                {
+                    "ID": "expire-noncurrent",
+                    "Status": "Enabled",
+                    "Filter": {"Prefix": ""},
+                    "NoncurrentVersionExpiration": {"NoncurrentDays": 30},
+                    "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},
+                }
+            ]
+        },
+    )
+    log("S3 bucket created (private, encrypted, versioned, 30-day noncurrent expiry)")
+    audit("bucket_created", bucket=bucket, region=region)
+    return bucket
+
+
+# ---------------------------------------------------------------------------
+# IAM
+# ---------------------------------------------------------------------------
+
+
+def ensure_iam(region: str, bucket: str) -> tuple[str, str]:
+    iam = client("iam")
+    role_name = f"{NAME_PREFIX}-app-role"
+    profile_name = f"{NAME_PREFIX}-app-profile"
+
+    try:
+        iam.get_role(RoleName=role_name)
+        log(f"IAM role {role_name} already exists")
+    except ClientError:
+        log(f"Creating IAM role: {role_name}")
+        iam.create_role(
+            RoleName=role_name,
+            AssumeRolePolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ec2.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            ),
+            Tags=[{"Key": "Project", "Value": NAME_PREFIX}],
+        )
+        audit("iam_role_created", role=role_name)
+
+    # Backups need write; nothing on the box has any reason to delete an
+    # object, so DeleteObject is deliberately absent (M93 lesson: a
+    # compromised box should not be able to wipe the only backup).
+    bucket_arn = f"arn:aws:s3:::{bucket}"
+    iam.put_role_policy(
+        RoleName=role_name,
+        PolicyName=f"{NAME_PREFIX}-s3-backups",
+        PolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": bucket_arn},
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject"],
+                        "Resource": f"{bucket_arn}/*",
+                    },
+                ],
+            }
+        ),
+    )
+    iam.put_role_policy(
+        RoleName=role_name,
+        PolicyName=f"{NAME_PREFIX}-ssm-secrets",
+        PolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+                        "Resource": f"arn:aws:ssm:{region}:{account_id(region)}:parameter{SSM_PREFIX}*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["kms:Decrypt"],
+                        "Resource": "*",
+                        "Condition": {"StringEquals": {"kms:ViaService": f"ssm.{region}.amazonaws.com"}},
+                    },
+                ],
+            }
+        ),
+    )
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    )
+
+    try:
+        profile = iam.get_instance_profile(InstanceProfileName=profile_name)["InstanceProfile"]
+        log(f"Instance profile {profile_name} already exists")
+        # A previous run could have died between create_instance_profile and
+        # add_role_to_instance_profile, leaving an empty profile that launches
+        # an instance with no credentials at all. Converge instead of assuming.
+        if not any(r["RoleName"] == role_name for r in profile.get("Roles", [])):
+            warn(f"Instance profile {profile_name} has no role attached — attaching {role_name}")
+            iam.add_role_to_instance_profile(InstanceProfileName=profile_name, RoleName=role_name)
+            time.sleep(10)
+    except ClientError:
+        log(f"Creating instance profile: {profile_name}")
+        iam.create_instance_profile(
+            InstanceProfileName=profile_name,
+            Tags=[{"Key": "Project", "Value": NAME_PREFIX}],
+        )
+        iam.add_role_to_instance_profile(InstanceProfileName=profile_name, RoleName=role_name)
+        log("Waiting 10s for the instance profile to propagate...")
+        time.sleep(10)
+
+    log("IAM role + instance profile ready")
+    return role_name, profile_name
+
+
+# ---------------------------------------------------------------------------
+# Networking
+# ---------------------------------------------------------------------------
+
+
+def default_vpc(region: str) -> str:
+    vpcs = client("ec2", region).describe_vpcs(Filters=[{"Name": "is-default", "Values": ["true"]}])["Vpcs"]
+    if not vpcs:
+        die(
+            f"No default VPC in {region}. Pass --vpc <vpc-id>, or --dalston-sg "
+            "so the VPC can be derived from Dalston's security group."
+        )
+    return vpcs[0]["VpcId"]
+
+
+def sg_vpc(region: str, sg_id: str) -> str:
+    try:
+        groups = client("ec2", region).describe_security_groups(GroupIds=[sg_id])["SecurityGroups"]
+    except ClientError as exc:
+        die(f"Could not read security group {sg_id}: {exc}")
+    return groups[0]["VpcId"]
+
+
+def find_sg(region: str, name: str, vpc_id: str) -> Optional[str]:
+    resp = client("ec2", region).describe_security_groups(
+        Filters=[{"Name": "group-name", "Values": [name]}, {"Name": "vpc-id", "Values": [vpc_id]}]
+    )
+    groups = resp.get("SecurityGroups", [])
+    return groups[0]["GroupId"] if groups else None
+
+
+def ensure_app_sg(region: str, vpc_id: str) -> str:
+    name = f"{NAME_PREFIX}-app-sg"
+    existing = find_sg(region, name, vpc_id)
+    if existing:
+        log(f"Security group {name} already exists ({existing})")
+        sg_id = existing
+    else:
+        log(f"Creating security group: {name}")
+        sg_id = client("ec2", region).create_security_group(
+            GroupName=name,
+            Description="thestill app: public HTTPS only (spec #66)",
+            VpcId=vpc_id,
+            TagSpecifications=[{"ResourceType": "security-group", "Tags": base_tags("app")}],
+        )["GroupId"]
+        audit("sg_created", sg=sg_id, vpc=vpc_id)
+
+    # Caddy terminates TLS on 80/443. Nothing else is exposed — no 22 (SSM
+    # Session Manager is the admin path), no 8000, no 5432.
+    _authorize(
+        region,
+        sg_id,
+        [
+            {
+                "IpProtocol": "tcp",
+                "FromPort": 80,
+                "ToPort": 80,
+                "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTP (ACME + redirect)"}],
+            },
+            {
+                "IpProtocol": "tcp",
+                "FromPort": 443,
+                "ToPort": 443,
+                "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTPS"}],
+            },
+            {
+                "IpProtocol": "udp",
+                "FromPort": 443,
+                "ToPort": 443,
+                "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTP/3"}],
+            },
+        ],
+    )
+    return sg_id
+
+
+def _authorize(region: str, sg_id: str, permissions: list[dict]) -> None:
+    """Add ingress rules, tolerating ones that already exist.
+
+    The batch call fails atomically if ANY single rule is a duplicate, so
+    fall back to per-rule on failure (dalston pattern)."""
+    ec2 = client("ec2", region)
+    try:
+        ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=permissions)
+        return
+    except ClientError:
+        pass
+    for perm in permissions:
+        try:
+            ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[perm])
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "InvalidPermission.Duplicate":
+                raise
+
+
+def ensure_dalston_rule(region: str, dalston_sg: str, app_sg: str, port: int) -> None:
+    """Allow the app SG to reach Dalston on its service port, SG-to-SG.
+
+    Referencing the security group (not an IP) keeps working when Dalston is
+    rebuilt with a new private address — the coupling risk called out in
+    spec #66's Open Items."""
+    log(f"Allowing {app_sg} -> {dalston_sg}:{port}")
+    _authorize(
+        region,
+        dalston_sg,
+        [
+            {
+                "IpProtocol": "tcp",
+                "FromPort": port,
+                "ToPort": port,
+                "UserIdGroupPairs": [{"GroupId": app_sg, "Description": "thestill app"}],
+            }
+        ],
+    )
+    audit("dalston_rule_added", dalston_sg=dalston_sg, app_sg=app_sg, port=port)
+
+
+def pick_public_subnet(region: str, vpc_id: str) -> str:
+    """Prefer a subnet that auto-assigns public IPs (i.e. a real public
+    subnet); fall back to the first available one."""
+    subnets = client("ec2", region).describe_subnets(
+        Filters=[{"Name": "vpc-id", "Values": [vpc_id]}, {"Name": "state", "Values": ["available"]}]
+    )["Subnets"]
+    if not subnets:
+        die(f"No available subnets in {vpc_id}")
+    public = [s for s in subnets if s.get("MapPublicIpOnLaunch")]
+    chosen = sorted(public or subnets, key=lambda s: s["AvailabilityZone"])[0]
+    if not public:
+        warn(
+            f"No subnet in {vpc_id} auto-assigns public IPs; using "
+            f"{chosen['SubnetId']} with an explicit public IP. Verify it has "
+            "a route to an internet gateway."
+        )
+    return chosen["SubnetId"]
+
+
+# ---------------------------------------------------------------------------
+# SSM Parameter Store
+# ---------------------------------------------------------------------------
+
+
+def put_secret(region: str, name: str, value: str, *, overwrite: bool = False) -> bool:
+    """Write one SecureString. Returns True if written, False if it already
+    existed and overwrite was not requested."""
+    try:
+        client("ssm", region).put_parameter(
+            Name=f"{SSM_PREFIX}{name}",
+            Value=value,
+            Type="SecureString",
+            Overwrite=overwrite,
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ParameterAlreadyExists":
+            return False
+        raise
+
+
+def list_secrets(region: str) -> dict[str, str]:
+    """Return {NAME: value} for everything under the prefix."""
+    out: dict[str, str] = {}
+    paginator = client("ssm", region).get_paginator("get_parameters_by_path")
+    for page in paginator.paginate(Path=SSM_PREFIX, Recursive=True, WithDecryption=True):
+        for param in page["Parameters"]:
+            out[param["Name"].rsplit("/", 1)[-1]] = param["Value"]
+    return out
+
+
+_DOTENV_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+_INLINE_COMMENT_RE = re.compile(r"\s#")
+
+
+def _parse_env_value(rest: str) -> tuple[str, str]:
+    """Return (value, problem). A non-empty problem means: do not use this."""
+    rest = rest.strip()
+    if not rest:
+        return "", ""
+    quote = rest[0]
+    if quote in ("'", '"'):
+        end = rest.find(quote, 1)
+        if end == -1:
+            return "", f"unterminated {quote} quote"
+        trailing = rest[end + 1 :].strip()
+        if trailing and not trailing.startswith("#"):
+            return "", f"unexpected text after the closing quote ({trailing!r})"
+        return rest[1:end], ""
+    # Unquoted: an inline comment starts at the first whitespace-preceded '#'.
+    # Without this, `KEY=secret  # note` would ship the note as the secret.
+    match = _INLINE_COMMENT_RE.search(rest)
+    if match:
+        rest = rest[: match.start()]
+    return rest.strip(), ""
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a KEY=VALUE file into {NAME: value}.
+
+    Deliberately strict and dumb: no interpolation, no multiline. Anything
+    it cannot parse confidently is skipped AND reported — a silently
+    mangled credential surfaces days later as an auth failure nobody
+    connects back to the deploy (spec #42 FM-1: errors as empty results).
+    """
+    out: dict[str, str] = {}
+    skipped: list[tuple[int, str, str]] = []
+
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        match = _DOTENV_RE.match(raw)
+        if not match:
+            skipped.append((lineno, raw.strip()[:40], "not a KEY=VALUE assignment"))
+            continue
+        key, rest = match.group(1), match.group(2)
+        if key != key.upper():
+            skipped.append((lineno, key, "key is not upper-case (env vars are)"))
+            continue
+        value, problem = _parse_env_value(rest)
+        if problem:
+            skipped.append((lineno, key, problem))
+            continue
+        if not value:
+            skipped.append((lineno, key, "empty value"))
+            continue
+        out[key] = value
+
+    for lineno, what, why in skipped:
+        warn(f"  {path.name}:{lineno} skipped — {why}: {what}")
+    return out
+
+
+def preflight_secrets(region: str) -> None:
+    """Fail before launching a box that could never come up healthy."""
+    present = set(list_secrets(region))
+    missing = [name for name in REQUIRED_SECRETS if name not in present]
+    if not any(name in present for name in LLM_SECRETS):
+        missing.append(f"one of {', '.join(LLM_SECRETS)}")
+    if missing:
+        die(
+            "Missing required secrets in SSM:\n  - "
+            + "\n  - ".join(missing)
+            + f"\n\nAdd them with:\n  thestill-aws secrets put --from-env-file <file>\n"
+            f"(they land under {SSM_PREFIX} as SecureString)"
+        )
+    log(f"Preflight OK — {len(present)} parameters under {SSM_PREFIX}")
+
+
+# ---------------------------------------------------------------------------
+# Cloud-init user-data
+# ---------------------------------------------------------------------------
+
+
+def build_user_data(region: str, bucket: str, image_tag: str, kit_ref: str = "main") -> str:
+    """Compose the bootstrap script.
+
+    Structure follows dalston: a fixed header, one f-string block holding
+    every interpolated value, then a raw-string body so bash ${...} and
+    {braces} can never collide with Python formatting.
+
+    Every step is written to converge, not to assume a clean box, so the
+    same script is both the cloud-init first boot AND what ``reconcile``
+    re-runs over SSM against a live instance.
+    """
+    header = "#!/bin/bash\nset -euo pipefail\nexec > >(tee /var/log/user-data.log) 2>&1\n"
+
+    # The ONLY interpolated block; shlex.quote keeps a hostile tag or bucket
+    # name from breaking out of the assignment.
+    variables = (
+        "\n".join(
+            [
+                f"export AWS_DEFAULT_REGION={shlex.quote(region)}",
+                f"export SSM_PREFIX={shlex.quote(SSM_PREFIX)}",
+                f"BACKUP_BUCKET={shlex.quote(bucket)}",
+                f"DEPLOY_KIT_BASE={shlex.quote(deploy_kit_base(kit_ref))}",
+                f"IMAGE_TAG={shlex.quote(image_tag)}",
+                f"REMOTE_DIR={shlex.quote(REMOTE_DIR)}",
+                f"CONTAINER_UID={CONTAINER_UID}",
+                f"BOOTSTRAP_MARKER={shlex.quote(BOOTSTRAP_MARKER)}",
+                f"BACKUP_ONCALENDAR={shlex.quote(BACKUP_ONCALENDAR)}",
+            ]
+        )
+        + "\n"
+    )
+
+    body = r"""
+echo "=== thestill bootstrap starting ==="
+
+dnf install -y docker jq
+systemctl enable --now docker
+usermod -aG docker ec2-user
+
+# Compose v2 as a CLI plugin (AL2023 has no compose package).
+install -d /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64" \
+    -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+docker compose version
+
+install -d -m 0755 "$REMOTE_DIR"
+cd "$REMOTE_DIR"
+for f in docker-compose.prod.yml Caddyfile fetch-secrets.sh backup.sh; do
+    curl -fsSL "$DEPLOY_KIT_BASE/$f" -o "$f"
+done
+chmod +x fetch-secrets.sh backup.sh
+
+# The container runs as a non-root uid; the bind mount must be writable by it.
+install -d -o "$CONTAINER_UID" -g "$CONTAINER_UID" "$REMOTE_DIR/data"
+
+./fetch-secrets.sh
+# Delete-then-append so re-running this script can't accumulate duplicate
+# assignments (fetch-secrets.sh rewrites .env, but never assume it ran).
+sed -i "/^THESTILL_IMAGE_TAG=/d" .env
+printf "THESTILL_IMAGE_TAG='%s'\n" "$IMAGE_TAG" >> .env
+chmod 600 .env
+
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+
+# Nightly backup as a systemd timer — AL2023 minimal ships no cron.
+cat > /etc/systemd/system/thestill-backup.service <<EOF
+[Unit]
+Description=thestill nightly backup (pg_dump + artifact sync to S3)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=BACKUP_BUCKET=$BACKUP_BUCKET
+Environment=AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+ExecStart=$REMOTE_DIR/backup.sh
+EOF
+
+cat > /etc/systemd/system/thestill-backup.timer <<EOF
+[Unit]
+Description=Run the thestill backup nightly
+
+[Timer]
+OnCalendar=$BACKUP_ONCALENDAR
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now thestill-backup.timer
+
+install -d "$(dirname "$BOOTSTRAP_MARKER")"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$BOOTSTRAP_MARKER"
+echo "=== thestill bootstrap complete ==="
+"""
+    return header + variables + body
+
+
+# ---------------------------------------------------------------------------
+# SSM Run Command (the only remote-exec path — no SSH keys anywhere)
+# ---------------------------------------------------------------------------
+
+
+# SSM caps inline output at 24,000 chars (stdout) / 8,000 (stderr) with no
+# truncation flag, so a long reconcile can lose exactly the error you need.
+SSM_INLINE_STDOUT_LIMIT = 24000
+
+
+def run_remote(
+    region: str,
+    instance_id: str,
+    command: str,
+    *,
+    timeout: int = 120,
+    output_bucket: str = "",
+) -> tuple[int, str]:
+    """Run a shell command on the box via SSM. Returns (exit_code, output).
+
+    Pass ``output_bucket`` for commands whose output can be long: SSM then
+    also writes the full stream to S3 and we surface that URL instead of
+    silently handing back a truncated tail.
+    """
+    ssm = client("ssm", region)
+    send_kwargs: dict[str, Any] = {
+        "InstanceIds": [instance_id],
+        "DocumentName": "AWS-RunShellScript",
+        "Parameters": {"commands": [command]},
+    }
+    if output_bucket:
+        send_kwargs["OutputS3BucketName"] = output_bucket
+        send_kwargs["OutputS3KeyPrefix"] = "ssm-command-output"
+    try:
+        cmd_id = ssm.send_command(**send_kwargs)["Command"]["CommandId"]
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        if code == "InvalidInstanceId":
+            return 255, (
+                "SSM agent not reachable yet (instance still booting, or the " "instance profile is not attached)."
+            )
+        raise
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        try:
+            result = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        except ClientError:
+            continue
+        if result["Status"] in ("Pending", "InProgress", "Delayed"):
+            continue
+        stdout = result.get("StandardOutputContent", "") or ""
+        stderr = result.get("StandardErrorContent", "") or ""
+        output = stdout + stderr
+        if len(stdout) >= SSM_INLINE_STDOUT_LIMIT:
+            url = result.get("StandardOutputUrl", "")
+            output += f"\n\n[output truncated at {SSM_INLINE_STDOUT_LIMIT} chars by SSM" + (
+                f" — full log: {url}]" if url else "; re-run with an output bucket for the full log]"
+            )
+        return int(result.get("ResponseCode", -1)), output.strip()
+    return 254, f"Timed out after {timeout}s waiting for the command to finish"
+
+
+# ---------------------------------------------------------------------------
+# Route53
+# ---------------------------------------------------------------------------
+
+
+def find_hosted_zone(domain: str) -> tuple[str, str]:
+    """Return (zone_id, zone_name) for the most specific zone covering
+    ``domain``. Raises via die() when nothing matches."""
+    r53 = client("route53")
+    candidates: list[tuple[str, str]] = []
+    paginator = r53.get_paginator("list_hosted_zones")
+    for page in paginator.paginate():
+        for zone in page["HostedZones"]:
+            if zone.get("Config", {}).get("PrivateZone"):
+                continue
+            name = zone["Name"].rstrip(".")
+            if domain == name or domain.endswith("." + name):
+                candidates.append((zone["Id"].split("/")[-1], name))
+    if not candidates:
+        die(
+            f"No public Route53 hosted zone covers {domain}.\n"
+            "Create the A record manually at your DNS provider instead, then "
+            "run 'thestill-aws status'."
+        )
+    # Most specific zone wins (sub.example.com beats example.com).
+    return sorted(candidates, key=lambda z: len(z[1]), reverse=True)[0]
+
+
+def current_a_record(zone_id: str, domain: str) -> list[str]:
+    resp = client("route53").list_resource_record_sets(
+        HostedZoneId=zone_id, StartRecordName=domain, StartRecordType="A", MaxItems="1"
+    )
+    for record in resp.get("ResourceRecordSets", []):
+        if record["Name"].rstrip(".") == domain and record["Type"] == "A":
+            return [r["Value"] for r in record.get("ResourceRecords", [])]
+    return []
+
+
+def upsert_a_record(domain: str, ip: str, *, wait: bool = True) -> None:
+    zone_id, zone_name = find_hosted_zone(domain)
+    if current_a_record(zone_id, domain) == [ip]:
+        log(f"A record {domain} already points at {ip} — nothing to change.")
+        return
+    log(f"Upserting A record {domain} -> {ip} in zone {zone_name} ({zone_id})")
+    r53 = client("route53")
+    change = r53.change_resource_record_sets(
+        HostedZoneId=zone_id,
+        ChangeBatch={
+            "Comment": "thestill-aws",
+            "Changes": [
+                {
+                    "Action": "UPSERT",
+                    "ResourceRecordSet": {
+                        "Name": domain,
+                        "Type": "A",
+                        "TTL": 60,
+                        "ResourceRecords": [{"Value": ip}],
+                    },
+                }
+            ],
+        },
+    )["ChangeInfo"]
+    audit("dns_upserted", domain=domain, ip=ip, zone=zone_id)
+    if not wait:
+        return
+    log("Waiting for the change to propagate (INSYNC)...")
+    try:
+        r53.get_waiter("resource_record_sets_changed").wait(
+            Id=change["Id"], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
+        )
+        log("DNS is live")
+    except WaiterError:
+        warn("Still PENDING after 5 minutes — it will settle on its own.")
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    region = args.region
+    domain = args.domain.strip().lower().rstrip(".")
+    if not domain or "." not in domain:
+        die(f"--domain must be a fully-qualified hostname (got {args.domain!r})")
+
+    existing = load_state()
+    if existing and existing.instance_id:
+        log("Existing deployment found — verifying infrastructure")
+
+    step("1/5  Identity")
+    log(f"AWS account {account_id(region)}, region {region}")
+
+    step("2/5  Networking")
+    if args.dalston_sg:
+        vpc_id = sg_vpc(region, args.dalston_sg)
+        log(f"VPC derived from Dalston's security group: {vpc_id}")
+    elif args.vpc:
+        vpc_id = args.vpc
+    else:
+        vpc_id = default_vpc(region)
+        warn(
+            "Using the default VPC. Dalston must be in this VPC (or peered "
+            "with it) for private transcription traffic — pass --dalston-sg "
+            "to derive the VPC from Dalston instead."
+        )
+    sg_id = ensure_app_sg(region, vpc_id)
+    subnet_id = pick_public_subnet(region, vpc_id)
+    log(f"Subnet: {subnet_id}")
+    if args.dalston_sg:
+        ensure_dalston_rule(region, args.dalston_sg, sg_id, args.dalston_port)
+
+    step("3/5  Storage")
+    bucket = ensure_bucket(region)
+
+    step("4/5  IAM")
+    role_name, profile_name = ensure_iam(region, bucket)
+
+    step("5/5  Derived secrets")
+    # Values the operator should never have to hand-write: they follow from
+    # --domain, and POSTGRES_PASSWORD must be URI-safe because the compose
+    # file interpolates it into DATABASE_URL unescaped.
+    derived = {
+        "PUBLIC_DOMAIN": domain,
+        "PUBLIC_BASE_URL": f"https://{domain}",
+        "ALLOWED_ORIGINS": f"https://{domain}",
+        "POSTGRES_PASSWORD": pysecrets.token_hex(32),
+        "ENVIRONMENT": "production",
+        "COOKIE_SECURE": "true",
+        # Ship dark on the first boot: the operator flips these at cutover,
+        # once the old machine's schedulers are stopped.
+        "REFRESH_SCHEDULER_ENABLED": "false",
+        "BRIEFING_SCHEDULER_ENABLED": "false",
+    }
+    for name, value in derived.items():
+        if put_secret(region, name, value):
+            log(f"  seeded {name}")
+        else:
+            log(f"  {name} already set (left untouched)")
+
+    state = existing or Deployment()
+    state.region = region
+    state.domain = domain
+    state.vpc_id = vpc_id
+    state.subnet_id = subnet_id
+    state.sg_id = sg_id
+    state.dalston_sg = args.dalston_sg or ""
+    state.dalston_port = args.dalston_port if args.dalston_sg else 0
+    state.bucket = bucket
+    state.role_name = role_name
+    state.profile_name = profile_name
+    state.created_at = state.created_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    save_state(state)
+    audit("setup", region=region, domain=domain, vpc=vpc_id, sg=sg_id, bucket=bucket)
+
+    print()
+    log("Setup complete. No billable resources created yet.")
+    print(
+        "\nNext:\n"
+        "  1. Add your API keys and Dalston settings:\n"
+        "       thestill-aws secrets put --from-env-file prod-secrets.env\n"
+        "     Needed: JWT_SECRET_KEY, an LLM key (e.g. GEMINI_API_KEY),\n"
+        "     DALSTON_BASE_URL, DALSTON_API_KEY, URL_GUARD_ALLOWLIST,\n"
+        "     GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET if MULTI_USER=true.\n"
+        f"  2. Add https://{domain}/api/auth/callback to the Google OAuth console.\n"
+        "  3. thestill-aws launch\n"
+    )
+
+
+def cmd_secrets(args: argparse.Namespace) -> None:
+    state = require_state()
+    region = state.region
+
+    if args.action == "list":
+        present = list_secrets(region)
+        if not present:
+            log(f"No parameters under {SSM_PREFIX}")
+            return
+        log(f"{len(present)} parameters under {SSM_PREFIX}:")
+        for name in sorted(present):
+            # Names only. Values are secrets and this output gets pasted.
+            print(f"  {name}")
+        return
+
+    path = Path(args.from_env_file).expanduser()
+    if not path.is_file():
+        die(f"No such file: {path}")
+    values = parse_env_file(path)
+    if not values:
+        die(f"{path} contained no KEY=VALUE lines")
+
+    written, skipped = [], []
+    for name, value in sorted(values.items()):
+        if put_secret(region, name, value, overwrite=args.overwrite):
+            written.append(name)
+        else:
+            skipped.append(name)
+
+    for name in written:
+        log(f"  wrote {name}")
+    for name in skipped:
+        warn(f"  {name} already exists — re-run with --overwrite to replace it")
+    audit("secrets_put", written=written, skipped=skipped)
+    log(f"{len(written)} written, {len(skipped)} left untouched")
+
+
+def cmd_launch(args: argparse.Namespace) -> None:
+    state = require_state()
+    region = state.region
+
+    # Idempotent: converge on "one running app instance" rather than failing.
+    existing = discover_instance(region)
+    if existing:
+        current = existing["State"]["Name"]
+        instance_id = existing["InstanceId"]
+        if current in ("running", "pending"):
+            log(f"App instance {instance_id} is already {current} — nothing to do.")
+            print("  Inspect it with: thestill-aws status")
+            print("  Re-apply the on-box config with: thestill-aws reconcile")
+            return
+        if current in ("stopped", "stopping"):
+            log(f"App instance {instance_id} is {current} — starting it instead of launching a new one.")
+            client("ec2", region).start_instances(InstanceIds=[instance_id])
+            client("ec2", region).get_waiter("instance_running").wait(InstanceIds=[instance_id])
+            audit("started", instance=instance_id)
+            log(f"{instance_id} is running")
+            return
+
+    step("1/4  Preflight")
+    preflight_secrets(region)
+
+    step("2/4  Resolving AMI")
+    ami_id, root_device = resolve_ami(region)
+    log(f"AL2023 arm64: {ami_id} (root device {root_device})")
+
+    step("3/4  Launching instance")
+    kit_ref = args.kit_ref or default_kit_ref()
+    log(f"Deploy kit pinned to {kit_ref[:12] if len(kit_ref) > 12 else kit_ref}")
+    user_data = build_user_data(region, state.bucket, args.image_tag, kit_ref)
+    ec2 = client("ec2", region)
+    instance = retry_aws(
+        ec2.run_instances,
+        ImageId=ami_id,
+        InstanceType=args.instance_type,
+        MinCount=1,
+        MaxCount=1,
+        IamInstanceProfile={"Name": state.profile_name},
+        UserData=user_data,
+        NetworkInterfaces=[
+            {
+                "DeviceIndex": 0,
+                "SubnetId": state.subnet_id,
+                "Groups": [state.sg_id],
+                "AssociatePublicIpAddress": True,
+                "DeleteOnTermination": True,
+            }
+        ],
+        BlockDeviceMappings=[
+            {
+                "DeviceName": root_device,
+                "Ebs": {
+                    "VolumeSize": args.volume_size,
+                    "VolumeType": "gp3",
+                    "Encrypted": True,
+                    "DeleteOnTermination": True,
+                },
+            }
+        ],
+        MetadataOptions={
+            # IMDSv2 only: a container escape or SSRF must not be able to
+            # read instance-role credentials without a session token.
+            "HttpTokens": "required",
+            "HttpPutResponseHopLimit": 2,
+            "HttpEndpoint": "enabled",
+        },
+        # Tags go in the launch call, never as a follow-up CreateTags: a
+        # failure there would leave the instance invisible to discovery.
+        TagSpecifications=[
+            {"ResourceType": "instance", "Tags": base_tags("app")},
+            {"ResourceType": "volume", "Tags": base_tags("app")},
+        ],
+    )["Instances"][0]
+
+    instance_id = instance["InstanceId"]
+    state.instance_id = instance_id
+    state.image_tag = args.image_tag
+    state.kit_ref = kit_ref
+    save_state(state)
+    audit("launched", instance=instance_id, ami=ami_id, type=args.instance_type)
+    log(f"Launched {instance_id}")
+
+    log("Waiting for the instance to reach 'running'...")
+    ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
+    ip = describe_instance(region, instance_id).get("PublicIpAddress", "")
+    log(f"Running at {ip}")
+
+    step("4/4  Auto-recovery alarm")
+    _ensure_recovery_alarm(region, instance_id)
+
+    print()
+    log("Instance is up; cloud-init is still bootstrapping (3-6 minutes).")
+    print(
+        "\nNext:\n"
+        "  thestill-aws status          # watch the bootstrap finish\n"
+        "  thestill-aws dns             # point the domain at this instance\n"
+        "  thestill-aws logs            # container logs once bootstrap completes\n"
+    )
+
+
+def _ensure_recovery_alarm(region: str, instance_id: str) -> None:
+    """Free CloudWatch alarm that recovers the instance on host failure."""
+    cw = client("cloudwatch", region)
+    name = f"{NAME_PREFIX}-{instance_id}-auto-recovery"
+    cw.put_metric_alarm(
+        AlarmName=name,
+        AlarmDescription="Recover thestill on failed EC2 system status checks",
+        Namespace="AWS/EC2",
+        MetricName="StatusCheckFailed_System",
+        Statistic="Maximum",
+        Dimensions=[{"Name": "InstanceId", "Value": instance_id}],
+        Period=60,
+        EvaluationPeriods=2,
+        Threshold=1.0,
+        ComparisonOperator="GreaterThanOrEqualToThreshold",
+        AlarmActions=[f"arn:aws:automate:{region}:ec2:recover"],
+    )
+    log(f"Auto-recovery alarm set: {name}")
+
+
+def cmd_dns(args: argparse.Namespace) -> None:
+    state = require_state()
+    inst = discover_instance(state.region)
+    if not inst:
+        die("No running instance found. Run 'thestill-aws launch' first.")
+    ip = inst.get("PublicIpAddress", "")
+    if not ip:
+        die(f"Instance {inst['InstanceId']} has no public IP yet — retry shortly.")
+    upsert_a_record(state.domain, ip, wait=not args.no_wait)
+    print()
+    log(f"https://{state.domain} will serve once Caddy obtains its certificate.")
+    print("  Watch it: thestill-aws logs --service caddy")
+
+
+def cmd_reconcile(args: argparse.Namespace) -> None:
+    """Re-run the bootstrap on the live instance.
+
+    The same script cloud-init ran at first boot, replayed over SSM. Use it
+    to pick up a new image tag, changed SSM secrets, or an updated deploy
+    kit without relaunching the instance."""
+    state = require_state()
+    region = state.region
+    inst = discover_instance(region)
+    if not inst:
+        die("No running instance found. Run 'thestill-aws launch' first.")
+    if inst["State"]["Name"] != "running":
+        die(f"Instance {inst['InstanceId']} is {inst['State']['Name']}, not running.")
+
+    image_tag = args.image_tag or state.image_tag
+    # Reuse the pinned kit unless explicitly moved: replaying `main` onto a
+    # box running an older image is how version skew gets introduced.
+    kit_ref = args.kit_ref or state.kit_ref or "main"
+    log(f"Re-applying bootstrap on {inst['InstanceId']} (image {image_tag}, kit {kit_ref[:12]})")
+    log("This pulls the image and recreates changed containers; expect 1-3 minutes.")
+
+    code, out = run_remote(
+        region,
+        inst["InstanceId"],
+        build_user_data(region, state.bucket, image_tag, kit_ref),
+        timeout=600,
+        output_bucket=state.bucket,
+    )
+    print(_indent(out))
+    if code != 0:
+        die(f"Reconcile failed with exit code {code} (see output above).")
+
+    state.image_tag = image_tag
+    state.kit_ref = kit_ref
+    save_state(state)
+    audit("reconciled", instance=inst["InstanceId"], image_tag=image_tag)
+    log("Reconcile complete. Check 'thestill-aws status'.")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    state = require_state()
+    region = state.region
+
+    inst = discover_instance(region)
+    if not inst:
+        log("No app instance is running.")
+        print(f"  Region:  {region}\n  Domain:  {state.domain}\n  Bucket:  {state.bucket}")
+        print("\n  Launch one with: thestill-aws launch")
+        return
+
+    instance_id = inst["InstanceId"]
+    ip = inst.get("PublicIpAddress", "-")
+    print(f"  Instance:  {instance_id} ({inst['State']['Name']}, {inst['InstanceType']})")
+    print(f"  Public IP: {ip}")
+    print(f"  Domain:    {state.domain}")
+    print(f"  Image tag: {state.image_tag}")
+    print(f"  Bucket:    {state.bucket}")
+
+    if inst["State"]["Name"] != "running":
+        return
+
+    code, out = run_remote(
+        region,
+        instance_id,
+        f"test -f {BOOTSTRAP_MARKER} && echo COMPLETE || (echo PENDING; tail -n 3 /var/log/user-data.log 2>/dev/null)",
+    )
+    if code == 255:
+        print(f"  Bootstrap: unknown — {out}")
+        return
+    if out.startswith("COMPLETE"):
+        print("  Bootstrap: complete")
+    else:
+        print(f"  Bootstrap: in progress\n{_indent(out)}")
+        return
+
+    code, out = run_remote(
+        region,
+        instance_id,
+        f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml ps --format "
+        "'{{.Service}} {{.State}} {{.Status}}'",
+    )
+    print(f"  Containers:\n{_indent(out)}")
+
+    code, out = run_remote(
+        region,
+        instance_id,
+        "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000/health/ready || true",
+    )
+    verdict = "ready (200)" if out.strip().endswith("200") else f"NOT ready (got {out.strip() or 'no response'})"
+    print(f"  Readiness: {verdict}")
+
+
+def _indent(text: str, prefix: str = "    ") -> str:
+    return "\n".join(prefix + line for line in (text or "").splitlines())
+
+
+def cmd_logs(args: argparse.Namespace) -> None:
+    state = require_state()
+    inst = discover_instance(state.region)
+    if not inst:
+        die("No running instance found.")
+    code, out = run_remote(
+        state.region,
+        inst["InstanceId"],
+        f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml logs " f"--tail {args.lines} {args.service}",
+        timeout=90,
+    )
+    print(out)
+    if code not in (0, -1):
+        warn(f"remote exit code {code}")
+
+
+def cmd_ssh(args: argparse.Namespace) -> None:
+    state = require_state()
+    inst = discover_instance(state.region)
+    if not inst:
+        die("No running instance found.")
+    instance_id = inst["InstanceId"]
+    log(f"Opening an SSM session to {instance_id} (no SSH key, no port 22)...")
+    try:
+        subprocess.run(
+            ["aws", "ssm", "start-session", "--target", instance_id, "--region", state.region],
+            check=False,
+        )
+    except FileNotFoundError:
+        die(
+            "The AWS CLI is required for SSM sessions.\n"
+            "  brew install awscli\n"
+            "  (and the Session Manager plugin: "
+            "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)"
+        )
+
+
+def cmd_teardown(args: argparse.Namespace) -> None:
+    state = require_state()
+    region = state.region
+    inst = discover_instance(region)
+
+    print("This will delete:")
+    if inst:
+        print(f"  - EC2 instance {inst['InstanceId']} (and its encrypted root volume)")
+        print(f"  - CloudWatch alarm {NAME_PREFIX}-{inst['InstanceId']}-auto-recovery")
+    print(f"  - Security group {state.sg_id}")
+    if state.dalston_sg:
+        print(f"  - The ingress rule allowing {state.sg_id} -> {state.dalston_sg}:{state.dalston_port}")
+    print(f"  - IAM role {state.role_name} + instance profile {state.profile_name}")
+    print("\nNOT deleted (deliberately):")
+    print(f"  - S3 bucket {state.bucket} (your backups)")
+    print(f"  - SSM parameters under {SSM_PREFIX} (your secrets)")
+    print(f"  - The Route53 A record for {state.domain}")
+
+    if not args.yes:
+        if input("\nType 'yes' to confirm: ").strip() != "yes":
+            die("Aborted.")
+
+    ec2 = client("ec2", region)
+
+    if inst:
+        instance_id = inst["InstanceId"]
+        log(f"Terminating {instance_id}...")
+        ec2.terminate_instances(InstanceIds=[instance_id])
+        try:
+            ec2.get_waiter("instance_terminated").wait(InstanceIds=[instance_id])
+        except WaiterError:
+            warn("Timed out waiting for termination; continuing.")
+        try:
+            client("cloudwatch", region).delete_alarms(AlarmNames=[f"{NAME_PREFIX}-{instance_id}-auto-recovery"])
+        except ClientError as exc:
+            warn(f"Could not delete the alarm: {exc}")
+        audit("terminated", instance=instance_id)
+
+    # Dalston's rule references our SG, so it must go before the SG itself.
+    if state.dalston_sg and state.sg_id:
+        try:
+            ec2.revoke_security_group_ingress(
+                GroupId=state.dalston_sg,
+                IpPermissions=[
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": state.dalston_port,
+                        "ToPort": state.dalston_port,
+                        "UserIdGroupPairs": [{"GroupId": state.sg_id}],
+                    }
+                ],
+            )
+            log("Revoked the Dalston ingress rule")
+        except ClientError as exc:
+            warn(f"Could not revoke the Dalston rule: {exc}")
+
+    if state.sg_id:
+        for attempt in range(6):
+            try:
+                ec2.delete_security_group(GroupId=state.sg_id)
+                log(f"Deleted security group {state.sg_id}")
+                break
+            except ClientError as exc:
+                # The ENI can linger for a few seconds after termination.
+                if attempt == 5:
+                    warn(f"Could not delete {state.sg_id}: {exc}")
+                    break
+                time.sleep(10)
+
+    iam = client("iam")
+    if state.profile_name:
+        try:
+            iam.remove_role_from_instance_profile(InstanceProfileName=state.profile_name, RoleName=state.role_name)
+        except ClientError:
+            pass
+        try:
+            iam.delete_instance_profile(InstanceProfileName=state.profile_name)
+            log(f"Deleted instance profile {state.profile_name}")
+        except ClientError as exc:
+            warn(f"Could not delete the instance profile: {exc}")
+
+    if state.role_name:
+        for policy in (f"{NAME_PREFIX}-s3-backups", f"{NAME_PREFIX}-ssm-secrets"):
+            try:
+                iam.delete_role_policy(RoleName=state.role_name, PolicyName=policy)
+            except ClientError:
+                pass
+        try:
+            iam.detach_role_policy(
+                RoleName=state.role_name,
+                PolicyArn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+            )
+        except ClientError:
+            pass
+        try:
+            iam.delete_role(RoleName=state.role_name)
+            log(f"Deleted IAM role {state.role_name}")
+        except ClientError as exc:
+            warn(f"Could not delete the role: {exc}")
+
+    state.instance_id = ""
+    state.sg_id = ""
+    state.role_name = ""
+    state.profile_name = ""
+    save_state(state)
+    audit("teardown", region=region)
+
+    print()
+    log("Teardown complete.")
+    print(
+        f"\nStill present, remove by hand if you really mean it:\n"
+        f"  aws s3 rb s3://{state.bucket} --force\n"
+        f"  aws ssm delete-parameters --names $(aws ssm get-parameters-by-path "
+        f"--path {SSM_PREFIX} --query 'Parameters[].Name' --output text)\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="thestill-aws",
+        description="Provision and manage thestill's single-EC2 AWS deployment (spec #66).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_setup = sub.add_parser("setup", help="provision shared infra (idempotent, no billable resources)")
+    p_setup.add_argument("--domain", required=True, help="FQDN the app will serve, e.g. thestill.example.com")
+    p_setup.add_argument("--region", default=DEFAULT_REGION)
+    p_setup.add_argument("--dalston-sg", default="", help="Dalston's security group id (derives the VPC)")
+    p_setup.add_argument("--dalston-port", type=int, default=8080, help="Dalston service port (default 8080)")
+    p_setup.add_argument("--vpc", default="", help="explicit VPC id (default: Dalston's, else the default VPC)")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_secrets = sub.add_parser("secrets", help="seed or inspect SSM Parameter Store")
+    p_secrets.add_argument("action", choices=["put", "list"])
+    p_secrets.add_argument("--from-env-file", default="", help="KEY=VALUE file to upload (put)")
+    p_secrets.add_argument("--overwrite", action="store_true", help="replace parameters that already exist")
+    p_secrets.set_defaults(func=cmd_secrets)
+
+    p_launch = sub.add_parser("launch", help="launch the EC2 instance and bootstrap it")
+    p_launch.add_argument("--instance-type", default=INSTANCE_TYPE)
+    p_launch.add_argument("--volume-size", type=int, default=ROOT_VOLUME_SIZE)
+    p_launch.add_argument("--image-tag", default=DEFAULT_IMAGE_TAG, help="GHCR tag (default prod-latest)")
+    p_launch.add_argument(
+        "--kit-ref",
+        default="",
+        help="git ref the deploy kit is fetched from (default: this checkout's commit)",
+    )
+    p_launch.set_defaults(func=cmd_launch)
+
+    p_dns = sub.add_parser("dns", help="point the domain at the instance (Route53)")
+    p_dns.add_argument("--no-wait", action="store_true", help="don't block until the change is INSYNC")
+    p_dns.set_defaults(func=cmd_dns)
+
+    p_reconcile = sub.add_parser(
+        "reconcile", help="re-apply the bootstrap on the live instance (upgrades, config changes)"
+    )
+    p_reconcile.add_argument("--image-tag", default="", help="GHCR tag to move to (default: current)")
+    p_reconcile.add_argument("--kit-ref", default="", help="deploy-kit git ref to move to (default: the pinned one)")
+    p_reconcile.set_defaults(func=cmd_reconcile)
+
+    p_status = sub.add_parser("status", help="instance, bootstrap, containers and readiness")
+    p_status.set_defaults(func=cmd_status)
+
+    p_logs = sub.add_parser("logs", help="tail container logs via SSM")
+    p_logs.add_argument("--service", default="", help="compose service (default: all)")
+    p_logs.add_argument("--lines", type=int, default=50)
+    p_logs.set_defaults(func=cmd_logs)
+
+    p_ssh = sub.add_parser("ssh", help="open a shell via SSM Session Manager")
+    p_ssh.set_defaults(func=cmd_ssh)
+
+    p_teardown = sub.add_parser("teardown", help="delete the instance, SG and IAM (keeps S3 + secrets)")
+    p_teardown.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_teardown.set_defaults(func=cmd_teardown)
+
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.command == "secrets" and args.action == "put" and not args.from_env_file:
+        die("secrets put requires --from-env-file <path>")
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        die("Interrupted.")
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        message = exc.response.get("Error", {}).get("Message", str(exc))
+        if code in ("UnauthorizedOperation", "AccessDenied", "AccessDeniedException"):
+            die(f"AWS denied the call ({code}): {message}\nCheck the credentials' permissions.")
+        die(f"AWS error {code}: {message}")
+
+
+if __name__ == "__main__":
+    main()
