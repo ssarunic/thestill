@@ -42,9 +42,25 @@ def _pg_reachable(dsn: str) -> bool:
 
 
 class TestSqlitePing:
-    def test_succeeds_against_tmp_database(self, tmp_path):
+    def test_succeeds_against_bootstrapped_database(self, tmp_path):
+        from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+
         config = Config(storage_path=tmp_path)
+        SqlitePodcastRepository(db_path=str(config.database_path))  # creates schema
         ping(config)  # must not raise
+
+    def test_raises_when_database_file_missing(self, tmp_path):
+        # mode=rw must NOT create the file: a deleted database is not ready.
+        config = Config(storage_path=tmp_path)
+        with pytest.raises(sqlite3.OperationalError):
+            ping(config)
+        assert not (tmp_path / "podcasts.db").exists()
+
+    def test_raises_when_database_is_an_empty_shell(self, tmp_path):
+        config = Config(storage_path=tmp_path)
+        sqlite3.connect(str(config.database_path)).close()  # file, no schema
+        with pytest.raises(RuntimeError, match="podcasts table"):
+            ping(config)
 
     def test_raises_when_database_directory_missing(self, tmp_path):
         config = Config(

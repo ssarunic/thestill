@@ -48,11 +48,15 @@ async def health_check():
 
 
 @router.get("/health/ready")
-async def readiness_check(state: AppState = Depends(get_app_state)):
+def readiness_check(state: AppState = Depends(get_app_state)):
     """
     Readiness probe (spec #66): one cheap DB round-trip against the
     configured backend. Compose healthchecks and future ALB target groups
     point here so a container with a dead database stops reporting ready.
+
+    Deliberately a sync handler: FastAPI runs it in the threadpool, so the
+    blocking psycopg/sqlite connect (up to its 3s timeout) can never stall
+    the event loop — this endpoint is unauthenticated and probed repeatedly.
 
     Returns:
         200 with status "ready", or 503 with status "unready". The failure

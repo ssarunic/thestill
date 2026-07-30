@@ -20,12 +20,25 @@ command -v jq >/dev/null || { echo "jq is required (dnf install -y jq)" >&2; exi
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-aws ssm get-parameters-by-path \
+json="$(aws ssm get-parameters-by-path \
     --path "$SSM_PREFIX" \
     --recursive \
     --with-decryption \
-    --output json |
-    jq -r '.Parameters[] | "\(.Name | split("/") | last)=\(.Value)"' > "$tmp"
+    --output json)"
+
+# Values are written single-quoted so compose's dotenv parser takes them
+# literally — unquoted values undergo ${...} interpolation and misparse
+# whitespace, silently corrupting secrets. Single quotes and newlines are
+# not representable inside dotenv single quotes, so refuse them loudly
+# rather than write a subtly-wrong .env; rotate the offending secret.
+if printf '%s' "$json" | jq -e 'any(.Parameters[]; .Value | test("['\''\n\r]"))' >/dev/null; then
+    echo "A parameter value under $SSM_PREFIX contains a single quote or newline;" >&2
+    echo "these cannot be represented in compose's dotenv format — rotate that secret." >&2
+    exit 1
+fi
+
+printf '%s' "$json" |
+    jq -r '.Parameters[] | (.Name | split("/") | last) + "='\''" + .Value + "'\''"' > "$tmp"
 
 count="$(wc -l < "$tmp" | tr -d ' ')"
 if [ "$count" -eq 0 ]; then

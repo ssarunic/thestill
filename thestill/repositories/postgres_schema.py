@@ -553,11 +553,10 @@ def run_alembic_upgrade(dsn: str) -> None:
 
     The alembic config is built programmatically — ``alembic.ini`` is not
     shipped in the wheel — pointing ``script_location`` at the installed
-    ``thestill/migrations`` package. ``migrations/env.py`` resolves the DSN
-    from the ``DATABASE_URL`` env var first, so ``dsn`` must be the same
-    value (true for every caller that got it from ``Config.database_url``);
-    the ``sqlalchemy.url`` option below covers callers, like tests, that
-    run without the env var set.
+    ``thestill/migrations`` package. The DSN travels via
+    ``config.attributes`` which ``migrations/env.py`` resolves FIRST, ahead
+    of any ambient ``DATABASE_URL``: the advisory lock below is held on
+    ``dsn``, so alembic must never be redirected to a different database.
     """
     import psycopg
     from alembic import command
@@ -566,7 +565,7 @@ def run_alembic_upgrade(dsn: str) -> None:
     script_location = Path(__file__).resolve().parent.parent / "migrations"
     cfg = AlembicConfig()
     cfg.set_main_option("script_location", str(script_location))
-    cfg.set_main_option("sqlalchemy.url", dsn)
+    cfg.attributes["thestill_dsn"] = dsn
 
     with psycopg.connect(dsn, autocommit=True) as lock_conn:
         lock_conn.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_BOOTSTRAP_LOCK_KEY,))

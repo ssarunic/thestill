@@ -51,7 +51,11 @@ config = context.config
 
 
 def _database_url() -> str:
-    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    # A programmatic caller (postgres_schema.run_alembic_upgrade) is
+    # authoritative: it has already advisory-locked exactly this DSN, so an
+    # ambient DATABASE_URL must never redirect the upgrade to a different —
+    # unlocked — database. The env var remains the path for CLI runs.
+    url = config.attributes.get("thestill_dsn") or os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     if not url:
         raise RuntimeError("Set DATABASE_URL (or sqlalchemy.url) before running alembic.")
     # SQLAlchemy needs an explicit psycopg3 driver marker.

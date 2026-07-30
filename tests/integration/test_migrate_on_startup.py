@@ -50,11 +50,12 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _pin_database_url(monkeypatch):
-    """migrations/env.py resolves DATABASE_URL from the environment first;
-    pin it to the test DSN so a developer's real .env can never leak in and
-    migrate the wrong database."""
-    monkeypatch.setenv("DATABASE_URL", PG_DSN)
+def _adversarial_database_url(monkeypatch):
+    """The programmatic DSN must be authoritative: run_alembic_upgrade holds
+    its advisory lock on the dsn argument, so an ambient DATABASE_URL must
+    never redirect the upgrade elsewhere. Point the env var at a black-hole
+    address — every test below only passes if the argument wins."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x:y@192.0.2.1:5432/wrong-db")
 
 
 def _current_revision() -> str:

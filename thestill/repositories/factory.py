@@ -63,9 +63,15 @@ def ping(config: "Config") -> None:
 
     import sqlite3
 
-    conn = sqlite3.connect(str(config.database_path), timeout=3)
+    # mode=rw refuses to create a missing file — a deleted database must
+    # never probe as ready (default connect() would silently create an
+    # empty one and pass). Requiring the podcasts table also fails an
+    # empty shell file that no repository has ever bootstrapped.
+    conn = sqlite3.connect(f"file:{config.database_path}?mode=rw", uri=True, timeout=3)
     try:
-        conn.execute("SELECT 1")
+        row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='podcasts'").fetchone()
+        if row is None:
+            raise RuntimeError("sqlite database exists but is missing the podcasts table")
     finally:
         conn.close()
 

@@ -12,11 +12,21 @@ networks:
   thestill-net:
     driver: bridge
 
+# Docker's default json-file driver is unbounded and would eventually fill
+# the 30 GB host disk with app/Postgres/Caddy output, taking down both the
+# application and the database. The local driver compresses and rotates.
+x-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   thestill:
     image: "ghcr.io/ssarunic/thestill:${THESTILL_IMAGE_TAG:-prod-latest}"
     container_name: thestill
     restart: unless-stopped
+    logging: *bounded-logging
     env_file:
       - .env
     environment:
@@ -61,6 +71,7 @@ services:
     image: pgvector/pgvector:pg17
     container_name: thestill-postgres
     restart: unless-stopped
+    logging: *bounded-logging
     environment:
       POSTGRES_USER: thestill
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
@@ -79,6 +90,7 @@ services:
     image: caddy:2
     container_name: thestill-caddy
     restart: unless-stopped
+    logging: *bounded-logging
     ports:
       - "80:80"
       - "443:443"
