@@ -18,7 +18,7 @@ Thestill logs use the following CloudWatch-optimized format:
   "@timestamp": "2026-01-25T16:34:22.186Z",
   "level": "INFO",
   "episode_id": "abc123",
-  "task_id": 456,
+  "task_id": "9f1c2e3a-4b5d-4e6f-8a9b-0c1d2e3f4a5b",
   "stage": "transcribe",
   "retry_count": 0,
   "worker_id": "3fb0e2a4"
@@ -44,7 +44,7 @@ fields @timestamp, level, message
 Trace all operations for a single episode:
 
 ```sql
-fields @timestamp, level, message, duration_ms
+fields @timestamp, level, message, stage
 | filter episode_id = "abc123"
 | sort @timestamp asc
 ```
@@ -88,7 +88,7 @@ fields @timestamp, level, message, episode_id, duration_ms
 Trace an episode through the entire pipeline:
 
 ```sql
-fields @timestamp, level, message, worker_id, duration_ms
+fields @timestamp, level, message, worker_id, stage
 | filter episode_id = "abc-123"
 | sort @timestamp asc
 ```
@@ -121,8 +121,8 @@ fields @timestamp, message, episode_id, stage
 Find all episodes for a specific podcast:
 
 ```sql
-fields @timestamp, message, episode_id, duration_ms
-| filter podcast_id = 42
+fields @timestamp, message, episode_id
+| filter podcast_id = "9f1c2e3a-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 | filter @timestamp > ago(24h)
 | sort @timestamp desc
 ```
@@ -141,7 +141,7 @@ fields @timestamp, message, episode_id, error, error_class
 
 ### Error Count by Type (Last 24 Hours)
 
-Aggregate errors by exception type. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `resource_not_found`, `validation_error`, `tool_execution_error`, `unknown_error`). Task worker failures carry `error_class` (`infra` vs `item`) instead:
+Aggregate errors by exception type. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `resource_not_found`, `validation_error`, `tool_execution_error`, `unknown_error`). Task worker failures use a three-way `error_class` (`fatal`, `infra`, `item`) instead, but note it's only emitted on `task_transient_error` and `task_unexpected_error` — `task_fatal_error` log lines carry `error` but not `error_class`:
 
 ```sql
 filter level = "ERROR"
@@ -170,9 +170,11 @@ filter level = "ERROR"
 
 ## Performance Monitoring
 
-### Average Processing Time by Stage
+Pipeline task-stage events (`task_processing_started`, `task_completed_successfully`, `downloading_episode`, `download_completed`, etc., emitted from the task worker) do **not** carry a `duration_ms` field today, so `stage`/`worker_id` cannot be joined against `duration_ms` for per-stage or per-worker pipeline timing. `duration_ms` is only emitted by HTTP requests (`http_request_completed`/`http_request_failed`), MCP tool calls (`mcp_stdio_completed`/`mcp_request_completed`), and feed-refresh summaries (`feed_refresh_summary`, `feed_refresh_batch_summary`).
 
-Analyze performance across pipeline stages:
+### Average Duration by Event (HTTP/MCP/Feed Refresh)
+
+Analyze performance across the event types that actually carry `duration_ms`:
 
 ```sql
 filter duration_ms > 0
@@ -184,19 +186,19 @@ filter duration_ms > 0
 | sort avg_ms desc
 ```
 
-### Slow Transcriptions (> 5 minutes)
+### Slow Feed Refreshes (> 30 seconds)
 
-Find transcriptions taking longer than 5 minutes:
+Find per-podcast refresh cycles taking longer than 30 seconds:
 
 ```sql
-fields @timestamp, episode_id, duration_ms
-| filter stage = "transcribe" and duration_ms > 300000
+fields @timestamp, podcast_slug, duration_ms
+| filter message = "feed_refresh_summary" and duration_ms > 30000
 | sort duration_ms desc
 ```
 
 ### P95 Duration by Operation
 
-Calculate percentiles:
+Calculate percentiles across HTTP/MCP/feed-refresh events:
 
 ```sql
 filter duration_ms > 0
@@ -206,16 +208,17 @@ filter duration_ms > 0
   by message
 ```
 
-### Worker Performance Comparison
+### Slow API Endpoints by P95
 
-Compare processing times across workers:
+Compare HTTP endpoint latency:
 
 ```sql
-filter duration_ms > 0
+filter message = "http_request_completed"
 | stats avg(duration_ms) as avg_duration,
-        count(*) as task_count
-  by worker_id
-| sort avg_duration desc
+        pct(duration_ms, 95) as p95_duration,
+        count(*) as request_count
+  by endpoint
+| sort p95_duration desc
 ```
 
 ## Time-Based Analysis
@@ -445,7 +448,7 @@ aws cloudwatch put-dashboard \
         "type": "log",
         "x": 0, "y": 6, "width": 24, "height": 6,
         "properties": {
-          "title": "Processing Times",
+          "title": "HTTP/MCP/Feed-Refresh Durations",
           "query": "filter duration_ms > 0\\n| stats avg(duration_ms) as avg, pct(duration_ms, 95) as p95 by message",
           "region": "us-east-1",
           "view": "table"

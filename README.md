@@ -15,12 +15,12 @@ thestill downloads your podcasts, transcribes them with speaker identification, 
 thestill add "https://lexfridman.com/feed/podcast/"
 thestill add "https://www.youtube.com/@hubermanlab"
 
-# Run the web UI — episodes process continuously and your
-# morning briefing is generated from your inbox
+# Run the web UI — once an episode is discovered it's processed
+# automatically, and your morning briefing is generated from your inbox
 thestill server
 ```
 
-That's it. New episodes are discovered, downloaded, transcribed, cleaned, and summarized. You read instead of listen.
+New episodes are downloaded, transcribed, cleaned, and summarized automatically once discovered. Discovery itself is opt-in: run `thestill refresh` on a schedule (cron, or set `REFRESH_SCHEDULER_ENABLED=true` for a built-in background poll) to pick up newly-published episodes on feeds you already follow. You read instead of listen.
 
 Even better - talk to your podcasts through Claude Desktop:
 
