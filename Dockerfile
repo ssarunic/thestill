@@ -27,7 +27,7 @@ ARG EXTRAS=""
 # upload would land in our image without warning. Dependabot's docker
 # ecosystem watches these digests and opens a PR weekly when a new
 # version is published.
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS frontend-builder
+FROM node:26-slim@sha256:deae974a69e140f44f434ab29cb519fb5f8fe250fd364b8ca446bd0761acdc6a AS frontend-builder
 WORKDIR /src/thestill/web/frontend
 COPY thestill/web/frontend/package.json thestill/web/frontend/package-lock.json ./
 RUN npm ci
