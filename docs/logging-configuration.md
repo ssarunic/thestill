@@ -67,8 +67,8 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
 ### Console (Development)
 
 ```
-2026-01-25 16:42:31 [info     ] Episode downloaded         episode_id=abc123 file_size_mb=45.2 duration_sec=3600
-2026-01-25 16:43:15 [error    ] Transcription failed       episode_id=abc123 error=timeout provider=whisper
+2026-01-25T16:42:31.123456Z [info     ] Episode downloaded         episode_id=abc123 file_size_mb=45.2 duration_sec=3600
+2026-01-25T16:43:15.654321Z [error    ] Transcription failed       episode_id=abc123 error=timeout provider=whisper
 ```
 
 ### JSON (Production)
@@ -86,6 +86,8 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
 
 ### ECS (AWS Elastic)
 
+The ECS formatter adds `@timestamp`, `log.level`, and `ecs.version` alongside the original `timestamp` and `level` fields (both pairs are present):
+
 ```json
 {
   "@timestamp": "2026-01-25T16:42:31.123Z",
@@ -93,7 +95,9 @@ LOG_FORMAT=json thestill server 2>&1 | jq 'select(.episode_id=="abc123")'
   "message": "Episode downloaded",
   "ecs.version": "1.6.0",
   "episode_id": "abc123",
-  "file_size_mb": 45.2
+  "file_size_mb": 45.2,
+  "level": "info",
+  "timestamp": "2026-01-25T16:42:31.123456Z"
 }
 ```
 
@@ -107,7 +111,12 @@ Custom key-value pairs land flat in the JSON payload (rendered by `structlog-gcp
   "time": "2026-01-25T16:42:31.123456Z",
   "severity": "INFO",
   "episode_id": "abc123",
-  "file_size_mb": 45.2
+  "file_size_mb": 45.2,
+  "logging.googleapis.com/sourceLocation": {
+    "file": "/app/thestill/core/audio_downloader.py",
+    "line": "149",
+    "function": "audio_downloader:download_episode"
+  }
 }
 ```
 
@@ -119,7 +128,6 @@ A simpler, cheaper alternative to ECS format for AWS deployments. Works with Clo
 {
   "message": "Episode downloaded",
   "@timestamp": "2026-01-25T16:42:31.123456Z",
-  "timestamp": "2026-01-25T16:42:31.123456Z",
   "level": "INFO",
   "episode_id": "abc123",
   "file_size_mb": 45.2,
@@ -151,11 +159,11 @@ Generated IDs (`request_id`, `command_id`, `worker_id`) are bare 8-character UUI
 ```
 HTTP Request (request_id=a7f2c1d9)
   ↓
-Task Created (task_id=456, request_id=a7f2c1d9)
+Task Created (task_id=9f1c2e3a-..., request_id=a7f2c1d9)
   ↓
-Worker Processes (worker_id=3fb0e2a4, task_id=456, stage=transcribe)
+Worker Processes (worker_id=3fb0e2a4, task_id=9f1c2e3a-..., stage=transcribe)
   ↓
-Episode Transcribed (episode_id=abc, worker_id=3fb0e2a4, task_id=456)
+Episode Transcribed (episode_id=abc, worker_id=3fb0e2a4, task_id=9f1c2e3a-...)
 ```
 
 Each layer clears its context when it finishes, so `request_id` does not survive into the background worker — join HTTP-side and worker-side logs on `episode_id` or `task_id`.
@@ -167,7 +175,7 @@ Each layer clears its context when it finishes, so `request_id` does not survive
 ```python
 from structlog import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 class AudioDownloader:
     def download_episode(self, episode: Episode) -> Optional[Path]:
@@ -209,7 +217,7 @@ Request logging is automatic via middleware. Each HTTP request gets a unique `re
 
 # Manual logging in routes
 from structlog import get_logger
-logger = get_logger()
+logger = get_logger(__name__)
 
 @app.get("/api/podcasts/{podcast_id}")
 async def get_podcast(podcast_id: int):
@@ -249,7 +257,7 @@ import click
 from structlog import get_logger
 from thestill.utils.cli_logging import log_command
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 @click.command()
 @log_command
@@ -263,12 +271,13 @@ def transcribe(podcast_id: int):
 Background tasks include worker and task context:
 
 ```python
+import structlog
 from structlog import get_logger
-logger = get_logger()
+logger = get_logger(__name__)
 
 def process_task(task: Task, worker_id: str):
-    # Bind context for entire task lifecycle
-    logger = logger.bind(task_id=task.id, worker_id=worker_id)
+    # Bind context for entire task lifecycle via contextvars
+    structlog.contextvars.bind_contextvars(task_id=task.id, worker_id=worker_id)
 
     logger.info("Task started", task_type=task.type)
 
@@ -323,16 +332,18 @@ logger.debug("Calling API", api_key=config.openai_api_key, url=url)
 logger.debug("Calling API", api_key_length=len(config.openai_api_key), url=url)
 ```
 
+As a safety net, a `log_safety` processor automatically redacts field values whose keys contain `token`, `secret`, `password`, `api_key`, `authorization`, `cookie`, or `session` (for the `console`, `json`, `ecs`, and `cloudwatch` formats — the `gcp` format currently bypasses this). Don't rely on it as your primary defense — the field-name matching only covers the key names above.
+
 ### Quiet Mode for CLI
 
-Use the `--quiet` flag to suppress INFO logs and only show warnings/errors:
+The `--quiet` flag suppresses the CLI's own user-facing stdout messages (info, success, warning, and progress lines) — only errors still print. This is separate from structlog's backend logging on stderr, which is controlled independently via `LOG_LEVEL`:
 
 ```bash
-# Only show errors
+# Suppress stdout status/progress output; errors still print
 thestill --quiet refresh
 
-# Only show warnings and errors
-thestill --quiet transcribe --podcast-id 1
+# Combine with LOG_LEVEL to also control structured log verbosity on stderr
+LOG_LEVEL=WARNING thestill --quiet transcribe --podcast-id 1
 ```
 
 ## Troubleshooting
@@ -380,7 +391,7 @@ thestill status 2>&1 | jq . 1>/dev/null
 
 # Check context binding
 from structlog import get_logger
-logger = get_logger()
+logger = get_logger(__name__)
 
 # Bind context explicitly if not using middleware
 logger = logger.bind(request_id="a7f2c1d9")

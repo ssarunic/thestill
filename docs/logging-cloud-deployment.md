@@ -7,6 +7,7 @@ This guide covers deploying thestill with cloud-native logging on AWS Elastic (E
 Thestill supports multiple log formats optimized for cloud observability platforms:
 
 - **ECS (Elastic Common Schema)**: For AWS Elastic Stack (Elasticsearch, Kibana)
+- **CloudWatch**: Simpler alternative to ECS for AWS CloudWatch Logs
 - **GCP (Google Cloud Logging)**: For Google Cloud Platform
 - **JSON**: Generic structured logging for any platform
 - **Console**: Colored output for local development
@@ -18,7 +19,7 @@ All logging configuration is controlled via environment variables:
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
 | `LOG_LEVEL` | DEBUG, INFO, WARNING, ERROR, CRITICAL | INFO | Minimum log level to emit |
-| `LOG_FORMAT` | console, json, ecs, gcp, auto | auto | Output format (auto=console for TTY, json otherwise) |
+| `LOG_FORMAT` | console, json, ecs, gcp, cloudwatch, auto | auto | Output format (auto=console for TTY, json otherwise) |
 | `LOG_FILE` | file path | none | Optional file output path |
 | `SERVICE_NAME` | string | thestill | Service name for GCP logs |
 | `SERVICE_VERSION` | string | 1.0.0 | Service version for GCP logs |
@@ -335,9 +336,9 @@ Custom key-value pairs land flat in the JSON payload (rendered by `structlog-gcp
   "episode_id": 123,
   "duration_ms": 4500,
   "logging.googleapis.com/sourceLocation": {
-    "file": "thestill/core/audio_downloader.py",
+    "file": "/app/thestill/core/audio_downloader.py",
     "line": "149",
-    "function": "download_episode"
+    "function": "audio_downloader:download_episode"
   }
 }
 ```
@@ -493,7 +494,7 @@ logger.info("User logged in", password=user.password)
 logger.info("User logged in", user_id=user.id)
 ```
 
-The logging system automatically redacts common sensitive fields, but explicit redaction is better.
+The logging system automatically redacts common sensitive fields for the `console`, `json`, `ecs`, and `cloudwatch` formats, but explicit redaction is better. **Note:** the `gcp` format currently bypasses this automatic redaction — avoid logging secrets when running with `LOG_FORMAT=gcp`.
 
 ## Troubleshooting
 
