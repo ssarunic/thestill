@@ -230,6 +230,10 @@ class Deployment:
     instance_id: str = ""
     image_tag: str = DEFAULT_IMAGE_TAG
     kit_ref: str = "main"
+    # Elastic IP allocation. Without one, stop/start or a resize hands the
+    # box a NEW public address and silently breaks DNS — which is exactly
+    # what makes "resize to 8 cores for an hour" cheap and safe.
+    eip_allocation_id: str = ""
     created_at: str = ""
 
 
@@ -1139,7 +1143,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         "     Needed: JWT_SECRET_KEY, an LLM key (e.g. GEMINI_API_KEY),\n"
         "     DALSTON_BASE_URL, DALSTON_API_KEY, URL_GUARD_ALLOWLIST,\n"
         "     GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET if MULTI_USER=true.\n"
-        f"  2. Add https://{domain}/api/auth/callback to the Google OAuth console.\n"
+        f"  2. Add https://{domain}/api/auth/google/callback to the Google OAuth console.\n"
         "  3. thestill-aws launch\n"
     )
 
@@ -1203,14 +1207,14 @@ def cmd_launch(args: argparse.Namespace) -> None:
             log(f"{instance_id} is running")
             return
 
-    step("1/4  Preflight")
+    step("1/5  Preflight")
     preflight_secrets(region)
 
-    step("2/4  Resolving AMI")
+    step("2/5  Resolving AMI")
     ami_id, root_device = resolve_ami(region)
     log(f"AL2023 arm64: {ami_id} (root device {root_device})")
 
-    step("3/4  Launching instance")
+    step("3/5  Launching instance")
     kit_ref = args.kit_ref or default_kit_ref()
     log(f"Deploy kit pinned to {kit_ref[:12] if len(kit_ref) > 12 else kit_ref}")
     user_data = build_user_data(region, state.bucket, args.image_tag, kit_ref, state.domain, state.aliases)
@@ -1268,10 +1272,15 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     log("Waiting for the instance to reach 'running'...")
     ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
-    ip = describe_instance(region, instance_id).get("PublicIpAddress", "")
-    log(f"Running at {ip}")
 
-    step("4/4  Auto-recovery alarm")
+    step("4/5  Elastic IP")
+    if args.no_eip:
+        ip = describe_instance(region, instance_id).get("PublicIpAddress", "")
+        warn(f"--no-eip: using the auto-assigned {ip}, which changes on stop/start")
+    else:
+        ip = ensure_elastic_ip(region, instance_id, state)
+
+    step("5/5  Auto-recovery alarm")
     _ensure_recovery_alarm(region, instance_id)
 
     print()
@@ -1282,6 +1291,58 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "  thestill-aws dns             # point the domain at this instance\n"
         "  thestill-aws logs            # container logs once bootstrap completes\n"
     )
+
+
+def ensure_elastic_ip(region: str, instance_id: str, state: Deployment) -> str:
+    """Allocate (or reuse) an Elastic IP and attach it to ``instance_id``.
+
+    AWS bills every public IPv4 the same, so an EIP costs exactly what the
+    auto-assigned address already costs — but it survives stop/start and
+    instance-type changes. That turns "resize to 8 vCPU for a batch job,
+    then resize back" into a no-op for DNS instead of a broken site.
+
+    Idempotent: reuses the allocation recorded in state, or any unassociated
+    EIP already tagged for this project, before allocating a new one.
+    """
+    ec2 = client("ec2", region)
+
+    alloc_id = state.eip_allocation_id
+    if alloc_id:
+        try:
+            addr = ec2.describe_addresses(AllocationIds=[alloc_id])["Addresses"][0]
+            if addr.get("InstanceId") == instance_id:
+                log(f"Elastic IP {addr['PublicIp']} already attached")
+                return addr["PublicIp"]
+        except ClientError:
+            warn(f"Recorded Elastic IP {alloc_id} no longer exists; allocating a new one")
+            alloc_id = ""
+
+    if not alloc_id:
+        # Reuse an orphaned project EIP rather than leaking another one.
+        for addr in ec2.describe_addresses(Filters=[{"Name": "tag:Project", "Values": [NAME_PREFIX]}]).get(
+            "Addresses", []
+        ):
+            if not addr.get("InstanceId"):
+                alloc_id = addr["AllocationId"]
+                log(f"Reusing unattached Elastic IP {addr['PublicIp']}")
+                break
+
+    if not alloc_id:
+        log("Allocating a new Elastic IP")
+        alloc = ec2.allocate_address(
+            Domain="vpc",
+            TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": base_tags("app")}],
+        )
+        alloc_id = alloc["AllocationId"]
+        audit("eip_allocated", allocation_id=alloc_id, public_ip=alloc.get("PublicIp"))
+
+    ec2.associate_address(AllocationId=alloc_id, InstanceId=instance_id, AllowReassociation=True)
+    public_ip = ec2.describe_addresses(AllocationIds=[alloc_id])["Addresses"][0]["PublicIp"]
+    state.eip_allocation_id = alloc_id
+    save_state(state)
+    audit("eip_associated", allocation_id=alloc_id, instance=instance_id, public_ip=public_ip)
+    log(f"Elastic IP {public_ip} attached to {instance_id}")
+    return public_ip
 
 
 def _ensure_recovery_alarm(region: str, instance_id: str) -> None:
@@ -1424,10 +1485,14 @@ def cmd_status(args: argparse.Namespace) -> None:
     )
     print(f"  Containers:\n{_indent(out)}")
 
+    # The app port is NOT published to the host — only Caddy binds 80/443 —
+    # so probe inside the container rather than on the host's localhost.
     code, out = run_remote(
         region,
         instance_id,
-        "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000/health/ready || true",
+        f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml exec -T thestill "
+        'python -c "import urllib.request;'
+        "print(urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status)\" 2>&1 || true",
     )
     verdict = "ready (200)" if out.strip().endswith("200") else f"NOT ready (got {out.strip() or 'no response'})"
     print(f"  Readiness: {verdict}")
@@ -1511,6 +1576,20 @@ def cmd_teardown(args: argparse.Namespace) -> None:
         except ClientError as exc:
             warn(f"Could not delete the alarm: {exc}")
         audit("terminated", instance=instance_id)
+
+    # Release the Elastic IP. An allocated-but-unattached EIP keeps billing
+    # after the instance is gone, so this must not be skipped.
+    if state.eip_allocation_id:
+        try:
+            client("ec2", region).release_address(AllocationId=state.eip_allocation_id)
+            log(f"Released Elastic IP {state.eip_allocation_id}")
+            audit("eip_released", allocation_id=state.eip_allocation_id)
+            state.eip_allocation_id = ""
+        except ClientError as exc:
+            warn(
+                f"Could not release Elastic IP {state.eip_allocation_id}: {exc}\n"
+                "  Release it by hand or it keeps costing ~$3.65/mo."
+            )
 
     # Dalston's rule references our SG, so it must go before the SG itself.
     if state.dalston_sg and state.sg_id:
@@ -1633,6 +1712,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--kit-ref",
         default="",
         help="git ref the deploy kit is fetched from (default: this checkout's commit)",
+    )
+    p_launch.add_argument(
+        "--no-eip",
+        action="store_true",
+        help="skip the Elastic IP (the address then changes on stop/start or resize)",
     )
     p_launch.set_defaults(func=cmd_launch)
 
