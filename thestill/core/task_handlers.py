@@ -378,7 +378,25 @@ def handle_transcribe(
         audio_file = config.path_manager.downsampled_audio_file(episode.downsampled_audio_path)
         audio_key = config.path_manager.to_relative(audio_file)
         if not config.file_storage.exists(audio_key):
-            raise FatalError(f"Downsampled audio file not found: {audio_file}")
+            # ``downsampled_audio_path`` routinely outlives its WAV: the
+            # DELETE_AUDIO_AFTER_PROCESSING cleanup removes the file but a
+            # later failure can leave the column set, and a database restore
+            # carries the rows without the audio. Dead-lettering here strands
+            # an episode whose source audio is still perfectly reachable —
+            # Dalston fetches the URL itself, so recover onto that path
+            # instead of failing fatally.
+            if config.transcription_provider == "dalston" and episode.audio_url:
+                logger.warning(
+                    "downsampled_audio_missing_using_url_fetch",
+                    episode_id=episode.id,
+                    missing_path=str(audio_file),
+                    note="stale downsampled_audio_path; falling back to Dalston URL fetch",
+                )
+                use_dalston_url = True
+                audio_key = None
+                audio_file = None
+            else:
+                raise FatalError(f"Downsampled audio file not found: {audio_file}")
 
     # Transcription errors are usually transient (API issues, rate limits)
     with _handler_error_context(f"transcribing {episode.title}"):

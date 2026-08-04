@@ -313,6 +313,50 @@ so they can be cited in review ("this is FM-1") and recalled during development.
 
 ---
 
+### FM-9 — Constraints and indexes that depend on collation
+
+> A `CHECK` or index whose truth depends on **string ordering** means
+> different things on different machines. Two databases can report the same
+> locale name and still disagree, because the ordering comes from the host's
+> C library, not from Postgres. Discovered 2026-08-04 migrating to AWS
+> (spec #66): `entity_cooccurrences` has `CHECK (entity_a_id < entity_b_id)`
+> as a canonical-pair guard, and one row of 1,089,070 flipped ordering
+> between macOS and Debian — `pg_restore` aborted the whole `COPY` and the
+> table arrived **empty**.
+
+- **The specific trap:** source and destination both declared `en_US.UTF-8`.
+  macOS libc and Debian glibc disagree on punctuation: glibc ignores the
+  hyphen at the primary level, so `'company:s-club-7' < 'company:saudi-arabia'`
+  is **true** on macOS and **false** on Debian. A constraint that was
+  satisfied at source was violated on arrival.
+- **Why it hides:** it is invisible until a *cross-platform* restore, which
+  happens rarely and usually under deadline. `pg_restore` reports it as one
+  line among many and exits non-zero only if you let it — and the failure is
+  per-`COPY`, so a single bad row discards the entire table rather than
+  degrading proportionally. Row counts look fine for every *other* table,
+  which makes the gap easy to miss.
+- **Compounding (FM-1):** the restore script piped `pg_restore` through
+  `| tail -20 || true`, so the non-zero exit was swallowed. The loss was
+  caught only by comparing row counts against source afterwards — not by
+  anything in the automation. An error path that ends in `|| true` is a
+  decision to not know.
+- **Rule:** prefer collation-independent invariants. Canonical ordering is
+  better expressed with an explicit collation (`CHECK (entity_a_id COLLATE "C"
+  < entity_b_id COLLATE "C")`) so the guarantee travels with the schema.
+  Where the data is derivable, rebuilding on the destination is safer than
+  transporting it: the rebuild uses the destination's own collation and is
+  self-correcting.
+- **Rule (migration):** always diff row counts source-vs-destination after a
+  restore, per table. Never infer success from a clean-looking log.
+- **This codebase:** recovered by re-deriving `entity_cooccurrences` from
+  `entity_mentions` via `rebuild_cooccurrences`
+  ([postgres_entity_repository.py](../thestill/repositories/postgres_entity_repository.py)),
+  which produced 1,088,975 rows — 95 *fewer* than the source table, because
+  the incremental per-episode rebuild had drifted stale against its own
+  mentions. The destination is the more correct of the two.
+
+---
+
 ## Remediations & Implementation Phases
 
 Ordered by robustness-per-effort. Phase 1 is the high-leverage, low-cost set —

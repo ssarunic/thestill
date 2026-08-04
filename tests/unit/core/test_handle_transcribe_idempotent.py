@@ -146,3 +146,71 @@ def test_corrupt_artifact_falls_through_to_re_transcription():
     # The bad file is overwritten with a valid transcript.
     assert Transcript.model_validate_json(storage.files[_REL_PATH]).text == "recovered"
     state.feed_manager.mark_episode_processed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Stale ``downsampled_audio_path`` — the WAV is gone but the column survives.
+#
+# DELETE_AUDIO_AFTER_PROCESSING removes the file; a database restore carries
+# the row without it. The handler used to raise FatalError and dead-letter the
+# episode, even though Dalston can fetch the source URL itself. Observed in
+# production on both the local machine and the first AWS deployment (111 rows
+# pointing at an empty downsampled_audio/ directory).
+# ---------------------------------------------------------------------------
+
+
+def _build_state_with_stale_downsampled(storage: _FakeStorage, *, provider: str = "dalston", audio_url=...):
+    """State where ``downsampled_audio_path`` is set but the file is absent."""
+    state = _build_state(storage)
+    _, episode = state.repository.get_episode.return_value
+    episode.downsampled_audio_path = "the-show/ep.wav"
+    if audio_url is not ...:
+        episode.audio_url = audio_url
+    state.config.transcription_provider = provider
+    state.config.path_manager.downsampled_audio_file.side_effect = lambda p: Path("/data/downsampled_audio") / p
+    return state
+
+
+def test_missing_downsampled_file_falls_back_to_url_fetch():
+    storage = _FakeStorage()  # neither the WAV nor a transcript exists
+    state = _build_state_with_stale_downsampled(storage)
+
+    transcriber = MagicMock()
+    transcriber.transcribe_audio.return_value = _transcript("via url")
+
+    with patch("thestill.core.task_handlers.create_transcriber", return_value=transcriber):
+        handle_transcribe(_make_task(), state)
+
+    # Recovered onto the URL path instead of dead-lettering.
+    transcriber.transcribe_audio.assert_called_once()
+    _, kwargs = transcriber.transcribe_audio.call_args
+    assert kwargs["options"].audio_url == "https://example.com/audio.mp3"
+    state.feed_manager.mark_episode_processed.assert_called_once()
+
+
+def test_missing_downsampled_file_still_fatal_without_a_url():
+    storage = _FakeStorage()
+    state = _build_state_with_stale_downsampled(storage, audio_url=None)
+
+    with patch("thestill.core.task_handlers.create_transcriber") as create:
+        try:
+            handle_transcribe(_make_task(), state)
+        except Exception as exc:  # FatalError
+            assert "Downsampled audio file not found" in str(exc)
+        else:
+            raise AssertionError("expected FatalError when there is no URL to fall back to")
+    create.assert_not_called()
+
+
+def test_missing_downsampled_file_still_fatal_for_non_dalston_providers():
+    storage = _FakeStorage()
+    state = _build_state_with_stale_downsampled(storage, provider="google")
+
+    with patch("thestill.core.task_handlers.create_transcriber") as create:
+        try:
+            handle_transcribe(_make_task(), state)
+        except Exception as exc:
+            assert "Downsampled audio file not found" in str(exc)
+        else:
+            raise AssertionError("only Dalston can fetch by URL; others must still fail")
+    create.assert_not_called()

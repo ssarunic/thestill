@@ -141,13 +141,76 @@ Applies the [#25](25-security-audit-and-hardening.md) /
 - **Security group (Dalston):** inbound on its service port **from the app
   SG only** (replaces the previous overlay-network reachability for the data
   path). If Dalston lives in a different VPC, use same-region VPC peering.
-- **`DALSTON_BASE_URL`** points at Dalston's private IP/DNS. The SSRF URL
-  guard needs an allowlist entry for this private URL — same mechanism as
-  the localhost case in [docs/configuration.md](../docs/configuration.md).
+- **`DALSTON_BASE_URL`** points at Dalston's private DNS name (see the
+  addressing note below). The SSRF URL guard needs an allowlist entry for
+  this private URL — same mechanism as the localhost case in
+  [docs/configuration.md](../docs/configuration.md).
 - **IAM:** instance profile with least privilege — S3 read/write on the
   backup bucket, SSM core, CloudWatch Logs. No static AWS keys on the box.
 - **S3:** Block Public Access on; SSE-S3; versioning on (ransomware/fat-finger
   protection for backups).
+
+### Correction (2026-08-04): Dalston does not listen on its VPC interface
+
+This spec assumed the app could reach Dalston over private VPC networking as
+soon as an SG-to-SG rule existed. **That premise was wrong.** Dalston pins its
+gateway to loopback (`127.0.0.1:8000:8000` in its `docker-compose.aws.yml`)
+and publishes itself via `tailscale serve`; its M93 hardening milestone states
+the intent plainly — *"AWS SGs: zero ingress rules … Host ports bind
+tailscale0 / localhost only."* With the SG rule correctly in place the app
+still got `Connection refused` (not a timeout — the packet arrived and nothing
+was listening).
+
+Two options were weighed:
+
+| | Tailscale on the app box | VPC-private (chosen) |
+|---|---|---|
+| Change required | none to Dalston | one line: bind the VPC address |
+| Blast radius if the app is compromised | every device the tailnet ACL permits — and the tailnet is currently default-allow | one TCP port on one host |
+| Addressing | stable MagicDNS name | needs explicit work (below) |
+| Encryption in transit | WireGuard | none (same-VPC) |
+
+**Decision: VPC-private.** The app box is the only internet-facing host in
+the estate (80/443 open to the world); granting it membership of the most
+trusted network inverts the blast radius. An SG reference is a smaller trust
+relationship — one source identity, one destination, one port — and it is
+least-privilege by construction rather than by remembering to write an ACL.
+Tailscale remains the **administrative** overlay for Dalston; the app box
+never joins the tailnet at all, because its admin path is SSM Session Manager
+(no daemon, no keys, IAM-controlled, CloudTrail-audited).
+
+Bind to Dalston's **VPC address specifically**, not `0.0.0.0` — everything
+else on that host stays loopback-only.
+
+### Stable addressing for `DALSTON_BASE_URL`
+
+`ip-172-31-29-119.eu-west-2.compute.internal` is derived from the private IP,
+so it changes whenever Dalston is rebuilt. In increasing order of robustness:
+
+1. **Private Route53 record** (`dalston.int.thestill.me`, zone associated with
+   the VPC) — implemented 2026-08-04. This is indirection, *not* stability:
+   nothing updates it automatically yet. `thestill-aws` should upsert it on
+   every launch/reconcile.
+2. **Persistent ENI** with a fixed private IP, reattached on rebuild — free,
+   and sufficient while Dalston is a single instance.
+3. **Internal ALB** — stable DNS, health checks, target replacement, and a
+   natural path to multiple targets. Roughly $16–18/mo before LCUs, so worth
+   buying when Dalston needs more than one target rather than pre-paying.
+
+Note a private hosted zone answers only after propagation; a name queried
+before the zone is live can be negatively cached for the parent zone's SOA
+minimum (86400s here). Query a fresh name to distinguish propagation lag from
+misconfiguration.
+
+### Before Dalston is ever public
+
+Not required for this deployment — the SG admits exactly one source SG on one
+port — but a prerequisite for any public listener: public ALB with ACM TLS and
+WAF, SG allowing Dalston only from the ALB SG, per-tenant API keys and quotas,
+and admin/`/metrics`/key-administration surfaces kept off the public route.
+Dalston's own review additionally flags unauthenticated `/metrics`, wide-open
+CORS, no application-level upload ceiling, redirect-following after a single
+SSRF hostname check, and multi-GB in-memory accumulation on URL ingestion.
 
 ---
 
