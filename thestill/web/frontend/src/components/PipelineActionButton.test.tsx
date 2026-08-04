@@ -13,7 +13,6 @@ vi.mock('../hooks/useApi', () => ({
   useQueuePipelineTask: () => ({ mutate: vi.fn(), isPending: false }),
   useRunPipeline: () => ({ mutate: vi.fn(), isPending: false }),
   useCancelPipeline: () => ({ mutate: vi.fn() }),
-  useEpisodeTasks: () => ({ data: undefined }),
 }))
 
 function renderButton(episodeState = 'discovered') {
@@ -23,6 +22,7 @@ function renderButton(episodeState = 'discovered') {
       episodeSlug="ep"
       episodeId="ep-1"
       episodeState={episodeState}
+      tasks={[]}
     />
   )
 }

@@ -1,6 +1,5 @@
 import type { ReactElement } from 'react'
-import type { PipelineStage } from '../api/types'
-import { useEpisodeTasks } from '../hooks/useApi'
+import type { PipelineStage, EpisodeTask } from '../api/types'
 
 // Spec #28 §"Failure isolation rule" + Phase 5.2 — the four entity-
 // branch stages get their own status row, separate from the user
@@ -49,6 +48,8 @@ type StageStatus = 'completed' | 'processing' | 'pending' | 'failed' | 'queued'
 
 interface EntityBranchProgressProps {
   episodeId: string | null
+  // Spec #68 D2 — see PipelineActionButton: one owner for the task query.
+  tasks: EpisodeTask[]
   // When set, the strip collapses to a tiny "Indexed" pill once every
   // stage is complete. Defaults to true — this matches the spec's
   // "minimise visual weight when nothing's wrong" intent.
@@ -90,17 +91,15 @@ function WarnIcon() {
 
 export default function EntityBranchProgress({
   episodeId,
+  tasks,
   collapseWhenIdle = true,
 }: EntityBranchProgressProps) {
-  const { data: tasksData } = useEpisodeTasks(episodeId)
-
   if (!episodeId) return null
 
   // Build a per-stage status map from the most-recent task at each
   // entity-branch stage. The queue can have multiple historical tasks
   // (retries, manual re-runs) — we care about the latest one for each
   // stage to drive the dot color.
-  const tasks = tasksData?.tasks ?? []
   const latestByStage = new Map<string, { status: string; failedAt?: string | null }>()
   for (const t of tasks) {
     if (!ENTITY_STAGE_KEYS.has(t.stage)) continue

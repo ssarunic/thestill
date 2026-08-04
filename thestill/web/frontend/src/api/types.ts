@@ -550,26 +550,30 @@ export interface PipelineTaskStatusResponse {
   completed_at: string | null
 }
 
+// Named (spec #68) so the reader can own one task query and pass the rows to
+// PipelineActionButton and EntityBranchProgress as props.
+export interface EpisodeTask {
+  id: string
+  episode_id: string
+  stage: PipelineStage
+  status: PipelineTaskStatus | ExtendedPipelineTaskStatus
+  priority: number
+  error_message: string | null
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  retry_count: number
+  max_retries: number
+  next_retry_at: string | null
+  error_type: 'transient' | 'fatal' | null
+  last_error: string | null
+  metadata: PipelineTaskMetadata | null
+}
+
 export interface EpisodeTasksResponse {
   episode_id: string
-  tasks: Array<{
-    id: string
-    episode_id: string
-    stage: PipelineStage
-    status: PipelineTaskStatus | ExtendedPipelineTaskStatus
-    priority: number
-    error_message: string | null
-    created_at: string | null
-    updated_at: string | null
-    started_at: string | null
-    completed_at: string | null
-    retry_count: number
-    max_retries: number
-    next_retry_at: string | null
-    error_type: 'transient' | 'fatal' | null
-    last_error: string | null
-    metadata: PipelineTaskMetadata | null
-  }>
+  tasks: EpisodeTask[]
 }
 
 // Episode Browser Types

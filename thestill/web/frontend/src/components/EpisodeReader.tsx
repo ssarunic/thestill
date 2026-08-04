@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense, type RefObject } from 'react'
 import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
@@ -23,7 +23,7 @@ import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
 import MentionDensityTimeline from './episode-entities/MentionDensityTimeline'
 import EntityBranchProgress from './EntityBranchProgress'
-import type { PipelineStage, FailureType, EntityType, EpisodeEntity, MentionLite, SummaryCitation } from '../api/types'
+import type { FailureType, EntityType, EpisodeEntity, MentionLite, SummaryCitation } from '../api/types'
 
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
@@ -134,7 +134,18 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
     }
   }, [activeTab, setScrollTop])
 
-  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
+  // Spec #68 D1 — `settled` comes back from `useEpisodeLiveRefresh` below and
+  // feeds back in here on the next render, stopping the 5s clock once the
+  // episode is terminal *and* its content has actually landed. The one-render
+  // lag is deliberate and harmless: an extra tick costs one request, whereas
+  // computing terminality before the content queries have reported would stop
+  // the clock while the summary was still catching up.
+  const [settled, setSettled] = useState(false)
+  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(
+    podcastSlug!,
+    episodeSlug!,
+    { live: !settled },
+  )
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
   const {
     data: summaryData,
@@ -222,6 +233,36 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
   // Spec #29 read tracking — viewing this page while a summary exists is
   // what marks the inbox row read, regardless of how the user got here.
   useMarkInboxReadOnView(episode?.id, summaryData?.available === true)
+
+  // Spec #68 — keep the frozen transcript/summary queries in step with the
+  // 5s episode poll as the pipeline advances. Mounted here rather than in
+  // `PipelineActionButton` (which unmounts at `summarized`, on the very
+  // transition that matters) so the standalone page and the spec #52
+  // overlay both stay live off one implementation.
+  const live = useEpisodeLiveRefresh({
+    podcastSlug,
+    episodeSlug,
+    episode,
+    transcriptAvailable: transcriptData?.available,
+    summaryAvailable: summaryData?.available,
+  })
+
+  // Render-phase adjustment rather than an effect: React re-renders
+  // immediately with the new value instead of committing a frame with the
+  // stale one, and it keeps this off the cascading-render path an effect
+  // would put it on.
+  if (settled !== live.settled) setSettled(live.settled)
+
+  // Spec #68 D2 — one owner for the episode's task list. Both consumers
+  // (`PipelineActionButton`, `EntityBranchProgress`) render from this single
+  // query rather than each calling the hook: two observers of one cache entry
+  // would each keep their own idle counter, and whichever loses a collided
+  // fetch would not advance, so the terminal rule would stop being a property
+  // of the query.
+  const { data: tasksData } = useEpisodeTasks(episode?.id ?? null, {
+    contentTerminal: live.contentTerminal,
+  })
+  const episodeTasks = useMemo(() => tasksData?.tasks ?? [], [tasksData])
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
@@ -350,22 +391,6 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
     },
     [activeTab, setTab, clearEntityFilter, handleSegmentSeek],
   )
-
-  // Handle task completion - refresh relevant data
-  const handleTaskComplete = useCallback((stage: PipelineStage) => {
-    // Always refresh episode data to get updated state
-    queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
-
-    // Refresh transcript after clean stage completes
-    if (stage === 'clean') {
-      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'transcript'] })
-    }
-
-    // Refresh summary after summarize stage completes
-    if (stage === 'summarize') {
-      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'summary'] })
-    }
-  }, [queryClient, podcastSlug, episodeSlug])
 
   if (episodeError) {
     return (
@@ -503,7 +528,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 episodeSlug={episodeSlug!}
                 episodeId={episode.id}
                 episodeState={episode.state}
-                onTaskComplete={handleTaskComplete}
+                tasks={episodeTasks}
               />
             </div>
           )}
@@ -573,7 +598,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
               status row, independent of the user chain. Renders only
               when entity-branch tasks exist for this episode. */}
           <div className="border-t border-gray-100 pt-4">
-            <EntityBranchProgress episodeId={episode.id} />
+            <EntityBranchProgress episodeId={episode.id} tasks={episodeTasks} />
           </div>
 
           {(episode.description_html || episode.description) && (

@@ -5,6 +5,14 @@
 **Last Updated**: 2026-01-07
 
 > **Implementation Summary**: All backend infrastructure (task queue, error classification, retry logic, DLQ) and frontend UI components (full pipeline button, failure banners, DLQ dashboard) have been implemented. Unit and integration tests are pending.
+>
+> **Superseded in part**: the frontend refresh mechanism introduced here — the
+> `PipelineActionButton` → `onTaskComplete` edge callback that told the episode
+> reader when to refetch content — is replaced by
+> [#68 live-episode-reader-refresh](68-live-episode-reader-refresh.md). It could
+> not survive the non-atomic complete-then-enqueue window this spec's chain
+> enqueueing creates. Everything else here (chain enqueueing, error
+> classification, retry, DLQ) stands.
 
 ## Overview
 
