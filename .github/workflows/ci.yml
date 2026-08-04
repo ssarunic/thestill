@@ -101,7 +101,7 @@ jobs:
   frontend:
     name: Frontend build + tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: thestill/web/frontend
@@ -122,6 +122,27 @@ jobs:
 
       - name: Build (tsc + vite)
         run: npm run build
+
+      # Spec #68 — browser gate. The jsdom suite above cannot see the things
+      # that actually broke this app: React Query option merging, per-observer
+      # poll timers, and whether an invalidation reaches the painted DOM. These
+      # specs stub /api/** and drive the built bundle in a real Chromium.
+      # `test:e2e:ci` excludes @live specs, which need a populated backend.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (playwright)
+        run: npm run test:e2e:ci
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            thestill/web/frontend/playwright-report
+            thestill/web/frontend/test-results
+          retention-days: 7
 
   gitleaks:
     name: Secret scan (gitleaks)

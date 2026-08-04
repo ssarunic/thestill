@@ -10,11 +10,15 @@
  * http://localhost:5173) and a corpus that includes a person entity
  * matching "musk". Skipped if no person results land within the
  * settle window; the suite is a smoke check, not a gate yet.
+ *
+ * Tagged @live because it talks to a REAL backend with real data rather
+ * than stubbing /api/**. CI excludes @live (`npm run test:e2e:ci`) — it has
+ * no corpus to search. Run it locally against a populated dev server.
  */
 
 import { test, expect } from '@playwright/test'
 
-test.describe('⌘K command bar', () => {
+test.describe('⌘K command bar', { tag: '@live' }, () => {
   test('opens, returns grouped hits, and navigates on Enter', async ({ page, browserName }) => {
     await page.goto('/')
 
