@@ -163,7 +163,7 @@ Notes:
   Prefer a stable private DNS name over a raw IP (spec #66 risk item).
 - `DATABASE_URL` is **not** an SSM parameter — the compose file assembles it
   from `POSTGRES_PASSWORD`.
-- Add the `https://<domain>/api/auth/callback` redirect URI in the Google
+- Add the `https://<domain>/api/auth/google/callback` redirect URI in the Google
   OAuth console before cutover.
 
 ## 4. Migrate data (one-time)

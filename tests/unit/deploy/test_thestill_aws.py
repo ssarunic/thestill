@@ -213,6 +213,46 @@ class TestAliasDomains:
         assert args.alias == []
 
 
+class TestElasticIP:
+    """Without a stable address, stop/start or an instance-type change hands
+    the box a new IP and silently breaks DNS — which is what makes the
+    'resize to 8 cores for a batch job' pattern unsafe."""
+
+    def test_state_carries_the_allocation(self, cli):
+        assert "eip_allocation_id" in {f.name for f in __import__("dataclasses").fields(cli.Deployment)}
+
+    def test_launch_exposes_an_opt_out(self, cli):
+        args = cli.build_parser().parse_args(["launch"])
+        assert args.no_eip is False
+        assert cli.build_parser().parse_args(["launch", "--no-eip"]).no_eip is True
+
+    def test_teardown_releases_the_address(self):
+        # An allocated-but-unattached EIP keeps billing after teardown.
+        src = SCRIPT.read_text()
+        assert "release_address" in src, "teardown must release the Elastic IP"
+
+    def test_association_allows_reassociation(self):
+        # Retrofitting onto an already-running instance needs this.
+        assert "AllowReassociation=True" in SCRIPT.read_text()
+
+
+class TestReadinessProbe:
+    def test_probes_inside_the_container_not_the_host(self):
+        # Only Caddy publishes ports; the app's 8000 is compose-internal, so
+        # curling the host's localhost:8000 always fails.
+        src = SCRIPT.read_text()
+        assert "docker compose -f docker-compose.prod.yml exec -T thestill" in src
+        assert "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000" not in src
+
+
+class TestOAuthCallbackPath:
+    def test_help_text_matches_the_route_the_app_registers(self):
+        # auth router mounts at /api/auth, route is /google/callback.
+        src = SCRIPT.read_text()
+        assert "/api/auth/google/callback" in src
+        assert "/api/auth/callback" not in src.replace("/api/auth/google/callback", "")
+
+
 class TestDeployKitPinning:
     """A mutable 'main' ref would let reconcile pull a compose file newer
     than the image the box runs — silent version skew."""
