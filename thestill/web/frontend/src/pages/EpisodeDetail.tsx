@@ -10,7 +10,17 @@ import EpisodeReader from '../components/EpisodeReader'
  */
 export default function EpisodeDetail() {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
-  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(podcastSlug!, episodeSlug!)
+  // `live: false` — spec #68 D1. This is a passive consumer of a cache entry
+  // the reader already keeps fresh; the two share a query key, so the reader's
+  // polling updates this breadcrumb for free. Without the flag this observer
+  // runs its own 5s timer, which keeps the query polling even after the reader
+  // has settled and stopped — one observer cannot switch off a poll another is
+  // still driving.
+  const { data: episodeData, isLoading: episodeLoading, error: episodeError } = useEpisode(
+    podcastSlug!,
+    episodeSlug!,
+    { live: false },
+  )
   const episode = episodeData?.episode
 
   return (

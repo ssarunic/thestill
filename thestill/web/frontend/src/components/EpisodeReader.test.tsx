@@ -22,16 +22,24 @@ vi.mock('../hooks/useApi', () => ({
   useEpisodeEntities: vi.fn(() => ({ data: { entities: [] } })),
   useRelatedEpisodes: vi.fn(() => ({ data: { episodes: [] }, isLoading: false })),
   useMarkInboxReadOnView: vi.fn(),
+  useEpisodeLiveRefresh: vi.fn(() => ({ settled: false, contentTerminal: false })),
+  useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
 }))
 
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))
 vi.mock('./SummaryViewer', () => ({ default: () => <div>SUMMARY_VIEWER</div> }))
 
-import { useEpisode, useEpisodeSummary, useMarkInboxReadOnView } from '../hooks/useApi'
+import {
+  useEpisode,
+  useEpisodeSummary,
+  useMarkInboxReadOnView,
+  useEpisodeLiveRefresh,
+} from '../hooks/useApi'
 
 const mockUseEpisode = useEpisode as ReturnType<typeof vi.fn>
 const mockUseSummary = useEpisodeSummary as ReturnType<typeof vi.fn>
 const mockMarkOnView = useMarkInboxReadOnView as ReturnType<typeof vi.fn>
+const mockLiveRefresh = useEpisodeLiveRefresh as ReturnType<typeof vi.fn>
 
 function episodeResponse(): EpisodeDetailResponse {
   return {
@@ -131,6 +139,27 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     mockMarkOnView.mockClear()
     renderAtEpisodeRoute(<EpisodeDetail />)
     expect(mockMarkOnView).toHaveBeenCalledWith('ep-1', true)
+  })
+
+  it('inherits live pipeline refresh (spec #68) in both modes', () => {
+    // The hook lives on the reader, not on either shell, so the page and
+    // the overlay cannot drift apart on freshness (spec #42 FM-6). Both
+    // modes must hand it the same episode and the same content-availability
+    // signals it reconciles against.
+    const expected = {
+      podcastSlug: 'sample-pod',
+      episodeSlug: 'sample-episode',
+      episode: expect.objectContaining({ id: 'ep-1', state: 'summarized' }),
+      transcriptAvailable: undefined,
+      summaryAvailable: true,
+    }
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+    expect(mockLiveRefresh).toHaveBeenCalledWith(expect.objectContaining(expected))
+
+    mockLiveRefresh.mockClear()
+    renderAtEpisodeRoute(<EpisodeDetail />)
+    expect(mockLiveRefresh).toHaveBeenCalledWith(expect.objectContaining(expected))
   })
 
   it('shows the error card when the episode fails to load', () => {

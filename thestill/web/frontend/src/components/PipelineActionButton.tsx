@@ -1,16 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { useQueuePipelineTask, useEpisodeTasks, useRunPipeline, useCancelPipeline } from '../hooks/useApi'
-import type { PipelineStage, ExtendedPipelineTaskStatus } from '../api/types'
+import { useQueuePipelineTask, useRunPipeline, useCancelPipeline } from '../hooks/useApi'
+import type { PipelineStage, ExtendedPipelineTaskStatus, EpisodeTask } from '../api/types'
 import { STAGE_BUTTON_COLOR } from '../constants/stages'
 import PipelineStepper from './PipelineStepper'
 
+// Spec #68 D4 — this component no longer reports task completion upward.
+// Detecting the "had an active task → now doesn't" edge only worked if the
+// client witnessed that exact transition, and this component unmounts at
+// `summarized` (see EpisodeReader), i.e. on the transition that mattered
+// most. Content freshness is now `useEpisodeLiveRefresh`'s job.
 interface PipelineActionButtonProps {
   podcastSlug: string
   episodeSlug: string
   episodeId: string
   episodeState: string
-  onTaskComplete?: (stage: PipelineStage) => void
+  // Spec #68 D2 — supplied by `EpisodeReader`, which owns the single task
+  // query. Fetching it here as well would split the poll's idle counter
+  // across two observers of one cache entry.
+  tasks: EpisodeTask[]
 }
 
 // Progress update from SSE
@@ -232,7 +240,7 @@ export default function PipelineActionButton({
   episodeSlug,
   episodeId,
   episodeState,
-  onTaskComplete,
+  tasks,
 }: PipelineActionButtonProps) {
   const { isAdmin } = useAuth()
   const [error, setError] = useState<string | null>(null)
@@ -243,27 +251,23 @@ export default function PipelineActionButton({
   const { mutate: queueTask, isPending } = useQueuePipelineTask(podcastSlug, episodeSlug)
   const { mutate: runFullPipeline, isPending: isPipelinePending } = useRunPipeline(podcastSlug, episodeSlug)
   const { mutate: cancelPipelineMutation } = useCancelPipeline()
-  const { data: tasksData } = useEpisodeTasks(episodeId)
   const eventSourceRef = useRef<EventSource | null>(null)
-
-  // Track previous active task to detect completion
-  const prevActiveTaskRef = useRef<{ id: string; stage: PipelineStage } | null>(null)
 
   // Get action for current state
   const action = stateToAction[episodeState]
 
   // Check if there's already an active task
-  const activeTask = tasksData?.tasks?.find(
+  const activeTask = tasks.find(
     (t) => t.status === 'pending' || t.status === 'processing'
   )
 
   // Check for retry_scheduled task
-  const retryScheduledTask = tasksData?.tasks?.find(
+  const retryScheduledTask = tasks.find(
     (t) => (t.status as ExtendedPipelineTaskStatus) === 'retry_scheduled'
   )
 
   // Check if running a full pipeline (has metadata.run_full_pipeline)
-  const isPipelineRunning = tasksData?.tasks?.some(
+  const isPipelineRunning = tasks.some(
     (t) =>
       (t.status === 'pending' || t.status === 'processing') &&
       (t as any).metadata?.run_full_pipeline
@@ -339,33 +343,13 @@ export default function PipelineActionButton({
     }
   }, [activeTask?.id, activeTask?.stage, activeTask?.status])
 
-  // Detect when a task completes and notify parent
-  useEffect(() => {
-    const prevTask = prevActiveTaskRef.current
-
-    // If we had an active task before but not now, check if it completed
-    if (prevTask && !activeTask) {
-      const completedTask = tasksData?.tasks?.find(
-        (t) => t.id === prevTask.id && t.status === 'completed'
-      )
-      if (completedTask && onTaskComplete) {
-        onTaskComplete(completedTask.stage)
-      }
-    }
-
-    // Update ref with current active task
-    prevActiveTaskRef.current = activeTask
-      ? { id: activeTask.id, stage: activeTask.stage }
-      : null
-  }, [activeTask, tasksData?.tasks, onTaskComplete])
-
   // Check for failed task for the NEXT stage (the action we're about to take)
   // Only show if there's no completed task for that stage that supersedes it
   const recentFailedTask = action
-    ? tasksData?.tasks?.find((t) => {
+    ? tasks.find((t) => {
         if (t.stage !== action.stage || t.status !== 'failed') return false
         // Check if there's a completed task for the same stage that's newer
-        const hasNewerSuccess = tasksData?.tasks?.some(
+        const hasNewerSuccess = tasks.some(
           (other) =>
             other.stage === t.stage &&
             other.status === 'completed' &&

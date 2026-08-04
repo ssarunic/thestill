@@ -274,6 +274,43 @@ so they can be cited in review ("this is FM-1") and recalled during development.
   natural). Candidates for the same validator: any future LLM surface that
   persists free text (summaries, narration scripts, entity enrichment).
 
+### FM-8 — Edge-triggered state sync (a poll that latches itself off)
+
+> A consumer syncs by detecting a *transition* — "there was work in flight,
+> now there isn't" — and acts only on that edge. It is correct only if it
+> observes every transition. Timers throttle, components unmount, tabs sleep,
+> and the producer's intermediate states are not atomic, so eventually it
+> misses one and stops syncing entirely. Discovered 2026-08-03 in the episode
+> reader (spec #68): the transcript and summary panes showed "not yet
+> available" indefinitely after the pipeline had finished.
+
+- **Why it hides:** the *first* stage usually works, so the mechanism looks
+  sound in manual testing and in any test whose fixture keeps exactly one task
+  active until the pipeline ends (FM-5 again — that fixture never produces the
+  empty intermediate state the real producer does). The failure needs a real
+  multi-stage run to appear, and then it looks like a caching bug rather than a
+  sync bug.
+- **The specific trap:** a self-referential poll predicate — *keep polling only
+  if the last poll said busy* — is a latch that can only fall open. In spec #68,
+  `TaskWorker` completes a task and only *then* enqueues its successor
+  ([task_worker.py:671-704](../thestill/core/task_worker.py#L671-L704)); a poll
+  landing in that non-atomic window saw an empty list, returned `false`, and
+  never ran again for the rest of the pipeline.
+- **Rule:** sync on a level the producer **re-asserts on every tick**, not on a
+  transition the consumer must witness. Then a missed observation costs latency,
+  never correctness. If you must stop polling, make every path back to activity
+  restart it, and bound the stop with consecutive-quiet-tick counting rather
+  than a single quiet observation.
+- **Corollary:** when two views of the same entity refresh at different
+  cadences, the slower one is not "cached", it is **wrong** — something must
+  reconcile them. Freezing one (`refetchInterval: false`) is only safe if
+  something else invalidates it.
+- **This codebase:** fixed in the reader by `useEpisodeLiveRefresh`
+  ([useApi.ts](../thestill/web/frontend/src/hooks/useApi.ts)), which diffs
+  `(state, has_transcript, has_summary)` off the already-live 5 s episode poll.
+  Known remaining instances, same shape, not yet converted: `useRefreshStatus`,
+  `useAddPodcastStatus`, `usePipelineTaskStatus`.
+
 ---
 
 ## Remediations & Implementation Phases
@@ -351,6 +388,10 @@ The catalogue is only useful if it's applied. Two layers:
 - [ ] FM-7: Does LLM-generated text reach storage? Is it routed through
       `sanitize_text` (or an equivalent validator) at the response schema,
       with stripped counts logged?
+- [ ] FM-8: Does this act on a *transition* rather than a re-asserted level?
+      Can the poll/watch that feeds it switch itself off based on its own last
+      result? If two views of the same entity refresh at different cadences,
+      what reconciles the slower one?
 
 ---
 
