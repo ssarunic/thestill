@@ -15,7 +15,7 @@ point of the feature.
 
 | Kind | Example URL | Notes |
 |---|---|---|
-| YouTube video | `https://www.youtube.com/watch?v=dQw4w9WgXcQ` | Also `youtu.be/...`, `/shorts/...`, `/playlist?list=...`. The episode's parent channel is upserted into the system as an `auto_added` podcast row, hidden from refresh until you follow it. |
+| YouTube video | `https://www.youtube.com/watch?v=dQw4w9WgXcQ` | Also `youtu.be/...` and `/shorts/...`. A watch URL that carries a `list=` param imports just that video — the playlist context is ignored. Pasting a bare `youtube.com/playlist?list=...` index page is not supported (importing a whole playlist/channel is not a goal of this feature; use "follow" instead). The episode's parent channel is upserted into the system as an `auto_added` podcast row, hidden from refresh until you follow it. |
 | Apple Podcasts share link | `https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000` | Resolved via the iTunes Search API to the show's RSS feed and the episode's audio URL. Show-only links (no `?i=...`) are rejected — paste an episode link from the Share menu. |
 | Direct audio file | `https://cdn.example.com/episode.mp3` | Any URL ending in `.mp3`, `.m4a`, `.opus`, `.ogg`, or `.wav`. Falls back to a synthetic `audio-imports` parent. |
 
@@ -120,13 +120,19 @@ clearing the `auto_added` flag.
 
 ## Running the pipeline
 
-Imports run through the same pipeline as RSS-discovered episodes:
+Imports skip the local `download` and `downsample` stages and are enqueued
+directly at `transcribe`, which fetches the audio from the resolved
+`audio_url` itself. From there the chain continues like RSS-discovered
+episodes:
 
 ```
-download → downsample → transcribe → clean → summarize → entity branch
+transcribe → clean → summarize → entity branch
 ```
 
-There is no special-case path. Failures surface in the same way (failed
+This shortcut currently requires the Dalston transcription provider (set
+via `TRANSCRIPTION_PROVIDER`, default `whisper`); on a non-Dalston setup an
+import's `transcribe` task has no local audio file to work from and will
+fail. Failures surface the same way as RSS-discovered episodes (failed
 state, `Failed Tasks` page, retry from the dead-letter queue).
 
 ## Quotas
