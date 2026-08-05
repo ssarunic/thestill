@@ -1148,9 +1148,108 @@ def cmd_setup(args: argparse.Namespace) -> None:
     )
 
 
+# Variables that are SUPPOSED to differ between a laptop and the deployment,
+# so the diff does not nag about them. Everything else showing up as missing
+# is a real question.
+_DIFF_EXPECTED_LOCAL_ONLY = {
+    # Point at local files or the local backend.
+    "GOOGLE_APP_CREDENTIALS",
+    "STORAGE_PATH",
+    "DATABASE_PATH",
+    "DATABASE_URL",
+    "LOG_FILE",
+    "LOG_FORMAT",
+    # Test-only: clips audio, must never reach production.
+    "DEBUG_CLIP_DURATION",
+    # Sized for the dev machine; the box is tuned separately.
+    "PARALLEL_JOBS",
+    "MAX_WORKERS",
+    # Local-transcription / local-LLM stacks the deployment image omits.
+    "WHISPER_MODEL",
+    "WHISPER_DEVICE",
+    "OLLAMA_MODEL",
+    "OLLAMA_BASE_URL",
+}
+_DIFF_EXPECTED_REMOTE_ONLY = {
+    "PUBLIC_DOMAIN",
+    "PUBLIC_BASE_URL",
+    "ALLOWED_ORIGINS",
+    "POSTGRES_PASSWORD",
+    "ENVIRONMENT",
+    "COOKIE_SECURE",
+    "DALSTON_BASE_URL",
+    "URL_GUARD_ALLOWLIST",
+    "MIGRATE_ON_STARTUP",
+    "REFRESH_SCHEDULER_ENABLED",
+    "BRIEFING_SCHEDULER_ENABLED",
+}
+
+
+def _secrets_diff(region: str, env_file: Path) -> None:
+    """Report configuration drift between a local env file and SSM.
+
+    Exists because hand-picking which variables to migrate is how
+    ``ENABLE_DIARIZATION`` went missing on 2026-08-04: the code defaults it
+    to ``false``, so the deployment silently stopped asking Dalston for
+    diarization and every transcript came back with no speakers. Nothing
+    errored, nothing logged — the output was structurally valid and wrong.
+
+    Values are never printed; only names, and whether they differ.
+    """
+    if not env_file.is_file():
+        die(f"No such env file: {env_file}")
+
+    local = parse_env_file(env_file)
+    remote = list_secrets(region)
+
+    expected_to_differ = _DIFF_EXPECTED_LOCAL_ONLY | _DIFF_EXPECTED_REMOTE_ONLY
+    missing = sorted(set(local) - set(remote) - _DIFF_EXPECTED_LOCAL_ONLY)
+    remote_only = sorted(set(remote) - set(local) - _DIFF_EXPECTED_REMOTE_ONLY)
+    # A value that is *supposed* to differ (the deployment's domain, its
+    # scheduler flags) is not drift; reporting it trains you to ignore the
+    # section that matters.
+    differing = sorted(k for k in set(local) & set(remote) if local[k] != remote[k] and k not in expected_to_differ)
+    ignored = sorted((set(local) - set(remote)) & _DIFF_EXPECTED_LOCAL_ONLY)
+
+    print(f"  local  : {env_file}  ({len(local)} vars)")
+    print(f"  remote : {SSM_PREFIX}  ({len(remote)} params)")
+    print()
+
+    if missing:
+        err(f"MISSING FROM SSM ({len(missing)}) — the deployment falls back to code defaults:")
+        for name in missing:
+            print(f"    {name}")
+        print(f"\n  Push them:  thestill-aws secrets put --from-env-file {env_file}")
+    else:
+        log("Nothing missing from SSM.")
+
+    if differing:
+        print()
+        warn(f"DIFFERENT VALUES ({len(differing)}) — intentional, or drift?")
+        for name in differing:
+            print(f"    {name}")
+
+    if remote_only:
+        print()
+        log(f"Only in SSM ({len(remote_only)}) — set for the deployment, absent locally:")
+        for name in remote_only:
+            print(f"    {name}")
+
+    if ignored:
+        print()
+        log(f"Ignored as expected-local-only ({len(ignored)}): {', '.join(ignored)}")
+
+    if missing:
+        sys.exit(1)
+
+
 def cmd_secrets(args: argparse.Namespace) -> None:
     state = require_state()
     region = state.region
+
+    if args.action == "diff":
+        _secrets_diff(region, Path(args.against).expanduser())
+        return
 
     if args.action == "list":
         present = list_secrets(region)
@@ -1699,8 +1798,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.set_defaults(func=cmd_setup)
 
     p_secrets = sub.add_parser("secrets", help="seed or inspect SSM Parameter Store")
-    p_secrets.add_argument("action", choices=["put", "list"])
+    p_secrets.add_argument("action", choices=["put", "list", "diff"])
     p_secrets.add_argument("--from-env-file", default="", help="KEY=VALUE file to upload (put)")
+    p_secrets.add_argument(
+        "--against",
+        default=".env",
+        help="local env file to diff SSM against (diff; default .env)",
+    )
     p_secrets.add_argument("--overwrite", action="store_true", help="replace parameters that already exist")
     p_secrets.set_defaults(func=cmd_secrets)
 

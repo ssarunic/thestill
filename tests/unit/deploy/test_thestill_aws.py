@@ -351,3 +351,48 @@ class TestConstants:
     def test_image_repo_matches_the_ci_publish_target(self, cli):
         workflow = (SCRIPT.parents[2] / ".github" / "workflows" / "ci.yml").read_text()
         assert cli.DEFAULT_IMAGE_TAG in workflow, "CI must publish the tag the launcher pulls"
+
+
+class TestSecretsDiff:
+    """Config drift should be a check, not a judgement call.
+
+    Hand-picking which variables to migrate is how ENABLE_DIARIZATION went
+    missing on 2026-08-04: the code defaults it to false, so the deployment
+    silently stopped requesting diarization and every transcript came back
+    with no speakers. Nothing raised, nothing logged.
+    """
+
+    def test_diff_is_a_secrets_action(self, cli):
+        args = cli.build_parser().parse_args(["secrets", "diff"])
+        assert args.action == "diff"
+        assert args.against == ".env"
+
+    def test_diff_accepts_an_explicit_env_file(self, cli):
+        args = cli.build_parser().parse_args(["secrets", "diff", "--against", "other.env"])
+        assert args.against == "other.env"
+
+    def test_values_are_never_printed(self):
+        # The report names variables; printing a secret would defeat storing
+        # them in SecureString at all.
+        src = SCRIPT.read_text()
+        body = src[src.index("def _secrets_diff") : src.index("def cmd_secrets")]
+        assert "local[k]" in body, "expected a value comparison"
+        for leak in ('print(f"    {name}: {local', "print(local[", "print(remote["):
+            assert leak not in body
+
+    def test_expected_differences_are_not_reported_as_drift(self, cli):
+        # A deployment-specific value differing from the laptop is the point,
+        # not a problem — reporting it trains you to ignore the real section.
+        for name in ("PUBLIC_BASE_URL", "REFRESH_SCHEDULER_ENABLED", "ENVIRONMENT"):
+            assert name in cli._DIFF_EXPECTED_REMOTE_ONLY
+
+    def test_debug_clip_duration_is_never_migrated(self, cli):
+        # Uncommented locally; it truncates audio to 5 minutes. Copying it to
+        # production would turn a config gap into data loss.
+        assert "DEBUG_CLIP_DURATION" in cli._DIFF_EXPECTED_LOCAL_ONLY
+
+    def test_missing_vars_exit_nonzero(self):
+        # So it can gate a deploy rather than being advisory.
+        src = SCRIPT.read_text()
+        body = src[src.index("def _secrets_diff") : src.index("def cmd_secrets")]
+        assert "sys.exit(1)" in body

@@ -1036,9 +1036,12 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
     # between SUMMARIZE and REINDEX, so a failure leaves the episode
     # permanently unsearchable. Skip with a distinct, queryable status and
     # let the successors run; the backlog drains wherever GLiNER exists.
+    # Only consult the module when we would actually have to build a real
+    # extractor: an injected one (tests, or a future remote implementation)
+    # is proof enough that extraction is possible here.
     from .entity_extractor import EntityExtractor as _EntityExtractor
 
-    if not _EntityExtractor.is_available():
+    if state.entity_extractor is None and not _EntityExtractor.is_available():
         state.repository.update_entity_extraction_status(
             episode_id=episode.id,
             status=EntityExtractionStatus.SKIPPED_UNAVAILABLE.value,
@@ -1170,7 +1173,7 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
     if pending:
         from .entity_resolver import EntityResolver as _EntityResolver
 
-        if not _EntityResolver.is_available():
+        if state.entity_resolver is None and not _EntityResolver.is_available():
             logger.warning(
                 "entity_resolution_skipped_unavailable",
                 episode_id=episode.id,
