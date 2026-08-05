@@ -1030,6 +1030,27 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         )
         return
 
+    # Spec #66 — the deployment image omits the ``entities`` extra (GLiNER +
+    # ReFinED need 4-6 GB, which does not fit the t4g.medium alongside
+    # Postgres). Raising here would sever the chain: EXTRACT_ENTITIES sits
+    # between SUMMARIZE and REINDEX, so a failure leaves the episode
+    # permanently unsearchable. Skip with a distinct, queryable status and
+    # let the successors run; the backlog drains wherever GLiNER exists.
+    from .entity_extractor import EntityExtractor as _EntityExtractor
+
+    if not _EntityExtractor.is_available():
+        state.repository.update_entity_extraction_status(
+            episode_id=episode.id,
+            status=EntityExtractionStatus.SKIPPED_UNAVAILABLE.value,
+        )
+        logger.warning(
+            "entity_extraction_skipped_unavailable",
+            episode_id=episode.id,
+            podcast_slug=podcast.slug,
+            note="gliner absent on this host; episode flagged for later backfill",
+        )
+        return
+
     sidecar_path = state.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
     if not sidecar_path.exists():
         raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar_path} (episode {episode.id})")
@@ -1140,6 +1161,23 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
     repo = state.entity_repository
 
     pending = repo.list_pending_mentions(episode_id=episode.id)
+
+    # Spec #66 — same reasoning as EXTRACT_ENTITIES: RESOLVE_ENTITIES sits
+    # ahead of REINDEX, so raising for a missing optional dependency would
+    # strand the episode unsearchable. With no pending mentions the stage is
+    # already a no-op; the guard only matters when mentions exist (e.g.
+    # carried over by a restore) and ReFinED is absent.
+    if pending:
+        from .entity_resolver import EntityResolver as _EntityResolver
+
+        if not _EntityResolver.is_available():
+            logger.warning(
+                "entity_resolution_skipped_unavailable",
+                episode_id=episode.id,
+                pending_mentions=len(pending),
+                note="refined absent on this host; mentions stay pending for later backfill",
+            )
+            return
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
         results: list = []

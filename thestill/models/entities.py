@@ -58,6 +58,15 @@ class EntityExtractionStatus(str, Enum):
     COMPLETE = "complete"
     FAILED = "failed"
     SKIPPED_LEGACY = "skipped_legacy"
+    # Spec #66 — the extractor is absent on this host (the AWS image omits
+    # the ``entities`` extra: GLiNER + ReFinED need 4-6 GB). Distinct from
+    # SKIPPED_LEGACY, which means the episode is structurally ineligible and
+    # re-running would never help. This one IS eligible and is owed work, so
+    # it is the backlog marker: when extraction is available somewhere,
+    #   SELECT id FROM episodes WHERE entity_extraction_status =
+    #       'skipped_unavailable'
+    # is the queue to drain.
+    SKIPPED_UNAVAILABLE = "skipped_unavailable"
 
 
 class MentionRole(str, Enum):

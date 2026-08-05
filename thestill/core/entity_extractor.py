@@ -259,6 +259,23 @@ class EntityExtractor:
     # Internals
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def is_available() -> bool:
+        """True when GLiNER can actually be imported on this host.
+
+        The AWS deployment image deliberately omits the ``entities`` extra —
+        GLiNER plus ReFinED need 4-6 GB of RAM, which does not fit alongside
+        Postgres on the t4g.medium (spec #66). Callers use this to skip the
+        stage cleanly instead of raising, because ``extract-entities`` sits
+        mid-chain and a raise severs everything downstream of it, including
+        the ``reindex`` that makes an episode searchable.
+        """
+        try:
+            import gliner  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
     def _load_model(self) -> None:
         if self._model is not None:
             return

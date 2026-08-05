@@ -126,6 +126,17 @@ class TestEnumStrCompat:
         assert MatchType.ENTITY == "entity"
 
     def test_entity_extraction_status_values(self):
-        # Spec #28 — the on-disk allowed set.
+        # Spec #28 — the on-disk allowed set. ``skipped_unavailable`` added by
+        # spec #66: the AWS image omits the entities extra, so the stage skips
+        # rather than raising (a raise severs the linear chain before REINDEX
+        # and leaves the episode unsearchable). The column is plain ``text``
+        # with no CHECK constraint, so no migration is needed — but the value
+        # IS a backlog marker other code queries, hence pinning it here.
         values = {s.value for s in EntityExtractionStatus}
-        assert values == {"pending", "complete", "failed", "skipped_legacy"}
+        assert values == {
+            "pending",
+            "complete",
+            "failed",
+            "skipped_legacy",
+            "skipped_unavailable",
+        }

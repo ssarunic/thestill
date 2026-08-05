@@ -218,6 +218,20 @@ class EntityResolver:
     # Internals
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def is_available() -> bool:
+        """True when ReFinED can actually be imported on this host.
+
+        Mirrors ``EntityExtractor.is_available``; see the note there on why
+        the entity stages skip rather than raise when the optional extra is
+        absent (spec #66 — the AWS image omits it deliberately).
+        """
+        try:
+            import refined.inference.processor  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
     def _load_model(self) -> None:
         if self._model is not None:
             return
