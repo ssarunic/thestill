@@ -48,6 +48,11 @@ def _make_state():
 
     state = MagicMock()
     state.repository.get_episode.return_value = (podcast, episode)
+    # Production AppState starts with these unset; the guards only consult
+    # the optional module when they would otherwise have to build a real
+    # instance, so an injected mock must not look like a warm extractor.
+    state.entity_extractor = None
+    state.entity_resolver = None
     return state, episode
 
 
@@ -141,3 +146,37 @@ class TestAvailabilityHelpers:
         except ImportError:
             expected = False
         assert EntityResolver.is_available() is expected
+
+
+class TestInjectedExtractorWins:
+    """An injected extractor is proof extraction is possible here.
+
+    CI runs without the ``entities`` extra while a dev laptop usually has it.
+    An earlier version of this guard consulted the module unconditionally, so
+    it fired even when a test (or a future remote extractor) had supplied a
+    working instance — short-circuiting real work. Caught by CI on 2026-08-05
+    precisely because the two environments differ.
+    """
+
+    def test_module_absent_but_extractor_injected_does_not_skip(self):
+        state, _ = _make_state()
+        state.entity_extractor = MagicMock()  # someone handed us a working one
+
+        with patch("thestill.core.entity_extractor.EntityExtractor.is_available", return_value=False):
+            with pytest.raises(Exception):  # proceeds into real work, fails on the mock fixture
+                handle_extract_entities(_make_task(), state)
+
+        statuses = [c.kwargs.get("status") for c in state.repository.update_entity_extraction_status.call_args_list]
+        assert EntityExtractionStatus.SKIPPED_UNAVAILABLE.value not in statuses
+
+    def test_module_absent_but_resolver_injected_does_not_skip(self):
+        state, _ = _make_state()
+        state.entity_resolver = MagicMock()
+        state.entity_repository.list_pending_mentions.return_value = [MagicMock()]
+
+        with patch("thestill.core.entity_resolver.EntityResolver.is_available", return_value=False):
+            handle_resolve_entities(_make_task(), state)
+
+        # Proof it went past the guard into real resolution work rather than
+        # returning early: the injected resolver was actually consulted.
+        assert state.entity_resolver.resolve.called or state.entity_repository.update_mention_resolution.called
