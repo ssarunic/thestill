@@ -7,7 +7,7 @@ import Inbox from './Inbox'
 import type { Episode, InboxItem, InboxListResponse } from '../api/types'
 
 vi.mock('../hooks/useApi', () => ({
-  useInbox: vi.fn(),
+  useInboxInfinite: vi.fn(),
   // ``Inbox`` renders ``<BriefingCard />`` which calls ``useLatestBriefing``;
   // a 404 ("no briefing yet") is the no-op state so the component returns
   // null and stays out of the way of the inbox-list assertions below.
@@ -15,9 +15,9 @@ vi.mock('../hooks/useApi', () => ({
   useGenerateBriefingNow: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }))
 
-import { useGenerateBriefingNow, useInbox, useLatestBriefing } from '../hooks/useApi'
+import { useGenerateBriefingNow, useInboxInfinite, useLatestBriefing } from '../hooks/useApi'
 
-const mockUseInbox = useInbox as ReturnType<typeof vi.fn>
+const mockUseInbox = useInboxInfinite as ReturnType<typeof vi.fn>
 const mockUseLatestBriefing = useLatestBriefing as ReturnType<typeof vi.fn>
 const mockUseGenerateBriefingNow = useGenerateBriefingNow as ReturnType<typeof vi.fn>
 
@@ -74,13 +74,19 @@ function inboxItem(overrides: Partial<InboxItem['entry']>, episode: Episode): In
   }
 }
 
-function inboxResponse(items: InboxItem[]): InboxListResponse {
+// ``useInboxInfinite`` returns InfiniteData — pages of InboxListResponse.
+function inboxResponse(items: InboxItem[]): { pages: InboxListResponse[]; pageParams: string[] } {
   return {
-    status: 'ok',
-    timestamp: '2026-05-08T00:00:00Z',
-    items,
-    count: items.length,
-    next_before: null,
+    pages: [
+      {
+        status: 'ok',
+        timestamp: '2026-05-08T00:00:00Z',
+        items,
+        count: items.length,
+        next_before: null,
+      },
+    ],
+    pageParams: [''],
   }
 }
 

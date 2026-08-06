@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–2 shipped 2026-08-06; Phases 3–8 open)
+**Status**: 🚧 Active development (Phases 1–3 shipped 2026-08-06; Phases 4–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -488,6 +488,43 @@ pre-existing on the base commit (verified by stash-rerun): the
 `test_entity_tools` MCP schema test and two `test_default_deny_auth`
 route-registration tests. Formatting drift in `api_search.py`/`api_imports.py`
 also pre-exists and was left untouched.
+
+## Outcome (Phase 3, 2026-08-06)
+
+**QueryClient defaults (3.1)** — client creation moved from `main.tsx` into
+an exported `createQueryClient()`
+([queryClient.ts](../thestill/web/frontend/src/queryClient.ts)) with **no
+default `refetchInterval`** and `staleTime` raised 5s → 60s. The module
+docstring carries the roster of hooks that legitimately poll.
+
+**Explicit intervals (3.2)** — `useEpisode` was the one hook whose
+*correctness* rode on the app-wide default: its own comment warned that
+`refetchInterval: undefined` would "silently disable the 5s clock this whole
+design rides on". It now declares `refetchInterval: live ? 5_000 : false`
+and `staleTime: 5_000` explicitly, preserving spec #68's clock and its
+focus-reactivation semantics verbatim. The already-explicit pollers
+(`useRefreshStatus` / `useAddPodcastStatus` / `usePipelineTaskStatus`,
+`useEpisodeTasks`' stepped cadence, `useQueueTasks`, `useInbox`'s
+conditional) are unchanged. Everything else — dashboard, podcasts,
+top-podcasts, searches, entities, briefings, related-episodes, and every
+infinite query (which used to re-fetch *all* loaded pages per 5s tick) — is
+now fetch-on-mount + invalidate-on-mutation.
+
+**Pinning test (3.3)** —
+[queryClient.test.ts](../thestill/web/frontend/src/queryClient.test.ts)
+asserts the defaults carry no `refetchInterval` and the 60s `staleTime`.
+
+**Inbox pagination rode along** (the functional bug from the review): the
+server already returned a `next_before` cursor that the page ignored, making
+anything older than the newest 50 unreachable and the "N delivered" count
+wrong. New `useInboxInfinite` (cursor-chained `useInfiniteQuery`, keeps the
+conditional while-processing poll across pages), a "Load older" button, and
+an `N+` count when more pages exist. `useInbox` remains for single-page
+callers.
+
+Tests: full frontend suite 329 passed (Inbox tests updated to the
+InfiniteData shape), `tsc -b` clean, eslint clean on changed files,
+production `vite build` green.
 
 ## Related specs
 

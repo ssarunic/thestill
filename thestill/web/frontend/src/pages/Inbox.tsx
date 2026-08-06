@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { useInbox } from '../hooks/useApi'
+import { useInboxInfinite } from '../hooks/useApi'
 import type { Episode, InboxItem, InboxState } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
 import Button, { PlusIcon } from '../components/Button'
@@ -141,17 +141,20 @@ export default function Inbox() {
   // Once everything is summarised or failed the query goes back to its
   // default 15s staleTime.
   const POLL_INTERVAL_MS = 5_000
-  const { data, isLoading, error } = useInbox({
-    refetchInterval: (query) => {
-      const items = query.state.data?.items
-      if (!items) return false
-      return items.some((it) => deriveProgress(it.episode).kind === 'processing')
-        ? POLL_INTERVAL_MS
-        : false
-    },
-  })
+  const { data, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } =
+    useInboxInfinite({
+      refetchInterval: (query) => {
+        const pages = query.state.data?.pages
+        if (!pages) return false
+        return pages.some((page) =>
+          page.items.some((it) => deriveProgress(it.episode).kind === 'processing'),
+        )
+          ? POLL_INTERVAL_MS
+          : false
+      },
+    })
 
-  const items = useMemo(() => data?.items ?? [], [data])
+  const items = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data])
 
   if (error) {
     return (
@@ -170,7 +173,7 @@ export default function Inbox() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Inbox</h1>
           <p className="text-gray-500 mt-1">
-            {isLoading ? 'Loading…' : `${items.length} delivered`}
+            {isLoading ? 'Loading…' : `${items.length}${hasNextPage ? '+' : ''} delivered`}
           </p>
         </div>
         <Button
@@ -201,11 +204,20 @@ export default function Inbox() {
           </Button>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {items.map((item) => (
-            <InboxRow key={item.entry.id} item={item} />
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-3">
+            {items.map((item) => (
+              <InboxRow key={item.entry.id} item={item} />
+            ))}
+          </ul>
+          {hasNextPage && (
+            <div className="text-center">
+              <Button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+                {isFetchingNextPage ? 'Loading…' : 'Load older'}
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       <ImportEpisodeModal
