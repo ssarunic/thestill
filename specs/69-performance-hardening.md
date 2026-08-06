@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–5 shipped 2026-08-06; Phases 6–8 open)
+**Status**: 🚧 Active development (Phases 1–6 shipped 2026-08-06; Phases 7–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities; Phase 6: gzip + content-hash ETags + limit caps + stored summary previews (migration 0008) — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -610,6 +610,49 @@ above. Revisit only if a measured episode produces a pathological payload.
 
 Tests: full unit 2660 passed, integration 592 passed (dual-backend entity
 contract suites included; same pre-existing failures as the base commit).
+
+## Outcome (Phase 6, 2026-08-06)
+
+**Compression (6.1)** — `GZipMiddleware` (min 1KB) added innermost in the
+stack, so every other middleware sees only headers.
+
+**Revalidation (6.2)** — new `etag_json_response` helper
+([responses.py](../thestill/web/responses.py)): strong sha1 content-hash
+ETag over the *payload* (deliberately excluding the envelope's per-request
+timestamp, or nothing would ever revalidate) + `Cache-Control: private,
+no-cache` (these artifacts CAN be regenerated, so always revalidate — but a
+matching `If-None-Match` answers 304 with no body). Applied to the five
+write-once resources: transcript, transcript-words (the API's largest
+payload), summary (per-language), narration script, briefing script.
+Covered by a dedicated test file (stable ETag across requests, 304 on
+match, multi-candidate `If-None-Match`, change-miss).
+
+**Transcript double-ship (6.3)** — when the segmented structure is present
+the response's `content` is now the empty string (the reader renders from
+`segments` and never reads the markdown — verified in `EpisodeReader`'s
+render branch; the fallback viewer only mounts when `segments` is absent).
+Wire type stays `string`; `types.ts` documents the contract.
+
+**Caps (6.4)** — `GET /api/episodes` `limit` clamped to `Query(20, ge=1,
+le=200)`, `offset ge=0`; previously `?limit=1000000` flowed straight into
+SQL.
+
+**Stored summary preview (6.5)** — `episodes.summary_preview` column
+(migration [0008](../thestill/migrations/versions/0008_summary_preview.py)
+\+ `SCHEMA_SQL` + SQLite `_run_migrations` ALTER), written at summarize
+time in the task handler while the summary text is already in hand
+(best-effort — a failed preview write never fails the summarize task).
+The episode list uses the stored value; rows summarized before the column
+existed lazily backfill on first render (read once → persist → never read
+again, with an empty-string sentinel for summaries with no extractable
+gist so those files aren't re-read forever). The preview setter
+deliberately does **not** bump `updated_at` — backfilling an old episode
+must not resurface it in the activity feed. Fresh-install vs
+alembic-upgraded column sets verified identical; 0008 downgrade
+round-trips.
+
+Tests: unit at baseline plus the new ETag suite (2660+5), integration 592
+passed, frontend `tsc -b` clean.
 
 ## Related specs
 

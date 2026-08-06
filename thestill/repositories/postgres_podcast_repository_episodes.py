@@ -132,6 +132,7 @@ def _episode_from_row(row: Dict[str, Any], *, prefix: str = "") -> Episode:
             else 0.0
         ),
         summary_path=col("summary_path"),
+        summary_preview=col("summary_preview"),
         published_at=(col("published_at") if has("published_at") else None),
         failed_at_stage=col("failed_at_stage"),
         failure_reason=col("failure_reason"),
@@ -1208,15 +1209,13 @@ class EpisodesMixin:
             return []
 
         with connect(self.dsn) as conn:
-            rows = conn.execute(
-                f"""
+            rows = conn.execute(f"""
                 SELECT {_PODCAST_TUPLE_COLS}
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
                 ORDER BY e.pub_date DESC NULLS LAST
-                """
-            ).fetchall()
+                """).fetchall()
 
             _, id_to_pair = self._category_maps(conn)
             return [(self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row)) for row in rows]
@@ -1512,15 +1511,13 @@ class EpisodesMixin:
                     (podcast_id,),
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT e.*
                     FROM episodes e
                     WHERE EXISTS (SELECT 1 FROM episode_transcript_links etl
                                   WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL)
                     ORDER BY e.pub_date DESC NULLS LAST
-                    """
-                ).fetchall()
+                    """).fetchall()
 
             results = []
             for row in rows:
@@ -1642,6 +1639,14 @@ class EpisodesMixin:
                 (podcast_id, audio_url),
             ).fetchone()
             return as_str(row["id"]) if row else None
+
+    def set_episode_summary_preview(self, episode_id: str, preview: Optional[str]) -> None:
+        # No updated_at bump on purpose — see the interface docstring.
+        with connect(self.dsn) as conn:
+            conn.execute(
+                "UPDATE episodes SET summary_preview = %s WHERE id = %s",
+                (preview, episode_id),
+            )
 
     def set_episode_canonical_id(self, episode_id: str, canonical_id: str) -> None:
         """Stamp ``canonical_id`` on an existing episode row.

@@ -171,3 +171,39 @@ def conflict(message: str) -> NoReturn:
         # Raises HTTPException(status_code=409, detail="Task already running")
     """
     raise HTTPException(status_code=409, detail=message)
+
+
+def etag_json_response(request: "Request", data: Dict[str, Any], status: str = "ok") -> "Response":
+    """``api_response`` with a strong content-hash ETag (spec #69 Phase 6).
+
+    For write-once resources (transcripts, word timestamps, summaries,
+    narration scripts): the ETag is a sha1 over the serialized ``data``
+    payload — deliberately excluding the envelope's per-request
+    ``timestamp`` so an unchanged resource revalidates. ``Cache-Control:
+    private, no-cache`` forces revalidation on every use (these artifacts
+    CAN be regenerated), but a matching ``If-None-Match`` answers 304 with
+    no body — which is the entire transfer for a multi-hundred-KB
+    transcript payload.
+    """
+    import hashlib
+    import json as _json
+
+    from fastapi import Request, Response  # noqa: F401  (Request used in signature)
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+
+    encoded = jsonable_encoder(data)
+    etag = (
+        '"'
+        + hashlib.sha1(  # noqa: S324 — cache validator, not crypto
+            _json.dumps(encoded, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        + '"'
+    )
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+
+    if_none_match = request.headers.get("if-none-match", "")
+    if etag in {tag.strip() for tag in if_none_match.split(",")}:
+        return Response(status_code=304, headers=headers)
+
+    return JSONResponse(content=api_response(encoded, status=status), headers=headers)

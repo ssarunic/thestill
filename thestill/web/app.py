@@ -567,6 +567,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             )
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
+    # Spec #69 Phase 6 — compress large JSON payloads (transcripts, word
+    # timestamps, search results). A 2-hour episode's word payload is
+    # ~1 MB raw and ~100–150 KB gzipped. Added first so it runs innermost:
+    # every other middleware sees only headers, never the compressed body.
+    from fastapi.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     # Add logging middleware for request/response tracking
     app.add_middleware(LoggingMiddleware)
 

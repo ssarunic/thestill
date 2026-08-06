@@ -578,6 +578,17 @@ class EpisodeRepository(ABC):
     efficient than loading full podcast objects.
     """
 
+    def set_episode_summary_preview(self, episode_id: str, preview: "Optional[str]") -> None:
+        """Persist the pre-computed summary preview (spec #69 Phase 6.5).
+
+        Best-effort persistence hint written at summarize time (and by the
+        episode list's lazy backfill). Deliberately does NOT touch
+        ``updated_at`` — backfilling an old episode must not resurface it
+        in the activity feed. Default is a no-op so non-SQL test doubles
+        stay valid; both SQL backends override.
+        """
+        return None
+
     @abstractmethod
     def get_episodes_by_podcast(self, podcast_url: str) -> List[Episode]:
         """

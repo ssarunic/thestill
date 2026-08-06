@@ -184,6 +184,11 @@ class Episode(BaseModel):
     # CLEANED state still gates on ``clean_transcript_path``.
     clean_transcript_json_path: Optional[str] = None
     summary_path: Optional[str] = None  # Filename of the summary (future use)
+    # Spec #69 Phase 6 — first-section preview stored at summarize time so
+    # list endpoints don't read the full summary file per row. NULL for
+    # episodes summarized before the column existed (the web list lazily
+    # backfills on first render).
+    summary_preview: Optional[str] = None
 
     # Timestamp the episode crossed from "pipeline-incomplete" to delivered.
     # NULL gates the row out of all inbox queries; non-NULL means it has

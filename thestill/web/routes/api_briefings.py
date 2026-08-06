@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from structlog import get_logger
 
@@ -38,7 +38,7 @@ from ...utils.briefing_cadence import next_run_for
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
 from ..dependencies import AppState, get_app_state, require_auth
-from ..responses import api_response, bad_request, not_found, paginated_response
+from ..responses import api_response, bad_request, etag_json_response, not_found, paginated_response
 
 logger = get_logger(__name__)
 
@@ -379,6 +379,7 @@ def narrate_briefing(
 @router.get("/{briefing_id}/script")
 def get_briefing_script(
     briefing_id: str,
+    request: Request,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
@@ -395,7 +396,8 @@ def get_briefing_script(
         # Surface as 404 so the UI can show a friendly empty state.
         logger.warning("briefing_script_missing", briefing_id=briefing_id, path=str(path))
         not_found("Briefing script", briefing_id)
-    return api_response({"markdown": path.read_text(encoding="utf-8")})
+    # Write-once script artifact: content-hash ETag (spec #69 Phase 6.2).
+    return etag_json_response(request, {"markdown": path.read_text(encoding="utf-8")})
 
 
 @router.post("/{briefing_id}/listened")

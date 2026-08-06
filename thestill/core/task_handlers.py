@@ -742,6 +742,19 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             summary_path=summary_db_path,
         )
 
+        # Spec #69 Phase 6.5 — store the list-view preview now, while the
+        # summary text is in hand, so the episode list never has to read
+        # the full summary file per row. Best-effort: a failed preview
+        # write must not fail the summarize task.
+        try:
+            from ..services.podcast_service import extract_summary_preview
+
+            state.repository.set_episode_summary_preview(
+                episode.id, extract_summary_preview(persisted_summary.markdown)
+            )
+        except Exception:
+            logger.warning("summary_preview_store_failed", episode_id=episode.id, exc_info=True)
+
         logger.info(f"Summarization completed for episode: {episode.title}")
 
         # Publish + fan out to follower inboxes. The conditional UPDATE in

@@ -127,6 +127,7 @@ def episode_from_row(row: sqlite3.Row, *, prefix: str = "") -> Episode:
             else 0.0
         ),
         summary_path=col("summary_path"),
+        summary_preview=(col("summary_preview") if has("summary_preview") else None),
         published_at=(
             datetime.fromisoformat(col("published_at")) if has("published_at") and col("published_at") else None
         ),
@@ -249,6 +250,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN failure_reason TEXT NULL")
             conn.execute("ALTER TABLE episodes ADD COLUMN failure_type TEXT NULL")
             conn.execute("ALTER TABLE episodes ADD COLUMN failed_at TIMESTAMP NULL")
+
+        # spec #69 Phase 6 — stored summary preview (see Episode model note)
+        cursor = conn.execute("PRAGMA table_info(episodes)")
+        episode_columns_now = {row["name"] for row in cursor.fetchall()}
+        if "summary_preview" not in episode_columns_now:
+            logger.info("Migrating database: adding summary_preview to episodes")
+            conn.execute("ALTER TABLE episodes ADD COLUMN summary_preview TEXT NULL")
             logger.info("Migration complete: failure tracking columns added to episodes")
 
         # Migration: Add language column to podcasts (idempotent)
@@ -5319,6 +5327,14 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (podcast_id, audio_url),
             ).fetchone()
             return row["id"] if row else None
+
+    def set_episode_summary_preview(self, episode_id: str, preview: Optional[str]) -> None:
+        # No updated_at bump on purpose — see the interface docstring.
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET summary_preview = ? WHERE id = ?",
+                (preview, episode_id),
+            )
 
     def set_episode_canonical_id(self, episode_id: str, canonical_id: str) -> None:
         """Stamp ``canonical_id`` on an existing episode row.

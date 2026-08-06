@@ -149,6 +149,7 @@ def _episode_from_row(row: dict) -> Episode:
             row["playback_time_offset_seconds"] if row.get("playback_time_offset_seconds") is not None else 0.0
         ),
         summary_path=row["summary_path"],
+        summary_preview=row.get("summary_preview"),
         published_at=row.get("published_at"),
         failed_at_stage=row["failed_at_stage"],
         failure_reason=row["failure_reason"],

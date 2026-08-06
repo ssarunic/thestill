@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     raw_transcript_path text NULL,
     clean_transcript_path text NULL,
     summary_path text NULL,
+    summary_preview text NULL,
     slug text NOT NULL DEFAULT '',
     image_url text NULL,
     failed_at_stage text NULL,

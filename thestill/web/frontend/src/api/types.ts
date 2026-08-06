@@ -358,6 +358,10 @@ export interface ContentResponse {
   timestamp: string
   episode_id: string
   episode_title: string
+  // Spec #69 Phase 6.3 — for transcripts, ``content`` is the empty string
+  // whenever ``segments`` is present (the reader renders from segments and
+  // never reads the markdown; shipping both doubled the payload). Summary
+  // responses always carry the markdown here.
   content: string
   available: boolean
   citations?: SummaryCitation[] | null

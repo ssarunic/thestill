@@ -21,7 +21,7 @@ Provides access to podcasts, episodes, and follow/unfollow functionality.
 import threading
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from structlog import get_logger
@@ -34,7 +34,7 @@ from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
-from ..responses import api_response, conflict, not_found, paginated_response
+from ..responses import api_response, conflict, etag_json_response, not_found, paginated_response
 
 logger = get_logger(__name__)
 
@@ -360,8 +360,9 @@ def get_episode_by_slugs(
 def get_episode_transcript_by_slugs(
     podcast_slug: str,
     episode_slug: str,
+    request: Request,
     state: AppState = Depends(get_app_state),
-) -> dict:
+) -> Response:
     """
     Get the transcript for an episode by slugs.
 
@@ -397,17 +398,26 @@ def get_episode_transcript_by_slugs(
     segmented = state.podcast_service.get_segmented_transcript_for_episode(episode)
     if segmented is not None:
         response_payload["segments"] = segmented.annotated.model_dump()
+        # Spec #69 Phase 6.3 — don't double-ship the transcript: when the
+        # segmented structure is present the reader renders from it and
+        # never reads ``content`` (the markdown is the segments' text again,
+        # so shipping both ~doubles the payload). ``content`` stays a string
+        # for the wire contract; the fallback viewer only mounts when
+        # ``segments`` is absent.
+        response_payload["content"] = ""
 
-    return api_response(response_payload)
+    # Write-once resource: content-hash ETag + revalidation (Phase 6.2).
+    return etag_json_response(request, response_payload)
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
 async def get_episode_summary_by_slugs(
     podcast_slug: str,
     episode_slug: str,
+    request: Request,
     lang: Optional[str] = Query(None, pattern=r"^[A-Za-z]{2,3}$"),
     state: AppState = Depends(get_app_state),
-) -> dict:
+) -> Response:
     """
     Get the summary for an episode by slugs.
 
@@ -488,7 +498,9 @@ async def get_episode_summary_by_slugs(
         canonical_language=canonical_language,
     )
 
-    return api_response(
+    # Write-once (per language) resource: content-hash ETag (Phase 6.2).
+    return etag_json_response(
+        request,
         {
             "episode_id": episode.id,
             "episode_title": episode.title,
@@ -499,7 +511,7 @@ async def get_episode_summary_by_slugs(
             "podcast_language": podcast_language,
             "canonical_language": canonical_language,
             "available_languages": available_languages,
-        }
+        },
     )
 
 

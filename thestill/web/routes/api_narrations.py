@@ -25,12 +25,12 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from structlog import get_logger
 
 from ...models.briefing import Briefing
 from ..dependencies import AppState, get_app_state, require_auth
-from ..responses import api_response, not_found
+from ..responses import api_response, etag_json_response, not_found
 
 logger = get_logger(__name__)
 
@@ -102,6 +102,7 @@ def get_narration(
 @router.get("/{narration_id}/script.json")
 def get_narration_script(
     narration_id: str,
+    request: Request,
     app_state: AppState = Depends(get_app_state),
     user=Depends(require_auth),
 ):
@@ -116,4 +117,5 @@ def get_narration_script(
     except (OSError, ValueError) as exc:
         logger.warning("narration.read_failed", id=narration_id, error=str(exc))
         not_found("Narration", narration_id)
-    return api_response(payload)
+    # Write-once script artifact: content-hash ETag (spec #69 Phase 6.2).
+    return etag_json_response(request, payload)
