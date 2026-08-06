@@ -357,6 +357,51 @@ so they can be cited in review ("this is FM-1") and recalled during development.
 
 ---
 
+### FM-10 — Config that defaults to a working-but-wrong value
+
+> A setting absent from the environment falls back to a code default. The
+> system starts, every stage succeeds, and the output is structurally valid
+> and quietly wrong. Nothing raises, nothing logs, no alert fires — the only
+> signal is a human eventually noticing the *content* is off. Discovered
+> 2026-08-05, one day after the AWS cutover (spec #66): every transcript
+> produced on the new host had `speaker: null` on every segment.
+
+- **The specific trap:** `ENABLE_DIARIZATION` was not migrated to SSM.
+  `config.py` reads it as `os.getenv("ENABLE_DIARIZATION", "false")`, so the
+  deployment stopped asking Dalston for diarization. Dalston obediently
+  returned plain transcription. Facts extraction and the speaker-mapping
+  code were both working perfectly — there was simply nothing to map onto.
+  Seven episodes were affected before it was caught by eye.
+- **Why the migration missed it:** the variables were **hand-picked** into a
+  carry-over list rather than diffed. That list omitted 28 of them.
+  `ENABLE_DIARIZATION` was merely the first whose absence was visible;
+  `DELETE_AUDIO_AFTER_PROCESSING`, `NARRATION_ENABLED` and several model
+  pins (`GEMINI_MODEL`, `DALSTON_MODEL`) were also missing and would have
+  changed behaviour and cost silently.
+- **Why it hides:** a missing *credential* fails loudly on first use, so we
+  reason about config as if all of it behaves that way. A missing *boolean*
+  does the opposite: `false` is a legal value, the code path it selects is a
+  legal path, and the result is a well-formed artifact. The blast radius is
+  bounded only by how long it takes someone to look closely.
+- **Rule:** treat config drift as a **check**, not a judgement call. Diff
+  what the code reads against what the environment provides, and fail the
+  deploy on a gap. `thestill-aws secrets diff` does this: it reports what
+  SSM lacks, what differs, and what is deployment-only; exits non-zero when
+  something is missing; and never prints a value. Variables that are
+  *supposed* to differ are excluded by name so the section that matters
+  stays readable.
+- **Corollary:** a default is a policy decision, not a convenience. Where
+  the wrong default produces silent degradation rather than a crash, prefer
+  no default — fail at config load with the remedy, the way
+  `DATABASE_URL`-without-psycopg now does.
+- **Corollary (migration):** never copy an env file wholesale either.
+  `DEBUG_CLIP_DURATION=300` was live in the source `.env`; copying it would
+  have truncated every production transcript to five minutes, turning a
+  config gap into data loss. The diff's ignore-list is the record of which
+  variables are deliberately local-only.
+
+---
+
 ## Remediations & Implementation Phases
 
 Ordered by robustness-per-effort. Phase 1 is the high-leverage, low-cost set —
