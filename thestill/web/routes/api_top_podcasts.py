@@ -71,7 +71,7 @@ def _resolve_region(
 
 
 @router.get("")
-async def list_top_podcasts(
+def list_top_podcasts(
     request: Request,
     region: Optional[str] = Query(None, description="ISO 3166-1 alpha-2; defaults to user's region"),
     limit: int = Query(50, ge=1, le=_MAX_LIMIT),

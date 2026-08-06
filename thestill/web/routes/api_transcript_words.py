@@ -69,7 +69,7 @@ class SegmentWords(BaseModel):
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/transcript/words")
-async def get_episode_transcript_words(
+def get_episode_transcript_words(
     podcast_slug: str,
     episode_slug: str,
     state: AppState = Depends(get_app_state),

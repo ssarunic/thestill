@@ -46,7 +46,7 @@ class InboxStateRequest(BaseModel):
 
 
 @router.get("")
-async def list_inbox(
+def list_inbox(
     state: Optional[str] = None,
     limit: int = 50,
     before: Optional[str] = None,
@@ -76,7 +76,7 @@ async def list_inbox(
 
 
 @router.get("/unread-count")
-async def get_unread_count(
+def get_unread_count(
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
@@ -85,7 +85,7 @@ async def get_unread_count(
 
 
 @router.post("/{episode_id}/read")
-async def mark_inbox_read(
+def mark_inbox_read(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -103,7 +103,7 @@ async def mark_inbox_read(
 
 
 @router.post("/{episode_id}/state")
-async def set_inbox_state(
+def set_inbox_state(
     episode_id: str,
     body: InboxStateRequest,
     app_state: AppState = Depends(get_app_state),

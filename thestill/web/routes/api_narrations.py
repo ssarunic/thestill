@@ -73,7 +73,7 @@ def _resolve_owned_briefing(state: AppState, narration_id: str, user_id: str) ->
 
 
 @router.get("/{narration_id}")
-async def get_narration(
+def get_narration(
     narration_id: str,
     app_state: AppState = Depends(get_app_state),
     user=Depends(require_auth),
@@ -100,7 +100,7 @@ async def get_narration(
 
 
 @router.get("/{narration_id}/script.json")
-async def get_narration_script(
+def get_narration_script(
     narration_id: str,
     app_state: AppState = Depends(get_app_state),
     user=Depends(require_auth),

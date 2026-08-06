@@ -66,7 +66,7 @@ class BulkProcessResponse(BaseModel):
 
 
 @router.get("")
-async def get_all_episodes(
+def get_all_episodes(
     limit: int = 20,
     offset: int = 0,
     search: Optional[str] = None,
@@ -182,7 +182,7 @@ async def get_all_episodes(
 
 
 @router.post("/bulk/process")
-async def bulk_process_episodes(
+def bulk_process_episodes(
     request: BulkProcessRequest,
     app_state: AppState = Depends(get_app_state),
     _: User = Depends(require_admin),
@@ -296,7 +296,7 @@ class FailedEpisodeListResponse(BaseModel):
 
 
 @router.get("/failed", response_model=FailedEpisodeListResponse)
-async def list_failed_episodes(
+def list_failed_episodes(
     limit: int = 100,
     app_state: AppState = Depends(get_app_state),
 ) -> FailedEpisodeListResponse:
@@ -342,7 +342,7 @@ async def list_failed_episodes(
 
 
 @router.get("/{episode_id}/failure", response_model=EpisodeFailureResponse)
-async def get_episode_failure(
+def get_episode_failure(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
 ) -> EpisodeFailureResponse:
@@ -382,7 +382,7 @@ async def get_episode_failure(
 
 
 @router.post("/{episode_id}/retry", response_model=EpisodeRetryResponse)
-async def retry_failed_episode(
+def retry_failed_episode(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
     _: User = Depends(require_admin),

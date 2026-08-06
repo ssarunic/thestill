@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from structlog import get_logger
 
@@ -242,9 +243,20 @@ async def elevenlabs_webhook(
     Raises:
         HTTPException: If signature is invalid, payload is malformed, or metadata is missing
     """
-    # Get raw body for signature verification
+    # Get raw body for signature verification. Reading the body is the only
+    # genuinely-async step; the processing below does sync DB and file I/O,
+    # so it runs in the threadpool to keep the event loop free (spec #69
+    # Phase 2). HTTPExceptions raised inside the helper propagate normally.
     body = await request.body()
+    return await run_in_threadpool(_process_elevenlabs_webhook, body, elevenlabs_signature, state)
 
+
+def _process_elevenlabs_webhook(
+    body: bytes,
+    elevenlabs_signature: Optional[str],
+    state: AppState,
+):
+    """Sync body of ``elevenlabs_webhook`` — see its docstring."""
     # Layer 1: Verify HMAC signature (proves it's from ElevenLabs).
     # fail closed — no secret configured means no
     # authenticated webhook source, so we refuse the request. The only
@@ -393,7 +405,7 @@ async def elevenlabs_webhook(
 
 
 @admin_router.get("/elevenlabs/results")
-async def list_webhook_results(state: AppState = Depends(get_app_state)):
+def list_webhook_results(state: AppState = Depends(get_app_state)):
     """
     List all received webhook results.
 
@@ -429,7 +441,7 @@ async def list_webhook_results(state: AppState = Depends(get_app_state)):
 
 
 @admin_router.get("/elevenlabs/results/{transcription_id}")
-async def get_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
+def get_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
     """
     Get a specific webhook result by transcription ID.
 
@@ -454,7 +466,7 @@ async def get_webhook_result(transcription_id: str, state: AppState = Depends(ge
 
 
 @admin_router.delete("/elevenlabs/results/{transcription_id}")
-async def delete_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
+def delete_webhook_result(transcription_id: str, state: AppState = Depends(get_app_state)):
     """
     Delete a webhook result by transcription ID.
 

@@ -279,7 +279,7 @@ def run_refresh_task(
 
 
 @admin_router.post("/refresh", response_model=RefreshResponse)
-async def refresh_feeds(
+def refresh_feeds(
     request: RefreshRequest,
     background_tasks: BackgroundTasks,
     state: AppState = Depends(get_app_state),
@@ -334,7 +334,7 @@ async def refresh_feeds(
 
 
 @router.get("/refresh/status", response_model=TaskStatusResponse)
-async def get_refresh_status(
+def get_refresh_status(
     state: AppState = Depends(get_app_state),
 ) -> TaskStatusResponse:
     """
@@ -366,7 +366,7 @@ async def get_refresh_status(
 
 
 @router.get("/status")
-async def get_all_tasks_status(
+def get_all_tasks_status(
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
     """
@@ -385,7 +385,7 @@ async def get_all_tasks_status(
 
 
 @router.post("/add", response_model=AddPodcastResponse)
-async def add_podcast(
+def add_podcast(
     request: AddPodcastRequest,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -444,7 +444,7 @@ async def add_podcast(
 
 
 @router.get("/add/status", response_model=TaskStatusResponse)
-async def get_add_podcast_status(
+def get_add_podcast_status(
     state: AppState = Depends(get_app_state),
 ) -> TaskStatusResponse:
     """
@@ -710,7 +710,7 @@ def _validate_episode_for_stage(
 
 
 @admin_router.post("/download", response_model=QueueTaskResponse)
-async def queue_download(
+def queue_download(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -748,7 +748,7 @@ async def queue_download(
 
 
 @admin_router.post("/downsample", response_model=QueueTaskResponse)
-async def queue_downsample(
+def queue_downsample(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -774,7 +774,7 @@ async def queue_downsample(
 
 
 @admin_router.post("/transcribe", response_model=QueueTaskResponse)
-async def queue_transcribe(
+def queue_transcribe(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -800,7 +800,7 @@ async def queue_transcribe(
 
 
 @admin_router.post("/clean", response_model=QueueTaskResponse)
-async def queue_clean(
+def queue_clean(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -826,7 +826,7 @@ async def queue_clean(
 
 
 @admin_router.post("/summarize", response_model=QueueTaskResponse)
-async def queue_summarize(
+def queue_summarize(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -861,7 +861,7 @@ class CancelPipelineResponse(BaseModel):
 
 
 @admin_router.post("/run-pipeline", response_model=RunPipelineResponse)
-async def run_pipeline(
+def run_pipeline(
     request: RunPipelineRequest,
     state: AppState = Depends(get_app_state),
 ) -> RunPipelineResponse:
@@ -965,7 +965,7 @@ async def run_pipeline(
 
 
 @admin_router.post("/episode/{episode_id}/cancel-pipeline", response_model=CancelPipelineResponse)
-async def cancel_pipeline(
+def cancel_pipeline(
     episode_id: str,
     state: AppState = Depends(get_app_state),
 ) -> CancelPipelineResponse:
@@ -1011,7 +1011,7 @@ async def cancel_pipeline(
 
 
 @router.get("/task/{task_id}", response_model=QueuedTaskStatusResponse)
-async def get_queued_task_status(
+def get_queued_task_status(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> QueuedTaskStatusResponse:
@@ -1046,7 +1046,7 @@ async def get_queued_task_status(
 
 
 @admin_router.get("/queue/status", response_model=QueueStatusResponse)
-async def get_queue_status(
+def get_queue_status(
     state: AppState = Depends(get_app_state),
 ) -> QueueStatusResponse:
     """
@@ -1066,7 +1066,7 @@ async def get_queue_status(
 
 
 @admin_router.get("/queue/tasks", response_model=QueueTasksResponse)
-async def get_queue_tasks(
+def get_queue_tasks(
     completed_limit: int = 10,
     state: AppState = Depends(get_app_state),
 ) -> QueueTasksResponse:
@@ -1223,7 +1223,7 @@ async def get_queue_tasks(
 
 
 @admin_router.post("/queue/task/{task_id}/bump", response_model=BumpTaskResponse)
-async def bump_queue_task(
+def bump_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> BumpTaskResponse:
@@ -1258,7 +1258,7 @@ async def bump_queue_task(
 
 
 @admin_router.post("/queue/task/{task_id}/cancel", response_model=CancelTaskResponse)
-async def cancel_queue_task(
+def cancel_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> CancelTaskResponse:
@@ -1293,7 +1293,7 @@ async def cancel_queue_task(
 
 
 @router.get("/episode/{episode_id}/tasks")
-async def get_episode_tasks(
+def get_episode_tasks(
     episode_id: str,
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
@@ -1402,7 +1402,7 @@ async def stream_task_progress(
 
 
 @router.get("/task/{task_id}/progress/current")
-async def get_current_progress(
+def get_current_progress(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
@@ -1502,7 +1502,7 @@ class DLQBulkRetryResponse(BaseModel):
 
 
 @admin_router.get("/dlq", response_model=DLQListResponse)
-async def list_dlq_tasks(
+def list_dlq_tasks(
     limit: int = 100,
     branch: str = "all",
     state: AppState = Depends(get_app_state),
@@ -1622,7 +1622,7 @@ async def list_dlq_tasks(
 
 
 @admin_router.post("/dlq/{task_id}/retry", response_model=DLQActionResponse)
-async def retry_dlq_task(
+def retry_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> DLQActionResponse:
@@ -1676,7 +1676,7 @@ async def retry_dlq_task(
 
 
 @admin_router.post("/dlq/{task_id}/skip", response_model=DLQActionResponse)
-async def skip_dlq_task(
+def skip_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> DLQActionResponse:
@@ -1722,7 +1722,7 @@ async def skip_dlq_task(
 
 
 @admin_router.post("/dlq/retry-all", response_model=DLQBulkRetryResponse)
-async def retry_all_dlq_tasks(
+def retry_all_dlq_tasks(
     request: Optional[DLQBulkRetryRequest] = None,
     state: AppState = Depends(get_app_state),
 ) -> DLQBulkRetryResponse:

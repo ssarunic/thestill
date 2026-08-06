@@ -46,7 +46,7 @@ class ImportRequest(BaseModel):
 
 
 @router.post("")
-async def create_import(
+def create_import(
     body: ImportRequest,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),

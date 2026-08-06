@@ -47,7 +47,7 @@ class ResolvePodcastRequest(BaseModel):
 
 
 @router.post("/resolve")
-async def resolve_podcast(
+def resolve_podcast(
     request: ResolvePodcastRequest,
     state: AppState = Depends(get_app_state),
 ) -> dict:
@@ -132,7 +132,7 @@ async def resolve_podcast(
 
 
 @router.get("")
-async def get_podcasts(
+def get_podcasts(
     limit: int = 12,
     offset: int = 0,
     q: Optional[str] = None,
@@ -192,7 +192,7 @@ async def get_podcasts(
 
 
 @router.get("/{podcast_slug}")
-async def get_podcast(
+def get_podcast(
     podcast_slug: str,
     state: AppState = Depends(get_app_state),
     user: Optional[User] = Depends(get_current_user),
@@ -252,7 +252,7 @@ async def get_podcast(
 
 
 @router.get("/{podcast_slug}/episodes")
-async def get_podcast_episodes(
+def get_podcast_episodes(
     podcast_slug: str,
     limit: int = 20,
     offset: int = 0,
@@ -295,7 +295,7 @@ async def get_podcast_episodes(
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}")
-async def get_episode_by_slugs(
+def get_episode_by_slugs(
     podcast_slug: str,
     episode_slug: str,
     state: AppState = Depends(get_app_state),
@@ -363,7 +363,7 @@ async def get_episode_by_slugs(
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/transcript")
-async def get_episode_transcript_by_slugs(
+def get_episode_transcript_by_slugs(
     podcast_slug: str,
     episode_slug: str,
     state: AppState = Depends(get_app_state),
@@ -515,7 +515,7 @@ async def get_episode_summary_by_slugs(
 
 
 @router.post("/{podcast_slug}/follow", status_code=201)
-async def follow_podcast(
+def follow_podcast(
     podcast_slug: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -552,7 +552,7 @@ async def follow_podcast(
 
 
 @router.delete("/{podcast_slug}/follow", status_code=204)
-async def unfollow_podcast(
+def unfollow_podcast(
     podcast_slug: str,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -583,7 +583,7 @@ async def unfollow_podcast(
 
 
 @router.get("/{podcast_slug}/followers/count")
-async def get_podcast_follower_count(
+def get_podcast_follower_count(
     podcast_slug: str,
     state: AppState = Depends(get_app_state),
 ) -> dict:

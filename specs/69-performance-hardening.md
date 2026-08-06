@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phase 1 shipped 2026-08-06; Phases 2–8 open)
+**Status**: 🚧 Active development (Phases 1–2 shipped 2026-08-06; Phases 3–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity landed; all five EXPLAIN gates green — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -443,6 +443,51 @@ round-trips. Tests: 307 SQLite repository unit tests, 192 dual-backend
 contract tests (Postgres side included via `TEST_DATABASE_URL`), 2
 migrate-on-startup tests, full unit suite 2644 passed (one pre-existing
 `test_entity_tools` MCP failure, present on the base commit, unrelated).
+
+## Outcome (Phase 2, 2026-08-06)
+
+**Route sweep (2.1)** — 65 route handlers converted from `async def` to sync
+`def` (threadpooled by FastAPI), verified await-free by AST scan before each
+conversion. Beyond the planned file list, the sweep also covered
+`api_commands.py` (25 routes — the queue/DLQ/status endpoints the frontend
+polls), `api_narrations.py`, `api_imports.py`, and the three non-awaiting
+`auth.py` routes (`logout`, `get_current_user`, `update_current_user`,
+plus `google_login`, which awaited nothing). Remaining async routes, each
+with a reason: `stream_task_progress` (SSE), `get_episode_summary_by_slugs`
+(awaits its `run_in_threadpool` LLM wraps), `auth_status` /
+`google_callback` (await async OAuth), `health_check` (zero I/O — staying on
+the loop keeps liveness responsive even with a saturated threadpool, same
+rationale as the pre-existing sync `readiness_check`), and
+`elevenlabs_webhook` (awaits `request.body()`, then hands the sync
+signature-verify/DB/file work to a threadpooled `_process_elevenlabs_webhook`
+helper).
+
+**Long-running work (2.2)** — `resolve_podcast`'s 1–2s RSS fetch and
+`get_latest_briefing`'s lazy generation now run in the threadpool via the
+sync conversion (the resolve docstring's threadpool claim is finally true).
+`narrate_briefing` also converted — the minutes-long LLM call no longer
+touches the event loop — but the **202 + task-id contract is deferred**: the
+task manager is singleton-per-`TaskType` and cannot key per-briefing tasks,
+so the conversion needs a small task-manager extension plus frontend polling
+changes in `useNarrateBriefing`/`NarrationView`. Documented in the route's
+docstring; pairs naturally with backlog item M7 (scheduler narration
+parallelism) in [70-performance-medium-backlog.md](70-performance-medium-backlog.md).
+
+**Regression guard (2.3)** — `tests/unit/web/test_route_event_loop_guard.py`:
+(a) an AST guard pinning the exact allowlist of async route handlers — any
+new `async def` route fails until consciously allowlisted; (b) an
+await-necessity check (an async route that never awaits has no reason to be
+async); (c) a behavioral gate — with `get_status` stubbed to block for 1s,
+a concurrent `/health` must answer in <0.5s (measured ~0.1s; an `async def`
+regression would push it to ~1s). This replaces the plan's "AST check in CI
+or pylint plugin" idea — a plain pytest is simpler and runs everywhere.
+
+Tests: guard suite 3/3; web unit suite 232 passed; full unit suite 2647
+passed; integration 359 passed (with `TEST_DATABASE_URL`). Three failures are
+pre-existing on the base commit (verified by stash-rerun): the
+`test_entity_tools` MCP schema test and two `test_default_deny_auth`
+route-registration tests. Formatting drift in `api_search.py`/`api_imports.py`
+also pre-exists and was left untouched.
 
 ## Related specs
 

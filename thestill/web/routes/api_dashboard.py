@@ -66,7 +66,7 @@ class ActivityResponse(BaseModel):
 
 
 @router.get("/stats")
-async def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
+def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
     """
     Get dashboard statistics.
 
@@ -98,7 +98,7 @@ async def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
 
 
 @router.get("/activity")
-async def get_recent_activity(
+def get_recent_activity(
     limit: int = 10,
     offset: int = 0,
     state: AppState = Depends(get_app_state),
@@ -154,7 +154,7 @@ async def get_recent_activity(
 
 
 @router.get("/narration")
-async def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
+def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
     """Aggregate narration runs for the dashboard tile (spec #33 Phase 5).
 
     Filesystem-driven so no schema migration: the runner writes one
