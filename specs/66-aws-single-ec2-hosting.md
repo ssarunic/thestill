@@ -1,8 +1,8 @@
 # AWS Hosting on a Single EC2 Node (operator-scale)
 
-> **Status:** 🚧 Deployability implemented (2026-07-30) — `[search]` extra, `prod` image target + GHCR multi-arch publish, `MIGRATE_ON_STARTUP`, `/health/ready`, `deploy/aws-ec2/` kit, [docs/aws-deployment.md](../docs/aws-deployment.md) runbook. EC2 provisioning + cutover (§Migration) pending.
+> **Status:** ✅ Deployed and cut over (2026-08-06). Live at `https://thestill.me` on `i-098addb829485abf5` (t4g.medium, eu-west-2), Elastic IP `35.177.165.137`, Let's Encrypt TLS via Caddy. Full corpus migrated (5,479 episodes / 411,541 chunks / 793k entity mentions), Dalston reached over the private VPC path, refresh scheduler running the queued path. Local instance retired.
 > **Created:** 2026-07-29
-> **Updated:** 2026-07-30
+> **Updated:** 2026-08-06
 > **Author:** Engineering
 > **Priority:** High — moves the production instance off the dev machine
 > **Related:** [43-aws-hosting.md](43-aws-hosting.md) (beta-scale plan; this spec supersedes its Phase-1 sizing), [05-docker-deployment.md](05-docker-deployment.md) (slim/full image), [44-postgres-migration.md](44-postgres-migration.md) (✅ done — unblocks everything here), [35-pluggable-file-storage.md](35-pluggable-file-storage.md) / [40-storage-routing-ephemeral-vs-persistent.md](40-storage-routing-ephemeral-vs-persistent.md) (S3 backend, optional here), [25-security-audit-and-hardening.md](25-security-audit-and-hardening.md), [26-pre-deploy-security-checklist.md](26-pre-deploy-security-checklist.md), [51-briefing-email-delivery.md](51-briefing-email-delivery.md) (SES phase)
@@ -201,6 +201,41 @@ Note a private hosted zone answers only after propagation; a name queried
 before the zone is live can be negatively cached for the parent zone's SOA
 minimum (86400s here). Query a fresh name to distinguish propagation lag from
 misconfiguration.
+
+### What the cutover actually taught us (2026-08-04 → 08-06)
+
+Five things went wrong that the plan did not anticipate. All are fixed; they
+are recorded because each is a class, not an incident.
+
+1. **Config drift, silent.** `ENABLE_DIARIZATION` never reached SSM, so every
+   transcript on the new host came back speakerless — valid output, no error.
+   Root cause was hand-picking which variables to migrate (28 were missed).
+   Fixed by `thestill-aws secrets diff`; catalogued as
+   [#42 FM-10](42-robustness-and-failure-mode-hardening.md).
+2. **Collation-dependent CHECK.** `entity_cooccurrences` has
+   `CHECK (a < b)`, which means different things under macOS libc and Debian
+   glibc. One row of 1,089,070 flipped ordering and `pg_restore` discarded the
+   entire table. Catalogued as [#42 FM-9](42-robustness-and-failure-mode-hardening.md);
+   recovered by re-deriving from `entity_mentions`.
+3. **A mid-chain stage that raises severs the pipeline.** The image omits the
+   `entities` extra by design, so `extract-entities` raised — and because the
+   chain is linear, `reindex` never ran and 105 episodes were readable but
+   unsearchable. Entity stages now skip with `skipped_unavailable` and let the
+   chain continue.
+4. **Stale paths outlive their files.** Restored rows carried
+   `downsampled_audio_path` values whose WAVs were long deleted, and the
+   transcribe handler dead-lettered on the missing file instead of falling
+   back to Dalston's URL fetch.
+5. **Dalston does not listen on its VPC interface** (above). Cost a day of
+   assuming the security group was at fault.
+
+Sizing note: embedding work scales with **episodes, not users** — thestill
+processes once and fans out (spec #29). At ~200 episodes/week and ~203 chunks
+each, steady state is minutes of daily CPU, so `t4g.medium` is not the
+constraint at 10-20 users; memory and the singleton architecture are. Bulk
+work (a re-embed, an entity backfill) is better served by temporarily
+resizing than by permanently buying a larger box — which is why the Elastic
+IP matters: it makes stop/resize/start a no-op for DNS.
 
 ### Before Dalston is ever public
 
