@@ -166,6 +166,17 @@ class SqliteEntityRepository(EntityRepository):
             ).fetchone()
         return _row_to_entity(row) if row else None
 
+    def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM entities WHERE id IN ({placeholders})",
+                list(entity_ids),
+            ).fetchall()
+        return [_row_to_entity(row) for row in rows]
+
     def find_entity_by_qid(self, wikidata_qid: str) -> Optional[EntityRecord]:
         """Look up by Wikidata QID (used during resolution merging)."""
         with self._get_connection() as conn:
@@ -446,6 +457,8 @@ class SqliteEntityRepository(EntityRepository):
         """
         sql = """
             SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   e.slug AS episode_slug, e.audio_url AS episode_audio_url,
+                   e.image_url AS episode_image_url, e.duration AS episode_duration,
                    p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
                    ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
             FROM entity_mentions m
@@ -503,6 +516,8 @@ class SqliteEntityRepository(EntityRepository):
         """
         sql = """
             SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   e.slug AS episode_slug, e.audio_url AS episode_audio_url,
+                   e.image_url AS episode_image_url, e.duration AS episode_duration,
                    p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
                    ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
             FROM entity_mentions m
@@ -556,6 +571,8 @@ class SqliteEntityRepository(EntityRepository):
         """
         sql_base = """
             SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+                   e.slug AS episode_slug, e.audio_url AS episode_audio_url,
+                   e.image_url AS episode_image_url, e.duration AS episode_duration,
                    p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
                    ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
             FROM entity_mentions m
@@ -600,10 +617,16 @@ class SqliteEntityRepository(EntityRepository):
         (Wikidata/Wikipedia Tier-0 data, ``None`` when not yet fetched)
         and ``most_discussed_on`` (per-podcast mention counts).
         """
-        entity = self.get_entity(entity_id)
-        if entity is None:
-            return None
+        # Spec #69 Phase 5 — entity row folded into the same connection and
+        # co-occurring entities JOINed instead of fetched one query per row.
         with self._get_connection() as conn:
+            entity_row = conn.execute(
+                "SELECT * FROM entities WHERE id = ?",
+                (entity_id,),
+            ).fetchone()
+            if entity_row is None:
+                return None
+            entity = _row_to_entity(entity_row)
             mention_count = conn.execute(
                 "SELECT COUNT(*) FROM entity_mentions " "WHERE entity_id = ? AND resolution_status = 'resolved'",
                 (entity_id,),
@@ -612,12 +635,11 @@ class SqliteEntityRepository(EntityRepository):
             # and unify into a single column. Order by episode_count.
             cooccur_rows = conn.execute(
                 """
-                SELECT
-                    CASE WHEN c.entity_a_id = ? THEN c.entity_b_id
-                         ELSE c.entity_a_id END AS other_id,
-                    c.episode_count,
-                    c.last_seen_at
+                SELECT other.*, c.episode_count, c.last_seen_at
                 FROM entity_cooccurrences c
+                JOIN entities other
+                  ON other.id = CASE WHEN c.entity_a_id = ? THEN c.entity_b_id
+                                     ELSE c.entity_a_id END
                 WHERE c.entity_a_id = ? OR c.entity_b_id = ?
                 ORDER BY c.episode_count DESC
                 LIMIT ?
@@ -649,18 +671,14 @@ class SqliteEntityRepository(EntityRepository):
                 "SELECT * FROM entity_enrichment WHERE entity_id = ?",
                 (entity_id,),
             ).fetchone()
-        cooccurring = []
-        for row in cooccur_rows:
-            other = self.get_entity(row["other_id"])
-            if other is None:
-                continue
-            cooccurring.append(
-                {
-                    "entity": other,
-                    "episode_count": row["episode_count"],
-                    "last_seen_at": row["last_seen_at"],
-                }
-            )
+        cooccurring = [
+            {
+                "entity": _row_to_entity(row),
+                "episode_count": row["episode_count"],
+                "last_seen_at": row["last_seen_at"],
+            }
+            for row in cooccur_rows
+        ]
         recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
         roles = self.get_entity_roles(entity_id)
         return {
@@ -1498,8 +1516,7 @@ class SqliteEntityRepository(EntityRepository):
         mention_count``.
         """
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT e.id                   AS entity_id,
                        e.type                 AS type,
                        e.canonical_name       AS canonical_name,
@@ -1512,8 +1529,7 @@ class SqliteEntityRepository(EntityRepository):
                 WHERE e.wikidata_qid IS NOT NULL
                   AND m.resolution_status = 'resolved'
                 GROUP BY e.id, m.surface_form
-                """
-            ).fetchall()
+                """).fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -1542,8 +1558,7 @@ class SqliteEntityRepository(EntityRepository):
         deleted by the caller.
         """
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     e.wikidata_qid,
                     e.id,
@@ -1560,8 +1575,7 @@ class SqliteEntityRepository(EntityRepository):
                       GROUP BY wikidata_qid
                       HAVING COUNT(*) > 1
                   )
-                """
-            ).fetchall()
+                """).fetchall()
 
         by_qid: Dict[str, List[sqlite3.Row]] = {}
         for row in rows:
@@ -1605,8 +1619,7 @@ class SqliteEntityRepository(EntityRepository):
         """
         valid_types = {t.value for t in EntityType}
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     e.id AS entity_id,
                     e.type AS current_type,
@@ -1616,8 +1629,7 @@ class SqliteEntityRepository(EntityRepository):
                 JOIN entity_mentions m ON m.entity_id = e.id
                 WHERE m.surface_label IS NOT NULL
                 GROUP BY e.id, m.surface_label
-                """
-            ).fetchall()
+                """).fetchall()
 
         per_entity: Dict[str, Dict[str, Any]] = {}
         for row in rows:
@@ -1717,6 +1729,10 @@ def _row_to_mention_context(row: sqlite3.Row) -> MentionContext:
         podcast_slug=row["podcast_slug"],
         entity_type=row["entity_type"],
         entity_canonical_name=row["entity_canonical_name"],
+        episode_slug=_row_get(row, "episode_slug"),
+        episode_audio_url=_row_get(row, "episode_audio_url"),
+        episode_image_url=_row_get(row, "episode_image_url"),
+        episode_duration=_row_get(row, "episode_duration"),
     )
 
 

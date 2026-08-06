@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–4 shipped 2026-08-06; Phases 5–8 open)
+**Status**: 🚧 Active development (Phases 1–5 shipped 2026-08-06; Phases 6–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -568,6 +568,48 @@ connection setup). Route tests updated to mock the new seam with a
 contract-honoring side effect; service tests wire the mock repository's
 indexed lookups. Full unit suite 2660 passed; integration 592 passed
 (same two pre-existing failures as the base commit).
+
+## Outcome (Phase 5, 2026-08-06)
+
+**Entity page (5.1)** — `get_entity_summary` now runs on **3 connections**
+(was ≈34): the entity row is folded into the aggregate connection, and the
+per-co-occurrence `get_entity` loop became a JOIN in the co-occurrence
+query itself (both backends). The route's per-mention `get_episode` loop is
+gone: `MentionContext` gained `episode_slug` / `episode_audio_url` /
+`episode_image_url` / `episode_duration`, projected in the existing
+mention-context JOIN on both backends, so the deeplink/player fields ride
+along. The episode-entities route's per-distinct-entity qid backfill uses a
+new `get_entities_by_ids` batch method (concrete ABC default = per-id loop;
+`ANY`/`IN` overrides on both backends).
+
+**Typeahead (5.2)** — restructured **Postgres-only** (SQLite planner
+tuning is a spec non-goal, and SQLite has no LATERAL): entities are
+filtered FIRST by the migration-0007 trgm index, then only the matches are
+scored via LATERAL aggregates (mention count off `idx_mentions_entity`,
+guest role off the jsonb GIN, host/recurring off the small podcasts
+table) — identical ranking semantics, with a `_MATCH_CAP = 200`
+deterministic bound (pre-ranked by the ordering's own name-length
+tiebreak) for degenerate prefixes. Two findings from measuring on the
+seeded instance (2000 entities / 60k mentions / 2000 guest anchors):
+(a) the old corpus-wide shape is actually cheap at *small* scale (~40ms) —
+its cost grows with total mentions/episodes per keystroke, which is the
+target-scale problem; (b) the LATERAL plan's cost estimate trips
+Postgres's JIT threshold, and JIT compilation (~400ms) dwarfed execution
+(~60ms) — the method now sets `SET LOCAL jit = off`. Measured after both
+fixes: 15–47ms typical, 73ms worst-case all-match, vs 1.2s before the
+cap+JIT fixes. **The spec's "maintained role-index table" open question is
+resolved: not needed** — per-match LATERAL over the Phase-1 indices gives
+the same effect with no new state to keep fresh.
+
+**Mentions endpoint paging (5.3) — deliberately not done**: the reader
+consumes the full mention set in one fetch (inline highlights, strip,
+rail, timeline all derive from it), so paging would force the client to
+fetch all pages anyway; the payload is bounded per episode by extraction.
+The actual measured costs in that route (per-entity qid N+1) are fixed
+above. Revisit only if a measured episode produces a pathological payload.
+
+Tests: full unit 2660 passed, integration 592 passed (dual-backend entity
+contract suites included; same pre-existing failures as the base commit).
 
 ## Related specs
 

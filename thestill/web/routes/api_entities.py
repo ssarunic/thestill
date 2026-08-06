@@ -359,12 +359,12 @@ def get_episode_entities(
             )
 
     # ``ctx`` doesn't carry wikidata_qid; backfill from the entities
-    # table for any entity we'll surface. One round-trip per distinct
-    # entity, but the per-episode entity count is small (10–50 typical).
-    for entity_id, ref in entity_records.items():
-        full = entity_repo.get_entity(entity_id)
-        if full and full.wikidata_qid:
-            entity_records[entity_id] = ref.model_copy(update={"wikidata_qid": full.wikidata_qid})
+    # table for any entity we'll surface — one batched query (spec #69
+    # Phase 5) instead of a round-trip (and connection) per entity.
+    for full in entity_repo.get_entities_by_ids(list(entity_records.keys())):
+        ref = entity_records.get(full.id)
+        if ref is not None and full.wikidata_qid:
+            entity_records[full.id] = ref.model_copy(update={"wikidata_qid": full.wikidata_qid})
 
     items: list[EpisodeEntity] = []
     for entity_id, mentions in grouped.items():
@@ -474,27 +474,14 @@ def get_entity_summary(
     recent_mentions: list[CitationRow] = []
     for ctx in summary["recent_mentions"]:
         m = ctx.mention
-        # The web doesn't have an `/episodes/<id>` route; resolve slugs
-        # so the row is deeplinkable from the entity page.
-        episode_lookup = state.repository.get_episode(ctx.episode_id)
-        episode_slug = None
-        episode_audio_url = None
-        episode_image_url = None
-        episode_duration = None
-        if episode_lookup is not None:
-            _ep_podcast, ep_record = episode_lookup
-            episode_slug = ep_record.slug
-            # ``audio_url`` is a HttpUrl on the model; coerce to str so
-            # the response stays JSON-serializable.
-            episode_audio_url = str(ep_record.audio_url) if ep_record.audio_url else None
-            episode_image_url = ep_record.image_url
-            episode_duration = ep_record.duration
+        # Deeplink/player fields ride along on the mention-context JOIN
+        # (spec #69 Phase 5) — no per-mention episode re-fetch.
         recent_mentions.append(
             CitationRow(
                 episode_id=ctx.episode_id,
                 podcast_id=ctx.podcast_id,
                 podcast_slug=ctx.podcast_slug,
-                episode_slug=episode_slug,
+                episode_slug=ctx.episode_slug,
                 podcast_title=ctx.podcast_title,
                 episode_title=ctx.episode_title,
                 published_at=(ctx.episode_pub_date.isoformat() if ctx.episode_pub_date else None),
@@ -503,9 +490,9 @@ def get_entity_summary(
                 speaker=m.speaker,
                 quote=m.quote_excerpt,
                 surface_form=m.surface_form,
-                audio_url=episode_audio_url,
-                image_url=episode_image_url,
-                duration=episode_duration,
+                audio_url=ctx.episode_audio_url,
+                image_url=ctx.episode_image_url,
+                duration=ctx.episode_duration,
             )
         )
 

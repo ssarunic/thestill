@@ -56,6 +56,8 @@ _TYPE_PRIORITY = {t.value: i for i, t in enumerate(EntityType)}
 
 _MENTION_CONTEXT_SELECT = """
     SELECT m.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+           e.slug AS episode_slug, e.audio_url AS episode_audio_url,
+           e.image_url AS episode_image_url, e.duration AS episode_duration,
            p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
            ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
     FROM entity_mentions m
@@ -156,6 +158,16 @@ class PostgresEntityRepository(EntityRepository):
                 (entity_id,),
             ).fetchone()
         return _row_to_entity(row) if row else None
+
+    def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
+        if not entity_ids:
+            return []
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT * FROM entities WHERE id = ANY(%s)",
+                (list(entity_ids),),
+            ).fetchall()
+        return [_row_to_entity(row) for row in rows]
 
     def find_entity_by_qid(self, wikidata_qid: str) -> Optional[EntityRecord]:
         """Look up by Wikidata QID (used during resolution merging)."""
@@ -485,22 +497,28 @@ class PostgresEntityRepository(EntityRepository):
         """Return entity + mention_count + cooccurring + recent_mentions
         (+ roles, most_discussed_on, enrichment — spec #45).
         """
-        entity = self.get_entity(entity_id)
-        if entity is None:
-            return None
+        # Spec #69 Phase 5 — one connection for the whole aggregate block
+        # (entity row folded in, co-occurring entities JOINed instead of
+        # fetched one connection per row).
         with connect(self.dsn) as conn:
+            entity_row = conn.execute(
+                "SELECT * FROM entities WHERE id = %s",
+                (entity_id,),
+            ).fetchone()
+            if entity_row is None:
+                return None
+            entity = _row_to_entity(entity_row)
             mention_count = conn.execute(
                 "SELECT COUNT(*) AS n FROM entity_mentions WHERE entity_id = %s AND resolution_status = 'resolved'",
                 (entity_id,),
             ).fetchone()["n"]
             cooccur_rows = conn.execute(
                 """
-                SELECT
-                    CASE WHEN c.entity_a_id = %s THEN c.entity_b_id
-                         ELSE c.entity_a_id END AS other_id,
-                    c.episode_count,
-                    c.last_seen_at
+                SELECT other.*, c.episode_count, c.last_seen_at
                 FROM entity_cooccurrences c
+                JOIN entities other
+                  ON other.id = CASE WHEN c.entity_a_id = %s THEN c.entity_b_id
+                                     ELSE c.entity_a_id END
                 WHERE c.entity_a_id = %s OR c.entity_b_id = %s
                 ORDER BY c.episode_count DESC
                 LIMIT %s
@@ -529,18 +547,14 @@ class PostgresEntityRepository(EntityRepository):
                 "SELECT * FROM entity_enrichment WHERE entity_id = %s",
                 (entity_id,),
             ).fetchone()
-        cooccurring = []
-        for row in cooccur_rows:
-            other = self.get_entity(row["other_id"])
-            if other is None:
-                continue
-            cooccurring.append(
-                {
-                    "entity": other,
-                    "episode_count": row["episode_count"],
-                    "last_seen_at": row["last_seen_at"],
-                }
-            )
+        cooccurring = [
+            {
+                "entity": _row_to_entity(row),
+                "episode_count": row["episode_count"],
+                "last_seen_at": row["last_seen_at"],
+            }
+            for row in cooccur_rows
+        ]
         recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
         roles = self.get_entity_roles(entity_id)
         return {
@@ -613,8 +627,7 @@ class PostgresEntityRepository(EntityRepository):
             "hosts_podcasts": [{**r, "podcast_id": as_str(r["podcast_id"])} for r in host_rows],
             "recurring_podcasts": [{**r, "podcast_id": as_str(r["podcast_id"])} for r in recurring_rows],
             "guest_episodes": [
-                {**r, "episode_id": as_str(r["episode_id"]), "podcast_id": as_str(r["podcast_id"])}
-                for r in guest_rows
+                {**r, "episode_id": as_str(r["episode_id"]), "podcast_id": as_str(r["podcast_id"])} for r in guest_rows
             ],
         }
 
@@ -820,6 +833,10 @@ class PostgresEntityRepository(EntityRepository):
                 row = conn.execute(sql, params).fetchone()
         return _row_to_entity(row) if row else None
 
+    # Score at most this many ILIKE matches per typeahead keystroke; see
+    # the comment inside ``search_entities_by_prefix``.
+    _MATCH_CAP = 200
+
     def search_entities_by_prefix(
         self,
         prefix: str,
@@ -844,68 +861,74 @@ class PostgresEntityRepository(EntityRepository):
         if types:
             type_clause = "AND e.type = ANY(%s)"
             type_params = [list(types)]
+        # Spec #69 Phase 5 — filter entities FIRST (trgm-indexed ILIKE from
+        # migration 0007), then score only the matches via LATERAL
+        # aggregates: the mention count runs off idx_mentions_entity per
+        # match and the role rows off the guest-ids GIN / the ~small
+        # podcasts table. The old shape computed corpus-wide role and
+        # mention aggregates (every jsonb array of every episode + a GROUP
+        # BY over all resolved mentions) on every keystroke — at target
+        # scale that is millions of mention rows per keypress. Ranking
+        # semantics are identical (MAX role, COUNT DISTINCT episodes,
+        # mention count, name length, name), with one bound: a degenerate
+        # prefix matching more than _MATCH_CAP entities scores only the
+        # cap's worth, pre-ranked by the ordering's own name-length
+        # tiebreak so the truncation is deterministic. Real prefixes (the
+        # UI gates at 2+ chars) match a handful of entities.
         sql = f"""
-            WITH role_index AS (
-                SELECT g.value AS entity_id,
-                       3 AS role_score, 'guest' AS role, episodes.id AS episode_id
-                FROM episodes
-                CROSS JOIN LATERAL jsonb_array_elements_text(episodes.guest_entity_ids) AS g(value)
-                WHERE episodes.guest_entity_ids <> '[]'::jsonb
-                UNION ALL
-                SELECT h.value AS entity_id,
-                       2 AS role_score, 'host' AS role, episodes.id AS episode_id
-                FROM episodes
-                JOIN podcasts ON podcasts.id = episodes.podcast_id
-                CROSS JOIN LATERAL jsonb_array_elements_text(podcasts.host_entity_ids) AS h(value)
-                WHERE podcasts.host_entity_ids <> '[]'::jsonb
-                UNION ALL
-                SELECT r.value AS entity_id,
-                       1 AS role_score, 'recurring' AS role, episodes.id AS episode_id
-                FROM episodes
-                JOIN podcasts ON podcasts.id = episodes.podcast_id
-                CROSS JOIN LATERAL jsonb_array_elements_text(podcasts.recurring_entity_ids) AS r(value)
-                WHERE podcasts.recurring_entity_ids <> '[]'::jsonb
-            ),
-            role_agg AS (
-                SELECT entity_id,
-                       MAX(role_score) AS role_score,
-                       COUNT(DISTINCT episode_id) AS role_episode_count
-                FROM role_index
-                GROUP BY entity_id
-            ),
-            mention_agg AS (
-                SELECT entity_id, COUNT(*) AS mention_count
-                FROM entity_mentions
-                WHERE resolution_status = 'resolved'
-                GROUP BY entity_id
-            ),
-            ranked AS (
-                SELECT
-                    e.id              AS id,
-                    e.type            AS type,
-                    e.canonical_name  AS canonical_name,
-                    e.aliases         AS aliases,
-                    COALESCE(ma.mention_count, 0) AS mention_count,
-                    COALESCE(ra.role_score, 0)    AS role_score,
-                    COALESCE(ra.role_episode_count, 0) AS role_episode_count,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY e.type
-                        ORDER BY COALESCE(ra.role_score, 0)             DESC,
-                                 COALESCE(ra.role_episode_count, 0)     DESC,
-                                 COALESCE(ma.mention_count, 0)          DESC,
-                                 LENGTH(e.canonical_name)               ASC,
-                                 e.canonical_name                       ASC
-                    ) AS rn
+            WITH matched AS (
+                SELECT e.id, e.type, e.canonical_name, e.aliases
                 FROM entities e
-                LEFT JOIN role_agg    ra ON ra.entity_id = e.id
-                LEFT JOIN mention_agg ma ON ma.entity_id = e.id
                 WHERE (e.canonical_name ILIKE %s
                        OR e.aliases::text ILIKE %s)
                   {type_clause}
+                ORDER BY LENGTH(e.canonical_name) ASC, e.canonical_name ASC
+                LIMIT {self._MATCH_CAP}
+            ),
+            scored AS (
+                SELECT
+                    matched.id, matched.type, matched.canonical_name, matched.aliases,
+                    COALESCE(ment.mention_count, 0)   AS mention_count,
+                    COALESCE(r.role_score, 0)         AS role_score,
+                    COALESCE(r.role_episode_count, 0) AS role_episode_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY matched.type
+                        ORDER BY COALESCE(r.role_score, 0)             DESC,
+                                 COALESCE(r.role_episode_count, 0)     DESC,
+                                 COALESCE(ment.mention_count, 0)       DESC,
+                                 LENGTH(matched.canonical_name)        ASC,
+                                 matched.canonical_name                ASC
+                    ) AS rn
+                FROM matched
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS mention_count
+                    FROM entity_mentions em
+                    WHERE em.entity_id = matched.id
+                      AND em.resolution_status = 'resolved'
+                ) ment ON true
+                LEFT JOIN LATERAL (
+                    SELECT MAX(role_score) AS role_score,
+                           COUNT(DISTINCT episode_id) AS role_episode_count
+                    FROM (
+                        SELECT 3 AS role_score, ge.id AS episode_id
+                          FROM episodes ge
+                         WHERE ge.guest_entity_ids @> to_jsonb(matched.id)
+                        UNION ALL
+                        SELECT 2, he.id
+                          FROM episodes he
+                          JOIN podcasts hp ON hp.id = he.podcast_id
+                         WHERE hp.host_entity_ids @> to_jsonb(matched.id)
+                        UNION ALL
+                        SELECT 1, re.id
+                          FROM episodes re
+                          JOIN podcasts rp ON rp.id = re.podcast_id
+                         WHERE rp.recurring_entity_ids @> to_jsonb(matched.id)
+                    ) roles
+                ) r ON true
             )
             SELECT id, type, canonical_name, aliases, mention_count,
                    role_score, role_episode_count
-            FROM ranked
+            FROM scored
             WHERE rn <= %s
             ORDER BY role_score DESC,
                      role_episode_count DESC,
@@ -915,6 +938,11 @@ class PostgresEntityRepository(EntityRepository):
         """
         params = [like_pattern, like_pattern, *type_params, limit_per_type]
         with connect(self.dsn) as conn:
+            # The LATERAL plan's cost estimate trips the JIT threshold, and
+            # JIT compilation (~400ms measured) dwarfs the actual execution
+            # (~60ms) — this is an interactive typeahead, so compile-heavy
+            # optimization is never worth it here.
+            conn.execute("SET LOCAL jit = off")
             rows = conn.execute(sql, params).fetchall()
         hits: List[EntityHit] = []
         prefix_lower = prefix.lower()
@@ -1286,8 +1314,7 @@ class PostgresEntityRepository(EntityRepository):
         ``json.loads`` on it — that's the cross-backend contract.
         """
         with connect(self.dsn) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT e.id                   AS entity_id,
                        e.type                 AS type,
                        e.canonical_name       AS canonical_name,
@@ -1300,8 +1327,7 @@ class PostgresEntityRepository(EntityRepository):
                 WHERE e.wikidata_qid IS NOT NULL
                   AND m.resolution_status = 'resolved'
                 GROUP BY e.id, m.surface_form
-                """
-            ).fetchall()
+                """).fetchall()
         return [{**r, "wikidata_instance_of": json.dumps(r["wikidata_instance_of"] or [])} for r in rows]
 
     # ------------------------------------------------------------------
@@ -1315,8 +1341,7 @@ class PostgresEntityRepository(EntityRepository):
         same rule (and same Python-side ranking) as the SQLite version.
         """
         with connect(self.dsn) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     e.wikidata_qid,
                     e.id,
@@ -1333,8 +1358,7 @@ class PostgresEntityRepository(EntityRepository):
                       GROUP BY wikidata_qid
                       HAVING COUNT(*) > 1
                   )
-                """
-            ).fetchall()
+                """).fetchall()
 
         by_qid: Dict[str, List[dict]] = {}
         for row in rows:
@@ -1366,8 +1390,7 @@ class PostgresEntityRepository(EntityRepository):
         """
         valid_types = {t.value for t in EntityType}
         with connect(self.dsn) as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT
                     e.id AS entity_id,
                     e.type AS current_type,
@@ -1377,8 +1400,7 @@ class PostgresEntityRepository(EntityRepository):
                 JOIN entity_mentions m ON m.entity_id = e.id
                 WHERE m.surface_label IS NOT NULL
                 GROUP BY e.id, m.surface_label
-                """
-            ).fetchall()
+                """).fetchall()
 
         per_entity: Dict[str, Dict[str, Any]] = {}
         for row in rows:
@@ -1459,6 +1481,10 @@ def _row_to_mention_context(row: dict) -> MentionContext:
         podcast_slug=row["podcast_slug"],
         entity_type=row["entity_type"],
         entity_canonical_name=row["entity_canonical_name"],
+        episode_slug=row.get("episode_slug"),
+        episode_audio_url=row.get("episode_audio_url"),
+        episode_image_url=row.get("episode_image_url"),
+        episode_duration=row.get("episode_duration"),
     )
 
 
