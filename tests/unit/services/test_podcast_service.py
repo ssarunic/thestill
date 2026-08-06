@@ -127,6 +127,20 @@ class TestPodcastServiceInitialization:
         assert service.path_manager is mock_path_manager
 
 
+
+def _wire_repo_lookups(podcast_service, sample_podcasts):
+    """Point the mock repository's indexed lookups at the fixtures.
+
+    Spec #69 Phase 4 routed ``get_podcast`` string identifiers to
+    ``repository.get`` / ``get_by_slug`` / ``get_by_url`` instead of
+    linear-scanning ``feed_manager.list_podcasts()``.
+    """
+    repo = podcast_service.repository
+    repo.get.side_effect = lambda pid: next((p for p in sample_podcasts if p.id == pid), None)
+    repo.get_by_slug.side_effect = lambda slug: next((p for p in sample_podcasts if p.slug == slug), None)
+    repo.get_by_url.side_effect = lambda url: next((p for p in sample_podcasts if str(p.rss_url) == url), None)
+
+
 class TestAddPodcast:
     """Test add_podcast method."""
 
@@ -179,6 +193,7 @@ class TestRemovePodcast:
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
         podcast_service.feed_manager.remove_podcast.return_value = True
+        _wire_repo_lookups(podcast_service, sample_podcasts)
 
         # Execute
         result = podcast_service.remove_podcast("https://example.com/news.xml")
@@ -266,6 +281,7 @@ class TestGetPodcast:
         """Should get podcast by RSS URL."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
+        _wire_repo_lookups(podcast_service, sample_podcasts)
 
         # Execute
         result = podcast_service.get_podcast("https://example.com/news.xml")
@@ -290,6 +306,7 @@ class TestGetPodcast:
         """Should return None if URL not found."""
         # Setup mocks
         podcast_service.feed_manager.list_podcasts.return_value = sample_podcasts
+        _wire_repo_lookups(podcast_service, sample_podcasts)
 
         # Execute
         result = podcast_service.get_podcast("https://example.com/notfound.xml")
@@ -507,5 +524,6 @@ class TestEdgeCases:
     def test_empty_url(self, podcast_service):
         """Should handle empty URL gracefully."""
         podcast_service.feed_manager.list_podcasts.return_value = []
+        _wire_repo_lookups(podcast_service, [])
         result = podcast_service.get_podcast("")
         assert result is None

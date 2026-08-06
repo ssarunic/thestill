@@ -120,44 +120,21 @@ class StatsService:
         """
         logger.debug("Gathering system statistics")
 
-        # Get podcast data
-        podcasts = self.repository.get_all()
-        podcasts_tracked = len(podcasts)
-
-        # Count episodes by state
-        from ..models.podcast import EpisodeState
-
-        episodes_total = 0
-        episodes_discovered = 0
-        episodes_downloaded = 0
-        episodes_downsampled = 0
-        episodes_transcribed = 0
-        episodes_cleaned = 0
-        episodes_summarized = 0
-        transcripts_available = 0
-
-        for podcast in podcasts:
-            episodes_total += len(podcast.episodes)
-            for episode in podcast.episodes:
-                # Count by state
-                if episode.state == EpisodeState.DISCOVERED:
-                    episodes_discovered += 1
-                elif episode.state == EpisodeState.DOWNLOADED:
-                    episodes_downloaded += 1
-                elif episode.state == EpisodeState.DOWNSAMPLED:
-                    episodes_downsampled += 1
-                elif episode.state == EpisodeState.TRANSCRIBED:
-                    episodes_transcribed += 1
-                elif episode.state == EpisodeState.CLEANED:
-                    episodes_cleaned += 1
-                elif episode.state == EpisodeState.SUMMARIZED:
-                    episodes_summarized += 1
-
-                # Check if summary file actually exists using PathManager
-                if episode.summary_path:
-                    md_path = self.path_manager.summary_file(episode.summary_path)
-                    if md_path.exists():
-                        transcripts_available += 1
+        # Spec #69 Phase 4 — one SQL aggregate instead of hydrating every
+        # episode of every podcast and counting states in Python.
+        # ``with_summary_path`` replaces the old per-episode summary-file
+        # existence probe (one stat() syscall per summarized episode); the
+        # DB column is the source of truth for whether a summary exists.
+        state_counts = self.repository.count_episode_states()
+        podcasts_tracked = state_counts["podcasts_tracked"]
+        episodes_total = state_counts["episodes_total"]
+        episodes_discovered = state_counts["discovered"]
+        episodes_downloaded = state_counts["downloaded"]
+        episodes_downsampled = state_counts["downsampled"]
+        episodes_transcribed = state_counts["transcribed"]
+        episodes_cleaned = state_counts["cleaned"]
+        episodes_summarized = state_counts["summarized"]
+        transcripts_available = state_counts["with_summary_path"]
 
         # Legacy fields for backward compatibility
         episodes_processed = episodes_summarized
@@ -257,29 +234,22 @@ class StatsService:
         """
         logger.debug(f"Gathering recent activity (limit={limit})")
 
-        podcasts = self.repository.get_all()
+        # Spec #69 Phase 4 — ORDER BY updated_at DESC LIMIT in SQL
+        # (idx_episodes_updated_at) instead of hydrating and sorting the
+        # whole corpus in Python.
+        rows, total = self.repository.get_recent_activity_rows(limit=limit)
+        result = [
+            ActivityItem(
+                episode_id=row["episode_id"],
+                episode_title=row["episode_title"],
+                podcast_title=row["podcast_title"],
+                podcast_id=row["podcast_id"],
+                state=row["state"],
+                timestamp=row["updated_at"],
+                pub_date=row["pub_date"],
+            )
+            for row in rows
+        ]
 
-        # Collect all episodes with their podcast info
-        activity_items: List[ActivityItem] = []
-        for podcast in podcasts:
-            for episode in podcast.episodes:
-                activity_items.append(
-                    ActivityItem(
-                        episode_id=episode.id,
-                        episode_title=episode.title,
-                        podcast_title=podcast.title,
-                        podcast_id=podcast.id,
-                        state=episode.state.value,
-                        timestamp=episode.updated_at,
-                        pub_date=episode.pub_date,
-                    )
-                )
-
-        # Sort by updated_at descending (most recent first)
-        activity_items.sort(key=lambda x: x.timestamp, reverse=True)
-
-        # Apply limit
-        result = activity_items[:limit]
-
-        logger.info(f"Found {len(activity_items)} total episodes, returning {len(result)}")
+        logger.info(f"Found {total} total episodes, returning {len(result)}")
         return result

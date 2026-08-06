@@ -30,6 +30,7 @@ from ...models.user import User
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
+from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
@@ -154,31 +155,19 @@ def get_podcasts(
         List of followed podcasts with their metadata, episode counts, and pagination info.
     """
     # Get IDs of podcasts the user follows
-    followed_podcast_ids = set(state.follower_repository.get_followed_podcast_ids(user.id))
+    followed_podcast_ids = state.follower_repository.get_followed_podcast_ids(user.id)
 
-    # Get all podcasts with their indexed info
-    all_podcasts = state.podcast_service.get_podcasts()
-
-    # Filter to only followed podcasts
-    followed_podcasts = [p for p in all_podcasts if p.id in followed_podcast_ids]
-
-    # Filter must run before pagination so `total` reflects the filtered set
+    # Spec #69 Phase 4 — filter/search/paginate in SQL instead of hydrating
+    # the whole corpus (every episode of every podcast) per page view. The
+    # filter runs before pagination so `total` reflects the filtered set
     # and infinite scroll pages stay consistent with the query.
-    needle = (q or "").strip().lower()
-    if needle:
-        followed_podcasts = [
-            p for p in followed_podcasts if needle in p.title.lower() or needle in (p.author or "").lower()
-        ]
+    rows, total = state.repository.list_podcast_rows(podcast_ids=followed_podcast_ids, q=q, limit=limit, offset=offset)
 
-    total = len(followed_podcasts)
-
-    # Apply pagination
-    podcasts = followed_podcasts[offset : offset + limit]
-
-    # Add is_following flag (always true for this endpoint)
+    # Add is_following flag (always true for this endpoint). ``index`` was
+    # only ever consumed as a stable list key — page position serves that.
     podcast_dicts = []
-    for p in podcasts:
-        podcast_dict = p.model_dump()
+    for i, row in enumerate(rows):
+        podcast_dict = PodcastWithIndex(index=offset + i + 1, **row).model_dump()
         podcast_dict["is_following"] = True
         podcast_dicts.append(podcast_dict)
 
@@ -206,46 +195,51 @@ def get_podcast(
     Returns:
         Podcast details with episode count.
     """
-    podcast = state.repository.get_by_slug(podcast_slug)
+    # Spec #69 Phase 4 — metadata + counts in one light query; previously
+    # this hydrated the podcast's whole back catalog AND rescanned the full
+    # corpus just to recover episode counts. ``index`` (a legacy list
+    # position nothing renders on this page) is pinned to 0.
+    row = state.repository.get_podcast_row_by_slug(podcast_slug)
 
-    if not podcast:
+    if not row:
         not_found("Podcast", podcast_slug)
 
-    # Get the indexed version for extra info
-    podcasts = state.podcast_service.get_podcasts()
-    podcast_info = next((p for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), None)
+    is_following = bool(user) and state.follower_repository.exists(user.id, row["id"])
 
-    is_following = bool(user) and state.follower_repository.exists(user.id, podcast.id)
+    # PodcastWithIndex normalizes the row (ISO-string datetimes from the
+    # SQLite backend become datetime objects) so the response shape is
+    # backend-independent.
+    info = PodcastWithIndex(index=0, **row)
 
     return api_response(
         {
             "podcast": {
-                "id": podcast.id,
-                "index": podcast_info.index if podcast_info else 0,
-                "title": podcast.title,
-                "description": podcast.description,
-                "rss_url": str(podcast.rss_url),
-                "slug": podcast.slug,
-                "image_url": podcast.image_url,
-                "primary_category": podcast.primary_category,
-                "primary_subcategory": podcast.primary_subcategory,
-                "secondary_category": podcast.secondary_category,
-                "secondary_subcategory": podcast.secondary_subcategory,
+                "id": info.id,
+                "index": info.index,
+                "title": info.title,
+                "description": info.description,
+                "rss_url": info.rss_url,
+                "slug": info.slug,
+                "image_url": info.image_url,
+                "primary_category": info.primary_category,
+                "primary_subcategory": info.primary_subcategory,
+                "secondary_category": info.secondary_category,
+                "secondary_subcategory": info.secondary_subcategory,
                 # ``last_processed`` is the discovery watermark (newest episode
                 # pub_date); ``last_processed_at`` is the wall-clock processing
                 # time the UI's "last processed" indicator should use.
-                "last_processed": podcast.last_processed.isoformat() if podcast.last_processed else None,
-                "last_processed_at": podcast.last_processed_at.isoformat() if podcast.last_processed_at else None,
-                "episodes_count": len(podcast.episodes),
-                "episodes_processed": podcast_info.episodes_processed if podcast_info else 0,
+                "last_processed": info.last_processed.isoformat() if info.last_processed else None,
+                "last_processed_at": info.last_processed_at.isoformat() if info.last_processed_at else None,
+                "episodes_count": info.episodes_count,
+                "episodes_processed": info.episodes_processed,
                 "is_following": is_following,
                 # THES-146: New metadata fields
-                "author": podcast.author,
-                "explicit": podcast.explicit,
-                "show_type": podcast.show_type,
-                "website_url": podcast.website_url,
-                "is_complete": podcast.is_complete,
-                "copyright": podcast.copyright,
+                "author": info.author,
+                "explicit": info.explicit,
+                "show_type": info.show_type,
+                "website_url": info.website_url,
+                "is_complete": info.is_complete,
+                "copyright": info.copyright,
             },
         }
     )

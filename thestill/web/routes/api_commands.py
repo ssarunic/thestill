@@ -130,7 +130,7 @@ def run_add_podcast_task(
         task_manager.update_progress(TaskType.ADD_PODCAST, 30, "Fetching podcast feed...")
 
         # Get count of podcasts before adding (to detect if it's new)
-        podcasts_before = len(state.repository.get_all())
+        podcasts_before = state.repository.count_podcasts()
 
         # Execute the add podcast (returns existing if already exists)
         podcast = state.podcast_service.add_podcast(url)
@@ -143,7 +143,7 @@ def run_add_podcast_task(
             return
 
         # Check if this was a newly added podcast or an existing one
-        podcasts_after = len(state.repository.get_all())
+        podcasts_after = state.repository.count_podcasts()
         is_new_podcast = podcasts_after > podcasts_before
 
         if is_new_podcast:

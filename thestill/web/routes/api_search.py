@@ -69,6 +69,7 @@ def _query(state, sql: str, params: list) -> list[dict]:
     finally:
         conn.close()
 
+
 router = APIRouter()
 
 
@@ -372,15 +373,11 @@ def search_quick(
     # only knows about podcast_id) doesn't need a slug-aware code path.
     resolved_podcast_id = podcast_id
     if podcast_slug:
-        podcast = state.repository.get_by_slug(podcast_slug)
-        if podcast is None:
-            # An unknown slug shouldn't 500 the typeahead — just drop
-            # the filter and let the broader query stand. The client
-            # already shows the slug in its idle hint, so the user
-            # knows what they typed.
-            resolved_podcast_id = None
-        else:
-            resolved_podcast_id = podcast.id
+        # id-only lookup (no episode hydration — spec #69 Phase 4). An
+        # unknown slug shouldn't 500 the typeahead — just drop the filter
+        # and let the broader query stand. The client already shows the
+        # slug in its idle hint, so the user knows what they typed.
+        resolved_podcast_id = state.repository.resolve_podcast_slug(podcast_slug)
     filters = SearchFilters(
         podcast_id=resolved_podcast_id,
         date_from=date_from,

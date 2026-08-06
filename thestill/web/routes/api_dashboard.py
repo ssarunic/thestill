@@ -113,36 +113,28 @@ def get_recent_activity(
     Returns:
         List of recently processed episodes with pagination info.
     """
-    podcasts = state.repository.get_all()
+    # Spec #69 Phase 4 — sort/paginate in SQL (idx_episodes_updated_at)
+    # instead of hydrating and sorting the whole corpus per page view.
+    rows, total = state.repository.get_recent_activity_rows(limit=limit, offset=offset)
 
-    # Collect all episodes with their podcast info (all states)
-    all_episodes = []
-    for podcast in podcasts:
-        for episode in podcast.episodes:
-            all_episodes.append(
-                {
-                    "episode_id": episode.id,
-                    "episode_title": episode.title,
-                    "episode_slug": episode.slug,
-                    "podcast_title": podcast.title,
-                    "podcast_id": podcast.id,
-                    "podcast_slug": podcast.slug,
-                    "action": episode.state.value,  # discovered, downloaded, downsampled, transcribed, cleaned, summarized
-                    "timestamp": episode.updated_at,
-                    "pub_date": episode.pub_date,
-                    "duration": episode.duration,
-                    "duration_formatted": format_duration(episode.duration) if episode.duration else None,
-                    "episode_image_url": episode.image_url,
-                    "podcast_image_url": podcast.image_url,
-                }
-            )
-
-    # Sort by updated_at descending
-    all_episodes.sort(key=lambda x: x["timestamp"] or datetime.min, reverse=True)
-    total = len(all_episodes)
-
-    # Apply pagination
-    items = all_episodes[offset : offset + limit]
+    items = [
+        {
+            "episode_id": row["episode_id"],
+            "episode_title": row["episode_title"],
+            "episode_slug": row["episode_slug"],
+            "podcast_title": row["podcast_title"],
+            "podcast_id": row["podcast_id"],
+            "podcast_slug": row["podcast_slug"],
+            "action": row["state"],  # discovered, downloaded, downsampled, transcribed, cleaned, summarized
+            "timestamp": row["updated_at"],
+            "pub_date": row["pub_date"],
+            "duration": row["duration"],
+            "duration_formatted": format_duration(row["duration"]) if row["duration"] else None,
+            "episode_image_url": row["episode_image_url"],
+            "podcast_image_url": row["podcast_image_url"],
+        }
+        for row in rows
+    ]
 
     return paginated_response(
         items=items,

@@ -415,6 +415,160 @@ class PodcastRepository(ABC):
         backing_off / parked_total / parked_by_reason."""
         pass
 
+    # ------------------------------------------------------------------
+    # Spec #69 Phase 4 — aggregates and light lookups.
+    #
+    # ``get_all()`` hydrates every episode of every podcast (1+P queries,
+    # tens of MB at target scale), which the hot web paths were using for
+    # counting, filtering, and slug resolution. The methods below are the
+    # purpose-built replacements. The defaults here fall back to
+    # ``get_all()`` so any implementation stays correct; the SQLite and
+    # Postgres backends override each with a single SQL query. New callers
+    # should prefer these over ``get_all()`` — the fallback is the slow
+    # path, not the contract.
+    # ------------------------------------------------------------------
+
+    def count_podcasts(self) -> int:
+        """Number of tracked podcasts."""
+        return len(self.get_all())
+
+    def resolve_podcast_slug(self, slug: str) -> Optional[str]:
+        """Resolve a podcast slug to its id, without hydrating episodes."""
+        podcast = self.get_by_slug(slug)
+        return str(podcast.id) if podcast else None
+
+    def count_episode_states(self) -> Dict[str, int]:
+        """Aggregate episode pipeline-state counts in one pass.
+
+        Returns a dict with ``podcasts_tracked``, ``episodes_total``, one
+        bucket per :class:`EpisodeState` value (keyed by the enum value;
+        failed episodes count only under ``failed``, mirroring
+        ``Episode.state``), and ``with_summary_path`` — rows with a
+        ``summary_path`` regardless of failure state (the historical
+        "transcripts_available" stat).
+        """
+        from ..models.podcast import EpisodeState
+
+        podcasts = self.get_all()
+        counts: Dict[str, int] = {s.value: 0 for s in EpisodeState}
+        total = 0
+        with_summary = 0
+        for podcast in podcasts:
+            for episode in podcast.episodes:
+                total += 1
+                counts[episode.state.value] += 1
+                if episode.summary_path:
+                    with_summary += 1
+        return {
+            "podcasts_tracked": len(podcasts),
+            "episodes_total": total,
+            "with_summary_path": with_summary,
+            **counts,
+        }
+
+    def get_recent_activity_rows(self, limit: int = 20, offset: int = 0) -> Tuple[List[Dict], int]:
+        """Episodes ordered by ``updated_at`` DESC, with podcast display
+        fields, plus the total episode count.
+
+        Row keys: episode_id, episode_title, episode_slug, podcast_id,
+        podcast_title, podcast_slug, state (``Episode.state`` value),
+        updated_at, pub_date, duration, episode_image_url,
+        podcast_image_url.
+        """
+        rows: List[Dict] = []
+        for podcast in self.get_all():
+            for episode in podcast.episodes:
+                rows.append(
+                    {
+                        "episode_id": str(episode.id),
+                        "episode_title": episode.title,
+                        "episode_slug": episode.slug,
+                        "podcast_id": str(podcast.id),
+                        "podcast_title": podcast.title,
+                        "podcast_slug": podcast.slug,
+                        "state": episode.state.value,
+                        "updated_at": episode.updated_at,
+                        "pub_date": episode.pub_date,
+                        "duration": episode.duration,
+                        "episode_image_url": episode.image_url,
+                        "podcast_image_url": podcast.image_url,
+                    }
+                )
+        rows.sort(key=lambda r: r["updated_at"] or datetime.min, reverse=True)
+        return rows[offset : offset + limit], len(rows)
+
+    def list_podcast_rows(
+        self,
+        *,
+        podcast_ids: Optional[Sequence[str]] = None,
+        q: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Tuple[List[Dict], int]:
+        """Light podcast listing — no episode hydration.
+
+        Ordered ``created_at`` DESC (the same order as :meth:`get_all`).
+        ``podcast_ids`` filters to that set (``[]`` returns nothing;
+        ``None`` means all); ``q`` is a case-insensitive substring match on
+        title or author; ``limit``/``offset`` paginate after filtering.
+        Returns ``(rows, total)`` where ``total`` counts the filtered set.
+        Row keys match :class:`PodcastWithIndex` fields except ``index``,
+        with per-podcast ``episodes_count`` / ``episodes_processed``
+        (processed = CLEANED or SUMMARIZED).
+        """
+        wanted = None if podcast_ids is None else {str(pid) for pid in podcast_ids}
+        needle = (q or "").strip().lower()
+        rows = []
+        for podcast in self.get_all():
+            if wanted is not None and str(podcast.id) not in wanted:
+                continue
+            if needle and needle not in podcast.title.lower() and needle not in (podcast.author or "").lower():
+                continue
+            rows.append(self._podcast_row_from_model(podcast))
+        total = len(rows)
+        if limit is not None:
+            rows = rows[offset : offset + limit]
+        elif offset:
+            rows = rows[offset:]
+        return rows, total
+
+    def get_podcast_row_by_slug(self, slug: str) -> Optional[Dict]:
+        """Single-podcast variant of :meth:`list_podcast_rows` — the
+        podcast-page metadata (with episode counts) without hydrating the
+        back catalog."""
+        podcast = self.get_by_slug(slug)
+        return self._podcast_row_from_model(podcast) if podcast else None
+
+    @staticmethod
+    def _podcast_row_from_model(podcast: Podcast) -> Dict:
+        """Shared row shape for the fallback implementations above."""
+        from ..models.podcast import EpisodeState
+
+        processed = sum(1 for e in podcast.episodes if e.state in (EpisodeState.CLEANED, EpisodeState.SUMMARIZED))
+        return {
+            "id": str(podcast.id),
+            "title": podcast.title,
+            "description": podcast.description,
+            "rss_url": str(podcast.rss_url),
+            "slug": podcast.slug,
+            "image_url": podcast.image_url,
+            "language": podcast.language,
+            "primary_category": podcast.primary_category,
+            "primary_subcategory": podcast.primary_subcategory,
+            "secondary_category": podcast.secondary_category,
+            "secondary_subcategory": podcast.secondary_subcategory,
+            "last_processed": podcast.last_processed,
+            "last_processed_at": podcast.last_processed_at,
+            "episodes_count": len(podcast.episodes),
+            "episodes_processed": processed,
+            "author": podcast.author,
+            "explicit": podcast.explicit,
+            "show_type": podcast.show_type,
+            "website_url": podcast.website_url,
+            "is_complete": podcast.is_complete,
+            "copyright": podcast.copyright,
+        }
+
 
 class EpisodeRepository(ABC):
     """

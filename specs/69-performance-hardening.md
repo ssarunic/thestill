@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–3 shipped 2026-08-06; Phases 4–8 open)
+**Status**: 🚧 Active development (Phases 1–4 shipped 2026-08-06; Phases 5–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -525,6 +525,49 @@ callers.
 Tests: full frontend suite 329 passed (Inbox tests updated to the
 InfiniteData shape), `tsc -b` clean, eslint clean on changed files,
 production `vite build` green.
+
+## Outcome (Phase 4, 2026-08-06)
+
+**Interface** — six methods added to `PodcastRepository`
+([podcast_repository.py](../thestill/repositories/podcast_repository.py))
+as **concrete defaults that fall back to `get_all()`**, so the interface
+stays total for any implementor and the fallback doubles as the executable
+contract; SQLite and Postgres override each with a single SQL query:
+`count_podcasts`, `resolve_podcast_slug` (slug → id, no hydration),
+`count_episode_states` (one `COUNT(*) FILTER` aggregate whose cascading
+NULL guards reproduce `Episode.state`'s priority order exactly),
+`get_recent_activity_rows` (SQL `ORDER BY updated_at DESC LIMIT/OFFSET`
+off `idx_episodes_updated_at`), `list_podcast_rows` (id-set filter +
+case-insensitive q + pagination + per-podcast counts via LATERAL on
+Postgres), `get_podcast_row_by_slug`.
+
+**Callers retired off the corpus path**: `StatsService.get_stats` (also
+drops the per-episode summary-file `stat()` probe — the `summary_path`
+column is now the source of truth for "transcripts_available");
+`StatsService.get_recent_activity` (CLI); `/api/dashboard/activity`;
+`/api/podcasts` (SQL filter/paginate; `index` becomes page position — it
+was only ever a React list key); `/api/podcasts/{slug}` (one light query,
+kills both the back-catalog hydration and the full-corpus rescan; `index`
+pinned 0); slug→id resolution in `/api/episodes`, `/api/search/quick`, and
+all four `FollowerService` by-slug helpers; `len(get_all())`×2 in the
+add-podcast flow → `count_podcasts()`; `podcast_service.get_podcast` now
+routes UUID/slug/URL identifiers to the indexed `get`/`get_by_slug`/
+`get_by_url` lookups (only the legacy 1-based CLI index still walks the
+ordered list). `get_all()` itself remains for CLI/feed-manager paths that
+genuinely need full hydration.
+
+**Verification** — new parity suite
+[test_sqlite_podcast_aggregates.py](../tests/unit/repositories/test_sqlite_podcast_aggregates.py):
+each SQL override must equal the ABC fallback over the same seeded data
+(every pipeline state + a failed episode; the failed-with-summary row
+pins the state-bucket vs `with_summary_path` distinction). Postgres
+implementations exercised against the seeded 30k-episode scratch instance:
+correct totals and counts, listing page ~40ms, slug resolve ~20ms,
+single-podcast row ~20ms (times dominated by the spec-#44 per-call
+connection setup). Route tests updated to mock the new seam with a
+contract-honoring side effect; service tests wire the mock repository's
+indexed lookups. Full unit suite 2660 passed; integration 592 passed
+(same two pre-existing failures as the base commit).
 
 ## Related specs
 

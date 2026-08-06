@@ -95,13 +95,13 @@ def get_all_episodes(
     Returns:
         List of episodes with their metadata, processing status, and pagination info.
     """
-    # Resolve podcast_slug to podcast_id if provided
+    # Resolve podcast_slug to podcast_id if provided (id-only lookup — no
+    # episode hydration, spec #69 Phase 4)
     podcast_id = None
     if podcast_slug:
-        podcast = app_state.repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = app_state.repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             not_found("Podcast", podcast_slug)
-        podcast_id = podcast.id
 
     # Parse date parameters
     parsed_date_from = parse_iso_datetime(date_from, field_name="date_from")
