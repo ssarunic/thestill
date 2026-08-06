@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 📋 Planned
+**Status**: 🚧 Active development (Phase 1 shipped 2026-08-06; Phases 2–8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity landed; all five EXPLAIN gates green — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -413,6 +413,36 @@ statement count (measured via `pg_stat_statements` calls delta).
 - Phase 6.3's response-shape change needs a frontend/backend compatibility
   window — decide whether to version the endpoint or ship both sides in one
   deploy (single-deploy is fine today; #66 is a single-box host).
+
+## Outcome (Phase 1, 2026-08-06)
+
+Shipped as alembic migration
+[0007_performance_indices.py](../thestill/migrations/versions/0007_performance_indices.py)
+plus the matching `SCHEMA_SQL` DDL and a SQLite parity block at the end of
+`_run_migrations` (portable subset only — SQLite's `DESC` already sorts nulls
+last, so the pub_date rebuild is Postgres-only; trgm/jsonb-GIN don't port).
+Two deviations from the plan as written: the Postgres tasks index landed as
+`idx_tasks_podcast_stage(podcast_id, stage)` to mirror the SQLite queue's
+existing index name and shape, and the inbox composite reuses SQLite's
+established `idx_inbox_user_all` name.
+
+Gate results on the seeded 30k-episode / 40k-inbox-row scratch instance:
+
+| Gate | Before | After |
+|---|---|---|
+| Episode listing (`pub_date DESC NULLS LAST LIMIT 50`) | seq scan + top-N sort, 19.3ms | `idx_episodes_pub_date_nulls_last` index scan, 0.12ms |
+| Inbox default view | all user rows fetched + sort | `idx_inbox_user_all` ordered scan, stops after 85 rows read, 0.17ms |
+| Title `ILIKE '%…%'` | seq scan, 12.1ms | `idx_episodes_title_trgm` bitmap scan, 1.4ms |
+| Failed-episodes DLQ view | full seq scan | `idx_episodes_failed` index scan |
+| Summarize-stage (CLEANED) poll | full seq scan | `idx_episodes_state_cleaned` index scan |
+
+Convergence verified three ways: fresh `SCHEMA_SQL` install, migration 0007
+applied over the pre-existing schema, and a live `alembic upgrade head`
+(0001→0007) all produce byte-identical index sets. Downgrade DDL
+round-trips. Tests: 307 SQLite repository unit tests, 192 dual-backend
+contract tests (Postgres side included via `TEST_DATABASE_URL`), 2
+migrate-on-startup tests, full unit suite 2644 passed (one pre-existing
+`test_entity_tools` MCP failure, present on the base commit, unrelated).
 
 ## Related specs
 

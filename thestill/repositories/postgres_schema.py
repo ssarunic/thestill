@@ -46,6 +46,9 @@ DEFAULT_EMBEDDING_DIM = 384
 # Tables in FK dependency order. {dim} is the pgvector dimensionality.
 SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS vector;
+-- pg_trgm backs the ILIKE '%term%' searches (episode titles, entity
+-- typeahead) with GIN trigram indexes (spec #69 Phase 1.5).
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ===== users / auth ======================================================
 CREATE TABLE IF NOT EXISTS users (
@@ -178,14 +181,22 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_canonical_id ON episodes(canonical_id) WHERE canonical_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_external_id ON episodes(podcast_id, external_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_podcast_id ON episodes(podcast_id);
-CREATE INDEX IF NOT EXISTS idx_episodes_pub_date ON episodes(pub_date DESC);
+-- NULLS LAST matches every hot listing's ORDER BY (spec #69 Phase 1.1);
+-- the default DESC NULLS FIRST index could not serve those sorts.
+-- Migration 0007 drops the old idx_episodes_pub_date on existing DBs.
+CREATE INDEX IF NOT EXISTS idx_episodes_pub_date_nulls_last ON episodes(pub_date DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_episodes_published_at ON episodes(published_at DESC) WHERE published_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_slug ON episodes(podcast_id, slug) WHERE slug != '';
 CREATE INDEX IF NOT EXISTS idx_episodes_state_discovered ON episodes(podcast_id, pub_date DESC) WHERE audio_path IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_state_downloaded ON episodes(podcast_id, pub_date DESC) WHERE audio_path IS NOT NULL AND downsampled_audio_path IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_state_downsampled ON episodes(podcast_id, pub_date DESC) WHERE downsampled_audio_path IS NOT NULL AND raw_transcript_path IS NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_state_transcribed ON episodes(podcast_id, pub_date DESC) WHERE raw_transcript_path IS NOT NULL AND clean_transcript_path IS NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_state_cleaned ON episodes(podcast_id, pub_date DESC) WHERE clean_transcript_path IS NOT NULL AND summary_path IS NULL;
+CREATE INDEX IF NOT EXISTS idx_episodes_failed ON episodes(failed_at DESC) WHERE failed_at_stage IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_updated_at ON episodes(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_title_trgm ON episodes USING gin (title gin_trgm_ops);
+-- jsonb_path_ops: only @> containment is queried (entity guest-episode lookups).
+CREATE INDEX IF NOT EXISTS idx_episodes_guest_entities ON episodes USING gin (guest_entity_ids jsonb_path_ops);
 
 CREATE TABLE IF NOT EXISTS episode_alternate_enclosures (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -242,6 +253,11 @@ CREATE TABLE IF NOT EXISTS user_episode_inbox (
     UNIQUE(user_id, episode_id)
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_user_state ON user_episode_inbox(user_id, state, delivered_at DESC);
+-- Default inbox view filters ``state != 'dismissed'`` — the ``!=`` breaks
+-- idx_inbox_user_state's middle column, so the sort needs (user_id,
+-- delivered_at) directly. Name mirrors the SQLite schema's idx_inbox_user_all.
+CREATE INDEX IF NOT EXISTS idx_inbox_user_all ON user_episode_inbox(user_id, delivered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inbox_user_source ON user_episode_inbox(user_id, source, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_inbox_episode ON user_episode_inbox(episode_id);
 
 CREATE TABLE IF NOT EXISTS user_briefings (
@@ -326,6 +342,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(stage, priority DESC, created_at) WHERE status IN ('pending','retry_scheduled');
 CREATE INDEX IF NOT EXISTS idx_tasks_episode ON tasks(episode_id) WHERE episode_id IS NOT NULL;
+-- Mirrors SQLite's idx_tasks_podcast_stage: feed-scoped lookups plus the
+-- otherwise-unindexed FK for podcast cascade checks.
+CREATE INDEX IF NOT EXISTS idx_tasks_podcast_stage ON tasks(podcast_id, stage) WHERE podcast_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
 -- ===== pending transcription ops =========================================
@@ -352,6 +371,8 @@ CREATE TABLE IF NOT EXISTS entities (
 );
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_entities_name_lower ON entities(LOWER(canonical_name));
 
 CREATE TABLE IF NOT EXISTS entity_mentions (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -378,6 +399,9 @@ CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id, epi
 CREATE INDEX IF NOT EXISTS idx_mentions_episode ON entity_mentions(episode_id);
 CREATE INDEX IF NOT EXISTS idx_mentions_pending ON entity_mentions(resolution_status) WHERE resolution_status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_mentions_role ON entity_mentions(entity_id, role) WHERE entity_id IS NOT NULL;
+-- Per-mention resolution looks up by case-folded surface form; without this
+-- every lookup scans the largest entity table (spec #69 Phase 1.5).
+CREATE INDEX IF NOT EXISTS idx_mentions_surface_lower ON entity_mentions(LOWER(surface_form));
 
 CREATE TABLE IF NOT EXISTS entity_cooccurrences (
     entity_a_id text NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
@@ -387,6 +411,9 @@ CREATE TABLE IF NOT EXISTS entity_cooccurrences (
     PRIMARY KEY (entity_a_id, entity_b_id),
     CHECK (entity_a_id < entity_b_id)
 );
+-- The PK only covers the a-side; the ``OR entity_b_id = %s`` query leg and
+-- the ON DELETE CASCADE from entities need the b-side covered too.
+CREATE INDEX IF NOT EXISTS idx_cooccur_entity_b ON entity_cooccurrences(entity_b_id);
 
 CREATE TABLE IF NOT EXISTS entity_enrichment (
     entity_id text PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
@@ -419,6 +446,9 @@ CREATE TABLE IF NOT EXISTS mention_overrides (
     created_by text NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_overrides_surface_lower ON mention_overrides(LOWER(surface_form));
+CREATE INDEX IF NOT EXISTS idx_overrides_episode ON mention_overrides(episode_id) WHERE episode_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_overrides_entity ON mention_overrides(entity_id) WHERE entity_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS resolution_blacklist (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -428,6 +458,9 @@ CREATE TABLE IF NOT EXISTS resolution_blacklist (
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(surface_form, wrong_qid)
 );
+-- is_blacklisted matches on LOWER(surface_form), which the UNIQUE above
+-- cannot serve.
+CREATE INDEX IF NOT EXISTS idx_blacklist_surface_lower ON resolution_blacklist(LOWER(surface_form));
 
 -- ===== search: chunks + vectors (pgvector replaces sqlite-vec/FTS5) ======
 CREATE TABLE IF NOT EXISTS chunks (
@@ -469,6 +502,9 @@ CREATE TABLE IF NOT EXISTS episode_related (
     PRIMARY KEY (episode_id, related_episode_id)
 );
 CREATE INDEX IF NOT EXISTS idx_episode_related_src ON episode_related(episode_id, rank);
+-- The PK only covers the source side; episode cascade-deletes need the
+-- related side covered or each delete seq-scans the table.
+CREATE INDEX IF NOT EXISTS idx_episode_related_target ON episode_related(related_episode_id);
 
 CREATE TABLE IF NOT EXISTS related_idf (
     term text PRIMARY KEY,

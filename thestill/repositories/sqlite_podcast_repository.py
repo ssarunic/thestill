@@ -1645,6 +1645,46 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "WHERE refresh_disabled_reason IS NOT NULL"
         )
 
+        # spec #69 Phase 1 — performance indices (SQLite parity with
+        # migration 0007 where the syntax ports; the pg_trgm / jsonb-GIN
+        # indices are Postgres-only, and SQLite's DESC ordering already
+        # places NULLs last so the pub_date rebuild is not needed here).
+        # Runs last: every referenced table/column exists by this point.
+        conn.executescript(
+            """
+            -- Pipeline-state partials completing the four-stage set.
+            CREATE INDEX IF NOT EXISTS idx_episodes_state_cleaned
+                ON episodes(podcast_id, pub_date DESC)
+                WHERE clean_transcript_path IS NOT NULL AND summary_path IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_episodes_failed
+                ON episodes(failed_at DESC) WHERE failed_at_stage IS NOT NULL;
+
+            -- Import rate-limit count (user_id + source + delivered_at range).
+            CREATE INDEX IF NOT EXISTS idx_inbox_user_source
+                ON user_episode_inbox(user_id, source, delivered_at);
+
+            -- Reverse-side indices for cascade deletes and OR-legs.
+            CREATE INDEX IF NOT EXISTS idx_episode_related_target
+                ON episode_related(related_episode_id);
+            CREATE INDEX IF NOT EXISTS idx_cooccur_entity_b
+                ON entity_cooccurrences(entity_b_id);
+            CREATE INDEX IF NOT EXISTS idx_overrides_episode
+                ON mention_overrides(episode_id) WHERE episode_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_overrides_entity
+                ON mention_overrides(entity_id) WHERE entity_id IS NOT NULL;
+
+            -- Case-folded lookups (the repos match on LOWER(surface_form)).
+            CREATE INDEX IF NOT EXISTS idx_mentions_surface_lower
+                ON entity_mentions(LOWER(surface_form));
+            CREATE INDEX IF NOT EXISTS idx_overrides_surface_lower
+                ON mention_overrides(LOWER(surface_form));
+            CREATE INDEX IF NOT EXISTS idx_blacklist_surface_lower
+                ON resolution_blacklist(LOWER(surface_form));
+            CREATE INDEX IF NOT EXISTS idx_entities_name_lower
+                ON entities(LOWER(canonical_name));
+            """
+        )
+
     # ------------------------------------------------------------------
     # Spec #40 — file → DB backfill
     # ------------------------------------------------------------------
