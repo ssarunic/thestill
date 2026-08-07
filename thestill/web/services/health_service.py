@@ -40,3 +40,18 @@ class HealthService:
         """One cheap round-trip against the configured backend. Raises on
         failure (connection refused, missing file, wedged server)."""
         factory.ping(self._config)
+
+    def check_worker(self, task_worker) -> None:
+        """Raise when the task worker has degraded into not claiming.
+
+        The 2026-08-07 outage ran for hours with every probe green: liveness
+        only proves the process answers HTTP, and readiness only proved the
+        database was reachable. Neither looks at the thing that actually does
+        the work. A worker that has leaked its executor slack is not ready —
+        it is a web server with a dead pipeline behind it.
+        """
+        if task_worker is None:
+            return
+        is_degraded = getattr(task_worker, "is_degraded", None)
+        if callable(is_degraded) and is_degraded():
+            raise RuntimeError("task worker degraded: leaked handler threads; restart required")

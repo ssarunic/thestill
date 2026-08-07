@@ -72,6 +72,9 @@ def readiness_check(state: AppState = Depends(get_app_state)):
         service = HealthService(state.config)
     try:
         service.ping_database()
+        # A reachable database is not sufficient: the 2026-08-07 outage ran
+        # for hours with this endpoint green while the pipeline was frozen.
+        service.check_worker(getattr(state, "task_worker", None))
     except Exception as exc:  # noqa: BLE001 — any failure means "not ready"
         logger.warning("readiness_check_failed", error=str(exc), exc_info=True)
         return JSONResponse(status_code=503, content=api_response({}, status="unready"))
