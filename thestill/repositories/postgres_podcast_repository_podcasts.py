@@ -70,6 +70,7 @@ from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
 from ..utils.slug import generate_slug
+from .postgres_category_cache import CategoryCacheMixin
 from .sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SYNTHETIC_AUDIO_IMPORTS_RSS, _normalize_artwork_url
 
 logger = get_logger(__name__)
@@ -211,7 +212,7 @@ def _episode_from_row(row: dict) -> Episode:
     )
 
 
-class PodcastsMixin:
+class PodcastsMixin(CategoryCacheMixin):
     """Podcast-side methods of the Postgres podcast repository (spec #44).
 
     Composed with the episode-side mixin into the concrete repository; the
@@ -248,38 +249,9 @@ class PodcastsMixin:
             yield conn
 
     # ------------------------------------------------------------------
-    # Category id <-> (top, sub) resolution — lazy per-instance cache
+    # Category id <-> (top, sub) resolution — the lazy per-instance cache
+    # itself lives in CategoryCacheMixin, shared with the episode-side mixin.
     # ------------------------------------------------------------------
-
-    def _ensure_category_cache(self, conn: psycopg.Connection) -> None:
-        """Load the categories table into per-instance dicts on first use.
-
-        The taxonomy is small (~100 rows) and effectively read-only at
-        runtime. Unlike the SQLite repo (which loads it in ``__init__``
-        right after seeding), the mixin has no init hook, so the cache is
-        filled lazily by the first resolution call. An empty table yields
-        empty caches — every lookup then resolves to ``None`` gracefully.
-        """
-        if getattr(self, "_cat_cache_loaded", False):
-            return
-        rows = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY parent_id IS NOT NULL, id").fetchall()
-        cat_id_to_pair: Dict[int, Tuple[Optional[str], Optional[str]]] = {}
-        cat_pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
-        top_id_to_name: Dict[int, str] = {}
-        for row in rows:
-            if row["parent_id"] is None:
-                top_id_to_name[row["id"]] = row["name"]
-                cat_id_to_pair[row["id"]] = (row["name"], None)
-                cat_pair_to_id[(normalize_category_name(row["name"]), None)] = row["id"]
-            else:
-                top_name = top_id_to_name.get(row["parent_id"])
-                if top_name is None:
-                    continue  # orphan subcategory — defensive, FK should prevent
-                cat_id_to_pair[row["id"]] = (top_name, row["name"])
-                cat_pair_to_id[(normalize_category_name(top_name), normalize_category_name(row["name"]))] = row["id"]
-        self._cat_id_to_pair = cat_id_to_pair
-        self._cat_pair_to_id = cat_pair_to_id
-        self._cat_cache_loaded = True
 
     def _resolve_category_strings_to_id(
         self, top: Optional[str], sub: Optional[str], conn: Optional[psycopg.Connection] = None
@@ -1746,7 +1718,15 @@ class PodcastsMixin:
                 SELECT e.id AS episode_id, e.title AS episode_title, e.slug AS episode_slug,
                        p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
                        {self._EPISODE_STATE_CASE} AS state,
-                       e.updated_at, e.pub_date, e.duration,
+                       e.updated_at, e.pub_date,
+                       -- ``duration`` is a text column here but INTEGER on
+                       -- SQLite. The model read path leans on pydantic to
+                       -- coerce "3600" → 3600; this projection bypasses the
+                       -- model, so cast in SQL to keep the repository
+                       -- contract (and the JSON wire type) an int on both
+                       -- engines. Non-numeric legacy values yield NULL,
+                       -- matching the ``number | null`` client contract.
+                       CASE WHEN e.duration ~ '^[0-9]+$' THEN e.duration::int END AS duration,
                        e.image_url AS episode_image_url, p.image_url AS podcast_image_url
                   FROM episodes e
                   JOIN podcasts p ON p.id = e.podcast_id

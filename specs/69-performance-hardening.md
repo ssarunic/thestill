@@ -159,6 +159,12 @@ The repositories are synchronous psycopg3; FastAPI only threadpools **sync
       Move to the task manager; return `202` + task id (the pattern
       [api_commands.py:307](../thestill/web/routes/api_commands.py#L307)
       already uses for refresh/add).
+      **Deferred — blocked, not shipped.** The task manager is
+      singleton-per-`TaskType` and cannot key per-briefing tasks, so the
+      `202` contract needs that keying first. The route was converted to
+      sync `def` (off the event loop) but still returns `201` inline and
+      still holds a worker slot for the duration. Tracked as M10 in
+      [spec #70](70-performance-medium-backlog.md).
     - `GET /api/briefings/latest` lazy generation
       ([api_briefings.py:185](../thestill/web/routes/api_briefings.py#L185))
       → threadpool at minimum; spec #55's `202 briefing_pending` shape is the
@@ -289,10 +295,17 @@ golden-response comparisons.
     ([api_entities.py:288](../thestill/web/routes/api_entities.py#L288));
     add `limit`/`offset` with a server cap, and let the reader fetch
     incrementally.
+    **Withdrawn — not a finding.** The reader consumes the full mention set
+    in one fetch (inline highlights, strip, rail, and timeline all derive
+    from it), so paging would force the client to page through everything
+    anyway; the payload is bounded per episode by extraction. Recorded in
+    [spec #70](70-performance-medium-backlog.md)'s "Explicitly not findings"
+    section to prevent re-flagging. The measured cost in that route (the
+    per-entity qid N+1) was real and is fixed by 5.1.
 
 **Gate**: typeahead p50 <50ms on the seeded scratch DB; entity page issues a
 bounded query/connection count (measured via the request-scoped counter from
-Phase 4's gate).
+Phase 4's gate). The mentions endpoint stays unpaged by design (5.3).
 
 ### Phase 6 — Payload and endpoint hygiene (H6, H7)
 
@@ -316,7 +329,15 @@ Phase 4's gate).
     ([api_episodes.py:132](../thestill/web/routes/api_episodes.py#L132)).
 
 **Gate**: `Content-Length` of transcript-words for a 2-hour episode ≤200KB on
-the wire; episode list issues zero file reads; `limit=1000000` returns 422.
+the wire; `limit=1000000` returns 422; the episode list issues zero file reads
+**in steady state** — i.e. for any episode summarized after migration 0008.
+Rows summarized before the column existed backfill lazily (read once →
+persist → never read again), so a corpus predating 0008 pays one read per
+summarized episode spread across first renders. An offline backfill that
+would make the gate unconditional from day one is M11 in
+[spec #70](70-performance-medium-backlog.md); note the lazy path does not
+persist a sentinel when the summary file is missing, so those rows re-read on
+every list request until the file returns or the backfill lands.
 
 ### Phase 7 — Transcript rendering bounded by viewport (H8)
 
@@ -340,10 +361,22 @@ the wire; episode list issues zero file reads; `limit=1000000` returns 422.
 7.4 Same treatment (or minimum: windowing) for the fallback
     [TranscriptViewer.tsx](../thestill/web/frontend/src/components/TranscriptViewer.tsx).
 
-**Gate**: DOM node count on a 10k-segment transcript <2k; a 30s playback
-Performance profile shows no continuous scripting from the viewer; karaoke
-(spec #38), follow-playback (spec #23), and citation deep-links (spec #54)
-manual scenarios pass.
+**Gate**: a 30s playback Performance profile shows no continuous scripting
+from the viewer; karaoke (spec #38), follow-playback (spec #23), and citation
+deep-links (spec #54) manual scenarios pass.
+
+The original "DOM node count on a 10k-segment transcript <2k" gate is
+**withdrawn**, not met. 7.1 shipped CSS containment
+(`content-visibility: auto`) rather than JS windowing, which bounds
+*layout and paint* to the viewport but keeps every row mounted — node count
+stays O(n), as does initial reconciliation, memory, and any
+filter/search re-render. That was a deliberate trade (see the Phase 7
+outcome: five scroll features share one element-based mechanism that
+windowing would have forced a risky rewrite of), but it does not satisfy the
+node-count gate, so the gate is replaced by the containment guarantee rather
+than claimed as passed. True windowing — and the node-count gate with it —
+is M12 in [spec #70](70-performance-medium-backlog.md), to be revisited if
+node *memory* is ever the measured bottleneck.
 
 ### Phase 8 — Batch the remaining N+1s and writes (H9, H10)
 
@@ -453,8 +486,7 @@ conversion. Beyond the planned file list, the sweep also covered
 polls), `api_narrations.py`, `api_imports.py`, and the three non-awaiting
 `auth.py` routes (`logout`, `get_current_user`, `update_current_user`,
 plus `google_login`, which awaited nothing). Remaining async routes, each
-with a reason: `stream_task_progress` (SSE), `get_episode_summary_by_slugs`
-(awaits its `run_in_threadpool` LLM wraps), `auth_status` /
+with a reason: `stream_task_progress` (SSE), `auth_status` /
 `google_callback` (await async OAuth), `health_check` (zero I/O — staying on
 the loop keeps liveness responsive even with a saturated threadpool, same
 rationale as the pre-existing sync `readiness_check`), and
@@ -617,7 +649,7 @@ contract suites included; same pre-existing failures as the base commit).
 stack, so every other middleware sees only headers.
 
 **Revalidation (6.2)** — new `etag_json_response` helper
-([responses.py](../thestill/web/responses.py)): strong sha1 content-hash
+([responses.py](../thestill/web/responses.py)): sha1 content-hash
 ETag over the *payload* (deliberately excluding the envelope's per-request
 timestamp, or nothing would ever revalidate) + `Cache-Control: private,
 no-cache` (these artifacts CAN be regenerated, so always revalidate — but a
@@ -626,6 +658,14 @@ write-once resources: transcript, transcript-words (the API's largest
 payload), summary (per-language), narration script, briefing script.
 Covered by a dedicated test file (stable ETag across requests, 304 on
 match, multi-candidate `If-None-Match`, change-miss).
+
+*Follow-up correction:* this shipped as a **strong** validator, which was
+wrong — excluding the timestamp is what makes revalidation useful, but it
+also means two responses with the same tag are not octet-equal, and a strong
+tag asserts exactly that (RFC 9110 §8.8.1). Now emitted as weak (`W/"…"`)
+with weak comparison on `If-None-Match`; the test that "verified" the
+timestamp differed did so behind an `or True` and could never fail, and now
+asserts it.
 
 **Transcript double-ship (6.3)** — when the segmented structure is present
 the response's `content` is now the empty string (the reader renders from

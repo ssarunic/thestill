@@ -22,7 +22,6 @@ import threading
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from structlog import get_logger
 
@@ -411,7 +410,7 @@ def get_episode_transcript_by_slugs(
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
-async def get_episode_summary_by_slugs(
+def get_episode_summary_by_slugs(
     podcast_slug: str,
     episode_slug: str,
     request: Request,
@@ -443,8 +442,7 @@ async def get_episode_summary_by_slugs(
             from ...core.llm_provider import create_llm_provider_from_config
 
             provider = create_llm_provider_from_config(state.config)
-            canonical_language = await run_in_threadpool(
-                state.podcast_service.detect_and_record_summary_language,
+            canonical_language = state.podcast_service.detect_and_record_summary_language(
                 episode,
                 podcast_language=podcast_language,
                 provider=provider,
@@ -465,16 +463,13 @@ async def get_episode_summary_by_slugs(
     )
 
     # A missing non-canonical variant is generated synchronously on first
-    # request, then served from FileStorage on subsequent requests. Run the
-    # blocking provider call in FastAPI's worker pool rather than the event
-    # loop so unrelated requests remain responsive.
+    # request, then served from FileStorage on subsequent requests.
     if summary is None and requested_language != canonical_language and episode.summary_path:
         if provider is None:
             from ...core.llm_provider import create_llm_provider_from_config
 
             provider = create_llm_provider_from_config(state.config)
-        summary = await run_in_threadpool(
-            state.podcast_service.get_or_create_summary_translation,
+        summary = state.podcast_service.get_or_create_summary_translation(
             episode,
             source_language=canonical_language,
             target_language=requested_language,

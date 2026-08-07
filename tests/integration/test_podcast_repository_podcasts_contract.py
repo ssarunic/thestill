@@ -1035,6 +1035,46 @@ def test_top_podcasts_following_join(repo):
 
 
 # ---------------------------------------------------------------------------
+# Recent-activity projection
+# ---------------------------------------------------------------------------
+def test_get_recent_activity_rows_duration_is_int_on_both_backends(repo):
+    """``duration`` must reach the wire as an int, whichever backend serves it.
+
+    Postgres stores ``duration`` as ``text`` while SQLite stores ``INTEGER``.
+    The model read path leans on pydantic to coerce ``"3600"`` → ``3600``, but
+    this projection bypasses the model — so spec #69 Phase 4 silently changed
+    ``/api/dashboard/activity`` to emit a *string* on Postgres, against the
+    frontend's ``duration: number | null`` contract and through
+    ``format_duration``. Pinned here because it is invisible on SQLite.
+    """
+    p = _mk_podcast()
+    p.episodes = [_mk_episode(duration=3600)]
+    repo.save(p)
+
+    rows, total = repo.get_recent_activity_rows(limit=10)
+    assert total >= 1
+    row = next(r for r in rows if r["podcast_id"] == p.id)
+    assert row["duration"] == 3600
+    assert isinstance(row["duration"], int)
+
+
+def test_get_recent_activity_rows_tolerates_unparseable_duration(repo):
+    """A non-numeric or absent duration yields ``None``, never a crash.
+
+    The Postgres cast is guarded rather than a bare ``::int`` precisely so a
+    legacy row like ``"1:08:01"`` degrades to ``None`` (which the client
+    contract already allows) instead of failing the whole activity query.
+    """
+    p = _mk_podcast()
+    p.episodes = [_mk_episode(duration=None)]
+    repo.save(p)
+
+    rows, _ = repo.get_recent_activity_rows(limit=10)
+    row = next(r for r in rows if r["podcast_id"] == p.id)
+    assert row["duration"] is None
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 def test_get_chunks_health_empty(repo):

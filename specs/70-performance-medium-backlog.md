@@ -54,16 +54,16 @@ authenticated request
 single-user mode memoizes (`auth_service.py:117-139`) but multi-user does not.
 Separately, [api_top_podcasts.py:105](../thestill/web/routes/api_top_podcasts.py#L105)
 calls `get_current_user` manually although the router already runs
-`require_auth`, bypassing FastAPI's per-request dependency cache — JWT decode
-+ user fetch twice per request.
+`require_auth`, bypassing FastAPI's per-request dependency cache — so JWT
+decode + user fetch happen twice per request.
 
 **Remedy**: short-TTL (30–60s) in-process user cache keyed by user id,
 invalidated on user mutation; delete the manual `get_current_user` call and
 take the user from the dependency.
 
-**Trigger**: multi-user hosted deployment with >10 active users, or when the
-#44 pool lands (the fix is trivial to ride along); the double-auth deletion
-is a one-liner worth taking opportunistically.
+**Trigger**: multi-user hosted deployment with >10 active users, or when
+the #44 pool lands (the fix is trivial to ride along); the double-auth
+deletion is a one-liner worth taking opportunistically.
 
 ### M3 — Query-cache hygiene (frontend)
 
@@ -198,6 +198,70 @@ artifacts several times per request
 conditional UPDATE returning the row.
 
 **Trigger**: opportunistic — take each one when its file is next edited.
+
+### M10 — Narration still occupies a request thread
+
+**Evidence**: `POST /api/briefings/{id}/narrate` runs a minutes-long
+synchronous LLM narration inline and returns `201`
+([api_briefings.py:306-323](../thestill/web/routes/api_briefings.py#L306-L323)).
+Spec #69 Phase 2.2 called for `202` + task id; the route was converted to
+sync `def` (so it is off the event loop) but the contract change did not
+ship, so each concurrent narration still holds a FastAPI worker slot for its
+whole duration and can exhaust the pool.
+
+**Blocker**: the task manager is singleton-per-`TaskType` and cannot key
+per-briefing tasks — that keying is the actual prerequisite, which is
+why #69 deferred rather than skipped this.
+
+**Remedy**: add per-entity task keying to the task manager, then move the
+narration behind it and return `202` + task id, mirroring
+[api_commands.py:307](../thestill/web/routes/api_commands.py#L307). The CLI
+`thestill narrate` path is unaffected.
+
+**Trigger**: before briefing narration is exposed to concurrent users, or
+the first time the worker pool is observed saturating.
+
+### M11 — `summary_preview` has no offline backfill
+
+**Evidence**: migration 0008 leaves every existing `summary_preview` NULL,
+so #69 Phase 6's "episode list issues zero file reads" gate holds only for
+episodes summarized after the migration. A corpus predating 0008 pays one
+sequential FileStorage/S3 read per summarized episode, spread across first
+renders ([api_episodes.py:138-148](../thestill/web/routes/api_episodes.py#L138-L148)).
+Worse for missing files: the `FileNotFoundError` branch does not persist the
+empty sentinel that the found-but-empty branch does, so those rows re-read on
+every list request indefinitely.
+
+**Remedy**: a backfill (management command or one-shot task) that populates
+the column for pre-0008 rows, plus persisting the sentinel on
+`FileNotFoundError` so a missing file is recorded once rather than retried
+forever. With both, the Phase 6 gate becomes unconditional and the lazy path
+can be deleted.
+
+**Trigger**: take the sentinel fix opportunistically (it is a two-line
+change); the backfill before the next large import, or if list-page latency
+on the pre-0008 corpus is ever measured as a problem.
+
+### M12 — Transcript rows are contained, not virtualized
+
+**Evidence**: #69 Phase 7 shipped `content-visibility: auto` +
+`contain-intrinsic-size` ([index.css:98-112](../thestill/web/frontend/src/index.css#L98-L112))
+instead of JS windowing. That bounds layout and paint to the viewport, but
+React still constructs every row and all rows stay mounted: node count,
+initial reconciliation, and memory remain O(n), and filter/search re-renders
+remain O(n). The spec's original "<2k DOM nodes on a 10k-segment transcript"
+gate is therefore withdrawn rather than met.
+
+**Remedy**: real row windowing for both `SegmentedTranscriptViewer` and the
+fallback `TranscriptViewer`. The reason this was deferred is genuine and
+still applies: five scroll features (follow-playback, citation deep links,
+in-transcript search, `[`/`]` mention jumps, resume) share one element-based
+`scrollIntoView` mechanism across two scroll parents, and windowing unmounts
+the elements it depends on. Any attempt needs index-based `scrollToIndex`
+equivalents for all five plus visual QA.
+
+**Trigger**: only if node *memory* (not render cost) is the measured
+bottleneck, or a transcript materially larger than 10k segments appears.
 
 ## Appendix — Low tier (revisit opportunistically, no triggers)
 

@@ -37,10 +37,12 @@ def resource(key: str, request: Request):
 client = TestClient(app)
 
 
-def test_response_carries_strong_etag_and_revalidation_headers():
+def test_response_carries_weak_etag_and_revalidation_headers():
     resp = client.get("/resource/a")
     assert resp.status_code == 200
-    assert resp.headers["etag"].startswith('"') and resp.headers["etag"].endswith('"')
+    # Weak validator: the envelope timestamp keeps bodies from being
+    # octet-equal, so a strong tag would be a false claim.
+    assert resp.headers["etag"].startswith('W/"') and resp.headers["etag"].endswith('"')
     assert resp.headers["cache-control"] == "private, no-cache"
     body = resp.json()
     # api_response envelope is preserved.
@@ -52,9 +54,23 @@ def test_response_carries_strong_etag_and_revalidation_headers():
 def test_etag_is_stable_across_requests_despite_envelope_timestamp():
     first = client.get("/resource/a")
     second = client.get("/resource/a")
-    # Bodies differ (timestamp), but the ETag hashes only the payload.
-    assert first.json()["timestamp"] != second.json()["timestamp"] or True
+    # The bodies genuinely differ (per-request timestamp) while the ETag,
+    # which hashes only the payload, stays put. This is exactly why the
+    # validator must be weak rather than strong.
+    assert first.json()["timestamp"] != second.json()["timestamp"]
+    assert first.content != second.content
     assert first.headers["etag"] == second.headers["etag"]
+
+
+def test_if_none_match_accepts_tag_without_weak_prefix():
+    """A client that strips or re-adds ``W/`` still revalidates."""
+    etag = client.get("/resource/a").headers["etag"]
+    bare = etag.removeprefix("W/")
+    assert client.get("/resource/a", headers={"If-None-Match": bare}).status_code == 304
+
+
+def test_if_none_match_star_revalidates():
+    assert client.get("/resource/a", headers={"If-None-Match": "*"}).status_code == 304
 
 
 def test_if_none_match_returns_304_with_no_body():

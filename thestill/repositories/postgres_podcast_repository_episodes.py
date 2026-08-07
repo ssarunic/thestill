@@ -37,10 +37,12 @@ Postgres, following the port conventions in ``utils/postgres_ext.py``:
 The mixin has NO ``__init__``: it expects the composing class to set
 ``self.dsn``. Schema DDL lives exclusively in ``postgres_schema.py``.
 
-NOTE (cleanup): ``_normalize_artwork_url``, the minimal Podcast row mapping and
-the category-map helpers are duplicated from the podcast-side port (developed
-in parallel in ``postgres_podcast_repository_podcasts.py``); consolidate when
-the two mixins are composed into the final repository class.
+NOTE (cleanup): ``_normalize_artwork_url`` and the minimal Podcast row mapping
+are duplicated from the podcast-side port (developed in parallel in
+``postgres_podcast_repository_podcasts.py``); consolidate when the two mixins
+are composed into the final repository class. The category-map helpers were
+consolidated in the spec #69 follow-up — ``_category_maps`` now delegates to
+``PodcastsMixin._ensure_category_cache`` instead of keeping a parallel cache.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from ..utils.datetime_utils import now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
 from ..utils.slug import generate_slug
+from .postgres_category_cache import CategoryCacheMixin
 
 logger = get_logger(__name__)
 
@@ -153,7 +156,7 @@ _PODCAST_TUPLE_COLS = """p.id AS p_id, p.created_at AS p_created_at, p.rss_url, 
        p.last_processed, p.last_processed_at, p.updated_at AS p_updated_at, e.*"""
 
 
-class EpisodesMixin:
+class EpisodesMixin(CategoryCacheMixin):
     """Episode-side methods of the Postgres podcast repository.
 
     Composed (with the podcast-side mixin) into the concrete
@@ -164,46 +167,9 @@ class EpisodesMixin:
     dsn: str
 
     # ------------------------------------------------------------------
-    # Category lookups (duplicated minimal mapping — see module docstring)
+    # Category lookups — ``_category_maps`` comes from CategoryCacheMixin,
+    # shared with the podcast-side mixin (one cache per composed instance).
     # ------------------------------------------------------------------
-
-    def _category_maps(
-        self, conn: psycopg.Connection
-    ) -> Tuple[Dict[Tuple[str, Optional[str]], int], Dict[int, Tuple[str, Optional[str]]]]:
-        """Load ``(pair→id, id→pair)`` category maps from the categories table.
-
-        The SQLite repository builds these caches once at ``__init__`` after
-        seeding; here they're loaded per operation on the already-open
-        connection (the table is ~200 small rows). Keys of ``pair→id`` are
-        normalized via ``normalize_category_name``; top-level rows are stored
-        under ``(top_norm, None)``.
-        """
-        # Spec #69 Phase 8.3 — memoized per repository instance. Every
-        # single-episode read used to re-fetch this ~200-row table; a
-        # 20-episode briefing render paid it 20 times. The taxonomy is
-        # seeded at startup and read-only at runtime (the SQLite backend
-        # has cached it at __init__ since day one — this closes the
-        # asymmetry flagged in the module docstring's cleanup note).
-        cached = getattr(self, "_episode_category_maps_cache", None)
-        if cached is not None:
-            return cached
-        rows = conn.execute("SELECT id, name, parent_id FROM categories").fetchall()
-        top_id_to_name = {r["id"]: r["name"] for r in rows if r["parent_id"] is None}
-        pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
-        id_to_pair: Dict[int, Tuple[str, Optional[str]]] = {}
-        for r in rows:
-            if r["parent_id"] is None:
-                id_to_pair[r["id"]] = (r["name"], None)
-                pair_to_id[(normalize_category_name(r["name"]), None)] = r["id"]
-        for r in rows:
-            if r["parent_id"] is not None:
-                top_name = top_id_to_name.get(r["parent_id"])
-                if top_name is None:
-                    continue  # orphan subcategory — defensive, FK should prevent
-                id_to_pair[r["id"]] = (top_name, r["name"])
-                pair_to_id[(normalize_category_name(top_name), normalize_category_name(r["name"]))] = r["id"]
-        self._episode_category_maps_cache = (pair_to_id, id_to_pair)
-        return pair_to_id, id_to_pair
 
     @staticmethod
     def _resolve_category_strings(

@@ -250,6 +250,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE episodes ADD COLUMN failure_reason TEXT NULL")
             conn.execute("ALTER TABLE episodes ADD COLUMN failure_type TEXT NULL")
             conn.execute("ALTER TABLE episodes ADD COLUMN failed_at TIMESTAMP NULL")
+            logger.info("Migration complete: failure tracking columns added to episodes")
 
         # spec #69 Phase 6 — stored summary preview (see Episode model note)
         cursor = conn.execute("PRAGMA table_info(episodes)")
@@ -257,7 +258,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if "summary_preview" not in episode_columns_now:
             logger.info("Migrating database: adding summary_preview to episodes")
             conn.execute("ALTER TABLE episodes ADD COLUMN summary_preview TEXT NULL")
-            logger.info("Migration complete: failure tracking columns added to episodes")
+            logger.info("Migration complete: summary_preview column added to episodes")
 
         # Migration: Add language column to podcasts (idempotent)
         if "language" not in podcast_columns:

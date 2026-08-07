@@ -174,15 +174,23 @@ def conflict(message: str) -> NoReturn:
 
 
 def etag_json_response(request: "Request", data: Dict[str, Any], status: str = "ok") -> "Response":
-    """``api_response`` with a strong content-hash ETag (spec #69 Phase 6).
+    """``api_response`` with a weak content-hash ETag (spec #69 Phase 6).
 
     For write-once resources (transcripts, word timestamps, summaries,
     narration scripts): the ETag is a sha1 over the serialized ``data``
-    payload — deliberately excluding the envelope's per-request
-    ``timestamp`` so an unchanged resource revalidates. ``Cache-Control:
-    private, no-cache`` forces revalidation on every use (these artifacts
-    CAN be regenerated), but a matching ``If-None-Match`` answers 304 with
-    no body — which is the entire transfer for a multi-hundred-KB
+    payload, deliberately excluding the envelope's per-request
+    ``timestamp`` so an unchanged resource still revalidates.
+
+    That exclusion is why the validator is **weak** (``W/`` prefix). The
+    envelope stamps a fresh ``timestamp`` on every response, so two bodies
+    carrying the same payload are not byte-identical; a strong validator
+    asserts byte equality (RFC 9110 §8.8.1) and would be lying. Weak is
+    the accurate claim: semantically equivalent, not octet-equal. Nothing
+    here serves ranges, which is the case strong validators buy you.
+
+    ``Cache-Control: private, no-cache`` forces revalidation on every use
+    (these artifacts CAN be regenerated), but a matching ``If-None-Match``
+    answers 304 with no body — the entire transfer for a multi-hundred-KB
     transcript payload.
     """
     import hashlib
@@ -193,17 +201,21 @@ def etag_json_response(request: "Request", data: Dict[str, Any], status: str = "
     from fastapi.responses import JSONResponse
 
     encoded = jsonable_encoder(data)
-    etag = (
-        '"'
-        + hashlib.sha1(  # noqa: S324 — cache validator, not crypto
-            _json.dumps(encoded, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        + '"'
-    )
+    digest = hashlib.sha1(  # noqa: S324 — cache validator, not crypto
+        _json.dumps(encoded, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    etag = f'W/"{digest}"'
     headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
 
+    # Weak comparison (RFC 9110 §8.8.3.2): ignore the ``W/`` prefix on both
+    # sides so a client that echoes the opaque tag in either form still
+    # revalidates. ``*`` matches any current representation.
+    def _opaque(tag: str) -> str:
+        return tag.strip().removeprefix("W/").strip()
+
     if_none_match = request.headers.get("if-none-match", "")
-    if etag in {tag.strip() for tag in if_none_match.split(",")}:
+    candidates = {_opaque(tag) for tag in if_none_match.split(",")}
+    if "*" in candidates or _opaque(etag) in candidates:
         return Response(status_code=304, headers=headers)
 
     return JSONResponse(content=api_response(encoded, status=status), headers=headers)
