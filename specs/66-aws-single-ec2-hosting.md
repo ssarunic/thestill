@@ -364,10 +364,15 @@ Ordered levers, each independent, none blocked by this spec:
   configured email provider's credentials must move with the deployment; SES
   (Phase 4 of #51) becomes natural once on AWS — including its sandbox-exit
   and bounce-handling work.
-- **arm64 wheel validation:** the `full` image is torch-free, but the
-  in-process embedding model (sentence-transformers) must be verified on
-  Graviton before cutover; fall back to a `t3.medium`-class x86 instance if
-  any wheel misbehaves.
+- **arm64 wheel validation — resolved.** sentence-transformers and its CPU
+  torch dependency have run on Graviton since cutover without incident, so
+  CI publishes **arm64 only** as of 2026-08-07. amd64 was never pulled by
+  anything (the box is a `t4g.medium`) and its cache scope never warmed, so
+  that leg cost 30+ minutes per merge against arm64's ~4. The x86 fallback
+  is therefore no longer one instance-type change away: falling back to a
+  `t3.medium`-class box now also means restoring the multi-arch publish
+  matrix in `.github/workflows/ci.yml` (the comment above `docker-publish`
+  spells out how) and waiting one merge for the amd64 image to exist.
 - **Postgres-in-container ops:** major-version upgrades and vacuum/memory
   tuning are on the operator until the RDS lever is pulled.
 - **Single node = no HA** — accepted; recovery is the documented restore
