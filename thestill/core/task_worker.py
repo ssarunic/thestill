@@ -44,6 +44,7 @@ Usage:
 """
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
@@ -172,6 +173,14 @@ class TaskWorker:
         # an executor slot). Guarded by ``_active_lock``. Surfaced in
         # get_status so a thread leak is visible instead of silent.
         self._abandoned_threads: Dict[TaskStage, int] = {stage: 0 for stage in TaskStage}
+        # How many leaked threads the pool is sized to absorb before the worker
+        # declares itself degraded and stops claiming. A leak is permanent
+        # (threads cannot be killed), so this is a budget, not a buffer: once
+        # spent, only a restart recovers. Bounded-and-loud beats the silent
+        # re-freeze that fixed headroom alone would produce.
+        from ..utils.config import _env_int
+
+        self.abandoned_thread_budget: int = _env_int("QUEUE_ABANDONED_THREAD_BUDGET", 8)
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -255,6 +264,36 @@ class TaskWorker:
         worker has since reclaimed under a fresh ``started_at``."""
         return task.started_at.isoformat() if task.started_at is not None else None
 
+    def executor_max_workers(self) -> int:
+        """Threads the handler pool needs to honour the configured capacities.
+
+        Must be >= the sum of per-stage capacities: the queue is allowed to
+        claim that many tasks concurrently, and a claim with no thread behind
+        it sits in ``processing`` doing nothing. The extra allowance covers the
+        periodic loops (stale reset, auto-heal) that also use ``to_thread``,
+        PLUS ``abandoned_thread_budget`` — see that attribute for why a fixed
+        headroom alone is not a fix.
+        """
+        return sum(self.parallel_jobs_per_stage.values()) + 4 + self.abandoned_thread_budget
+
+    def is_degraded(self) -> bool:
+        """True once leaked handler threads have eaten the pool's slack.
+
+        Python cannot kill a thread, so every watchdog abandonment
+        permanently consumes an executor slot. Headroom only defers the
+        problem: past ``abandoned_thread_budget`` leaks there are fewer usable
+        threads than the configured capacities, and claims start piling up in
+        ``processing`` with nothing behind them — the 2026-08-07 outage, in
+        which all nine stages froze while every liveness probe stayed green.
+
+        Rather than silently degrade again, the worker stops claiming and says
+        so. Recovery is a process restart (the only thing that reclaims the
+        threads); the deployment's ``restart: unless-stopped`` plus a readiness
+        probe that consults this makes that visible and actionable.
+        """
+        with self._active_lock:
+            return sum(self._abandoned_threads.values()) >= self.abandoned_thread_budget
+
     def _all_active_episode_ids_locked(self) -> set[str]:
         """Return episode IDs active in any stage. Caller must hold _active_lock."""
         ids: set[str] = set()
@@ -329,6 +368,31 @@ class TaskWorker:
 
         # Reset any stale tasks from previous runs on startup
         self._reset_stale_tasks()
+
+        # Every handler runs via ``asyncio.to_thread``, which uses the loop's
+        # DEFAULT executor — ``min(32, cpu_count + 4)``, i.e. only 6 threads on
+        # a 2-vCPU box. The per-stage capacities routinely sum to far more than
+        # that, so the queue claims tasks that have no thread to run on: they
+        # sit in ``processing``, look alive, and do nothing.
+        #
+        # 2026-08-07 outage: capacities summed to 28 against 6 threads. Handlers
+        # that outran the watchdog were abandoned (Python cannot kill a thread),
+        # each one keeping its executor slot while a replacement was claimed into
+        # the slot it vacated. At ~21 abandonments/hour every thread was
+        # eventually held by abandoned work and ALL nine stages froze at once —
+        # transcription included, so Dalston went idle. Liveness probes stayed
+        # green throughout because /health never looks at the worker.
+        #
+        # Size the pool to what we actually promise, plus headroom for the
+        # periodic loops, so a claim always has somewhere to run.
+        pool_size = self.executor_max_workers()
+        asyncio.get_running_loop().set_default_executor(
+            concurrent.futures.ThreadPoolExecutor(
+                max_workers=pool_size,
+                thread_name_prefix="thestill-handler",
+            )
+        )
+        logger.info("task_worker_executor_sized", max_workers=pool_size)
 
         semaphores: Dict[TaskStage, asyncio.Semaphore] = {
             stage: asyncio.Semaphore(self.parallel_jobs_per_stage[stage]) for stage in TaskStage
@@ -504,6 +568,13 @@ class TaskWorker:
                     exclude_eps = self._all_active_episode_ids_locked() or None
                     exclude_pods = self._all_active_podcast_ids_locked() or None
 
+                # Stop claiming once leaked threads have eaten the slack.
+                # Claiming past this point produces rows that sit in
+                # ``processing`` with no thread behind them — work that looks
+                # in-flight, is not, and churns the stale-task reset.
+                if self.is_degraded():
+                    slots = 0
+
                 if slots > 0:
                     for _ in range(slots):
                         # Spec #49 L1 — gate on the breaker. When OPEN the call
@@ -601,8 +672,21 @@ class TaskWorker:
                     episode_id=task.episode_id,
                     timeout_s=self._watchdog_timeout_s.get(stage),
                     abandoned_threads_total=total_abandoned,
+                    abandoned_thread_budget=self.abandoned_thread_budget,
                     note="freeing worker slot; abandoned thread leaks until it unblocks; stale-task reset requeues the row",
                 )
+                if total_abandoned == self.abandoned_thread_budget:
+                    # Exactly-once transition into degraded, so the alert is a
+                    # single event rather than one per subsequent timeout.
+                    logger.critical(
+                        "task_worker_degraded",
+                        abandoned_threads_total=total_abandoned,
+                        note=(
+                            "leaked handler threads have consumed the executor's slack; "
+                            "claiming stopped to avoid rows that look in-flight but are not. "
+                            "Only a process restart reclaims these threads."
+                        ),
+                    )
             finally:
                 with self._active_lock:
                     self._active_by_stage[stage].pop(self._task_key(task), None)

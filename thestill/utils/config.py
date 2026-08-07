@@ -211,18 +211,37 @@ def get_stage_watchdog_seconds() -> Dict["TaskStage", Optional[float]]:  # noqa:
     # Per-stage defaults (seconds). Network/LLM stages get a bounded watchdog;
     # transcribe is left unbounded because a long episode on local Whisper can
     # legitimately run for hours and we won't risk killing real work.
+    #
+    # Sizing rule: the watchdog exists to free a slot from a handler that will
+    # NEVER finish (a socket frozen by host sleep — the 2026-07-01 clean stall).
+    # It is not a performance budget. Set it well above the slowest legitimate
+    # run on the slowest host you deploy to, because abandoning work that would
+    # have completed is strictly worse than waiting: Python cannot kill the
+    # thread, so the abandoned handler keeps its executor slot while a
+    # replacement is claimed into the slot it vacated. That is a leak, and it
+    # compounds — see the 2026-08-07 outage, where CPU-bound stages on a 2-vCPU
+    # box routinely outran a 1800s budget and wedged every stage at ~21
+    # abandonments/hour.
+    #
+    # The CPU-bound stages below are therefore generous. ``reindex`` generates
+    # embeddings and ``compute-related``/``rebuild-cooccurrences`` do corpus-wide
+    # aggregation; on a small instance these legitimately take far longer than
+    # half an hour.
     defaults: Dict[str, Optional[float]] = {
         "download": 3600.0,
         "downsample": 3600.0,
         "transcribe": None,
-        "clean": 1800.0,
-        "summarize": 1800.0,
-        "extract-entities": 1800.0,
-        "resolve-entities": 1800.0,
-        "reindex": 1800.0,
-        "rebuild-cooccurrences": 1800.0,
-        "compute-related": 1800.0,
-        "enrich-entities": 1800.0,
+        # LLM round-trips: bounded, but generously — a long episode through a
+        # rate-limited provider can take a while.
+        "clean": 5400.0,
+        "summarize": 5400.0,
+        # CPU-bound on the deployment host. See the sizing rule above.
+        "extract-entities": 7200.0,
+        "resolve-entities": 7200.0,
+        "reindex": 7200.0,
+        "rebuild-cooccurrences": 7200.0,
+        "compute-related": 7200.0,
+        "enrich-entities": 3600.0,
         "refresh-feed": 1800.0,
     }
     return {stage: defaults.get(stage.value, 1800.0) for stage in TaskStage}

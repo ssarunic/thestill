@@ -25,7 +25,16 @@ ENV = "QUEUE_STAGE_WATCHDOG_SECONDS"
 def test_unset_uses_per_stage_defaults(monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
     wd = get_stage_watchdog_seconds()
-    assert wd[TaskStage.CLEAN] == 1800.0
+    # Raised from 1800 to 5400 on 2026-08-07. The watchdog frees a slot from a
+    # handler that will NEVER finish; it is not a performance budget. Because
+    # Python cannot kill the thread, abandoning work that would have completed
+    # leaks an executor slot — at scale that wedges every stage (see the
+    # outage note in ``get_stage_watchdog_seconds``). Budgets must sit above
+    # the slowest legitimate run on the slowest deployment host.
+    assert wd[TaskStage.CLEAN] == 5400.0
+    # CPU-bound stages get more still: embedding and corpus-wide aggregation
+    # on a 2-vCPU instance routinely exceed half an hour.
+    assert wd[TaskStage.REINDEX] == 7200.0
     # Transcribe is intentionally unbounded (long local-Whisper jobs).
     assert wd[TaskStage.TRANSCRIBE] is None
 

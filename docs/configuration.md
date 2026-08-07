@@ -192,6 +192,7 @@ down, and frees slots held by wedged handlers.
 | `QUEUE_CIRCUIT_WINDOW_SECONDS` | Rolling window over which failures are counted | `120` |
 | `QUEUE_CIRCUIT_COOLDOWN_SECONDS` | How long a breaker stays OPEN before a half-open probe | `60` |
 | `QUEUE_STAGE_WATCHDOG_SECONDS` | Uniform handler watchdog timeout for every stage; `0` disables everywhere | - (unset = per-stage defaults) |
+| `QUEUE_ABANDONED_THREAD_BUDGET` | Watchdog-abandoned handler threads tolerated before the worker declares itself degraded, stops claiming, and fails `/health/ready`. Abandoned threads cannot be killed, so each one permanently consumes an executor slot — only a restart recovers | `8` |
 
 ## Transcript Cleaning (legacy inline path)
 
