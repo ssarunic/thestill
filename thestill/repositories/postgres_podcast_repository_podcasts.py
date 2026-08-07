@@ -97,6 +97,59 @@ _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.descripti
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
+# Shared by ``_save_episode_row`` (single insert) and ``save()``'s batched
+# re-insert (spec #69 Phase 8.4) so the column list can't drift between the
+# two paths. ``duration`` is a ``text`` column in the typed schema, so the
+# int model field is stringified on write (pydantic coerces it back on read).
+_EPISODE_INSERT_SQL = """
+    INSERT INTO episodes (
+        id, podcast_id, created_at, updated_at, external_id, title, slug, description,
+        description_html, pub_date, audio_url, duration, image_url,
+        explicit, episode_type, episode_number, season_number, website_url,
+        audio_file_size, audio_mime_type,
+        audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
+        clean_transcript_json_path, summary_path, playback_time_offset_seconds,
+        failed_at_stage, failure_reason, failure_type, failed_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _episode_insert_params(podcast_id: str, episode: Episode, now: datetime) -> tuple:
+    return (
+        episode.id,
+        podcast_id,
+        episode.created_at,
+        now,
+        episode.external_id,
+        episode.title,
+        episode.slug,
+        episode.description,
+        episode.description_html,
+        episode.pub_date,
+        str(episode.audio_url),
+        str(episode.duration) if episode.duration is not None else None,
+        _normalize_artwork_url(episode.image_url),
+        episode.explicit,
+        episode.episode_type,
+        episode.episode_number,
+        episode.season_number,
+        episode.website_url,
+        episode.audio_file_size,
+        episode.audio_mime_type,
+        episode.audio_path,
+        episode.downsampled_audio_path,
+        episode.raw_transcript_path,
+        episode.clean_transcript_path,
+        episode.clean_transcript_json_path,
+        episode.summary_path,
+        episode.playback_time_offset_seconds,
+        episode.failed_at_stage,
+        episode.failure_reason,
+        episode.failure_type.value if episode.failure_type else None,
+        episode.failed_at,
+    )
+
+
 def _opt_bool(value: Any) -> Optional[bool]:
     """Nullable boolean read (native bool in PG; None stays None)."""
     return None if value is None else bool(value)
@@ -149,6 +202,7 @@ def _episode_from_row(row: dict) -> Episode:
             row["playback_time_offset_seconds"] if row.get("playback_time_offset_seconds") is not None else 0.0
         ),
         summary_path=row["summary_path"],
+        summary_preview=row.get("summary_preview"),
         published_at=row.get("published_at"),
         failed_at_stage=row["failed_at_stage"],
         failure_reason=row["failure_reason"],
@@ -435,14 +489,12 @@ class PodcastsMixin:
             A podcast with no tracked episodes has no key in the dict.
         """
         with self._get_connection() as conn:
-            podcast_rows = conn.execute(
-                f"""
+            podcast_rows = conn.execute(f"""
                 SELECT {_PODCAST_COLS_P}
                 FROM podcasts p
                 WHERE {self._active_feed_sql("p", require_incomplete=False)}
                 ORDER BY p.created_at DESC
-                """
-            ).fetchall()
+                """).fetchall()
 
             dedup: Dict[str, Set[str]] = {}
             for ext_row in conn.execute("SELECT podcast_id, external_id FROM episodes"):
@@ -825,66 +877,21 @@ class PodcastsMixin:
             # Note: No CASCADE - we explicitly delete here
             conn.execute("DELETE FROM episodes WHERE podcast_id = %s", (podcast_id,))
 
-            # Insert all episodes
-            for episode in podcast.episodes:
-                self._save_episode_row(conn, podcast_id, episode, now)
+            # Insert all episodes — one executemany, not one round trip per
+            # episode (spec #69 Phase 8.4; a 1000-episode feed import used
+            # to issue 1000 INSERT statements).
+            if podcast.episodes:
+                conn.cursor().executemany(
+                    _EPISODE_INSERT_SQL,
+                    [_episode_insert_params(podcast_id, ep, now) for ep in podcast.episodes],
+                )
 
             logger.debug(f"Saved podcast: {podcast.title} ({len(podcast.episodes)} episodes)")
             return podcast
 
     def _save_episode_row(self, conn: psycopg.Connection, podcast_id: str, episode: Episode, now: datetime) -> None:
-        """Insert episode into database (PG port of ``_save_episode``).
-
-        ``duration`` is a ``text`` column in the typed schema, so the int
-        model field is stringified on write (pydantic coerces it back on
-        read).
-        """
-        conn.execute(
-            """
-            INSERT INTO episodes (
-                id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                description_html, pub_date, audio_url, duration, image_url,
-                explicit, episode_type, episode_number, season_number, website_url,
-                audio_file_size, audio_mime_type,
-                audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
-                clean_transcript_json_path, summary_path, playback_time_offset_seconds,
-                failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                episode.id,
-                podcast_id,
-                episode.created_at,
-                now,
-                episode.external_id,
-                episode.title,
-                episode.slug,
-                episode.description,
-                episode.description_html,
-                episode.pub_date,
-                str(episode.audio_url),
-                str(episode.duration) if episode.duration is not None else None,
-                _normalize_artwork_url(episode.image_url),
-                episode.explicit,
-                episode.episode_type,
-                episode.episode_number,
-                episode.season_number,
-                episode.website_url,
-                episode.audio_file_size,
-                episode.audio_mime_type,
-                episode.audio_path,
-                episode.downsampled_audio_path,
-                episode.raw_transcript_path,
-                episode.clean_transcript_path,
-                episode.clean_transcript_json_path,
-                episode.summary_path,
-                episode.playback_time_offset_seconds,
-                episode.failed_at_stage,
-                episode.failure_reason,
-                episode.failure_type.value if episode.failure_type else None,
-                episode.failed_at,
-            ),
-        )
+        """Insert episode into database (PG port of ``_save_episode``)."""
+        conn.execute(_EPISODE_INSERT_SQL, _episode_insert_params(podcast_id, episode, now))
 
     def touch_last_processed_at(self, podcast_id: str, when: datetime) -> None:
         """Record the wall-clock time an episode was last processed.
@@ -1131,16 +1138,14 @@ class PodcastsMixin:
         now_dt = now or now_utc()
         active_filter = self._active_feed_sql()
         with self._get_connection() as conn:
-            reason_rows = conn.execute(
-                f"""
+            reason_rows = conn.execute(f"""
                 SELECT COALESCE(refresh_disabled_reason, 'unknown') AS reason, COUNT(*) AS n
                 FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND (last_refresh_at IS NOT NULL OR last_refresh_error IS NOT NULL)
                   AND {active_filter}
                 GROUP BY reason
-                """
-            ).fetchall()
+                """).fetchall()
             parked_by_reason = {row["reason"]: row["n"] for row in reason_rows}
             active = conn.execute(
                 f"SELECT COUNT(*) AS n FROM podcasts WHERE next_refresh_at IS NOT NULL AND {active_filter}"
@@ -1152,13 +1157,11 @@ class PodcastsMixin:
                 """,
                 (now_dt,),
             ).fetchone()["n"]
-            backing_off = conn.execute(
-                f"""
+            backing_off = conn.execute(f"""
                 SELECT COUNT(*) AS n FROM podcasts
                 WHERE next_refresh_at IS NOT NULL AND last_refresh_failure_kind IS NOT NULL
                   AND {active_filter}
-                """
-            ).fetchone()["n"]
+                """).fetchone()["n"]
         return {
             "active": active,
             "due_now": due_now,
@@ -1176,22 +1179,24 @@ class PodcastsMixin:
         """
         now_dt = now or now_utc()
         with self._get_connection() as conn:
-            rows = conn.execute(
-                f"""
+            rows = conn.execute(f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND last_refresh_at IS NULL
                   AND last_refresh_error IS NULL
                   AND {self._active_feed_sql()}
-                """
-            ).fetchall()
+                """).fetchall()
+            # Spec #69 Phase 8.4 — jitter computed in Python as before,
+            # written in one executemany instead of a statement per feed.
+            seed_params = []
             for row in rows:
                 pid = as_str(row["id"])
                 offset = (hash(pid) % max(1, default_interval_seconds)) if default_interval_seconds > 0 else 0
-                next_at = now_dt + timedelta(seconds=offset)
-                conn.execute(
+                seed_params.append((default_interval_seconds, now_dt + timedelta(seconds=offset), pid))
+            if seed_params:
+                conn.cursor().executemany(
                     "UPDATE podcasts SET refresh_interval_seconds = %s, next_refresh_at = %s WHERE id = %s",
-                    (default_interval_seconds, next_at, pid),
+                    seed_params,
                 )
             if rows:
                 logger.info("Seeded refresh schedule for unscheduled feeds", count=len(rows))
@@ -1655,3 +1660,191 @@ class PodcastsMixin:
             if row is None:
                 return None
             return as_str(row["id"]), row["title"], row["slug"]
+
+    # ------------------------------------------------------------------
+    # Spec #69 Phase 4 — aggregates and light lookups (SQL overrides of
+    # the PodcastRepository fallbacks; see the interface docstrings).
+    # ------------------------------------------------------------------
+
+    # Per-podcast episode counters shared by the two podcast-row queries.
+    # ``processed`` mirrors ``Episode.state in (CLEANED, SUMMARIZED)``:
+    # not failed, and cleaned (or summarized, which implies past cleaning).
+    # LATERAL so the counts run per selected podcast off
+    # idx_episodes_podcast_id instead of grouping the whole episodes table.
+    _EPISODE_COUNTS_JOIN = """
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS episodes_count,
+                   COUNT(*) FILTER (
+                       WHERE e.failed_at_stage IS NULL
+                         AND (e.summary_path IS NOT NULL OR e.clean_transcript_path IS NOT NULL)
+                   ) AS episodes_processed
+              FROM episodes e
+             WHERE e.podcast_id = p.id
+        ) ec ON true
+    """
+
+    def count_podcasts(self) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) AS n FROM podcasts").fetchone()["n"])
+
+    def resolve_podcast_slug(self, slug: str) -> Optional[str]:
+        if not slug:
+            return None
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT id FROM podcasts WHERE slug = %s", (slug,)).fetchone()
+            return as_str(row["id"]) if row else None
+
+    def count_episode_states(self) -> Dict[str, int]:
+        # The cascading NULL guards reproduce ``Episode.state``'s priority
+        # order exactly (failed wins; then most-progressed path).
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT
+                    (SELECT COUNT(*) FROM podcasts) AS podcasts_tracked,
+                    COUNT(*) AS episodes_total,
+                    COUNT(*) FILTER (WHERE summary_path IS NOT NULL) AS with_summary_path,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NOT NULL) AS failed,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NOT NULL) AS summarized,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NULL
+                        AND clean_transcript_path IS NOT NULL) AS cleaned,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NULL AND clean_transcript_path IS NULL
+                        AND raw_transcript_path IS NOT NULL) AS transcribed,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NULL AND clean_transcript_path IS NULL
+                        AND raw_transcript_path IS NULL
+                        AND downsampled_audio_path IS NOT NULL) AS downsampled,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NULL AND clean_transcript_path IS NULL
+                        AND raw_transcript_path IS NULL AND downsampled_audio_path IS NULL
+                        AND audio_path IS NOT NULL) AS downloaded,
+                    COUNT(*) FILTER (WHERE failed_at_stage IS NULL
+                        AND summary_path IS NULL AND clean_transcript_path IS NULL
+                        AND raw_transcript_path IS NULL AND downsampled_audio_path IS NULL
+                        AND audio_path IS NULL) AS discovered
+                  FROM episodes
+                """).fetchone()
+            return {key: int(value or 0) for key, value in row.items()}
+
+    _EPISODE_STATE_CASE = """
+        CASE WHEN e.failed_at_stage IS NOT NULL THEN 'failed'
+             WHEN e.summary_path IS NOT NULL THEN 'summarized'
+             WHEN e.clean_transcript_path IS NOT NULL THEN 'cleaned'
+             WHEN e.raw_transcript_path IS NOT NULL THEN 'transcribed'
+             WHEN e.downsampled_audio_path IS NOT NULL THEN 'downsampled'
+             WHEN e.audio_path IS NOT NULL THEN 'downloaded'
+             ELSE 'discovered' END
+    """
+
+    def get_recent_activity_rows(self, limit: int = 20, offset: int = 0) -> Tuple[List[Dict], int]:
+        with self._get_connection() as conn:
+            total = int(conn.execute("SELECT COUNT(*) AS n FROM episodes").fetchone()["n"])
+            rows = conn.execute(
+                f"""
+                SELECT e.id AS episode_id, e.title AS episode_title, e.slug AS episode_slug,
+                       p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
+                       {self._EPISODE_STATE_CASE} AS state,
+                       e.updated_at, e.pub_date, e.duration,
+                       e.image_url AS episode_image_url, p.image_url AS podcast_image_url
+                  FROM episodes e
+                  JOIN podcasts p ON p.id = e.podcast_id
+                 ORDER BY e.updated_at DESC
+                 LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            ).fetchall()
+            return [
+                {**row, "episode_id": as_str(row["episode_id"]), "podcast_id": as_str(row["podcast_id"])}
+                for row in rows
+            ], total
+
+    def _podcast_row_from_db(self, row: Dict) -> Dict:
+        primary = self._cat_id_to_pair.get(row["primary_category_id"], (None, None))
+        secondary = self._cat_id_to_pair.get(row["secondary_category_id"], (None, None))
+        return {
+            "id": as_str(row["id"]),
+            "title": row["title"],
+            "description": row["description"],
+            "rss_url": row["rss_url"],
+            "slug": row["slug"],
+            "image_url": row["image_url"],
+            "language": row["language"],
+            "primary_category": primary[0],
+            "primary_subcategory": primary[1],
+            "secondary_category": secondary[0],
+            "secondary_subcategory": secondary[1],
+            "last_processed": row["last_processed"],
+            "last_processed_at": row["last_processed_at"],
+            "episodes_count": int(row["episodes_count"] or 0),
+            "episodes_processed": int(row["episodes_processed"] or 0),
+            "author": row["author"],
+            "explicit": _opt_bool(row["explicit"]),
+            "show_type": row["show_type"],
+            "website_url": row["website_url"],
+            "is_complete": bool(row["is_complete"]),
+            "copyright": row["copyright"],
+        }
+
+    def list_podcast_rows(
+        self,
+        *,
+        podcast_ids: Optional[Sequence[str]] = None,
+        q: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Tuple[List[Dict], int]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if podcast_ids is not None:
+            if not podcast_ids:
+                return [], 0
+            clauses.append("p.id = ANY(%s::uuid[])")
+            params.append([str(pid) for pid in podcast_ids])
+        needle = (q or "").strip()
+        if needle:
+            clauses.append("(p.title ILIKE %s OR p.author ILIKE %s)")
+            like = f"%{needle}%"
+            params.extend([like, like])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        with self._get_connection() as conn:
+            self._ensure_category_cache(conn)
+            total = int(conn.execute(f"SELECT COUNT(*) AS n FROM podcasts p {where}", params).fetchone()["n"])
+            page = ""
+            page_params: List[Any] = list(params)
+            if limit is not None:
+                page = "LIMIT %s OFFSET %s"
+                page_params.extend([limit, offset])
+            elif offset:
+                page = "OFFSET %s"
+                page_params.append(offset)
+            rows = conn.execute(
+                f"""
+                SELECT {_PODCAST_COLS_P}, ec.episodes_count, ec.episodes_processed
+                  FROM podcasts p
+                  {self._EPISODE_COUNTS_JOIN}
+                  {where}
+                 ORDER BY p.created_at DESC
+                 {page}
+                """,
+                page_params,
+            ).fetchall()
+            return [self._podcast_row_from_db(row) for row in rows], total
+
+    def get_podcast_row_by_slug(self, slug: str) -> Optional[Dict]:
+        if not slug:
+            return None
+        with self._get_connection() as conn:
+            self._ensure_category_cache(conn)
+            row = conn.execute(
+                f"""
+                SELECT {_PODCAST_COLS_P}, ec.episodes_count, ec.episodes_processed
+                  FROM podcasts p
+                  {self._EPISODE_COUNTS_JOIN}
+                 WHERE p.slug = %s
+                """,
+                (slug,),
+            ).fetchone()
+            return self._podcast_row_from_db(row) if row else None

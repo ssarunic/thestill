@@ -74,6 +74,12 @@ class MentionContext:
     podcast_slug: str
     entity_type: Optional[str]
     entity_canonical_name: Optional[str]
+    # Spec #69 Phase 5 — deeplink/player fields projected in the same JOIN
+    # so the entity-page route doesn't re-fetch each mention's episode.
+    episode_slug: Optional[str] = None
+    episode_audio_url: Optional[str] = None
+    episode_image_url: Optional[str] = None
+    episode_duration: Optional[str] = None
 
 
 class EntityRepository(ABC):
@@ -100,6 +106,20 @@ class EntityRepository(ABC):
         ``wikidata_instance_of`` is replaced only when the incoming
         list is non-empty, and ``updated_at`` advances.
         """
+
+    def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
+        """Batch variant of :meth:`get_entity` (spec #69 Phase 5).
+
+        Default falls back to one lookup per id; the SQL backends
+        override with a single ``IN``/``ANY`` query. Missing ids are
+        silently dropped; order is unspecified.
+        """
+        out = []
+        for entity_id in entity_ids:
+            entity = self.get_entity(entity_id)
+            if entity is not None:
+                out.append(entity)
+        return out
 
     @abstractmethod
     def get_entity(self, entity_id: str) -> Optional[EntityRecord]:

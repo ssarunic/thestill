@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from structlog import get_logger
 
@@ -38,7 +38,7 @@ from ...utils.briefing_cadence import next_run_for
 from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
 from ..dependencies import AppState, get_app_state, require_auth
-from ..responses import api_response, bad_request, not_found, paginated_response
+from ..responses import api_response, bad_request, etag_json_response, not_found, paginated_response
 
 logger = get_logger(__name__)
 
@@ -149,7 +149,7 @@ def _require_owned(briefing: Briefing, user: User) -> None:
 
 
 @router.get("")
-async def list_briefings(
+def list_briefings(
     limit: int = 20,
     offset: int = 0,
     app_state: AppState = Depends(get_app_state),
@@ -170,7 +170,7 @@ async def list_briefings(
 
 
 @router.get("/latest")
-async def get_latest_briefing(
+def get_latest_briefing(
     response: Response,
     force: bool = False,
     app_state: AppState = Depends(get_app_state),
@@ -214,7 +214,7 @@ def _serialize_schedule(schedule: BriefingSchedule) -> dict:
 # NOTE: /schedule routes are declared before /{briefing_id} so the literal
 # path wins over the parameterized one.
 @router.get("/schedule")
-async def get_briefing_schedule(
+def get_briefing_schedule(
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
@@ -226,7 +226,7 @@ async def get_briefing_schedule(
 
 
 @router.put("/schedule")
-async def put_briefing_schedule(
+def put_briefing_schedule(
     body: ScheduleUpdateRequest,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -289,7 +289,7 @@ async def put_briefing_schedule(
 
 
 @router.get("/{briefing_id}")
-async def get_briefing(
+def get_briefing(
     briefing_id: str,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -304,7 +304,7 @@ async def get_briefing(
 
 
 @router.post("/{briefing_id}/narrate", status_code=201)
-async def narrate_briefing(
+def narrate_briefing(
     briefing_id: str,
     body: NarrateBriefingRequest,
     app_state: AppState = Depends(get_app_state),
@@ -314,6 +314,13 @@ async def narrate_briefing(
 
     Used by the length-switcher UI: each click writes
     ``<briefing_id>-<slug>.{json,md}`` so previous variants are preserved.
+
+    Sync ``def`` on purpose: the narration LLM call takes tens of seconds
+    to minutes, so it must run in the threadpool, never on the event loop
+    (spec #69 Phase 2). It still holds the request (and a threadpool slot)
+    for the full run — converting to a 202 + task-id contract is deferred
+    until the task manager supports per-briefing task keys (it is
+    singleton-per-TaskType today).
     """
     briefing = app_state.briefing_repository.get(briefing_id)
     if briefing is None:
@@ -370,8 +377,9 @@ async def narrate_briefing(
 
 
 @router.get("/{briefing_id}/script")
-async def get_briefing_script(
+def get_briefing_script(
     briefing_id: str,
+    request: Request,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
@@ -388,11 +396,12 @@ async def get_briefing_script(
         # Surface as 404 so the UI can show a friendly empty state.
         logger.warning("briefing_script_missing", briefing_id=briefing_id, path=str(path))
         not_found("Briefing script", briefing_id)
-    return api_response({"markdown": path.read_text(encoding="utf-8")})
+    # Write-once script artifact: content-hash ETag (spec #69 Phase 6.2).
+    return etag_json_response(request, {"markdown": path.read_text(encoding="utf-8")})
 
 
 @router.post("/{briefing_id}/listened")
-async def mark_briefing_listened(
+def mark_briefing_listened(
     briefing_id: str,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),

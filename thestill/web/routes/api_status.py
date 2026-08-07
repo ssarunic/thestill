@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 @router.get("")
-async def get_status(state: AppState = Depends(get_app_state)):
+def get_status(state: AppState = Depends(get_app_state)):
     """
     Get detailed system status.
 

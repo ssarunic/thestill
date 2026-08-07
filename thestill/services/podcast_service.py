@@ -405,10 +405,14 @@ class PodcastService:
         Returns:
             Podcast object or None if not found
         """
-        podcasts = self.feed_manager.list_podcasts()
+        # Spec #69 Phase 4 — route each identifier shape to its indexed
+        # repository lookup instead of hydrating the whole corpus and
+        # linear-scanning it. Only the legacy 1-based CLI index still needs
+        # the ordered full list.
 
         # If integer, treat as index (1-based)
         if isinstance(podcast_id, int):
+            podcasts = self.feed_manager.list_podcasts()
             if 1 <= podcast_id <= len(podcasts):
                 logger.debug(f"Retrieved podcast by index: {podcast_id}")
                 return podcasts[podcast_id - 1]
@@ -421,23 +425,23 @@ class PodcastService:
 
         # Check if it's a UUID (internal ID)
         if isinstance(podcast_id, str) and len(podcast_id) == 36 and podcast_id.count("-") == 4:
-            for podcast in podcasts:
-                if podcast.id == podcast_id:
-                    logger.debug(f"Retrieved podcast by UUID: {podcast.title}")
-                    return podcast
+            podcast = self.repository.get(podcast_id)
+            if podcast:
+                logger.debug(f"Retrieved podcast by UUID: {podcast.title}")
+                return podcast
 
         # Check if it's a slug (URL-safe identifier)
         if isinstance(podcast_id, str):
-            for podcast in podcasts:
-                if podcast.slug == podcast_id:
-                    logger.debug(f"Retrieved podcast by slug: {podcast.title}")
-                    return podcast
+            podcast = self.repository.get_by_slug(podcast_id)
+            if podcast:
+                logger.debug(f"Retrieved podcast by slug: {podcast.title}")
+                return podcast
 
         # Otherwise, treat as RSS URL
-        for podcast in podcasts:
-            if str(podcast.rss_url) == podcast_id:
-                logger.debug(f"Retrieved podcast by URL: {podcast.title}")
-                return podcast
+        podcast = self.repository.get_by_url(str(podcast_id))
+        if podcast:
+            logger.debug(f"Retrieved podcast by URL: {podcast.title}")
+            return podcast
 
         logger.warning(f"Podcast not found: {podcast_id}")
         return None

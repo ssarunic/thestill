@@ -191,7 +191,7 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
 
 
 @router.get("/google/login")
-async def google_login(request: Request, state: AppState = Depends(get_app_state)):
+def google_login(request: Request, state: AppState = Depends(get_app_state)):
     """
     Initiate Google OAuth login flow.
 
@@ -299,7 +299,7 @@ async def google_callback(
 
 
 @router.post("/logout")
-async def logout(
+def logout(
     request: Request,
     response: Response,
     state: AppState = Depends(get_app_state),
@@ -321,7 +321,7 @@ async def logout(
 
 
 @router.get("/me")
-async def get_current_user(request: Request, state: AppState = Depends(get_app_state)):
+def get_current_user(request: Request, state: AppState = Depends(get_app_state)):
     """
     Get the current authenticated user.
 
@@ -362,7 +362,7 @@ class UpdateMeRequest(BaseModel):
 
 
 @router.patch("/me")
-async def update_current_user(
+def update_current_user(
     payload: UpdateMeRequest,
     request: Request,
     state: AppState = Depends(get_app_state),

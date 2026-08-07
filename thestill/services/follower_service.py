@@ -259,11 +259,11 @@ class FollowerService:
             PodcastNotFoundError: If podcast doesn't exist
             AlreadyFollowingError: If user already follows the podcast
         """
-        podcast = self.podcast_repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = self.podcast_repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             raise PodcastNotFoundError(f"Podcast not found: {podcast_slug}")
 
-        return self.follow(user_id, podcast.id)
+        return self.follow(user_id, podcast_id)
 
     def unfollow_by_slug(self, user_id: str, podcast_slug: str) -> bool:
         """
@@ -280,11 +280,11 @@ class FollowerService:
             PodcastNotFoundError: If podcast doesn't exist
             NotFollowingError: If user doesn't follow the podcast
         """
-        podcast = self.podcast_repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = self.podcast_repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             raise PodcastNotFoundError(f"Podcast not found: {podcast_slug}")
 
-        return self.unfollow(user_id, podcast.id)
+        return self.unfollow(user_id, podcast_id)
 
     def is_following_by_slug(self, user_id: str, podcast_slug: str) -> bool:
         """
@@ -297,11 +297,11 @@ class FollowerService:
         Returns:
             True if user follows the podcast, False otherwise (including if podcast not found)
         """
-        podcast = self.podcast_repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = self.podcast_repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             return False
 
-        return self.is_following(user_id, podcast.id)
+        return self.is_following(user_id, podcast_id)
 
     def get_follower_count_by_slug(self, podcast_slug: str) -> Optional[int]:
         """
@@ -313,8 +313,8 @@ class FollowerService:
         Returns:
             Number of followers, or None if podcast not found
         """
-        podcast = self.podcast_repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = self.podcast_repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             return None
 
-        return self.get_follower_count(podcast.id)
+        return self.get_follower_count(podcast_id)

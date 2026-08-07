@@ -4,6 +4,7 @@ import {
   useInfiniteQuery,
   useMutation,
   useQueryClient,
+  type InfiniteData,
   type UseQueryOptions,
 } from '@tanstack/react-query'
 import {
@@ -193,9 +194,11 @@ export function useEpisode(
     enabled: !!podcastSlug && !!episodeSlug,
     // Spec #68 D1 — this query is the reader's clock: `useEpisodeLiveRefresh`
     // derives content freshness from it. While the episode is unsettled it
-    // keeps the app-wide 5s `refetchInterval` (main.tsx) and runs in
-    // background tabs too, since a 40-minute transcription with the tab
-    // backgrounded is the common case. Content queries stay focus-gated.
+    // polls every 5s and runs in background tabs too, since a 40-minute
+    // transcription with the tab backgrounded is the common case. Content
+    // queries stay focus-gated. (Spec #69 Phase 3 removed the app-wide 5s
+    // default this clock used to inherit — the interval now lives here,
+    // explicitly.)
     //
     // It is pointedly NOT gated on *task activity* — a 2s task poll returning
     // an empty list before the 5s episode poll returns `summarized` would
@@ -206,13 +209,11 @@ export function useEpisode(
     //
     // Once settled the poll stops: a reader left open on a finished episode
     // would otherwise cost ~17k requests/day. Reactivation is
-    // `refetchOnWindowFocus` (global `staleTime` is 5s, so returning to the
-    // tab refetches) plus explicit invalidation from any queue mutation.
-    // Set ONLY when stopping. `refetchInterval: undefined` does not mean
-    // "inherit the default" — React Query spreads query options over
-    // `defaultOptions.queries`, so an explicit `undefined` wins and silently
-    // disables the 5s clock this whole design rides on.
-    ...(live ? {} : { refetchInterval: false as const }),
+    // `refetchOnWindowFocus` (staleTime stays 5s here — the app default is
+    // 60s — so returning to the tab refetches) plus explicit invalidation
+    // from any queue mutation.
+    staleTime: 5_000,
+    refetchInterval: live ? 5_000 : (false as const),
     refetchIntervalInBackground: live,
   })
 }
@@ -967,6 +968,33 @@ export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) 
   return useQuery({
     queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
     queryFn: () => getInbox(options),
+    staleTime: 15_000,
+    refetchInterval,
+  })
+}
+
+export interface UseInboxInfiniteOptions extends Omit<GetInboxOptions, 'before'> {
+  /** Conditional poll while imports work through the pipeline (see Inbox.tsx). */
+  refetchInterval?:
+    | number
+    | false
+    | ((query: {
+        state: { data?: InfiniteData<Awaited<ReturnType<typeof getInbox>>> }
+      }) => number | false | undefined)
+}
+
+/**
+ * Cursor-paged inbox (spec #69 Phase 3 rode-along fix): the server caps
+ * each page at 50 and returns a ``next_before`` cursor, but the page-less
+ * `useInbox` call meant anything older than the newest 50 was unreachable.
+ * Pages chain on ``before`` = previous page's ``next_before``.
+ */
+export function useInboxInfinite({ refetchInterval, ...options }: UseInboxInfiniteOptions = {}) {
+  return useInfiniteQuery({
+    queryKey: ['inbox', 'infinite', options.state ?? null, options.limit ?? null],
+    queryFn: ({ pageParam }) => getInbox({ ...options, before: pageParam || undefined }),
+    initialPageParam: '',
+    getNextPageParam: (lastPage) => lastPage.next_before ?? undefined,
     staleTime: 15_000,
     refetchInterval,
   })

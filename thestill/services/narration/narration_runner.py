@@ -165,9 +165,12 @@ class NarrationRunner:
             until=briefing.cursor_to,
             states=_NARRATION_STATES,
         )
+        # Spec #69 Phase 8.2 — batched lookup, order preserved (see
+        # briefing_renderer for the same pattern).
+        pairs = self.podcast_repository.get_episodes_by_ids(episode_ids)
         resolved: List[Tuple[Podcast, Episode]] = []
         for episode_id in episode_ids:
-            pair = self.podcast_repository.get_episode(episode_id)
+            pair = pairs.get(episode_id)
             if pair is None:
                 logger.debug(
                     "narration.run: episode missing from briefing window",

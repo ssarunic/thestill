@@ -20,7 +20,7 @@ Provides cross-podcast episode listing, search, and bulk operations.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
@@ -66,9 +66,11 @@ class BulkProcessResponse(BaseModel):
 
 
 @router.get("")
-async def get_all_episodes(
-    limit: int = 20,
-    offset: int = 0,
+def get_all_episodes(
+    # Server-side caps (spec #69 Phase 6.4): the limit used to flow
+    # unbounded straight into SQL, so ?limit=1000000 serialized the table.
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     podcast_slug: Optional[str] = None,
     state: Optional[str] = None,
@@ -95,13 +97,13 @@ async def get_all_episodes(
     Returns:
         List of episodes with their metadata, processing status, and pagination info.
     """
-    # Resolve podcast_slug to podcast_id if provided
+    # Resolve podcast_slug to podcast_id if provided (id-only lookup — no
+    # episode hydration, spec #69 Phase 4)
     podcast_id = None
     if podcast_slug:
-        podcast = app_state.repository.get_by_slug(podcast_slug)
-        if not podcast:
+        podcast_id = app_state.repository.resolve_podcast_slug(podcast_slug)
+        if not podcast_id:
             not_found("Podcast", podcast_slug)
-        podcast_id = podcast.id
 
     # Parse date parameters
     parsed_date_from = parse_iso_datetime(date_from, field_name="date_from")
@@ -128,16 +130,23 @@ async def get_all_episodes(
     )
     episodes = []
     for podcast, episode in episodes_with_podcasts:
-        # Extract summary preview if summary exists. Spec #35 — read via
-        # FileStorage; FileNotFoundError replaces the prior exists() check.
-        summary_preview = None
-        if episode.summary_path:
+        # Spec #69 Phase 6.5 — the preview is stored at summarize time.
+        # Episodes summarized before the column existed backfill lazily:
+        # read the file once, persist the extraction, and never read it
+        # again (bounded by page size, self-healing). Spec #35 — reads go
+        # via FileStorage; FileNotFoundError replaces the exists() check.
+        summary_preview = episode.summary_preview
+        if summary_preview is None and episode.summary_path:
             summary_file = app_state.path_manager.summary_file(episode.summary_path)
             try:
                 summary_text = app_state.config.file_storage.read_text(app_state.path_manager.to_relative(summary_file))
                 summary_preview = extract_summary_preview(summary_text)
+                # Persist "" when nothing was extractable so the file is
+                # never re-read for this episode ('' renders as no preview).
+                app_state.repository.set_episode_summary_preview(episode.id, summary_preview or "")
             except FileNotFoundError:
                 pass
+        summary_preview = summary_preview or None
 
         episodes.append(
             {
@@ -182,7 +191,7 @@ async def get_all_episodes(
 
 
 @router.post("/bulk/process")
-async def bulk_process_episodes(
+def bulk_process_episodes(
     request: BulkProcessRequest,
     app_state: AppState = Depends(get_app_state),
     _: User = Depends(require_admin),
@@ -296,7 +305,7 @@ class FailedEpisodeListResponse(BaseModel):
 
 
 @router.get("/failed", response_model=FailedEpisodeListResponse)
-async def list_failed_episodes(
+def list_failed_episodes(
     limit: int = 100,
     app_state: AppState = Depends(get_app_state),
 ) -> FailedEpisodeListResponse:
@@ -342,7 +351,7 @@ async def list_failed_episodes(
 
 
 @router.get("/{episode_id}/failure", response_model=EpisodeFailureResponse)
-async def get_episode_failure(
+def get_episode_failure(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
 ) -> EpisodeFailureResponse:
@@ -382,7 +391,7 @@ async def get_episode_failure(
 
 
 @router.post("/{episode_id}/retry", response_model=EpisodeRetryResponse)
-async def retry_failed_episode(
+def retry_failed_episode(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
     _: User = Depends(require_admin),

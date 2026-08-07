@@ -69,13 +69,18 @@ class _InboxRepo:
 
 
 class _PodcastRepo:
-    """In-memory stub of ``PodcastRepository.get_episode``."""
+    """In-memory stub of the episode lookups the runner uses."""
 
     def __init__(self, episodes: Dict[str, tuple[Podcast, Episode]]) -> None:
         self._episodes = episodes
 
     def get_episode(self, episode_id: str):
         return self._episodes.get(episode_id)
+
+    def get_episodes_by_ids(self, episode_ids):
+        # Mirrors the EpisodeRepository fallback contract (spec #69 Phase 8):
+        # missing ids are silently absent.
+        return {eid: self._episodes[eid] for eid in episode_ids if eid in self._episodes}
 
 
 @pytest.fixture

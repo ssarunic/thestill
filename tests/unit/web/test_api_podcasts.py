@@ -65,9 +65,35 @@ def client(test_app):
     return TestClient(test_app)
 
 
+def _rows_side_effect(podcasts):
+    """Emulate ``PodcastRepository.list_podcast_rows`` over fixture podcasts.
+
+    Mirrors the interface contract (filter by ids, case-insensitive q on
+    title/author, paginate after filtering, return (rows, total)); the real
+    SQL implementations are covered by the repository tests.
+    """
+
+    def _list(*, podcast_ids=None, q=None, limit=None, offset=0):
+        wanted = None if podcast_ids is None else {str(pid) for pid in podcast_ids}
+        needle = (q or "").strip().lower()
+        rows = []
+        for p in podcasts:
+            if wanted is not None and p.id not in wanted:
+                continue
+            if needle and needle not in p.title.lower() and needle not in (p.author or "").lower():
+                continue
+            rows.append(p.model_dump(exclude={"index", "description_text"}))
+        total = len(rows)
+        if limit is not None:
+            rows = rows[offset : offset + limit]
+        return rows, total
+
+    return _list
+
+
 def _setup_followed(mock_app_state, podcasts):
     mock_app_state.follower_repository.get_followed_podcast_ids.return_value = [p.id for p in podcasts]
-    mock_app_state.podcast_service.get_podcasts.return_value = podcasts
+    mock_app_state.repository.list_podcast_rows.side_effect = _rows_side_effect(podcasts)
 
 
 class TestListPodcasts:
@@ -86,7 +112,7 @@ class TestListPodcasts:
         followed = _podcast("pod-1", "Lex Fridman")
         unfollowed = _podcast("pod-2", "Hard Fork")
         mock_app_state.follower_repository.get_followed_podcast_ids.return_value = ["pod-1"]
-        mock_app_state.podcast_service.get_podcasts.return_value = [followed, unfollowed]
+        mock_app_state.repository.list_podcast_rows.side_effect = _rows_side_effect([followed, unfollowed])
 
         response = client.get("/api/podcasts")
 

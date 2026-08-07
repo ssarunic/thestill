@@ -130,7 +130,7 @@ def run_add_podcast_task(
         task_manager.update_progress(TaskType.ADD_PODCAST, 30, "Fetching podcast feed...")
 
         # Get count of podcasts before adding (to detect if it's new)
-        podcasts_before = len(state.repository.get_all())
+        podcasts_before = state.repository.count_podcasts()
 
         # Execute the add podcast (returns existing if already exists)
         podcast = state.podcast_service.add_podcast(url)
@@ -143,7 +143,7 @@ def run_add_podcast_task(
             return
 
         # Check if this was a newly added podcast or an existing one
-        podcasts_after = len(state.repository.get_all())
+        podcasts_after = state.repository.count_podcasts()
         is_new_podcast = podcasts_after > podcasts_before
 
         if is_new_podcast:
@@ -279,7 +279,7 @@ def run_refresh_task(
 
 
 @admin_router.post("/refresh", response_model=RefreshResponse)
-async def refresh_feeds(
+def refresh_feeds(
     request: RefreshRequest,
     background_tasks: BackgroundTasks,
     state: AppState = Depends(get_app_state),
@@ -334,7 +334,7 @@ async def refresh_feeds(
 
 
 @router.get("/refresh/status", response_model=TaskStatusResponse)
-async def get_refresh_status(
+def get_refresh_status(
     state: AppState = Depends(get_app_state),
 ) -> TaskStatusResponse:
     """
@@ -366,7 +366,7 @@ async def get_refresh_status(
 
 
 @router.get("/status")
-async def get_all_tasks_status(
+def get_all_tasks_status(
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
     """
@@ -385,7 +385,7 @@ async def get_all_tasks_status(
 
 
 @router.post("/add", response_model=AddPodcastResponse)
-async def add_podcast(
+def add_podcast(
     request: AddPodcastRequest,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
@@ -444,7 +444,7 @@ async def add_podcast(
 
 
 @router.get("/add/status", response_model=TaskStatusResponse)
-async def get_add_podcast_status(
+def get_add_podcast_status(
     state: AppState = Depends(get_app_state),
 ) -> TaskStatusResponse:
     """
@@ -710,7 +710,7 @@ def _validate_episode_for_stage(
 
 
 @admin_router.post("/download", response_model=QueueTaskResponse)
-async def queue_download(
+def queue_download(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -748,7 +748,7 @@ async def queue_download(
 
 
 @admin_router.post("/downsample", response_model=QueueTaskResponse)
-async def queue_downsample(
+def queue_downsample(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -774,7 +774,7 @@ async def queue_downsample(
 
 
 @admin_router.post("/transcribe", response_model=QueueTaskResponse)
-async def queue_transcribe(
+def queue_transcribe(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -800,7 +800,7 @@ async def queue_transcribe(
 
 
 @admin_router.post("/clean", response_model=QueueTaskResponse)
-async def queue_clean(
+def queue_clean(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -826,7 +826,7 @@ async def queue_clean(
 
 
 @admin_router.post("/summarize", response_model=QueueTaskResponse)
-async def queue_summarize(
+def queue_summarize(
     request: QueueTaskRequest,
     state: AppState = Depends(get_app_state),
 ) -> QueueTaskResponse:
@@ -861,7 +861,7 @@ class CancelPipelineResponse(BaseModel):
 
 
 @admin_router.post("/run-pipeline", response_model=RunPipelineResponse)
-async def run_pipeline(
+def run_pipeline(
     request: RunPipelineRequest,
     state: AppState = Depends(get_app_state),
 ) -> RunPipelineResponse:
@@ -965,7 +965,7 @@ async def run_pipeline(
 
 
 @admin_router.post("/episode/{episode_id}/cancel-pipeline", response_model=CancelPipelineResponse)
-async def cancel_pipeline(
+def cancel_pipeline(
     episode_id: str,
     state: AppState = Depends(get_app_state),
 ) -> CancelPipelineResponse:
@@ -1011,7 +1011,7 @@ async def cancel_pipeline(
 
 
 @router.get("/task/{task_id}", response_model=QueuedTaskStatusResponse)
-async def get_queued_task_status(
+def get_queued_task_status(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> QueuedTaskStatusResponse:
@@ -1046,7 +1046,7 @@ async def get_queued_task_status(
 
 
 @admin_router.get("/queue/status", response_model=QueueStatusResponse)
-async def get_queue_status(
+def get_queue_status(
     state: AppState = Depends(get_app_state),
 ) -> QueueStatusResponse:
     """
@@ -1066,7 +1066,7 @@ async def get_queue_status(
 
 
 @admin_router.get("/queue/tasks", response_model=QueueTasksResponse)
-async def get_queue_tasks(
+def get_queue_tasks(
     completed_limit: int = 10,
     state: AppState = Depends(get_app_state),
 ) -> QueueTasksResponse:
@@ -1089,6 +1089,21 @@ async def get_queue_tasks(
 
     # Get all active tasks
     tasks_by_status = state.queue_manager.get_active_tasks(include_completed=completed_limit)
+
+    # Spec #69 Phase 8.1 — two batch lookups replace one repository call
+    # (and one fresh connection) per displayed task. ``list_podcast_rows``
+    # is the Phase 4 light listing (title/slug, no episode hydration) —
+    # the old per-task ``get_podcast_for_refresh`` fetched every episode
+    # external_id of the podcast just to print its title.
+    _all_tasks = [t for bucket in tasks_by_status.values() for t in bucket]
+    _episode_pairs = state.repository.get_episodes_by_ids(list({t.episode_id for t in _all_tasks if t.episode_id}))
+    _refresh_podcast_ids = list({str(t.podcast_id) for t in _all_tasks if t.podcast_id is not None})
+    _podcast_rows = {
+        row["id"]: row
+        for row in (
+            state.repository.list_podcast_rows(podcast_ids=_refresh_podcast_ids)[0] if _refresh_podcast_ids else []
+        )
+    }
 
     def format_duration(seconds: Optional[int]) -> Optional[str]:
         """Format duration in seconds to human-readable string."""
@@ -1141,13 +1156,13 @@ async def get_queue_tasks(
         # Spec #48 — feed-scoped (REFRESH_FEED) tasks have no episode; render
         # them by podcast title instead of dereferencing a null episode_id.
         if task.podcast_id is not None:
-            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
-            if loaded:
-                podcast_title = loaded[0].title
-                podcast_slug = loaded[0].slug
+            loaded_row = _podcast_rows.get(str(task.podcast_id))
+            if loaded_row:
+                podcast_title = loaded_row["title"]
+                podcast_slug = loaded_row["slug"]
             episode_title = "[Feed refresh]"
         else:
-            result = state.repository.get_episode(task.episode_id)
+            result = _episode_pairs.get(task.episode_id)
             if result:
                 podcast, episode = result
                 episode_title = episode.title
@@ -1223,7 +1238,7 @@ async def get_queue_tasks(
 
 
 @admin_router.post("/queue/task/{task_id}/bump", response_model=BumpTaskResponse)
-async def bump_queue_task(
+def bump_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> BumpTaskResponse:
@@ -1258,7 +1273,7 @@ async def bump_queue_task(
 
 
 @admin_router.post("/queue/task/{task_id}/cancel", response_model=CancelTaskResponse)
-async def cancel_queue_task(
+def cancel_queue_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> CancelTaskResponse:
@@ -1293,7 +1308,7 @@ async def cancel_queue_task(
 
 
 @router.get("/episode/{episode_id}/tasks")
-async def get_episode_tasks(
+def get_episode_tasks(
     episode_id: str,
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
@@ -1402,7 +1417,7 @@ async def stream_task_progress(
 
 
 @router.get("/task/{task_id}/progress/current")
-async def get_current_progress(
+def get_current_progress(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> Dict[str, Any]:
@@ -1502,7 +1517,7 @@ class DLQBulkRetryResponse(BaseModel):
 
 
 @admin_router.get("/dlq", response_model=DLQListResponse)
-async def list_dlq_tasks(
+def list_dlq_tasks(
     limit: int = 100,
     branch: str = "all",
     state: AppState = Depends(get_app_state),
@@ -1550,19 +1565,27 @@ async def list_dlq_tasks(
         )
     dead_tasks = state.queue_manager.get_dead_tasks(limit=limit, stage_filter=branch_stage_map[branch])
 
+    # Spec #69 Phase 8.1 — same two batch lookups as the queue view.
+    dlq_episode_pairs = state.repository.get_episodes_by_ids(list({t.episode_id for t in dead_tasks if t.episode_id}))
+    dlq_podcast_ids = list({str(t.podcast_id) for t in dead_tasks if t.podcast_id is not None})
+    dlq_podcast_rows = {
+        row["id"]: row
+        for row in (state.repository.list_podcast_rows(podcast_ids=dlq_podcast_ids)[0] if dlq_podcast_ids else [])
+    }
+
     tasks_with_info = []
     for task in dead_tasks:
         # Spec #48 — feed-scoped tasks render by podcast, not episode.
         if task.podcast_id is not None:
-            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
+            loaded_row = dlq_podcast_rows.get(str(task.podcast_id))
             tasks_with_info.append(
                 DLQTaskResponse(
                     task_id=task.id,
                     episode_id="",
                     episode_title="[Feed refresh]",
                     episode_slug="",
-                    podcast_title=loaded[0].title if loaded else "[Unknown]",
-                    podcast_slug=loaded[0].slug if loaded else "",
+                    podcast_title=loaded_row["title"] if loaded_row else "[Unknown]",
+                    podcast_slug=loaded_row["slug"] if loaded_row else "",
                     stage=task.stage.value,
                     error_message=task.error_message,
                     error_type=task.error_type.value if task.error_type else None,
@@ -1574,7 +1597,7 @@ async def list_dlq_tasks(
             )
             continue
         # Get episode and podcast info
-        result = state.repository.get_episode(task.episode_id)
+        result = dlq_episode_pairs.get(task.episode_id)
         if result:
             podcast, episode = result
             tasks_with_info.append(
@@ -1622,7 +1645,7 @@ async def list_dlq_tasks(
 
 
 @admin_router.post("/dlq/{task_id}/retry", response_model=DLQActionResponse)
-async def retry_dlq_task(
+def retry_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> DLQActionResponse:
@@ -1676,7 +1699,7 @@ async def retry_dlq_task(
 
 
 @admin_router.post("/dlq/{task_id}/skip", response_model=DLQActionResponse)
-async def skip_dlq_task(
+def skip_dlq_task(
     task_id: str,
     state: AppState = Depends(get_app_state),
 ) -> DLQActionResponse:
@@ -1722,7 +1745,7 @@ async def skip_dlq_task(
 
 
 @admin_router.post("/dlq/retry-all", response_model=DLQBulkRetryResponse)
-async def retry_all_dlq_tasks(
+def retry_all_dlq_tasks(
     request: Optional[DLQBulkRetryRequest] = None,
     state: AppState = Depends(get_app_state),
 ) -> DLQBulkRetryResponse:

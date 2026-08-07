@@ -132,6 +132,7 @@ def _episode_from_row(row: Dict[str, Any], *, prefix: str = "") -> Episode:
             else 0.0
         ),
         summary_path=col("summary_path"),
+        summary_preview=(col("summary_preview") if has("summary_preview") else None),
         published_at=(col("published_at") if has("published_at") else None),
         failed_at_stage=col("failed_at_stage"),
         failure_reason=col("failure_reason"),
@@ -177,6 +178,15 @@ class EpisodesMixin:
         normalized via ``normalize_category_name``; top-level rows are stored
         under ``(top_norm, None)``.
         """
+        # Spec #69 Phase 8.3 — memoized per repository instance. Every
+        # single-episode read used to re-fetch this ~200-row table; a
+        # 20-episode briefing render paid it 20 times. The taxonomy is
+        # seeded at startup and read-only at runtime (the SQLite backend
+        # has cached it at __init__ since day one — this closes the
+        # asymmetry flagged in the module docstring's cleanup note).
+        cached = getattr(self, "_episode_category_maps_cache", None)
+        if cached is not None:
+            return cached
         rows = conn.execute("SELECT id, name, parent_id FROM categories").fetchall()
         top_id_to_name = {r["id"]: r["name"] for r in rows if r["parent_id"] is None}
         pair_to_id: Dict[Tuple[str, Optional[str]], int] = {}
@@ -192,6 +202,7 @@ class EpisodesMixin:
                     continue  # orphan subcategory — defensive, FK should prevent
                 id_to_pair[r["id"]] = (top_name, r["name"])
                 pair_to_id[(normalize_category_name(top_name), normalize_category_name(r["name"]))] = r["id"]
+        self._episode_category_maps_cache = (pair_to_id, id_to_pair)
         return pair_to_id, id_to_pair
 
     @staticmethod
@@ -534,20 +545,26 @@ class EpisodesMixin:
         if not updates:
             return 0
         now = datetime.now(timezone.utc)
-        changed = 0
+        # Spec #69 Phase 8.4 — one executemany instead of a round trip per
+        # row (the image-repair caller can pass thousands of updates; the
+        # SQLite implementation has batched this since day one and the
+        # Postgres port regressed to a loop). psycopg3 sums rowcount across
+        # an executemany, preserving the changed-rows return.
+        params = []
+        for episode_id, image_url in updates:
+            normalized = _normalize_artwork_url(image_url)
+            params.append((normalized, now, episode_id, normalized))
         with connect(self.dsn) as conn:
-            for episode_id, image_url in updates:
-                normalized = _normalize_artwork_url(image_url)
-                cursor = conn.execute(
-                    """
-                    UPDATE episodes
-                    SET image_url = %s, updated_at = %s
-                    WHERE id = %s AND image_url IS DISTINCT FROM %s
-                    """,
-                    (normalized, now, episode_id, normalized),
-                )
-                changed += cursor.rowcount
-        return changed
+            cursor = conn.cursor()
+            cursor.executemany(
+                """
+                UPDATE episodes
+                SET image_url = %s, updated_at = %s
+                WHERE id = %s AND image_url IS DISTINCT FROM %s
+                """,
+                params,
+            )
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Spec #48 — orphan recovery / auto-process gating (tasks is read-only)
@@ -1149,6 +1166,27 @@ class EpisodesMixin:
             _, id_to_pair = self._category_maps(conn)
             return (self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row))
 
+    def get_episodes_by_ids(self, episode_ids) -> Dict[str, Tuple[Podcast, Episode]]:
+        """Spec #69 Phase 8 — one JOIN for a whole id list (see interface)."""
+        if not episode_ids:
+            return {}
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PODCAST_TUPLE_COLS}
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE e.id = ANY(%s::uuid[])
+                """,
+                ([str(eid) for eid in episode_ids],),
+            ).fetchall()
+            _, id_to_pair = self._category_maps(conn)
+            out: Dict[str, Tuple[Podcast, Episode]] = {}
+            for row in rows:
+                episode = self._row_to_episode(row)
+                out[episode.id] = (self._podcast_from_row_minimal(row, id_to_pair), episode)
+            return out
+
     def get_episode_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
         """Get specific episode by external ID (from RSS feed)."""
         with connect(self.dsn) as conn:
@@ -1208,15 +1246,13 @@ class EpisodesMixin:
             return []
 
         with connect(self.dsn) as conn:
-            rows = conn.execute(
-                f"""
+            rows = conn.execute(f"""
                 SELECT {_PODCAST_TUPLE_COLS}
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
                 ORDER BY e.pub_date DESC NULLS LAST
-                """
-            ).fetchall()
+                """).fetchall()
 
             _, id_to_pair = self._category_maps(conn)
             return [(self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row)) for row in rows]
@@ -1512,32 +1548,33 @@ class EpisodesMixin:
                     (podcast_id,),
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT e.*
                     FROM episodes e
                     WHERE EXISTS (SELECT 1 FROM episode_transcript_links etl
                                   WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL)
                     ORDER BY e.pub_date DESC NULLS LAST
-                    """
-                ).fetchall()
+                    """).fetchall()
 
-            results = []
-            for row in rows:
-                episode = self._row_to_episode(row)
-                # Fetch undownloaded links for this episode
+            episodes = [self._row_to_episode(row) for row in rows]
+
+            # Spec #69 Phase 8.5 — one query for every episode's links
+            # instead of one per episode (the external-transcript downloader
+            # can receive hundreds of episodes).
+            links_by_episode: Dict[str, List[TranscriptLink]] = {ep.id: [] for ep in episodes}
+            if episodes:
                 link_rows = conn.execute(
                     """
                     SELECT id, episode_id, url, mime_type, language, rel, downloaded_path, created_at
                     FROM episode_transcript_links
-                    WHERE episode_id = %s AND downloaded_path IS NULL
+                    WHERE downloaded_path IS NULL AND episode_id = ANY(%s::uuid[])
                     """,
-                    (episode.id,),
+                    ([ep.id for ep in episodes],),
                 ).fetchall()
-                links = [self._row_to_transcript_link(link_row) for link_row in link_rows]
-                results.append((episode, links))
+                for link_row in link_rows:
+                    links_by_episode[as_str(link_row["episode_id"])].append(self._row_to_transcript_link(link_row))
 
-            return results
+            return [(ep, links_by_episode[ep.id]) for ep in episodes]
 
     def _row_to_transcript_link(self, row: Dict[str, Any]) -> TranscriptLink:
         """Convert database row to TranscriptLink model."""
@@ -1642,6 +1679,14 @@ class EpisodesMixin:
                 (podcast_id, audio_url),
             ).fetchone()
             return as_str(row["id"]) if row else None
+
+    def set_episode_summary_preview(self, episode_id: str, preview: Optional[str]) -> None:
+        # No updated_at bump on purpose — see the interface docstring.
+        with connect(self.dsn) as conn:
+            conn.execute(
+                "UPDATE episodes SET summary_preview = %s WHERE id = %s",
+                (preview, episode_id),
+            )
 
     def set_episode_canonical_id(self, episode_id: str, canonical_id: str) -> None:
         """Stamp ``canonical_id`` on an existing episode row.

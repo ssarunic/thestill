@@ -28,12 +28,12 @@ feature is engaged.
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from structlog import get_logger
 
 from ..dependencies import AppState, get_app_state
-from ..responses import api_response, not_found
+from ..responses import api_response, etag_json_response, not_found
 
 logger = get_logger(__name__)
 
@@ -69,9 +69,10 @@ class SegmentWords(BaseModel):
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/transcript/words")
-async def get_episode_transcript_words(
+def get_episode_transcript_words(
     podcast_slug: str,
     episode_slug: str,
+    request: Request,
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """Return per-segment word-level timestamps for an episode.
@@ -127,10 +128,14 @@ async def get_episode_transcript_words(
             words_dto.append(WordTimestamp(w=raw_w.word, s=start_s, e=end_s))
         segments_payload.append(SegmentWords(segment_id=sw.segment_id, words=words_dto).model_dump())
 
-    return api_response(
+    # Write-once resource, and the largest payload in the API (~1 MB raw
+    # for a 2-hour episode): content-hash ETag + revalidation means repeat
+    # opens cost a 304 (spec #69 Phase 6.2; gzip handles first-load size).
+    return etag_json_response(
+        request,
         {
             "episode_id": episode.id,
             "playback_time_offset_seconds": words_result.playback_time_offset_seconds,
             "segments": segments_payload,
-        }
+        },
     )
