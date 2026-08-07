@@ -55,8 +55,6 @@ ROUTES_DIR = Path(routes_pkg.__file__).parent
 ALLOWED_ASYNC_ROUTES = {
     # SSE stream: awaits an asyncio.Queue in a generator.
     ("api_commands", "stream_task_progress"),
-    # Awaits run_in_threadpool for the LLM language-detection/translation.
-    ("api_podcasts", "get_episode_summary_by_slugs"),
     # OAuth flows await the async auth_service methods.
     ("auth", "auth_status"),
     ("auth", "google_callback"),
