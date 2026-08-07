@@ -97,6 +97,59 @@ _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.descripti
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
+# Shared by ``_save_episode_row`` (single insert) and ``save()``'s batched
+# re-insert (spec #69 Phase 8.4) so the column list can't drift between the
+# two paths. ``duration`` is a ``text`` column in the typed schema, so the
+# int model field is stringified on write (pydantic coerces it back on read).
+_EPISODE_INSERT_SQL = """
+    INSERT INTO episodes (
+        id, podcast_id, created_at, updated_at, external_id, title, slug, description,
+        description_html, pub_date, audio_url, duration, image_url,
+        explicit, episode_type, episode_number, season_number, website_url,
+        audio_file_size, audio_mime_type,
+        audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
+        clean_transcript_json_path, summary_path, playback_time_offset_seconds,
+        failed_at_stage, failure_reason, failure_type, failed_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _episode_insert_params(podcast_id: str, episode: Episode, now: datetime) -> tuple:
+    return (
+        episode.id,
+        podcast_id,
+        episode.created_at,
+        now,
+        episode.external_id,
+        episode.title,
+        episode.slug,
+        episode.description,
+        episode.description_html,
+        episode.pub_date,
+        str(episode.audio_url),
+        str(episode.duration) if episode.duration is not None else None,
+        _normalize_artwork_url(episode.image_url),
+        episode.explicit,
+        episode.episode_type,
+        episode.episode_number,
+        episode.season_number,
+        episode.website_url,
+        episode.audio_file_size,
+        episode.audio_mime_type,
+        episode.audio_path,
+        episode.downsampled_audio_path,
+        episode.raw_transcript_path,
+        episode.clean_transcript_path,
+        episode.clean_transcript_json_path,
+        episode.summary_path,
+        episode.playback_time_offset_seconds,
+        episode.failed_at_stage,
+        episode.failure_reason,
+        episode.failure_type.value if episode.failure_type else None,
+        episode.failed_at,
+    )
+
+
 def _opt_bool(value: Any) -> Optional[bool]:
     """Nullable boolean read (native bool in PG; None stays None)."""
     return None if value is None else bool(value)
@@ -824,66 +877,21 @@ class PodcastsMixin:
             # Note: No CASCADE - we explicitly delete here
             conn.execute("DELETE FROM episodes WHERE podcast_id = %s", (podcast_id,))
 
-            # Insert all episodes
-            for episode in podcast.episodes:
-                self._save_episode_row(conn, podcast_id, episode, now)
+            # Insert all episodes — one executemany, not one round trip per
+            # episode (spec #69 Phase 8.4; a 1000-episode feed import used
+            # to issue 1000 INSERT statements).
+            if podcast.episodes:
+                conn.cursor().executemany(
+                    _EPISODE_INSERT_SQL,
+                    [_episode_insert_params(podcast_id, ep, now) for ep in podcast.episodes],
+                )
 
             logger.debug(f"Saved podcast: {podcast.title} ({len(podcast.episodes)} episodes)")
             return podcast
 
     def _save_episode_row(self, conn: psycopg.Connection, podcast_id: str, episode: Episode, now: datetime) -> None:
-        """Insert episode into database (PG port of ``_save_episode``).
-
-        ``duration`` is a ``text`` column in the typed schema, so the int
-        model field is stringified on write (pydantic coerces it back on
-        read).
-        """
-        conn.execute(
-            """
-            INSERT INTO episodes (
-                id, podcast_id, created_at, updated_at, external_id, title, slug, description,
-                description_html, pub_date, audio_url, duration, image_url,
-                explicit, episode_type, episode_number, season_number, website_url,
-                audio_file_size, audio_mime_type,
-                audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
-                clean_transcript_json_path, summary_path, playback_time_offset_seconds,
-                failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                episode.id,
-                podcast_id,
-                episode.created_at,
-                now,
-                episode.external_id,
-                episode.title,
-                episode.slug,
-                episode.description,
-                episode.description_html,
-                episode.pub_date,
-                str(episode.audio_url),
-                str(episode.duration) if episode.duration is not None else None,
-                _normalize_artwork_url(episode.image_url),
-                episode.explicit,
-                episode.episode_type,
-                episode.episode_number,
-                episode.season_number,
-                episode.website_url,
-                episode.audio_file_size,
-                episode.audio_mime_type,
-                episode.audio_path,
-                episode.downsampled_audio_path,
-                episode.raw_transcript_path,
-                episode.clean_transcript_path,
-                episode.clean_transcript_json_path,
-                episode.summary_path,
-                episode.playback_time_offset_seconds,
-                episode.failed_at_stage,
-                episode.failure_reason,
-                episode.failure_type.value if episode.failure_type else None,
-                episode.failed_at,
-            ),
-        )
+        """Insert episode into database (PG port of ``_save_episode``)."""
+        conn.execute(_EPISODE_INSERT_SQL, _episode_insert_params(podcast_id, episode, now))
 
     def touch_last_processed_at(self, podcast_id: str, when: datetime) -> None:
         """Record the wall-clock time an episode was last processed.
@@ -1178,13 +1186,17 @@ class PodcastsMixin:
                   AND last_refresh_error IS NULL
                   AND {self._active_feed_sql()}
                 """).fetchall()
+            # Spec #69 Phase 8.4 — jitter computed in Python as before,
+            # written in one executemany instead of a statement per feed.
+            seed_params = []
             for row in rows:
                 pid = as_str(row["id"])
                 offset = (hash(pid) % max(1, default_interval_seconds)) if default_interval_seconds > 0 else 0
-                next_at = now_dt + timedelta(seconds=offset)
-                conn.execute(
+                seed_params.append((default_interval_seconds, now_dt + timedelta(seconds=offset), pid))
+            if seed_params:
+                conn.cursor().executemany(
                     "UPDATE podcasts SET refresh_interval_seconds = %s, next_refresh_at = %s WHERE id = %s",
-                    (default_interval_seconds, next_at, pid),
+                    seed_params,
                 )
             if rows:
                 logger.info("Seeded refresh schedule for unscheduled feeds", count=len(rows))

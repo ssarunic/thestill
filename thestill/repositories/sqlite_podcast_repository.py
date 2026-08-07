@@ -4441,6 +4441,35 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             episode = self._row_to_episode(row)
             return (podcast, episode)
 
+    def get_episodes_by_ids(self, episode_ids) -> Dict[str, Tuple[Podcast, Episode]]:
+        """Spec #69 Phase 8 — one JOIN for a whole id list (see interface)."""
+        if not episode_ids:
+            return {}
+        ids = [str(eid) for eid in episode_ids]
+        placeholders = ",".join("?" for _ in ids)
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT p.id as p_id, p.created_at as p_created_at, p.rss_url, p.title as p_title,
+                       p.slug as p_slug, p.description as p_description, p.image_url as p_image_url,
+                       p.language as p_language,
+                       p.primary_category_id as p_primary_category_id,
+                       p.secondary_category_id as p_secondary_category_id,
+                       p.author as p_author, p.explicit as p_explicit, p.show_type as p_show_type,
+                       p.website_url as p_website_url, p.is_complete as p_is_complete, p.copyright as p_copyright,
+                       p.last_processed, p.last_processed_at, p.updated_at as p_updated_at, e.*
+                FROM episodes e
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE e.id IN ({placeholders})
+                """,
+                ids,
+            ).fetchall()
+            out: Dict[str, Tuple[Podcast, Episode]] = {}
+            for row in rows:
+                episode = self._row_to_episode(row)
+                out[episode.id] = (self._row_to_podcast_minimal(row), episode)
+            return out
+
     def get_episode_by_external_id(self, podcast_url: str, episode_external_id: str) -> Optional[Episode]:
         """Get specific episode by external ID (from RSS feed)."""
         with self._get_connection() as conn:

@@ -578,6 +578,21 @@ class EpisodeRepository(ABC):
     efficient than loading full podcast objects.
     """
 
+    def get_episodes_by_ids(self, episode_ids: Sequence[str]) -> Dict[str, Tuple[Podcast, Episode]]:
+        """Batch variant of :meth:`get_episode` (spec #69 Phase 8).
+
+        Returns ``{episode_id: (podcast, episode)}``; missing ids are
+        silently absent so callers can preserve their own ordering and
+        detect deletions. Default falls back to one lookup per id; the SQL
+        backends override with a single JOIN query.
+        """
+        out: Dict[str, Tuple[Podcast, Episode]] = {}
+        for episode_id in episode_ids:
+            pair = self.get_episode(episode_id)
+            if pair is not None:
+                out[str(episode_id)] = pair
+        return out
+
     def set_episode_summary_preview(self, episode_id: str, preview: "Optional[str]") -> None:
         """Persist the pre-computed summary preview (spec #69 Phase 6.5).
 

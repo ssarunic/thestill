@@ -1090,6 +1090,21 @@ def get_queue_tasks(
     # Get all active tasks
     tasks_by_status = state.queue_manager.get_active_tasks(include_completed=completed_limit)
 
+    # Spec #69 Phase 8.1 — two batch lookups replace one repository call
+    # (and one fresh connection) per displayed task. ``list_podcast_rows``
+    # is the Phase 4 light listing (title/slug, no episode hydration) —
+    # the old per-task ``get_podcast_for_refresh`` fetched every episode
+    # external_id of the podcast just to print its title.
+    _all_tasks = [t for bucket in tasks_by_status.values() for t in bucket]
+    _episode_pairs = state.repository.get_episodes_by_ids(list({t.episode_id for t in _all_tasks if t.episode_id}))
+    _refresh_podcast_ids = list({str(t.podcast_id) for t in _all_tasks if t.podcast_id is not None})
+    _podcast_rows = {
+        row["id"]: row
+        for row in (
+            state.repository.list_podcast_rows(podcast_ids=_refresh_podcast_ids)[0] if _refresh_podcast_ids else []
+        )
+    }
+
     def format_duration(seconds: Optional[int]) -> Optional[str]:
         """Format duration in seconds to human-readable string."""
         if seconds is None:
@@ -1141,13 +1156,13 @@ def get_queue_tasks(
         # Spec #48 — feed-scoped (REFRESH_FEED) tasks have no episode; render
         # them by podcast title instead of dereferencing a null episode_id.
         if task.podcast_id is not None:
-            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
-            if loaded:
-                podcast_title = loaded[0].title
-                podcast_slug = loaded[0].slug
+            loaded_row = _podcast_rows.get(str(task.podcast_id))
+            if loaded_row:
+                podcast_title = loaded_row["title"]
+                podcast_slug = loaded_row["slug"]
             episode_title = "[Feed refresh]"
         else:
-            result = state.repository.get_episode(task.episode_id)
+            result = _episode_pairs.get(task.episode_id)
             if result:
                 podcast, episode = result
                 episode_title = episode.title
@@ -1550,19 +1565,27 @@ def list_dlq_tasks(
         )
     dead_tasks = state.queue_manager.get_dead_tasks(limit=limit, stage_filter=branch_stage_map[branch])
 
+    # Spec #69 Phase 8.1 — same two batch lookups as the queue view.
+    dlq_episode_pairs = state.repository.get_episodes_by_ids(list({t.episode_id for t in dead_tasks if t.episode_id}))
+    dlq_podcast_ids = list({str(t.podcast_id) for t in dead_tasks if t.podcast_id is not None})
+    dlq_podcast_rows = {
+        row["id"]: row
+        for row in (state.repository.list_podcast_rows(podcast_ids=dlq_podcast_ids)[0] if dlq_podcast_ids else [])
+    }
+
     tasks_with_info = []
     for task in dead_tasks:
         # Spec #48 — feed-scoped tasks render by podcast, not episode.
         if task.podcast_id is not None:
-            loaded = state.repository.get_podcast_for_refresh(task.podcast_id)
+            loaded_row = dlq_podcast_rows.get(str(task.podcast_id))
             tasks_with_info.append(
                 DLQTaskResponse(
                     task_id=task.id,
                     episode_id="",
                     episode_title="[Feed refresh]",
                     episode_slug="",
-                    podcast_title=loaded[0].title if loaded else "[Unknown]",
-                    podcast_slug=loaded[0].slug if loaded else "",
+                    podcast_title=loaded_row["title"] if loaded_row else "[Unknown]",
+                    podcast_slug=loaded_row["slug"] if loaded_row else "",
                     stage=task.stage.value,
                     error_message=task.error_message,
                     error_type=task.error_type.value if task.error_type else None,
@@ -1574,7 +1597,7 @@ def list_dlq_tasks(
             )
             continue
         # Get episode and podcast info
-        result = state.repository.get_episode(task.episode_id)
+        result = dlq_episode_pairs.get(task.episode_id)
         if result:
             podcast, episode = result
             tasks_with_info.append(

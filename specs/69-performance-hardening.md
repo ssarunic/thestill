@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–7 shipped 2026-08-06/07; Phase 8 open)
+**Status**: 🚧 Implemented on `claude/performance-analysis-prompt-nv8sh0` (2026-08-06/07) — all 8 phases shipped; pending merge
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities; Phase 6: gzip + content-hash ETags + limit caps + stored summary previews (migration 0008); Phase 7: content-visibility row windowing + 4Hz clock confined to a tracker leaf — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities; Phase 6: gzip + content-hash ETags + limit caps + stored summary previews (migration 0008); Phase 7: content-visibility row windowing + 4Hz clock confined to a tracker leaf; Phase 8: queue/DLQ/briefing batch lookups + category-map memo + executemany writes — see Outcome. ALL PHASES COMPLETE)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -703,6 +703,63 @@ crossing → exactly one), the walk-back-to-visible behavior under entity
 filters, and the pre-start null. All 31 existing viewer tests (including
 karaoke) pass unchanged; full frontend suite 332 passed; `tsc -b` and
 production build clean.
+
+## Outcome (Phase 8, 2026-08-07)
+
+**Batch lookups (8.1, 8.2)** — new `EpisodeRepository.get_episodes_by_ids`
+(`{id: (podcast, episode)}`; concrete ABC fallback + one-JOIN overrides on
+both backends, parity-tested like the Phase 4 aggregates). The queue and
+DLQ routes now do **two batch lookups per page** — episodes via the new
+method, refresh-task podcast titles via Phase 4's `list_podcast_rows` —
+instead of one repository call (and one connection) per displayed task;
+the old per-task `get_podcast_for_refresh` had also been fetching every
+episode external_id of the podcast just to print its title. The briefing
+renderer and narration runner resolve their whole episode window in one
+query, preserving inbox order and the missing-id logging.
+
+**Category-map memo (8.3)** — the episodes mixin's `_category_maps` is
+memoized per repository instance, closing the asymmetry its own module
+note flagged (SQLite has cached at `__init__` since day one): every
+single-episode read had been re-fetching the ~200-row taxonomy, so a
+20-episode briefing paid it 20 times.
+
+**Batched writes (8.4)** — `update_episode_image_urls` uses `executemany`
+(the SQLite implementation always had; the Postgres port had regressed to
+a loop — psycopg3 sums rowcount across an executemany so the changed-rows
+return survives, verified 10-then-0 with the no-op guard intact);
+`save()`'s destructive re-insert path executemanys all episodes through a
+shared `_EPISODE_INSERT_SQL`/`_episode_insert_params` (extracted from
+`_save_episode_row` so the column list can't drift);
+`seed_unscheduled_feeds` writes its jittered schedule in one executemany.
+**Two recorded deviations**: `_save_episode_idempotent`'s SELECT-then-write
+stays — the SELECT is *change detection* implementing the "only bump
+`updated_at` when data actually changed" contract, both statements already
+share one connection/transaction, and a conditional upsert would risk
+those semantics for one round trip on a non-hot path. And the SQLite
+counterparts of `save()`/`seed` keep their loops — row-at-a-time cost is
+network round trips, which a local file has none of.
+
+**Transcript links (8.5)** — the per-episode links query became one
+`episode_id = ANY(...)` fetch grouped in Python.
+
+**A ride-along fix**: exercising `get_episodes_by_ids` on a scratch DB
+without migration 0008 exposed that Phase 6's Postgres episode mapper read
+`summary_preview` unguarded — a deploy racing `alembic upgrade` would
+crash on every episode read. Now guarded with the mapper's own `has()`
+convention.
+
+Measured on the seeded scratch instance: 20-episode batch lookup 21ms
+(one query), 50-episode `save()` 210ms end-to-end, image repair 10 rows
+one statement, 290 feeds seeded one statement, links for 5 episodes one
+query. Tests: parity suite extended (8 tests), narration-runner stub
+taught the batch contract, full unit 2666 passed, integration 592 passed
+(same single pre-existing MCP failure and two pre-existing default-deny
+failures as the base commit).
+
+**This completes spec #69: all four Critical and all ten High findings
+from the 2026-08-06 review are closed.** Remaining performance work lives
+in [70-performance-medium-backlog.md](70-performance-medium-backlog.md)
+(deferred, trigger-gated) and spec #44's connection pool.
 
 ## Related specs
 

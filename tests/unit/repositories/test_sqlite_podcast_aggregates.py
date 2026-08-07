@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from thestill.models.podcast import Episode, Podcast
-from thestill.repositories.podcast_repository import PodcastRepository
+from thestill.repositories.podcast_repository import EpisodeRepository, PodcastRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
 
@@ -162,3 +162,20 @@ def test_get_podcast_row_by_slug_matches_fallback(seeded):
     fb = PodcastRepository.get_podcast_row_by_slug(seeded, "beta-cast")
     assert _normalize([sql]) == _normalize([fb])
     assert seeded.get_podcast_row_by_slug("missing") is None
+
+
+def test_get_episodes_by_ids_matches_fallback(seeded):
+    # Collect real episode ids via the corpus path.
+    all_ids = [e.id for p in seeded.get_all() for e in p.episodes]
+    wanted = all_ids[:3] + ["missing-id"]
+    sql = seeded.get_episodes_by_ids(wanted)
+    fb = EpisodeRepository.get_episodes_by_ids(seeded, wanted)
+    assert set(sql.keys()) == set(fb.keys()) == set(all_ids[:3])
+    for eid in sql:
+        sql_podcast, sql_episode = sql[eid]
+        fb_podcast, fb_episode = fb[eid]
+        assert sql_episode.id == fb_episode.id
+        assert sql_episode.title == fb_episode.title
+        assert sql_podcast.id == fb_podcast.id
+        assert sql_podcast.title == fb_podcast.title
+    assert seeded.get_episodes_by_ids([]) == {}

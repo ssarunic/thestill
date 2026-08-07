@@ -58,9 +58,13 @@ class BriefingRenderer:
         briefing covers what's still resolvable. The cursor still
         advances either way.
         """
+        # Spec #69 Phase 8.2 — one batched JOIN instead of a query (and a
+        # fresh connection) per window episode; order preserved from the
+        # inbox window, missing ids still logged and skipped.
+        pairs = self._repository.get_episodes_by_ids(episode_ids)
         episodes: List[Tuple[Podcast, Episode]] = []
         for episode_id in episode_ids:
-            row = self._repository.get_episode(episode_id)
+            row = pairs.get(episode_id)
             if row is None:
                 logger.warning(
                     "briefing_render_skipped_missing_episode",
