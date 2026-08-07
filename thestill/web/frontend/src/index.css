@@ -94,3 +94,20 @@ body {
 .animate-slide-in {
   animation: slide-in 0.3s ease-out;
 }
+
+/* Spec #69 Phase 7.1 — native row windowing for transcripts.
+   `content-visibility: auto` lets the browser skip style, layout, and
+   paint for every off-screen segment row, so a 10k-segment transcript
+   renders (and scrolls) at viewport cost instead of transcript cost.
+   Chosen over a JS windowing library on purpose: every scroll feature
+   in the reader (follow-playback, citation deep links, in-transcript
+   search, [ / ] mention jumps) drives element-based scrollIntoView via
+   useAutoScrollFollow, and works identically in both scroll contexts
+   (page and the spec #52 overlay) — all of which keeps working because
+   the elements still exist; they are just free until scrolled near.
+   `contain-intrinsic-size` provides the placeholder height (last
+   rendered size once known) so the scrollbar stays stable. */
+.transcript-content > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}

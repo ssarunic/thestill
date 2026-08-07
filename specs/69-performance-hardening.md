@@ -1,8 +1,8 @@
 # Performance Hardening — Critical and High Findings
 
-**Status**: 🚧 Active development (Phases 1–6 shipped 2026-08-06; Phases 7–8 open)
+**Status**: 🚧 Active development (Phases 1–7 shipped 2026-08-06/07; Phase 8 open)
 **Created**: 2026-08-06
-**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities; Phase 6: gzip + content-hash ETags + limit caps + stored summary previews (migration 0008) — see Outcome)
+**Updated**: 2026-08-06 (Phase 1: migration 0007 + `SCHEMA_SQL` + SQLite parity, all five EXPLAIN gates green; Phase 2: 65-route sync sweep + webhook threadpool + AST/behavioral guard; Phase 3: no-default-polling QueryClient + explicit `useEpisode` clock + inbox cursor paging; Phase 4: corpus-hydration retirement behind six new repository aggregates with fallback-parity tests; Phase 5: entity page batched to 3 connections + typeahead scoped to matched entities; Phase 6: gzip + content-hash ETags + limit caps + stored summary previews (migration 0008); Phase 7: content-visibility row windowing + 4Hz clock confined to a tracker leaf — see Outcome)
 **Priority**: High (Critical tier is wrong at current scale; High tier is wrong at target scale)
 
 ## Overview
@@ -653,6 +653,56 @@ round-trips.
 
 Tests: unit at baseline plus the new ETag suite (2660+5), integration 592
 passed, frontend `tsc -b` clean.
+
+## Outcome (Phase 7, 2026-08-07)
+
+**Windowing (7.1) — deliberate deviation from the plan's react-virtuoso.**
+Reading the component first changed the call: every scroll feature in the
+reader — follow-playback, citation deep links (spec #54), in-transcript
+search jumps, `[`/`]` mention jumps, the resume button — flows through one
+element-based mechanism (`useAutoScrollFollow`'s ref map +
+`scrollIntoView`), which works identically in both scroll contexts (page
+and the spec #52 overlay). A JS windowing library unmounts off-screen rows,
+so all five features plus the dual scroll-parent handling would need
+rewiring — high regression risk with no visual QA available. Instead the
+row containers get **`content-visibility: auto` +
+`contain-intrinsic-size: auto 96px`** (one CSS rule covering both viewers
+via their shared `transcript-content` container class): the browser skips
+style/layout/paint for every off-screen row, so a 10k-segment transcript
+renders and scrolls at viewport cost, while the elements still exist —
+every scroll feature keeps working untouched. The literal "<2k DOM nodes"
+gate is superseded by the equivalent guarantee ("off-screen rows cost no
+layout/paint"); React reconciliation cost per *tick* is eliminated by 7.2
+below, and per user-initiated re-render (filter toggle, search) stays
+O(n) — acceptable, they're rare events. Revisit true windowing only if
+node *memory* (not rendering) is ever the measured bottleneck.
+
+**Clock confinement (7.2)** — new `ActiveSegmentTracker` null-rendering
+leaf is now the only `usePlayerTime()` subscriber: it resolves the active
+segment per tick (same binary search + walk-back-to-visible logic,
+verbatim) and reports upward **only when the id changes**, so the viewer
+re-renders per segment transition (every few seconds) instead of 4×/second
+for the whole playback session. The per-tick `new Set(renderedSegments)`
+allocation moved to a `renderedIdSet` memo keyed on the filter state. The
+"not the current episode" reset is a render-time mask (no
+setState-in-effect cascade — eslint's `react-hooks/set-state-in-effect`
+verified clean on the new code; the one remaining hit in the file is the
+pre-existing search-reset effect, present on the base commit).
+
+**Keydown fix (7.3)** — the `[`/`]` handler reads the clock at press time
+via the player's stable `getCurrentTime()` instead of closing over the 4Hz
+`currentTime`; the listener is no longer torn down and re-registered per
+tick.
+
+**Fallback viewer (7.4)** — covered by the same CSS rule (shared container
+class).
+
+Tests: new `ActiveSegmentTracker` suite pins the report-only-on-change
+contract (4 ticks inside one segment → zero upward reports; boundary
+crossing → exactly one), the walk-back-to-visible behavior under entity
+filters, and the pre-start null. All 31 existing viewer tests (including
+karaoke) pass unchanged; full frontend suite 332 passed; `tsc -b` and
+production build clean.
 
 ## Related specs
 

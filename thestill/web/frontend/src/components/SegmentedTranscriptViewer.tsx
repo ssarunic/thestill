@@ -524,6 +524,47 @@ type RenderRow =
 // Spec #28 §5.2 affordance #2 — `E` toggle persistence key.
 const SHOW_ENTITY_HIGHLIGHTS_STORAGE_KEY = 'thestill:transcript:showEntityHighlights'
 
+interface ActiveSegmentTrackerProps {
+  segments: AnnotatedSegment[]
+  offset: number
+  renderedIdSet: Set<number>
+  onActiveChange: (id: number | null) => void
+}
+
+/**
+ * Spec #69 Phase 7.2 — the only subscriber to the 4Hz player clock.
+ *
+ * Renders nothing; on each tick it resolves the active segment (binary
+ * search over the full list so filler gaps and hidden kinds don't flicker
+ * the highlight, then a walk back to the nearest *visible* segment so the
+ * outline lands on something the reader can see) and reports upward only
+ * when the id actually changes. The 4Hz re-render is confined to this
+ * null-rendering leaf; the ~10k-row viewer re-renders per segment
+ * transition instead of per tick. Exported for tests.
+ */
+export function ActiveSegmentTracker({
+  segments,
+  offset,
+  renderedIdSet,
+  onActiveChange,
+}: ActiveSegmentTrackerProps) {
+  const currentTime = usePlayerTime()
+  const activeId = useMemo(() => {
+    const idx = findActiveSegmentIndex(segments, currentTime, offset)
+    if (idx < 0) return null
+    for (let i = idx; i >= 0; i -= 1) {
+      if (renderedIdSet.has(segments[i].id)) {
+        return segments[i].id
+      }
+    }
+    return null
+  }, [segments, currentTime, offset, renderedIdSet])
+  useEffect(() => {
+    onActiveChange(activeId)
+  }, [activeId, onActiveChange])
+  return null
+}
+
 export default function SegmentedTranscriptViewer({
   transcript,
   episodeId,
@@ -637,25 +678,26 @@ export default function SegmentedTranscriptViewer({
     }
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
-  const currentTime = usePlayerTime()
   const { track, getCurrentTime } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
-  const activeSegmentId = useMemo(() => {
-    if (!isCurrentEpisode) return null
-    // Search the full (unfiltered) list so filler gaps and hidden kinds
-    // don't flicker the highlight, then walk back to the nearest visible
-    // segment so the outline lands on something the reader can see.
-    const idx = findActiveSegmentIndex(transcript.segments, currentTime, offset)
-    if (idx < 0) return null
-    const visibleIds = new Set(renderedSegments.map((s) => s.id))
-    for (let i = idx; i >= 0; i -= 1) {
-      if (visibleIds.has(transcript.segments[i].id)) {
-        return transcript.segments[i].id
-      }
-    }
-    return null
-  }, [isCurrentEpisode, transcript.segments, currentTime, offset, renderedSegments])
+  // Spec #69 Phase 7.2 — the 4Hz player clock is confined to the
+  // ActiveSegmentTracker leaf below. The viewer itself re-renders only
+  // when the *active segment* changes (every few seconds of audio), not
+  // on every time tick: previously the whole ~10k-row tree re-rendered
+  // (and rebuilt a Set over every rendered segment) four times a second
+  // for the entire playback session. When another episode is playing the
+  // tracker is unmounted and the last tracked id is masked at render
+  // time (no reset effect — a setState-in-effect would cascade renders).
+  const [trackedSegmentId, setTrackedSegmentId] = useState<number | null>(null)
+  const activeSegmentId = isCurrentEpisode ? trackedSegmentId : null
+
+  // Computed once per filter change — not per tick (it used to live
+  // inside the per-tick active-segment memo).
+  const renderedIdSet = useMemo(
+    () => new Set(renderedSegments.map((s) => s.id)),
+    [renderedSegments],
+  )
 
   // Spec #38 — karaoke wipe. Resolve the words for the active segment.
   // Inactive segments stay on cleaned text so DOM cost stays
@@ -810,7 +852,11 @@ export default function SegmentedTranscriptViewer({
         }
         if (targetMentions.length === 0) return
         targetMentions.sort((a, b) => a.startMs - b.startMs)
-        const currentTimeMs = currentTime * 1000
+        // Spec #69 Phase 7.3 — read the clock at press time instead of
+        // closing over the 4Hz `currentTime`: with the time in the dep
+        // array this listener was torn down and re-registered on every
+        // tick for the whole playback session.
+        const currentTimeMs = getCurrentTime() * 1000
         let nextIdx: number
         if (direction === 1) {
           nextIdx = targetMentions.findIndex((m) => m.startMs > currentTimeMs)
@@ -837,7 +883,7 @@ export default function SegmentedTranscriptViewer({
   }, [
     focusedEntityId,
     mentionsBySegmentId,
-    currentTime,
+    getCurrentTime,
     onSeekRequest,
     offset,
     follow,
@@ -892,6 +938,14 @@ export default function SegmentedTranscriptViewer({
 
   return (
     <div className="relative">
+      {isCurrentEpisode && (
+        <ActiveSegmentTracker
+          segments={transcript.segments}
+          offset={offset}
+          renderedIdSet={renderedIdSet}
+          onActiveChange={setTrackedSegmentId}
+        />
+      )}
       <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2 mb-3 bg-white border-b border-gray-100 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="relative flex-1 min-w-[180px]">
           <input
