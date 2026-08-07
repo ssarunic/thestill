@@ -7,9 +7,11 @@
  * update the assertion at that point.
  *
  * Requires the dev server running on PLAYWRIGHT_BASE_URL (default
- * http://localhost:5173) and a corpus that includes a person entity
- * matching "musk". Skipped if no person results land within the
- * settle window; the suite is a smoke check, not a gate yet.
+ * http://localhost:5173), an authenticated session (the API is
+ * cookie-gated — pass a `storageState` carrying `auth_token`, or the
+ * shell renders but every query 401s), and a corpus that includes a
+ * person entity matching "musk". Skipped if no person results land
+ * within the settle window; the suite is a smoke check, not a gate yet.
  *
  * Tagged @live because it talks to a REAL backend with real data rather
  * than stubbing /api/**. CI excludes @live (`npm run test:e2e:ci`) — it has
@@ -24,9 +26,25 @@ test.describe('⌘K command bar', { tag: '@live' }, () => {
 
     // ⌘K on Mac, Ctrl+K elsewhere — the global handler accepts both.
     const isMac = browserName === 'webkit' || process.platform === 'darwin'
-    await page.keyboard.press(isMac ? 'Meta+K' : 'Control+K')
-
+    const chord = isMac ? 'Meta+K' : 'Control+K'
     const input = page.getByTestId('cmdk-input')
+
+    // The handler lives in a `Layout` effect, so it does not exist until
+    // React has mounted — and `goto` resolves on 'load', well before that.
+    // A chord pressed in that gap is silently dropped: measured 0/5 opens
+    // against a real backend, which is slower to first paint than the
+    // stubbed specs and why only this @live test saw it.
+    //
+    // Waiting on the shell removes most of the gap; the retry closes the
+    // rest. `toPass` re-presses only when the bar is still absent — the
+    // handler *toggles*, so pressing unconditionally would close the very
+    // bar a previous attempt had opened.
+    await expect(page.getByRole('navigation').first()).toBeVisible()
+    await expect(async () => {
+      if ((await input.count()) === 0) await page.keyboard.press(chord)
+      await expect(input).toBeVisible({ timeout: 1_000 })
+    }).toPass({ timeout: 10_000 })
+
     await expect(input).toBeFocused()
 
     await input.fill('musk')
