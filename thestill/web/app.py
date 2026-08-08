@@ -356,6 +356,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     )
     app_state.task_worker = task_worker
 
+    # Spec #71 Phase 1 — remote MCP over Streamable HTTP behind a
+    # capability URL. Ships dark: build_mcp_http returns None unless
+    # MCP_HTTP_ENABLED=true (with a validated MCP_HTTP_SECRET).
+    from .mcp_http import build_mcp_http
+
+    mcp_runtime = build_mcp_http(config)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan manager for startup/shutdown."""
@@ -520,7 +527,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         ).start()
         logger.info("embedding_model_warmup_scheduled", model=embedding_model.model_name)
 
-        yield
+        # Spec #71 — the Streamable HTTP session manager's task group must
+        # outlive every in-flight MCP request. Entering it via an exit
+        # stack around the yield means it starts last and stops first on
+        # shutdown, before the task worker teardown below.
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as mcp_stack:
+            if mcp_runtime is not None:
+                await mcp_stack.enter_async_context(mcp_runtime.lifespan())
+                logger.info("mcp_http_endpoint_active", mount="/mcp")
+
+            yield
 
         # Cleanup on shutdown
         logger.info("shutting_down_web_server")
@@ -686,6 +704,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         api_commands.admin_router, prefix="/api/commands", tags=["commands", "admin"], dependencies=require_session
     )
 
+    # Spec #71 — mount the MCP capability-URL endpoint before the SPA
+    # catch-all so route matching can never hand /mcp/* to the frontend
+    # shell. The runtime itself 404s everything but the exact secret path.
+    if mcp_runtime is not None:
+        app.mount("/mcp", mcp_runtime)
+        logger.info("mcp_http_endpoint_mounted", mount="/mcp")
+
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -707,7 +732,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             opt out for the shell.
             """
             # Skip if it's an API or known route
-            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health")):
+            if full_path.startswith(("api/", "webhook/", "mcp/", "docs", "redoc", "openapi.json", "health")):
                 return None
             index_file = static_dir / "index.html"
             target = index_file if index_file.exists() else (static_dir / "index.html")

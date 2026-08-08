@@ -4,7 +4,8 @@ This guide explains how to use the Thestill MCP server with Claude Desktop, Chat
 
 ## Supported Clients
 
-- **Claude Desktop** (Anthropic) - Full MCP support
+- **Claude Desktop** (Anthropic) - Full MCP support (stdio)
+- **Claude mobile / claude.ai** (Anthropic) - via a custom connector to the web server's remote MCP endpoint (see Remote Access below)
 - **ChatGPT Desktop** (OpenAI) - MCP support via plugin system
 - **Any MCP-compatible client** - Standard MCP protocol
 
@@ -88,6 +89,48 @@ Close and reopen Claude Desktop for the changes to take effect.
 ### Step 4: Verify Connection
 
 In Claude Desktop, you should see a small indicator showing the MCP server is connected. You can now use natural language to interact with your podcast library!
+
+---
+
+## Remote Access — Claude Mobile / claude.ai Custom Connectors
+
+Claude on mobile and claude.ai (web) cannot run local processes, so the
+stdio server above does not work there. Instead, the thestill **web
+server** can expose the same MCP tool surface over the Streamable HTTP
+transport at a capability URL (spec #71 Phase 1).
+
+### Enable on the server
+
+Add to your `.env` and restart the web server:
+
+```bash
+MCP_HTTP_ENABLED=true
+MCP_HTTP_SECRET=<output of: openssl rand -hex 32>
+```
+
+The server then serves MCP at `/mcp/{MCP_HTTP_SECRET}`. The full URL is
+shown to admins on the web UI Settings page, with a copy button.
+
+### Requirements
+
+- **Publicly reachable HTTPS.** claude.ai connects from Anthropic's
+  servers, not from your phone — a LAN-only or VPN-only instance won't
+  work. A reverse proxy with TLS, or a tunnel (Cloudflare Tunnel, ngrok),
+  in front of a home server both work.
+- **Treat the URL as a password.** Whoever holds it can use every MCP
+  tool on the instance, including pipeline mutations. Rotate it by
+  changing `MCP_HTTP_SECRET` and restarting (then update the connector).
+
+### Add the connector on claude.ai
+
+1. Copy the connector URL from Settings on the thestill web UI.
+2. On claude.ai: **Settings → Connectors → Add custom connector**
+   (requires a Pro/Max/Team/Enterprise plan).
+3. Paste the URL, leave OAuth fields empty, and save.
+4. The connector is now available across Claude web, desktop, and mobile.
+
+Phase 2 (planned, spec #71) replaces the capability URL with OAuth 2.1
+tied to thestill user accounts.
 
 ---
 

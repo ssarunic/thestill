@@ -22,6 +22,7 @@ thestill server --workers 4        # Multiple worker processes
 | `/health` | GET | Liveness check for load balancers (`{"status": "healthy"}` envelope; no dependency checks) |
 | `/health/ready` | GET | Readiness probe (spec #66): one cheap DB round-trip; `200`/`"ready"` or `503`/`"unready"` |
 | `/api/status` | GET | Detailed system statistics (same data as the CLI `status` command) |
+| `/api/status/mcp` | GET | Remote MCP connector info (spec #71): capability URL for claude.ai custom connectors; admin-gated |
 | `/docs` | GET | OpenAPI docs — only when `ENVIRONMENT=development` or `ENABLE_DOCS=true`; disabled in production |
 
 Any path that doesn't match an API route (including bare `/status`) falls
@@ -284,6 +285,7 @@ operator-only surface requires an admin session (`require_admin`):
 - Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)
+- Remote MCP connector info: `GET /api/status/mcp` (spec #71 — returns the capability URL, which is operator-equivalent access)
 - Stored webhook payload inspection: `GET`/`DELETE` `/webhook/elevenlabs/results*`
 
 Ordinary users never drive the pipeline manually — it runs automatically

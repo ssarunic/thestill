@@ -28,6 +28,18 @@ from ...utils.log_safety import redact_mapping
 logger = structlog.get_logger(__name__)
 
 
+def _safe_endpoint(path: str) -> str:
+    """Redact capability secrets from logged paths (spec #71).
+
+    The MCP endpoint embeds its secret in the path (``/mcp/{secret}``);
+    logging the raw path would persist the credential in every access log
+    line. Anything under /mcp/ is collapsed to a fixed placeholder.
+    """
+    if path.startswith("/mcp/"):
+        return "/mcp/<redacted>"
+    return path
+
+
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware for logging HTTP requests and responses.
 
@@ -69,7 +81,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
             method=request.method,
-            endpoint=request.url.path,
+            endpoint=_safe_endpoint(request.url.path),
             client_ip=request.client.host if request.client else "unknown",
         )
 

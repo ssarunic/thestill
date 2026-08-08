@@ -18,12 +18,39 @@ System status API endpoint for Thestill web server.
 Provides detailed system status and statistics, similar to the CLI 'status' command.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ..dependencies import AppState, get_app_state
 from ..responses import api_response
 
 router = APIRouter()
+
+
+@router.get("/mcp")
+def get_mcp_status(request: Request, state: AppState = Depends(get_app_state)):
+    """Remote MCP connector info (spec #71 Phase 1).
+
+    Admin-gated at the router mount (this router carries ``require_admin``
+    in ``app.py``) because the returned capability URL is
+    operator-equivalent access. The Settings page renders it with a copy
+    button; when the feature is off the response says so and the UI shows
+    the env vars needed to enable it.
+    """
+    config = state.config
+    if not config.mcp_http_enabled or not config.mcp_http_secret:
+        return api_response({"mcp": {"enabled": False}})
+
+    from ..mcp_http import connector_url
+
+    return api_response(
+        {
+            "mcp": {
+                "enabled": True,
+                "url": connector_url(config, str(request.base_url)),
+                "transport": "streamable-http",
+            }
+        }
+    )
 
 
 @router.get("")

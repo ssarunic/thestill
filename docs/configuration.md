@@ -438,6 +438,8 @@ The MCP server logs through the shared logging setup — use `LOG_LEVEL`,
 |----------|-------------|---------|
 | `MCP_SESSION_KEY` | Per-session quota key for MCP rate limiting | - (random per-process key) |
 | `THESTILL_ENV_FILE` | Absolute path to the `.env` to load — useful for MCP clients like Claude Desktop that launch servers with CWD=`$HOME` | - (walk upward from package/CWD) |
+| `MCP_HTTP_ENABLED` | Mount the remote MCP endpoint (Streamable HTTP) on the web server at `/mcp/{MCP_HTTP_SECRET}` for claude.ai custom connectors / Claude mobile (spec #71 Phase 1) | `false` |
+| `MCP_HTTP_SECRET` | Capability secret for the remote MCP URL — required when enabled, min 32 chars (`openssl rand -hex 32`); the URL is operator-equivalent access, HTTPS only | - |
 
 ## Security & Misc
 

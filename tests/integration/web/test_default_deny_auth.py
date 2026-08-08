@@ -56,6 +56,8 @@ ADMIN_ROUTES = {
     ("GET", "/api/entities/review-queue"),
     ("POST", "/api/entities/corrections"),
     ("GET", "/api/status"),
+    # Spec #71 — the MCP capability URL is operator-equivalent access.
+    ("GET", "/api/status/mcp"),
     ("GET", "/api/dashboard/stats"),
     ("GET", "/api/dashboard/activity"),
     ("GET", "/api/dashboard/narration"),

@@ -474,6 +474,15 @@ class Config(BaseModel):
     # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
     max_webhook_body_bytes: int = 1 * 1024 * 1024
 
+    # Remote MCP over Streamable HTTP (spec #71 Phase 1). Ships dark.
+    # When enabled, the web server mounts the MCP tool surface at
+    # /mcp/{MCP_HTTP_SECRET} — a capability URL for claude.ai custom
+    # connectors (Claude mobile/web). The secret is operator-supplied and
+    # fail-fast (spec #25 item 4.1 precedent): no auto-generation, because
+    # a silently rotated secret silently breaks the connector.
+    mcp_http_enabled: bool = False
+    mcp_http_secret: str = ""
+
     # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
     enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
     enrichment_wikipedia_lang: str = "en"  # language edition for sitelinks + summaries
@@ -786,6 +795,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
+        # Remote MCP (spec #71)
+        "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "false").lower() == "true",
+        "mcp_http_secret": os.getenv("MCP_HTTP_SECRET", ""),
         # Entity enrichment (spec #45 Tier 0)
         "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
         "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
@@ -805,6 +817,18 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(
             "COOKIE_SECURE=false is not permitted when ENVIRONMENT=production. "
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
+        )
+
+    # Spec #71 — the MCP capability URL is operator-equivalent access, so
+    # the secret must be explicit and high-entropy. Fail at boot (same
+    # posture as JWT_SECRET_KEY, spec #25 item 4.1) rather than mounting a
+    # guessable endpoint or auto-generating a secret that would silently
+    # rotate and break the configured claude.ai connector.
+    if config_data["mcp_http_enabled"] and len(config_data["mcp_http_secret"]) < 32:
+        raise ValueError(
+            "MCP_HTTP_ENABLED=true requires MCP_HTTP_SECRET with at least "
+            "32 characters. Generate one with: openssl rand -hex 32  "
+            "(then set MCP_HTTP_SECRET=<value> in your .env)"
         )
 
     # Multi-user mode runs OAuth, which must build a non-spoofable

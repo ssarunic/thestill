@@ -63,6 +63,7 @@ import type {
   InboxUnreadCountResponse,
   ImportRequest,
   ImportResponse,
+  McpStatusResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -818,4 +819,10 @@ export async function importEpisode(request: ImportRequest): Promise<ImportRespo
   }
 
   return response.json()
+}
+
+// Remote MCP connector info (spec #71 Phase 1). Admin-gated: non-admins
+// get a 403, which callers should treat as "hide the section".
+export async function getMcpStatus(): Promise<McpStatusResponse> {
+  return fetchApi<McpStatusResponse>('/status/mcp')
 }
