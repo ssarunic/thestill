@@ -36,7 +36,7 @@ RUN npm run build
 # Vite writes to /src/thestill/web/static per outDir: '../static'
 
 # ---------- Stage 2: static ffmpeg source (for :full only) ----------
-FROM mwader/static-ffmpeg:8.1.2@sha256:33f770f812cbfc3de96c547157fc9faf8bd95a36481753439ffa761045167585 AS ffmpeg-src
+FROM mwader/static-ffmpeg:9.0@sha256:b90574a4e2ae62b763c39c384526689e7eb435da6398f4fb3f6c3f1c6a14ce33 AS ffmpeg-src
 
 # ---------- Stage 3: build the Python wheel ----------
 FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS python-builder
