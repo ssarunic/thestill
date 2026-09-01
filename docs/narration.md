@@ -94,7 +94,7 @@ config; for now the indirection lives at the constructor.
 
 ## Validation contract
 
-Three rules enforced after the script-generation LLM call:
+Four rules enforced after the script-generation LLM call:
 
 1. **Quote-id pool match** — every block of `kind: "quote"` references
    a `quote_id` that came from the verbatim pool we handed to the
@@ -105,10 +105,13 @@ Three rules enforced after the script-generation LLM call:
    Quotes are cued, not retyped.
 3. **Word-budget tolerance** — total narration words must land within
    `narration_word_budget × (1 ± 0.15)`.
+4. **Non-empty output** — the model must return at least one block,
+   and the computed narration word budget must be positive; either
+   failing is treated as a validation failure rather than a crash.
 
 A failed run regenerates once with a tightened prompt that includes
 the failure tokens (`unknown_quote_id`, `verbatim_leak`,
-`word_budget_high`, `word_budget_low`). A second failure flips the
+`word_budget_high`, `word_budget_low`, `empty_blocks`). A second failure flips the
 run to fallback mode — the link-index script renders behind a banner
 and the JSON still serialises with the failure reasons in
 `stats.fallback_reason` and a structured `narration.fallback` log

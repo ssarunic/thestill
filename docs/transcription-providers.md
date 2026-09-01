@@ -105,9 +105,15 @@ WHISPER_DEVICE=auto  # Options: auto, cpu, cuda
 
 ### How it works
 
-- Files <10MB: Synchronous transcription (fast)
-- Files >10MB: Async transcription via Google Cloud Storage
-- Language automatically detected from podcast RSS metadata
+- Always transcribes via Chirp 3's `BatchRecognize` API: audio is uploaded to a
+  Google Cloud Storage bucket (auto-created if `GOOGLE_STORAGE_BUCKET` is
+  empty) and the transcript is downloaded once the batch job completes —
+  there is no separate small-file synchronous path
+- Audio longer than 12 minutes is automatically split into chunks (with a
+  1-minute overlap for merging) and transcribed in parallel, supporting
+  episodes up to 8 hours long
+- Language comes from the podcast's configured language (populated from RSS
+  metadata when the podcast was added)
 - Built-in speaker diarization (no additional setup required)
 
 ### Pricing
