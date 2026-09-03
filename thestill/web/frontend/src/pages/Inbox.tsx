@@ -1,35 +1,39 @@
 import { useState, useMemo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useInboxInfinite } from '../hooks/useApi'
-import type { Episode, InboxItem, InboxState } from '../api/types'
+import type { Episode, InboxItem } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
 import Button, { PlusIcon } from '../components/Button'
 import ImportEpisodeModal from '../components/ImportEpisodeModal'
 
+// Compact, single-token timestamp: today → "12:50", this year → "8 Aug",
+// older → "8 Aug 24". Never wraps, so the meta row stays one line on phones.
 function formatDelivered(iso: string): string {
   const date = new Date(iso)
-  return date.toLocaleString(undefined, {
-    month: 'short',
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  }
+  return date.toLocaleDateString(undefined, {
     day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
+    month: 'short',
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: '2-digit' }),
   })
 }
 
-const STATE_TONE: Record<InboxState, string> = {
-  unread: 'bg-primary-100 text-primary-700',
-  saved: 'bg-yellow-100 text-yellow-800',
-  dismissed: 'bg-gray-100 text-gray-500',
-  read: 'bg-gray-100 text-gray-600',
-}
-
-function StateBadge({ state }: { state: InboxState }) {
+// Read state is conveyed like an email client: a dot + title weight for
+// unread, quiet styling for read, a bookmark glyph for saved, and a dimmed
+// row for dismissed. Screen readers still get the state as text.
+function SavedIcon() {
   return (
-    <span
-      className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded ${STATE_TONE[state]}`}
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+      className="w-3.5 h-3.5 text-yellow-500 flex-shrink-0"
     >
-      {state}
-    </span>
+      <path d="M5 3a2 2 0 0 0-2 2v12l7-4 7 4V5a2 2 0 0 0-2-2H5z" />
+    </svg>
   )
 }
 
@@ -93,41 +97,64 @@ function InboxRow({ item }: { item: InboxItem }) {
   const episodeHref = `/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`
   const progress = deriveProgress(episode)
   // Only surface the progress pill while the row hasn't reached the inbox's
-  // "ready to read" state — once summarised, the regular state badge is
+  // "ready to read" state — once summarised, the read-state styling is
   // enough signal.
   const showProgress = progress.kind !== 'ready'
+  const isUnread = entry.state === 'unread'
+  const isDismissed = entry.state === 'dismissed'
   return (
     <li>
       <Link
         to={episodeHref}
         state={{ backgroundLocation: location }}
-        className="group flex items-start gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
+        className={`group flex items-start gap-3 sm:gap-4 p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors ${
+          isDismissed ? 'opacity-60' : ''
+        }`}
       >
         {podcast.image_url ? (
           <img
             src={podcast.image_url}
             alt=""
-            className="w-12 h-12 rounded object-cover flex-shrink-0"
+            className="w-11 h-11 sm:w-12 sm:h-12 rounded object-cover flex-shrink-0"
           />
         ) : (
-          <div className="w-12 h-12 rounded bg-gray-100 flex-shrink-0" />
+          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded bg-gray-100 flex-shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2">
-            <p className="text-sm text-gray-500 truncate">{podcast.title}</p>
-            <span className="text-gray-300">·</span>
-            <p className="text-xs text-gray-400">{formatDelivered(entry.delivered_at)}</p>
-            {entry.source === 'import' && (
-              <span className="text-xs text-gray-400 italic">imported</span>
+          <div className="flex items-center gap-1.5">
+            {isUnread && (
+              <span
+                aria-hidden="true"
+                className="w-2 h-2 rounded-full bg-primary-500 flex-shrink-0"
+              />
             )}
+            {entry.state === 'saved' && <SavedIcon />}
+            <p className="flex-1 min-w-0 truncate text-xs sm:text-sm text-gray-500">
+              {podcast.title}
+            </p>
+            {entry.source === 'import' && (
+              <span className="text-xs text-gray-400 italic flex-shrink-0">imported</span>
+            )}
+            <time
+              dateTime={entry.delivered_at}
+              className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0"
+            >
+              {formatDelivered(entry.delivered_at)}
+            </time>
+            <span className="sr-only">{entry.state}</span>
           </div>
-          <p className="text-base font-medium text-gray-900 group-hover:text-primary-600 truncate">
+          <p
+            className={`mt-0.5 text-[15px] sm:text-base leading-snug line-clamp-2 group-hover:text-primary-600 ${
+              isUnread ? 'font-semibold text-gray-900' : 'font-normal text-gray-600'
+            }`}
+          >
             {episode.title}
           </p>
-        </div>
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <StateBadge state={entry.state} />
-          {showProgress && <ProgressPill status={progress} />}
+          {showProgress && (
+            <div className="mt-1.5">
+              <ProgressPill status={progress} />
+            </div>
+          )}
         </div>
       </Link>
     </li>
