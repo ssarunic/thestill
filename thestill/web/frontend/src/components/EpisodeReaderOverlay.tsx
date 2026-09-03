@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import EpisodeReader from './EpisodeReader'
+import { abovePlayer } from '../constants/layers'
 
 // Elements the focus trap cycles through. Mirrors what a browser considers
 // tabbable closely enough for this panel's content.
@@ -98,7 +99,14 @@ export default function EpisodeReaderOverlay() {
   }, [])
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div
+      className="fixed inset-x-0 top-0 z-[45]"
+      // Spec #71 — the reader is a long-lived surface, so it lays out
+      // inside the shell: the scrim and panel stop at the mini player's top
+      // edge (0px when nothing is loaded) instead of covering it.
+      style={{ bottom: abovePlayer() }}
+      data-testid="reader-overlay"
+    >
       {/* Scrim — visible beside the panel on lg+; the panel covers it below. */}
       <div className="absolute inset-0 bg-black/50" onClick={close} aria-hidden="true" />
 

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { EpisodeEntity } from '../../api/types'
 import { entityStyle } from '../../utils/entityColors'
+import { abovePlayer } from '../../constants/layers'
 
 // Spec #28 §5.2 — "Mention density timeline (left of the audio
 // scrubber): thin vertical strip alongside <FloatingPlayer/> showing
@@ -45,7 +46,8 @@ export default function MentionDensityTimeline({
       // Hidden on mobile — the spec calls for this to live "left of the
       // audio scrubber", which only exists on screens wide enough to
       // have a scrubber and sidebar.
-      className="pointer-events-none fixed bottom-20 left-2 right-2 z-10 hidden md:block sm:left-20 lg:left-72"
+      className="pointer-events-none fixed left-2 right-2 z-10 hidden md:block sm:left-20 lg:left-72"
+      style={{ bottom: abovePlayer('0.5rem') }}
       data-testid="mention-density-timeline"
       aria-label="Mention timeline"
     >

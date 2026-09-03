@@ -147,7 +147,7 @@ function App() {
 
     {/* Spec #61 §2 — floating video tile for off-reader video playback.
         Deliberately NOT mounted while the reader overlay is open: a global
-        tile above the z-50 overlay would fight its focus trap, one below
+        tile above the z-[45] overlay would fight its focus trap, one below
         would vanish behind the scrim (§3). Unmounting unregisters the
         floating slot, so playback simply continues audio-first. */}
     {!backgroundLocation && <FloatingVideoTile />}

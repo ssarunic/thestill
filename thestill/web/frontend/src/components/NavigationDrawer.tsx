@@ -65,7 +65,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
     <>
       {/* Overlay */}
       <div
-        className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-300 ${
+        className={`fixed inset-0 bg-black/50 z-[70] transition-opacity duration-300 ${
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         onClick={onClose}
@@ -74,7 +74,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
 
       {/* Drawer */}
       <div
-        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white z-50 transform transition-transform duration-300 ease-out ${
+        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white z-[70] transform transition-transform duration-300 ease-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         role="dialog"

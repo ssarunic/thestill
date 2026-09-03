@@ -365,12 +365,20 @@ the user is still reading — visible the instant the overlay closes.
 4. **Does the split pane (alternative 3) ever happen?** If yes, `EpisodeReader`
    is the component both futures share — which is an argument for doing the
    extraction carefully rather than minimally.
-5. **MiniPlayer under the scrim.** The overlay sits at `z-50` (matching every
+5. ~~**MiniPlayer under the scrim.** The overlay sits at `z-50` (matching every
    other modal); `MiniPlayer` (`z-30`) and the mention-density timeline
    (`z-10`) render beneath the scrim while the overlay is open. Playback
    itself is unaffected and the reader has its own play/pause control, but
    the transport for a *different* currently-playing episode is unreachable
-   until the overlay closes. Acceptable for v1; revisit if it annoys.
+   until the overlay closes. Acceptable for v1; revisit if it annoys.~~
+   **Resolved by [#71](71-player-shell-layer.md) (2026-09-03).** It annoyed:
+   the panel's right alignment covered every control at any desktop width
+   and the whole bar below `lg`, for the *same* episode too once the
+   transcript scrolled. The overlay now sits at `z-[45]` and ends at
+   `bottom: var(--player-h)`; the player is shell chrome at `z-50`. The
+   mention-density timeline is not rendered inside the overlay (it lived in
+   the dialog's stacking context, not under the scrim) pending its move
+   onto the #72 scrubber.
 
 ---
 
@@ -389,4 +397,5 @@ the user is still reading — visible the instant the overlay closes.
 | Date | Decision |
 |------|----------|
 | 2026-07-07 | Spec created. Overlay-over-inbox chosen over breadcrumb-only fix (doesn't solve context loss) and `/inbox/{episode}` route (duplicate URLs). Canonical-URL + background-location pattern selected. |
+| 2026-09-03 | Open question 5 resolved by [#71](71-player-shell-layer.md): overlay wrapper `inset-x-0 top-0 z-[45]` with `bottom: var(--player-h, 0px)`; mini player above it. No other overlay behaviour changed. |
 | 2026-07-08 | Phase 1 implemented. `PlayerProvider` lifted from `Layout` to `App` so it spans both route passes (resolves the sketch-vs-prose ambiguity about where the overlay routes mount). Overlay chrome hand-rolled at `z-50` per the codebase's existing modal conventions (no dialog library). Esc handler guarded against layered surfaces (⌘K command bar) via `defaultPrevented` + focus containment. Open Questions 1 & 2 resolved as proposed. Behavioral parity tests instead of snapshots (repo has none). `useAutoScrollFollow` confirmed container-agnostic — only `useReadingPosition` needed the ref parameter. |

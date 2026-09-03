@@ -786,10 +786,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     layer.style.visibility = 'visible'
     layer.style.pointerEvents = 'auto'
-    // The reader overlay (spec #52) is a z-50 dialog; a slot registered
-    // inside it needs the layer above the scrim. Everywhere else stay
-    // below the overlay/command-bar layers (z-50) but above the
-    // mini-player bar (z-30).
+    // The reader overlay (spec #52) is a z-[45] dialog; a slot registered
+    // inside it needs the layer above its scrim (and above the z-50 mini
+    // player, which the overlay insets above — spec #71). Everywhere else
+    // stay at the shell rung (z-40): below the overlay and the z-[70]
+    // transient modals, beside the floating tile.
     layer.style.zIndex = positionTarget.closest('[role="dialog"]') ? '60' : '40'
     let handle = 0
     const tick = () => {

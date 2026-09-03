@@ -1,5 +1,8 @@
-import { Link } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import { useBackgroundLocation } from '../hooks/useBackgroundLocation'
+import { PLAYER_HEIGHT_VAR } from '../constants/layers'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -13,6 +16,18 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+// Elements that own the space bar themselves: typing, native activation,
+// slider nudging. Anywhere else, space toggles playback (spec #71 §4).
+const SPACE_OWNER_SELECTOR =
+  'input, textarea, select, button, [contenteditable=""], [contenteditable="true"], [role="slider"], iframe'
+
+/**
+ * Spec #22 — persistent transport. Spec #71 — the bar is shell chrome: it
+ * sits above the reader overlay (z-50 vs z-[45]) and publishes its rendered
+ * height as `--player-h` on the document root so the overlay, page padding
+ * and every bottom-anchored pill can inset above it instead of being
+ * covered by it.
+ */
 export default function MiniPlayer() {
   const {
     track,
@@ -28,6 +43,48 @@ export default function MiniPlayer() {
     setVideoPreference,
   } = usePlayer()
   const currentTime = usePlayerTime()
+  const location = useLocation()
+  const backgroundLocation = useBackgroundLocation()
+  const barRef = useRef<HTMLDivElement>(null)
+  const hasTrack = track != null
+
+  // Publish the bar's height (0 when hidden). ResizeObserver covers the
+  // sm/lg padding changes and safe-area insets; the resize fallback is for
+  // environments without it (jsdom).
+  useEffect(() => {
+    const root = document.documentElement
+    const el = barRef.current
+    if (!hasTrack || !el) {
+      root.style.setProperty(PLAYER_HEIGHT_VAR, '0px')
+      return
+    }
+    const update = () => root.style.setProperty(PLAYER_HEIGHT_VAR, `${el.offsetHeight}px`)
+    update()
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
+    observer?.observe(el)
+    if (!observer) window.addEventListener('resize', update)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', update)
+      root.style.setProperty(PLAYER_HEIGHT_VAR, '0px')
+    }
+  }, [hasTrack])
+
+  // Space toggles playback anywhere a track is loaded, mirroring the Media
+  // Session play/pause handlers for the keyboard. Ignored while typing or
+  // when a control that activates on space has focus.
+  useEffect(() => {
+    if (!hasTrack) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || e.defaultPrevented || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target
+      if (target instanceof Element && target.closest(SPACE_OWNER_SELECTOR)) return
+      e.preventDefault()
+      toggle()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [hasTrack, toggle])
 
   if (!track) return null
 
@@ -35,11 +92,24 @@ export default function MiniPlayer() {
   const progress = hasDuration ? Math.min(1, currentTime / duration) : 0
   const episodePath = `/podcasts/${track.podcastSlug}/episodes/${track.episodeSlug}`
 
+  // Links into the episode keep the inbox's overlay contract (spec #52):
+  // from the inbox, or from inside an overlay already open over it, the
+  // reader opens above the still-mounted list. Elsewhere it is a plain
+  // navigation to the standalone page, as before.
+  const inInbox = location.pathname === '/inbox' || location.pathname.startsWith('/inbox/')
+  const linkState = backgroundLocation
+    ? { backgroundLocation }
+    : inInbox
+      ? { backgroundLocation: location }
+      : undefined
+  const alreadyOnEpisode = location.pathname === episodePath
+
   return (
     <div
+      ref={barRef}
       role="region"
       aria-label="Audio player"
-      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-30 bg-white border-t border-gray-200 shadow-lg"
+      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-50 bg-white border-t border-gray-200 shadow-lg pb-[env(safe-area-inset-bottom)]"
     >
       <div className="relative">
         <input
@@ -58,20 +128,24 @@ export default function MiniPlayer() {
         />
       </div>
 
-      <div className="flex items-center gap-3 px-3 py-2 sm:px-4 sm:py-3">
+      <div className="flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
         {track.artworkUrl ? (
           <img
             src={track.artworkUrl}
             alt=""
             width={40}
             height={40}
-            className="w-10 h-10 rounded object-cover flex-shrink-0 hidden sm:block"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded object-cover flex-shrink-0"
           />
         ) : null}
 
         <div className="flex-1 min-w-0">
           <Link
             to={episodePath}
+            state={linkState}
+            onClick={(e) => {
+              if (alreadyOnEpisode) e.preventDefault()
+            }}
             className="block text-sm font-medium text-gray-900 truncate hover:underline"
             title={track.title}
           >
@@ -91,6 +165,7 @@ export default function MiniPlayer() {
         {(mediaKind === 'video' || youtubeAvailable) && (
           <Link
             to={episodePath}
+            state={linkState}
             onClick={() => setVideoPreference('shown')}
             aria-label="Show video"
             title="Show video"
@@ -109,63 +184,69 @@ export default function MiniPlayer() {
           <span>{hasDuration ? formatTime(duration) : '--:--'}</span>
         </div>
 
-        <button
-          type="button"
-          onClick={() => skip(-15)}
-          aria-label="Back 15 seconds"
-          disabled={!hasDuration}
-          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
-            <path d="M11 17l-5-5 5-5" />
-            <path d="M18 17l-5-5 5-5" />
-          </svg>
-          <span className="sr-only">15</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={isPlaying ? 'Pause' : 'Play'}
-          className="w-10 h-10 flex items-center justify-center rounded-full bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 flex-shrink-0 disabled:opacity-50"
-          disabled={isLoading && !isPlaying}
-        >
-          {isLoading && !isPlaying ? (
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        {/* Transport — the three actions every mobile bar surveyed carries
+            (spec #71 §3). 44 px targets below sm, the previous 36/40 px above. */}
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => skip(-15)}
+            aria-label="Back 15 seconds"
+            disabled={!hasDuration}
+            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
+              <path d="M11 17l-5-5 5-5" />
+              <path d="M18 17l-5-5 5-5" />
             </svg>
-          ) : isPlaying ? (
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="5" width="4" height="14" rx="1" />
-              <rect x="14" y="5" width="4" height="14" rx="1" />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
+            <span className="sr-only">15</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => skip(15)}
-          aria-label="Forward 15 seconds"
-          disabled={!hasDuration}
-          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
-            <path d="M13 17l5-5-5-5" />
-            <path d="M6 17l5-5-5-5" />
-          </svg>
-          <span className="sr-only">15</span>
-        </button>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            className="w-11 h-11 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50"
+            disabled={isLoading && !isPlaying}
+          >
+            {isLoading && !isPlaying ? (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : isPlaying ? (
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="5" width="4" height="14" rx="1" />
+                <rect x="14" y="5" width="4" height="14" rx="1" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </button>
 
+          <button
+            type="button"
+            onClick={() => skip(15)}
+            aria-label="Forward 15 seconds"
+            disabled={!hasDuration}
+            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
+              <path d="M13 17l5-5-5-5" />
+              <path d="M6 17l5-5-5-5" />
+            </svg>
+            <span className="sr-only">15</span>
+          </button>
+        </div>
+
+        {/* Stop-and-dismiss is destructive next to Play; on phones it moves
+            into the expanded Now Playing sheet (spec #72). */}
         <button
           type="button"
           onClick={stop}
           aria-label="Close player"
-          className="w-9 h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 flex-shrink-0"
+          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 flex-shrink-0"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
