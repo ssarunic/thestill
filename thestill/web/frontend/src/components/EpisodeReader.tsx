@@ -654,9 +654,6 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 }`}
               >
                 Summary
-                {episode?.has_summary && (
-                  <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
-                )}
               </button>
               <button
                 onClick={() => setTab('transcript')}
@@ -667,9 +664,6 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 }`}
               >
                 Transcript
-                {episode?.has_transcript && (
-                  <span className="ml-2 w-2 h-2 inline-block rounded-full bg-green-400" />
-                )}
               </button>
             </nav>
             {showSummaryLanguageToggle && (
