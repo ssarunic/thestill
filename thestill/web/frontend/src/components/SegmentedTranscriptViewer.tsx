@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react'
+import { abovePlayer } from '../constants/layers'
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
@@ -1131,7 +1132,8 @@ export default function SegmentedTranscriptViewer({
         <button
           type="button"
           onClick={follow.resume}
-          className="fixed bottom-28 right-6 z-20 inline-flex items-center gap-2 rounded-full bg-primary-900 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          style={{ bottom: abovePlayer('1rem') }}
+          className="fixed right-6 z-20 inline-flex items-center gap-2 rounded-full bg-primary-900 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />

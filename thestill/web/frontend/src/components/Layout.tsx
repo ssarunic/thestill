@@ -5,7 +5,7 @@ import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
 import CommandBar from './CommandBar'
-import { usePlayer } from '../contexts/PlayerContext'
+import { abovePlayer } from '../constants/layers'
 import { useAuth } from '../contexts/AuthContext'
 import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM } from '../constants/navigation'
 import { useIsNavActive } from '../hooks/useBackgroundLocation'
@@ -68,7 +68,6 @@ function LayoutContent() {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false)
   const screenSize = useScreenSize()
-  const { track } = usePlayer()
   const { isAdmin } = useAuth()
 
   // Close sidebar/drawer when screen size changes
@@ -114,14 +113,15 @@ function LayoutContent() {
         {/* Overlay for tablet when sidebar is expanded */}
         {isSidebarExpanded && screenSize === 'tablet' && (
           <div
-            className="fixed inset-0 bg-black/50 z-30"
+            // Spec #71 — transient: dims the mini player too (z-[52] > z-50).
+            className="fixed inset-0 bg-black/50 z-[52]"
             onClick={() => setIsSidebarExpanded(false)}
           />
         )}
 
         <aside
-          className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 flex flex-col z-40 transition-all duration-300 ${
-            isSidebarExpanded ? 'w-64' : 'w-16 lg:w-64'
+          className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
+            isSidebarExpanded ? 'w-64 z-[55]' : 'w-16 lg:w-64 z-40'
           }`}
         >
             {/* Logo */}
@@ -259,9 +259,10 @@ function LayoutContent() {
         Desktop (≥1024px): ml-64 for full sidebar
       */}
       <main
-        className={`min-h-screen transition-all duration-300 ml-0 pt-14 sm:pt-0 sm:ml-16 lg:ml-64 ${
-          track ? 'pb-24' : ''
-        }`}
+        className="min-h-screen transition-all duration-300 ml-0 pt-14 sm:pt-0 sm:ml-16 lg:ml-64"
+        // Spec #71 — content insets above the mini player by its rendered
+        // height (0px when nothing is loaded) instead of a fixed pb-24.
+        style={{ paddingBottom: abovePlayer() }}
       >
         <div className="p-4 md:p-6 lg:p-8">
           <Outlet />

@@ -5,6 +5,7 @@ import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
+import { useBackgroundLocation } from '../hooks/useBackgroundLocation'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
@@ -78,6 +79,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const player = usePlayer()
+  const inOverlay = useBackgroundLocation() != null
 
   // The active tab lives in the URL (`?view=transcript`) rather than local
   // state, so a citation jump can push a history entry and browser Back
@@ -775,8 +777,11 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
 
       {/* Mention density timeline — fixed-position strip beside the
           MiniPlayer when this episode is the current track. Only
-          rendered on md+ screens (hides itself when there's no room). */}
-      {episode && entities.length > 0 && episode.duration && (
+          rendered on md+ screens (hides itself when there's no room).
+          Not inside the reader overlay (spec #71): a viewport-fixed strip
+          would paint across the panel's bottom edge; spec #72 moves it
+          onto the Now Playing scrubber. */}
+      {!inOverlay && episode && entities.length > 0 && episode.duration && (
         <PlayerScopedTimeline
           episodeId={episode.id}
           entities={entities}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlayer } from '../contexts/PlayerContext'
+import { abovePlayer } from '../constants/layers'
 
 // Spec #61 §2 — desktop-only surface; on mobile playback continues
 // audio-first in the mini-player bar. Falls back to "desktop" when
@@ -86,8 +87,8 @@ export default function FloatingVideoTile() {
       role="complementary"
       aria-label="Floating video player"
       data-testid="floating-video-tile"
-      className="fixed bottom-24 right-4 z-40 w-80 overflow-hidden rounded-lg border border-gray-200 bg-gray-900 shadow-xl"
-      style={{ transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
+      className="fixed right-4 z-40 w-80 overflow-hidden rounded-lg border border-gray-200 bg-gray-900 shadow-xl"
+      style={{ bottom: abovePlayer('1rem'), transform: `translate(${offset.dx}px, ${offset.dy}px)` }}
     >
       <div
         className="flex cursor-move touch-none items-center gap-1 px-2 py-1.5"

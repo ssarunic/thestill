@@ -45,6 +45,14 @@ describe('EpisodeReaderOverlay (spec #52)', () => {
     expect(screen.getByText('READER_CONTENT')).toBeInTheDocument()
   })
 
+  it('insets above the mini player instead of covering it (spec #71)', () => {
+    renderOverlay()
+    const overlay = screen.getByTestId('reader-overlay')
+    expect(overlay).toHaveStyle({ bottom: 'var(--player-h, 0px)' })
+    expect(overlay).toHaveClass('z-[45]')
+    expect(overlay).not.toHaveClass('inset-0')
+  })
+
   it('moves focus into the panel on open', () => {
     renderOverlay()
     expect(document.activeElement).toBe(screen.getByRole('dialog'))

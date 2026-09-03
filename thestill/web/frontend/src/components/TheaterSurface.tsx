@@ -9,7 +9,7 @@ import { usePlayer, type PlayerTrack } from '../contexts/PlayerContext'
  * never a media element of its own (invariant 1: one active engine).
  *
  * Registration is by mounted surface, not pathname (§3): the reader
- * renders both as a standalone page and inside the z-50 overlay, and the
+ * renders both as a standalone page and inside the z-[45] overlay, and the
  * media layer resolves z-index from the registered slot's DOM position.
  *
  * On mobile the slot sits sticky at the top of the episode page and the

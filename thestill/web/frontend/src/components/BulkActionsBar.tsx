@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext'
+import { abovePlayer } from '../constants/layers'
 import { useBulkProcess } from '../hooks/useApi'
 
 interface BulkActionsBarProps {
@@ -39,7 +40,10 @@ export default function BulkActionsBar({ selectedIds, onClearSelection }: BulkAc
   if (!isAdmin || selectedIds.size === 0) return null
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">
+    <div
+      className="fixed left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40"
+      style={{ bottom: abovePlayer() }}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">

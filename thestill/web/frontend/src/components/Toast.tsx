@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
+import { abovePlayer } from '../constants/layers'
 
 type ToastType = 'success' | 'error' | 'info'
 
@@ -40,7 +41,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ showToast, dismissToast }}>
       {children}
       {/* Toast container */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      <div className="fixed right-4 z-[70] flex flex-col gap-2" style={{ bottom: abovePlayer('1rem') }}>
         {toasts.map((toast) => (
           <div
             key={toast.id}

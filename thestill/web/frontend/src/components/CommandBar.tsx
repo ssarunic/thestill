@@ -148,7 +148,7 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 pt-[10vh] sm:pt-[15vh]"
+      className="fixed inset-0 z-[70] flex items-start justify-center bg-black/40 px-4 pt-[10vh] sm:pt-[15vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
