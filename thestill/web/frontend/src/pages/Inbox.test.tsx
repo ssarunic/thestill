@@ -238,3 +238,38 @@ describe('Briefing readiness gate', () => {
     )
   })
 })
+
+describe('Inbox unread indicator', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUseLatestBriefing.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
+  })
+
+  // Title weight is the *sole* unread signal — a coloured dot beside it said
+  // the same thing twice, so it was removed. Guard against it coming back.
+  it('marks unread rows with title weight only, no dot', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([inboxItem({ state: 'unread' }, episodeWith('summarized'))]),
+      isLoading: false,
+      error: null,
+    })
+    const { container } = render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(container.querySelector('.bg-primary-500.rounded-full')).toBeNull()
+    expect(screen.getByText('Sample Episode')).toHaveClass('font-semibold')
+    // The state stays available to assistive tech even without a visual dot.
+    expect(container.querySelector('.sr-only')).toHaveTextContent('unread')
+  })
+
+  it('renders read rows without the unread weight', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([inboxItem({ state: 'read' }, episodeWith('summarized'))]),
+      isLoading: false,
+      error: null,
+    })
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByText('Sample Episode')).toHaveClass('font-normal')
+  })
+})

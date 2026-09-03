@@ -21,9 +21,10 @@ function formatDelivered(iso: string): string {
   })
 }
 
-// Read state is conveyed like an email client: a dot + title weight for
-// unread, quiet styling for read, a bookmark glyph for saved, and a dimmed
-// row for dismissed. Screen readers still get the state as text.
+// Read state is conveyed like an email client: title weight is the *sole*
+// unread signal (a dot alongside it was redundant), quiet styling for read,
+// a bookmark glyph for saved, and a dimmed row for dismissed. Screen readers
+// still get the state as text.
 function SavedIcon() {
   return (
     <svg
@@ -122,12 +123,6 @@ function InboxRow({ item }: { item: InboxItem }) {
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            {isUnread && (
-              <span
-                aria-hidden="true"
-                className="w-2 h-2 rounded-full bg-primary-500 flex-shrink-0"
-              />
-            )}
             {entry.state === 'saved' && <SavedIcon />}
             <p className="flex-1 min-w-0 truncate text-xs sm:text-sm text-gray-500">
               {podcast.title}
