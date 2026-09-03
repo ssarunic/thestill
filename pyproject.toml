@@ -122,7 +122,7 @@ local-transcription = [
     "openai-whisper>=20250625",
     "whisperx>=3.7.0,<4.0.0",  # Pin to 3.7.x for VAD fixes
     "pyannote.audio>=3.1.1",
-    "transformers>=4.30.0",
+    "transformers<5.15,>=4.30",
     "librosa>=0.10.0",
     # Parakeet TDT runs through NeMo's ASR API so the hypothesis carries
     # native segment- and word-level timestamps. The HF transformers
