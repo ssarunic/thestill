@@ -110,10 +110,20 @@ fallback is explicit and the value is assertable in jsdom.
 - Full frontend suite green (342 tests). `tsc` clean. ESLint: the eight
   `react-hooks/set-state-in-effect` errors in touched files are identical to
   main (pre-existing, not in changed lines).
-- Not yet done: a Playwright pass at 390 / 768 / 1440 with a track playing
-  and the overlay open (the running dev machine serves a different app on
-  :8000 and the UI needs Google sign-in). Owed before merge or as the first
-  check after deploy.
+- Browser pass (2026-09-03, Playwright against a single-user scratch server
+  on a copy of `data/podcasts.db`, real audio playing from the reader):
+  - 1440×900: overlay bottom 835 = bar top 835, `--player-h` 65px; the
+    bar's Pause and title link are the topmost elements at their own
+    positions; no horizontal scroll.
+  - 768×1024 (full-width panel): overlay bottom 959 = bar top; skips and
+    Close visible. Expanded tablet sidebar sits at z-55 over the z-52
+    scrim; its user menu is clickable where it overlaps the bar, and the
+    bar is under the scrim as designed.
+  - 390×844: overlay bottom 783 = bar top, bar 61px; back/play/forward
+    all 44×44, Close hidden, artwork visible, 178px left for the title.
+  - Not exercised: the bulk-actions bar (the scratch DB predates the
+    current episodes schema, so the list 500s and nothing is selectable).
+    It uses the same `abovePlayer()` offset as the overlay.
 
 ## Alternatives considered
 
