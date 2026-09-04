@@ -5292,7 +5292,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.image_url, p.language,
                        p.primary_category_id, p.secondary_category_id,
                        p.author, p.explicit, p.show_type, p.website_url, p.is_complete,
-                       p.copyright, p.last_processed, p.last_processed_at, p.etag,
+                       p.copyright, p.apple_url, p.youtube_url,
+                       p.last_processed, p.last_processed_at, p.etag,
                        p.last_modified, p.updated_at
                 FROM podcasts p
                 INNER JOIN episodes e ON e.podcast_id = p.id
