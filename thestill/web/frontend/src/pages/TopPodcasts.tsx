@@ -253,7 +253,7 @@ export default function TopPodcasts() {
                   podcast.rank
                 )
               }
-              leading={<ListRowArtwork src={podcast.image_url} />}
+              leading={<ListRowArtwork sources={[podcast.image_url]} />}
               title={podcast.name}
               ariaLabel={`Open ${podcast.name}`}
               subtitle={

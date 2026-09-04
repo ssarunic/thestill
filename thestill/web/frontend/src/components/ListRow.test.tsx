@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import ListRow, { ListRowArtwork } from './ListRow'
@@ -17,7 +17,7 @@ describe('ListRow', () => {
       <ListGroup as="ol">
         <ListRow
           rank={3}
-          leading={<ListRowArtwork src={null} />}
+          leading={<ListRowArtwork sources={[null]} />}
           title="The News Agents"
           subtitle="Global · Daily News"
           to="/podcasts/the-news-agents"
@@ -81,5 +81,22 @@ describe('ListRow', () => {
     expect(list.className).toContain('sm:mx-0')
     expect(list.className).toContain('sm:rounded-lg')
     expect(list.className).toContain('divide-y')
+  })
+
+  it('walks the artwork fallback chain and ends on the placeholder', () => {
+    const { container, rerender } = render(
+      <ListRowArtwork sources={['https://img.example/a.jpg', null, 'https://img.example/b.jpg']} />,
+    )
+    const img = container.querySelector('img')!
+    expect(img).toHaveAttribute('src', 'https://img.example/a.jpg')
+    fireEvent.error(img)
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://img.example/b.jpg')
+    fireEvent.error(container.querySelector('img')!)
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('svg')).toBeInTheDocument()
+
+    rerender(<ListRowArtwork sources={[null, undefined]} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('svg')).toBeInTheDocument()
   })
 })

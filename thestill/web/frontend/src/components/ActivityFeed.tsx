@@ -146,7 +146,7 @@ export default function ActivityFeed({
             align="start"
             to={`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`}
             leading={
-              <ListRowArtwork src={item.episode_image_url || item.podcast_image_url} />
+              <ListRowArtwork sources={[item.episode_image_url, item.podcast_image_url]} />
             }
             overline={
               <div className="flex items-center gap-2">
