@@ -1687,6 +1687,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "WHERE refresh_disabled_reason IS NOT NULL"
         )
 
+        # Spec #73 follow-up — chart-sourced store links (Apple Podcasts /
+        # YouTube) on the local podcast row so the detail page can render
+        # them on every viewport. Nullable and feed-independent: existing
+        # rows are backfilled from ``top_podcasts`` on ``rss_url`` right
+        # here; new chart imports go through ``sync_podcast_chart_urls``.
+        if "apple_url" not in podcast_columns_now:
+            logger.info("Migrating database: adding chart store-link columns to podcasts")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN apple_url TEXT NULL")
+            conn.execute("ALTER TABLE podcasts ADD COLUMN youtube_url TEXT NULL")
+            self._backfill_chart_urls(conn)
+
         # spec #69 Phase 1 — performance indices (SQLite parity with
         # migration 0007 where the syntax ports; the pg_trgm / jsonb-GIN
         # indices are Postgres-only, and SQLite's DESC ordering already
@@ -1967,6 +1978,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             for row in conn.execute("SELECT region, source_mtime FROM top_podcasts_meta").fetchall()
         }
 
+        reseeded = False
         for path in json_files:
             region = path.stem.removeprefix("top_podcasts_").lower()
             if not region:
@@ -1974,6 +1986,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             mtime = path.stat().st_mtime
             if region in meta and abs(meta[region] - mtime) < _MTIME_EPSILON:
                 continue  # unchanged — skip
+            reseeded = True
 
             try:
                 rows = json.loads(path.read_text())
@@ -2070,6 +2083,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 rows=inserted,
                 source=path.name,
             )
+
+        # Chart data changed: refresh the store links on every local podcast
+        # that appears on a chart (spec #73 follow-up). Correlated lookup on
+        # the UNIQUE ``top_podcasts.rss_url`` index — cheap, and only runs
+        # when a region's JSON actually changed.
+        if reseeded:
+            self._backfill_chart_urls(conn)
 
     def _create_schema(self, conn: sqlite3.Connection):
         """Create database schema (single-user variant)."""
@@ -2168,6 +2188,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- THES-144: Show organization
                 show_type TEXT NULL,  -- "episodic" or "serial"
                 website_url TEXT NULL,
+                -- Spec #73 follow-up: store links copied from top_podcasts
+                -- (matched on rss_url); never parsed from the feed.
+                apple_url TEXT NULL,
+                youtube_url TEXT NULL,
                 -- THES-145: Feed management
                 is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
                 copyright TEXT NULL,
@@ -2708,6 +2732,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -2729,6 +2754,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -2749,6 +2775,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -2769,6 +2796,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
@@ -2792,6 +2820,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -2816,6 +2845,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
+                       apple_url, youtube_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE slug = ?
@@ -4890,6 +4920,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 explicit=explicit,
                 show_type=row["show_type"],
                 website_url=row["website_url"],
+                apple_url=row["apple_url"],
+                youtube_url=row["youtube_url"],
                 is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
@@ -4998,6 +5030,45 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     # ============================================================================
     # Top podcasts (chart) lookups
     # ============================================================================
+
+    @staticmethod
+    def _backfill_chart_urls(conn: sqlite3.Connection, podcast_id: Optional[str] = None) -> None:
+        """Copy ``apple_url``/``youtube_url`` from ``top_podcasts`` onto
+        ``podcasts`` rows sharing the same ``rss_url`` (spec #73 follow-up).
+
+        ``COALESCE`` keeps an existing link when the chart row has none, so a
+        chart scrape that lost a URL never blanks a link we already show.
+        Restricted to one row when ``podcast_id`` is given.
+        """
+        params: Tuple[Any, ...] = ()
+        scope = ""
+        if podcast_id is not None:
+            scope = " AND podcasts.id = ?"
+            params = (podcast_id,)
+        conn.execute(
+            f"""
+            UPDATE podcasts
+               SET apple_url = COALESCE(
+                       (SELECT t.apple_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), apple_url),
+                   youtube_url = COALESCE(
+                       (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), youtube_url)
+             WHERE EXISTS (SELECT 1 FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url){scope}
+            """,
+            params,
+        )
+
+    def sync_podcast_chart_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        if not podcast_id:
+            return {"apple_url": None, "youtube_url": None}
+        with self._get_connection() as conn:
+            self._backfill_chart_urls(conn, podcast_id)
+            row = conn.execute(
+                "SELECT apple_url, youtube_url FROM podcasts WHERE id = ?",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return {"apple_url": None, "youtube_url": None}
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"]}
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
@@ -5602,7 +5673,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     _PODCAST_ROW_COLS = """p.id, p.title, p.description, p.rss_url, p.slug, p.image_url, p.language,
            p.primary_category_id, p.secondary_category_id,
            p.last_processed, p.last_processed_at,
-           p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright"""
+           p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
+           p.apple_url, p.youtube_url"""
 
     _EPISODE_COUNTS_SELECT = """
         (SELECT COUNT(*) FROM episodes e WHERE e.podcast_id = p.id) AS episodes_count,
@@ -5712,6 +5784,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "website_url": row["website_url"],
             "is_complete": bool(row["is_complete"]),
             "copyright": row["copyright"],
+            "apple_url": row["apple_url"],
+            "youtube_url": row["youtube_url"],
         }
 
     def list_podcast_rows(

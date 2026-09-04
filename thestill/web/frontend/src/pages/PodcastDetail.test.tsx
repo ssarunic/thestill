@@ -107,6 +107,34 @@ describe('PodcastDetail header (spec #76 phase 3)', () => {
     expect(screen.getAllByRole('status').at(-1)).toHaveTextContent('Loading episodes…')
   })
 
+  it('lists the chart-sourced store links in Details, each only when present', () => {
+    mockUsePodcast.mockReturnValue({
+      data: podcast({
+        apple_url: 'https://podcasts.apple.com/us/podcast/prof-g-markets/id123',
+        youtube_url: 'https://www.youtube.com/@profgmarkets',
+      }),
+      isLoading: false,
+      error: null,
+    })
+    renderPage()
+    const apple = screen.getByRole('link', { name: /apple podcasts/i })
+    expect(apple).toHaveAttribute('href', 'https://podcasts.apple.com/us/podcast/prof-g-markets/id123')
+    expect(apple).toHaveAttribute('target', '_blank')
+    expect(apple).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByRole('link', { name: /youtube/i })).toHaveAttribute('href', 'https://www.youtube.com/@profgmarkets')
+  })
+
+  it('renders only the Apple link when the YouTube URL is null', () => {
+    mockUsePodcast.mockReturnValue({
+      data: podcast({ apple_url: 'https://podcasts.apple.com/us/podcast/prof-g-markets/id123', youtube_url: null }),
+      isLoading: false,
+      error: null,
+    })
+    renderPage()
+    expect(screen.getByRole('link', { name: /apple podcasts/i })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /youtube/i })).toBeNull()
+  })
+
   it('offers Unfollow when following and omits the website action without a URL', () => {
     mockUsePodcast.mockReturnValue({ data: podcast({ is_following: true, website_url: null }), isLoading: false, error: null })
     renderPage()

@@ -314,6 +314,24 @@ export default function PodcastDetail() {
                     </ExternalLink>
                   ) : null,
               },
+              // Chart-sourced store links (spec #73 follow-up); null, so
+              // omitted, for podcasts that are on no Top Podcasts chart.
+              {
+                label: 'Apple Podcasts',
+                value: podcast.apple_url ? (
+                  <ExternalLink href={podcast.apple_url} className="text-sm">
+                    Listen on Apple Podcasts
+                  </ExternalLink>
+                ) : null,
+              },
+              {
+                label: 'YouTube',
+                value: podcast.youtube_url ? (
+                  <ExternalLink href={podcast.youtube_url} className="text-sm">
+                    Watch on YouTube
+                  </ExternalLink>
+                ) : null,
+              },
               { label: 'Copyright', value: podcast.copyright },
             ]}
           />
