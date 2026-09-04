@@ -118,19 +118,25 @@ test('Top Podcasts restores scroll position and filters on Back', async ({ page 
   await expect(page).toHaveURL(/category=History/)
   await expect(page.getByText('GB Show 1', { exact: true })).toBeVisible()
 
-  // Scroll well down the list.
-  await page.evaluate(() => window.scrollTo(0, 1200))
-  await page.waitForFunction(() => window.scrollY > 1000)
+  // Scroll well down the list. Instant on purpose: the document sets
+  // ``scroll-behavior: smooth``, so a plain scrollTo animates and a reading
+  // taken while it is still moving is not the position the app records.
+  await page.evaluate(() => window.scrollTo({ top: 1200, behavior: 'instant' }))
+  await page.waitForFunction(() => window.scrollY === 1200)
   const before = await page.evaluate(() => window.scrollY)
-  expect(before).toBeGreaterThan(1000)
+  expect(before).toBe(1200)
 
-  // Open a podcast detail (row ~15, below the fold).
-  await page.getByRole('link', { name: 'Open GB Show 15', exact: true }).click()
-  await expect(page).toHaveURL(/\/podcasts\/show-gb-15/)
+  // Open a podcast detail from a row that is fully inside the viewport at
+  // this offset, so the click itself does not scroll the page first (which
+  // would legitimately move the recorded position away from ``before``).
+  const row = page.getByRole('link', { name: 'Open GB Show 20', exact: true })
+  await expect(row).toBeInViewport({ ratio: 1 })
+  await row.click()
+  await expect(page).toHaveURL(/\/podcasts\/show-gb-20/)
 
   // A real detail page sits at the top. Force the window there so the Back
   // restoration has real work to do (and native restoration can't cheat).
-  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
   await page.waitForFunction(() => window.scrollY === 0)
 
   // Back to the list.
