@@ -7,6 +7,9 @@ import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import { useToast } from '../components/Toast'
+import FollowButton from '../components/FollowButton'
+import ListGroup from '../components/ListGroup'
+import ListRow, { ListRowArtwork } from '../components/ListRow'
 
 export default function TopPodcasts() {
   const { user } = useAuth()
@@ -226,115 +229,71 @@ export default function TopPodcasts() {
         </div>
       )}
 
-      <ol className="space-y-2">
+      {/* Spec #73 — one ListGroup, full-bleed on phones; each row is a
+          ListRow whose title carries the link (real <a> when the chart entry
+          is already imported) or the resolve-then-navigate button. */}
+      <ListGroup as="ol">
         {items.map((podcast) => {
           const status = adding[podcast.rss_url] ?? 'idle'
           const isResolving = !!resolving[podcast.rss_url]
+          const isFollowed = podcast.is_following || status === 'done'
+          const effectiveStatus: 'idle' | 'pending' | 'done' | 'error' = isFollowed
+            ? 'done'
+            : status
           return (
-            <li
+            <ListRow
               key={podcast.rss_url}
-              onClick={() => handleOpen(podcast)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  handleOpen(podcast)
-                }
-              }}
-              role="link"
-              tabIndex={0}
-              aria-busy={isResolving}
-              aria-label={`Open ${podcast.name}`}
-              className={`flex items-center gap-4 bg-white border border-gray-200 rounded-lg px-4 py-3 transition-colors hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 cursor-pointer ${
-                isResolving ? 'opacity-70' : ''
-              }`}
-            >
-              <span className="w-10 text-right flex-shrink-0 flex items-center justify-end">
-                {isResolving ? (
+              rank={
+                isResolving ? (
                   <span
-                    className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+                    className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
                     aria-label="Loading"
                   />
                 ) : (
-                  <span className="text-xl font-semibold tabular-nums text-gray-400">
-                    {podcast.rank}
-                  </span>
-                )}
-              </span>
-              {podcast.image_url ? (
-                <img
-                  src={podcast.image_url}
-                  alt=""
-                  width={48}
-                  height={48}
-                  loading="lazy"
-                  className="w-12 h-12 rounded-md object-cover flex-shrink-0 aspect-square bg-gray-100"
-                />
-              ) : (
-                <div
-                  className="w-12 h-12 rounded-md flex-shrink-0 aspect-square bg-gradient-to-br from-primary-100 to-secondary-100 flex items-center justify-center"
-                  aria-hidden="true"
-                >
-                  <svg className="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-900 truncate">{podcast.name}</div>
-                <div className="text-sm text-gray-500 truncate">
+                  podcast.rank
+                )
+              }
+              leading={<ListRowArtwork src={podcast.image_url} />}
+              title={podcast.name}
+              ariaLabel={`Open ${podcast.name}`}
+              subtitle={
+                <>
                   {podcast.artist ?? 'Unknown artist'}
                   {podcast.category && (
-                    <span className="ml-2 text-gray-400">· {podcast.category}</span>
+                    <span className="text-gray-400"> · {podcast.category}</span>
                   )}
-                </div>
-              </div>
-              <div
-                className="flex items-center gap-2 flex-shrink-0"
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => e.stopPropagation()}
-              >
-                {podcast.apple_url && (
-                  <a
-                    href={podcast.apple_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-gray-500 hover:text-gray-900"
-                  >
-                    Apple
-                  </a>
-                )}
-                {(() => {
-                  const isFollowed = podcast.is_following || status === 'done'
-                  const effectiveStatus: 'idle' | 'pending' | 'done' | 'error' = isFollowed
-                    ? 'done'
-                    : status
-                  return (
-                    <button
-                      onClick={() => handleAdd(podcast)}
-                      disabled={effectiveStatus === 'pending' || effectiveStatus === 'done'}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium ${
-                        effectiveStatus === 'done'
-                          ? 'bg-green-100 text-green-800 cursor-default'
-                          : effectiveStatus === 'error'
-                            ? 'bg-red-100 text-red-800 hover:bg-red-200'
-                            : 'bg-primary-900 text-white hover:bg-primary-800 disabled:opacity-50'
-                      }`}
+                </>
+              }
+              to={podcast.podcast_slug ? `/podcasts/${podcast.podcast_slug}` : undefined}
+              onClick={podcast.podcast_slug ? undefined : () => handleOpen(podcast)}
+              busy={isResolving}
+              trailing={
+                <>
+                  {podcast.apple_url && (
+                    <a
+                      href={podcast.apple_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label="Open in Apple Podcasts"
+                      title="Open in Apple Podcasts"
+                      className="hidden sm:inline-flex items-center justify-center w-9 h-9 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
                     >
-                      {effectiveStatus === 'pending'
-                        ? 'Following…'
-                        : effectiveStatus === 'done'
-                          ? 'Following ✓'
-                          : effectiveStatus === 'error'
-                            ? 'Retry'
-                            : 'Follow'}
-                    </button>
-                  )
-                })()}
-              </div>
-            </li>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                  )}
+                  <FollowButton
+                    status={effectiveStatus}
+                    onClick={() => handleAdd(podcast)}
+                    iconOnlyMobile
+                  />
+                </>
+              }
+            />
           )
         })}
-      </ol>
+      </ListGroup>
     </div>
   )
 }

@@ -259,7 +259,11 @@ describe('Inbox unread indicator', () => {
     expect(container.querySelector('.bg-primary-500.rounded-full')).toBeNull()
     expect(screen.getByText('Sample Episode')).toHaveClass('font-semibold')
     // The state stays available to assistive tech even without a visual dot.
-    expect(container.querySelector('.sr-only')).toHaveTextContent('unread')
+    // Scoped to the row: the page's Import button also carries an sr-only
+    // label on phones (spec #73 Button change).
+    expect(
+      screen.getByText('Sample Episode').closest('li')?.querySelector('.sr-only'),
+    ).toHaveTextContent('unread')
   })
 
   it('renders read rows without the unread weight', () => {

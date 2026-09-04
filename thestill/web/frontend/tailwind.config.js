@@ -37,6 +37,11 @@ export default {
         warning: '#ed8936',
         error: '#e53e3e',
       },
+      fontSize: {
+        // List-row title scale (spec #73): 15 px on phones, one step under
+        // ``text-base``; rows switch to ``text-base`` at ``sm``.
+        row: ['15px', { lineHeight: '1.35' }],
+      },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         serif: ['Georgia', 'Charter', 'serif'],

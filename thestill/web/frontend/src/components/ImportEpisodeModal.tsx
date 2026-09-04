@@ -113,7 +113,7 @@ export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeMod
               placeholder="Paste a YouTube link, RSS episode URL, or audio file URL"
               aria-label="Episode URL"
               disabled={submitting}
-              className="w-full px-4 py-3 border rounded-lg text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors bg-white disabled:bg-gray-50"
+              className="w-full px-4 py-3 border rounded-lg text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors bg-white disabled:bg-gray-50"
             />
 
             <p className="mt-2 text-xs text-gray-500">

@@ -266,13 +266,13 @@ function EntityResultCard({ item }: { item: QuickEntityItem }) {
         className={`flex items-center gap-3 rounded-lg border ${style.pillBorder} ${style.pillBg} px-4 py-3 transition hover:shadow-sm`}
       >
         <div
-          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${style.pillBg} ${style.pillText} text-sm font-bold ring-1 ring-inset ${style.pillBorder}`}
+          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md ${style.pillBg} ${style.pillText} text-sm font-bold ring-1 ring-inset ${style.pillBorder}`}
         >
           {style.shortCode}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-2">
-            <span className="truncate font-semibold text-gray-900">{item.name}</span>
+            <span className="truncate text-row sm:text-base font-semibold text-gray-900">{item.name}</span>
             {item.role && <RoleBadge role={item.role} />}
             {item.matched_alias && (
               <span className="text-xs font-normal text-gray-500">aka {item.matched_alias}</span>

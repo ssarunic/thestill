@@ -23,35 +23,32 @@ export function useScrollRestoration(): void {
   const keyRef = useRef(location.key)
   keyRef.current = location.key
 
-  // Continuously record this entry's scroll offset (rAF-throttled so we don't
-  // hammer the Map on every scroll event).
+  // Continuously record this entry's scroll offset. Recorded synchronously:
+  // a Map.set per scroll event is free, and deferring it to a frame lost the
+  // last offset whenever a click navigated away before that frame ran (the
+  // browser's own scroll-into-view before the click is exactly such a scroll).
   useEffect(() => {
-    let raf = 0
     const onScroll = () => {
-      if (raf) return
-      raf = requestAnimationFrame(() => {
-        raf = 0
-        positions.set(keyRef.current, window.scrollY)
-      })
+      positions.set(keyRef.current, window.scrollY)
     }
     window.addEventListener('scroll', onScroll, { passive: true })
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      if (raf) cancelAnimationFrame(raf)
-    }
+    return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
   // On Back/Forward (POP) to a remembered entry, restore its offset. The retry
   // loop keeps re-applying the target until the page is tall enough to reach it
   // (cached content renders on the first commit; lazy images may add height a
   // few frames later), capped so a now-shorter list doesn't spin forever.
+  // ``behavior: 'instant'`` opts out of the document's ``scroll-behavior:
+  // smooth``: Back should land where the user was, not animate there, and an
+  // animated scroll would also defeat the per-frame convergence check.
   useEffect(() => {
     if (navType !== 'POP') return
     const target = positions.get(location.key)
     if (!target) return
     let frames = 0
     let raf = requestAnimationFrame(function attempt() {
-      window.scrollTo(0, target)
+      window.scrollTo({ top: target, behavior: 'instant' })
       frames += 1
       if (Math.abs(window.scrollY - target) > 2 && frames < 30) {
         raf = requestAnimationFrame(attempt)

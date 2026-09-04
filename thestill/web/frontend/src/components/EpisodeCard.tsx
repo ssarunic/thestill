@@ -105,7 +105,7 @@ export default function EpisodeCard({
 
   // Determine card border style based on failure and selection state
   const cardBorderClass = isSelected
-    ? 'border-indigo-500 ring-2 ring-indigo-200'
+    ? 'border-primary-500 ring-2 ring-primary-200'
     : isFailed
       ? episode.failure_type === 'fatal'
         ? 'border-red-300 hover:border-red-400'
@@ -146,7 +146,7 @@ export default function EpisodeCard({
       <div className="flex-1 min-w-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-2">
           <div className="min-w-0">
-            <h3 className="font-medium text-gray-900 line-clamp-2 text-sm sm:text-base">{episode.title}</h3>
+            <h3 className="font-medium text-gray-900 line-clamp-2 text-row sm:text-base leading-snug">{episode.title}</h3>
             {showPodcastName && displayPodcastTitle && (
               <p className="text-xs text-gray-500 mt-0.5 truncate">{displayPodcastTitle}</p>
             )}
@@ -256,7 +256,7 @@ export default function EpisodeCard({
                 type="checkbox"
                 checked={isSelected}
                 onChange={handleCheckboxChange}
-                className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 cursor-pointer"
+                className="w-4 h-4 accent-primary-900 border-gray-300 rounded focus:ring-primary-500 cursor-pointer"
               />
             </div>
           )}
