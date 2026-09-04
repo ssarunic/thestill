@@ -1,6 +1,6 @@
 import { ButtonHTMLAttributes, forwardRef } from 'react'
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
+export type ButtonVariant = 'primary' | 'secondary' | 'tonal' | 'success' | 'danger' | 'ghost'
 export type ButtonSize = 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -13,13 +13,26 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles: Record<ButtonVariant, { base: string; disabled: string }> = {
+  // Navy ``primary`` ramp from tailwind.config.js — the same colour as the
+  // sidebar's active item, the logo and the mini player (spec #73 §5.1).
   primary: {
-    base: 'bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 shadow-sm hover:shadow',
+    base: 'bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 shadow-sm hover:shadow',
     disabled: 'bg-gray-100 text-gray-400',
   },
   secondary: {
     base: 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 active:bg-gray-100',
     disabled: 'bg-gray-50 text-gray-400 border-gray-200',
+  },
+  // Quiet secondary action for list rows (Follow on a chart row).
+  tonal: {
+    base: 'bg-primary-50 text-primary-900 hover:bg-primary-100 active:bg-primary-200',
+    disabled: 'bg-gray-100 text-gray-400',
+  },
+  // Resting "done" state (Following ✓). Keeps its tint when disabled because
+  // the disabled state *is* the message.
+  success: {
+    base: 'bg-green-100 text-green-800',
+    disabled: 'bg-green-100 text-green-800',
   },
   danger: {
     base: 'text-red-600 hover:bg-red-50 hover:text-red-700 active:bg-red-100',
@@ -68,7 +81,8 @@ const LoadingSpinner = ({ size }: { size: ButtonSize }) => (
  * - Mobile-first with touch-friendly sizes (min 44px tap target)
  * - Responsive icon/text sizing
  * - Loading state with spinner
- * - iconOnlyMobile prop to show only icon on mobile devices
+ * - iconOnlyMobile prop to show only the icon on mobile devices; the label
+ *   stays in the DOM as screen-reader-only text so the button keeps its name
  *
  * @example
  * // Primary button with icon
@@ -117,7 +131,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           <span className={iconSizes[size]}>{icon}</span>
         ) : null}
         {children && (
-          <span className={iconOnlyMobile ? 'hidden sm:inline' : ''}>
+          <span className={iconOnlyMobile ? 'sr-only sm:not-sr-only' : ''}>
             {children}
           </span>
         )}
@@ -151,6 +165,12 @@ export const RefreshIcon = () => (
 export const MinusIcon = () => (
   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+  </svg>
+)
+
+export const CheckIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
   </svg>
 )
 

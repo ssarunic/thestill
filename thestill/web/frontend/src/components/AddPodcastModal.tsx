@@ -5,6 +5,7 @@ import { addPodcast, getTopPodcasts } from '../api/client'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import Button, { CloseIcon } from './Button'
+import FollowButton from './FollowButton'
 
 interface AddPodcastModalProps {
   isOpen: boolean
@@ -299,7 +300,7 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
                       key={podcast.rss_url}
                       id={`top-podcast-row-${idx}`}
                       className={`flex items-center gap-3 px-3 py-2 ${
-                        isHighlighted ? 'bg-indigo-50' : ''
+                        isHighlighted ? 'bg-primary-50' : ''
                       }`}
                     >
                       <span className="w-6 text-right text-sm tabular-nums text-gray-400 flex-shrink-0">
@@ -346,30 +347,6 @@ function statusOf(key: string, inFlight: Set<string>, done: Set<string>): Follow
   if (done.has(key)) return 'done'
   if (inFlight.has(key)) return 'pending'
   return 'idle'
-}
-
-interface FollowButtonProps {
-  status: FollowStatus
-  onClick: () => void
-  labels: Record<FollowStatus, string>
-}
-
-function FollowButton({ status, onClick, labels }: FollowButtonProps) {
-  const disabled = status !== 'idle'
-  const isDone = status === 'done'
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 rounded-md text-xs font-medium flex-shrink-0 ${
-        isDone
-          ? 'bg-green-100 text-green-800 cursor-default'
-          : 'bg-primary-900 text-white hover:bg-primary-800 disabled:opacity-50'
-      }`}
-    >
-      {labels[status]}
-    </button>
-  )
 }
 
 function ListSkeleton() {

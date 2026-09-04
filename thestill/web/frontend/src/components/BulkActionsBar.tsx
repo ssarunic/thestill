@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext'
+import Button from './Button'
 import { abovePlayer } from '../constants/layers'
 import { useBulkProcess } from '../hooks/useApi'
 
@@ -61,32 +62,33 @@ export default function BulkActionsBar({ selectedIds, onClearSelection }: BulkAc
           <div className="flex items-center gap-3">
             {bulkProcess.isPending && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600"></div>
                 Processing...
               </div>
             )}
 
-            <button
+            <Button
               onClick={handleProcessAll}
               disabled={bulkProcess.isPending}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium text-sm hover:bg-indigo-700 active:bg-indigo-800 transition-all duration-200 shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              icon={
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              }
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
               Process All
-            </button>
+            </Button>
           </div>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import type { ActivityItem } from '../api/types'
+import ListGroup from './ListGroup'
+import ListRow, { ListRowArtwork } from './ListRow'
 
 interface ActivityFeedProps {
   items: ActivityItem[]
@@ -111,17 +112,17 @@ export default function ActivityFeed({
 
   if (isLoading) {
     return (
-      <div className="space-y-4">
+      <ListGroup>
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="animate-pulse flex gap-4 p-4 bg-white rounded-lg">
-            <div className="w-10 h-10 bg-gray-200 rounded-full" />
+          <li key={i} className="animate-pulse flex gap-3 px-4 py-3">
+            <div className="w-12 h-12 bg-gray-200 rounded-md" />
             <div className="flex-1 space-y-2">
               <div className="h-4 bg-gray-200 rounded w-3/4" />
               <div className="h-3 bg-gray-200 rounded w-1/2" />
             </div>
-          </div>
+          </li>
         ))}
-      </div>
+      </ListGroup>
     )
   }
 
@@ -137,56 +138,39 @@ export default function ActivityFeed({
   }
 
   return (
-    <div className="space-y-2">
-      {items.map((item) => (
-        <Link
-          key={item.episode_id}
-          to={`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`}
-          className="flex items-start gap-4 p-4 bg-white rounded-lg border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all"
-        >
-          {/* Artwork with fallback: episode -> podcast -> icon */}
-          {item.episode_image_url || item.podcast_image_url ? (
-            <img
-              src={item.episode_image_url || item.podcast_image_url || ''}
-              alt=""
-              width={40}
-              height={40}
-              loading="lazy"
-              className="w-10 h-10 rounded-lg object-cover flex-shrink-0 aspect-square"
-            />
-          ) : (
-            <div className="w-10 h-10 bg-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 aspect-square">
-              <svg className="w-5 h-5 text-secondary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-              </svg>
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h4 className="font-medium text-gray-900 truncate">{item.episode_title}</h4>
-              <ActionBadge action={item.action} />
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span className="truncate">{item.podcast_title}</span>
-              {formatPubDate(item.pub_date) && (
-                <>
-                  <span className="text-gray-300">•</span>
-                  <span className="flex-shrink-0">{formatPubDate(item.pub_date)}</span>
-                </>
-              )}
-              {item.duration_formatted && (
-                <>
-                  <span className="text-gray-300">•</span>
-                  <span className="flex-shrink-0">{formatDuration(item.duration_formatted)}</span>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="text-xs text-gray-400 flex-shrink-0">
-            {formatTimestamp(item.timestamp)}
-          </div>
-        </Link>
-      ))}
+    <div>
+      <ListGroup>
+        {items.map((item) => (
+          <ListRow
+            key={item.episode_id}
+            align="start"
+            to={`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}`}
+            leading={
+              <ListRowArtwork src={item.episode_image_url || item.podcast_image_url} />
+            }
+            overline={
+              <div className="flex items-center gap-2">
+                <ActionBadge action={item.action} />
+                <span className="ml-auto text-xs text-gray-400 whitespace-nowrap">
+                  {formatTimestamp(item.timestamp)}
+                </span>
+              </div>
+            }
+            title={item.episode_title}
+            subtitle={
+              <>
+                {item.podcast_title}
+                {formatPubDate(item.pub_date) && (
+                  <span className="text-gray-400"> · {formatPubDate(item.pub_date)}</span>
+                )}
+                {item.duration_formatted && (
+                  <span className="text-gray-400"> · {formatDuration(item.duration_formatted)}</span>
+                )}
+              </>
+            }
+          />
+        ))}
+      </ListGroup>
 
       {/* Load more trigger */}
       {fetchNextPage && (

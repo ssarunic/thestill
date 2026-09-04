@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom'
 import { useBriefingsInfinite } from '../hooks/useApi'
 import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { Briefing } from '../api/types'
+import ListGroup from '../components/ListGroup'
+import ListRow from '../components/ListRow'
 
 // Past-briefings history (digest retirement follow-up). Deliberately a
 // lightweight list reached from the inbox card — the briefing's home
@@ -30,35 +32,33 @@ function formatWindow(briefing: Briefing): string {
 }
 
 function BriefingRow({ briefing }: { briefing: Briefing }) {
+  // Spec #73 — the row is the link, so the old "Read →" affordance is gone;
+  // the trailing slot holds the one status element that fits a phone row.
   return (
-    <Link
+    <ListRow
       to={`/briefings/${briefing.id}`}
-      className="group flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-lg hover:border-primary-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-all"
-    >
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900 group-hover:text-primary-700">
-          {formatCreatedAt(briefing.created_at)}
-        </p>
-        <p className="text-sm text-gray-500">
+      title={formatCreatedAt(briefing.created_at)}
+      titleClassName="font-semibold text-gray-900 group-hover:text-primary-700"
+      subtitle={
+        <>
           {briefing.episode_count} episode{briefing.episode_count === 1 ? '' : 's'}
           {' • '}
           covers {formatWindow(briefing)}
-        </p>
-      </div>
-      {briefing.listened_at ? (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-          Listened
-        </span>
-      ) : (
-        <span className="text-xs font-medium text-gray-400">Unplayed</span>
-      )}
-      <span className="text-sm font-medium text-primary-700 group-hover:text-primary-800">
-        Read →
-      </span>
-    </Link>
+        </>
+      }
+      trailing={
+        briefing.listened_at ? (
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            Listened
+          </span>
+        ) : (
+          <span className="text-xs font-medium text-gray-400">Unplayed</span>
+        )
+      }
+    />
   )
 }
 
@@ -82,11 +82,11 @@ export default function Briefings() {
       </div>
 
       {query.isLoading && (
-        <div className="space-y-3">
+        <ListGroup>
           {[0, 1, 2].map((i) => (
-            <div key={i} className="animate-pulse h-16 bg-white border border-gray-200 rounded-lg" />
+            <li key={i} className="animate-pulse h-16" />
           ))}
-        </div>
+        </ListGroup>
       )}
 
       {query.error && (
@@ -112,11 +112,13 @@ export default function Briefings() {
         </div>
       )}
 
-      <div className="space-y-3">
-        {briefings.map((briefing) => (
-          <BriefingRow key={briefing.id} briefing={briefing} />
-        ))}
-      </div>
+      {briefings.length > 0 && (
+        <ListGroup>
+          {briefings.map((briefing) => (
+            <BriefingRow key={briefing.id} briefing={briefing} />
+          ))}
+        </ListGroup>
+      )}
 
       {query.hasNextPage && (
         <div className="flex justify-center">
