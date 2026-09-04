@@ -28,7 +28,7 @@ const variantStyles: Record<ButtonVariant, { base: string; disabled: string }> =
     base: 'bg-primary-50 text-primary-900 hover:bg-primary-100 active:bg-primary-200',
     disabled: 'bg-gray-100 text-gray-400',
   },
-  // Resting "done" state (Following ✓). Keeps its tint when disabled because
+  // Resting "done" state (Following + check icon). Keeps its tint when disabled because
   // the disabled state *is* the message.
   success: {
     base: 'bg-green-100 text-green-800',

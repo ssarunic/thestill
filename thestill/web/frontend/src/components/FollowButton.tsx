@@ -16,7 +16,7 @@ interface FollowButtonProps {
 const DEFAULT_LABELS: Record<FollowStatus, string> = {
   idle: 'Follow',
   pending: 'Following…',
-  done: 'Following ✓',
+  done: 'Following',
   error: 'Retry',
 }
 

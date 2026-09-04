@@ -137,12 +137,12 @@ describe('AddPodcastModal', () => {
     })
 
     expect(screen.getByText('Follow')).toBeInTheDocument()
-    const following = screen.getByText('Following ✓')
+    const following = screen.getByText('Following')
     expect(following).toBeInTheDocument()
     expect(following.closest('button')).toBeDisabled()
   })
 
-  it('flips a Follow button to Following ✓ on successful add', async () => {
+  it('flips a Follow button to Following on successful add', async () => {
     mockGetTopPodcasts.mockResolvedValue(
       response([row({ rank: 1, name: 'The Daily', is_following: false })]),
     )
@@ -166,7 +166,7 @@ describe('AddPodcastModal', () => {
     await user.click(screen.getByRole('button', { name: 'Follow' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Following ✓')).toBeInTheDocument()
+      expect(screen.getByText('Following')).toBeInTheDocument()
     })
     expect(mockAddPodcast).toHaveBeenCalledWith({ url: 'https://example.com/feed' })
     // Modal stays open after a list-Follow.
