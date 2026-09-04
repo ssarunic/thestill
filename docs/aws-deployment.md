@@ -178,7 +178,7 @@ Notes:
 3. Sync artifacts into `./data`: `raw_transcripts/`, `clean_transcripts/`,
    `summaries/`, `briefings/`, `narrations/`, `episode_facts/`,
    `podcast_facts/`, `corpus/`. Skip `logs/` and `debug_feeds/`.
-4. Start the rest **with schedulers off** (`REFRESH_SCHEDULER_ENABLED=false`,
+4. Start the rest **with schedulers off** (`REFRESH_SCHEDULER_ENABLED=false`, `REFRESH_ON_OPEN_ENABLED=false`,
    `BRIEFING_SCHEDULER_ENABLED=false` in SSM/.env for the first boot):
    `docker compose -f docker-compose.prod.yml up -d`
 5. Verify readiness — the compose healthcheck polls `/health/ready`, so

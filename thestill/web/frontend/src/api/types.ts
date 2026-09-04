@@ -123,6 +123,9 @@ export interface PodcastDetail {
   episodes_count: number
   episodes_processed: number
   is_following: boolean
+  // Spec #74 — true while an open-triggered (or scheduled) feed refresh is
+  // queued or running; the detail page polls until it settles.
+  refresh_pending?: boolean
   // THES-146: New metadata fields
   author?: string | null
   explicit?: boolean | null

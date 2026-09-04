@@ -70,6 +70,7 @@ from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
 from ..utils.slug import generate_slug
+from .podcast_repository import RefreshOnOpenState
 from .postgres_category_cache import CategoryCacheMixin
 from .sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID, SYNTHETIC_AUDIO_IMPORTS_RSS, _normalize_artwork_url
 
@@ -461,12 +462,14 @@ class PodcastsMixin(CategoryCacheMixin):
             A podcast with no tracked episodes has no key in the dict.
         """
         with self._get_connection() as conn:
-            podcast_rows = conn.execute(f"""
+            podcast_rows = conn.execute(
+                f"""
                 SELECT {_PODCAST_COLS_P}
                 FROM podcasts p
                 WHERE {self._active_feed_sql("p", require_incomplete=False)}
                 ORDER BY p.created_at DESC
-                """).fetchall()
+                """
+            ).fetchall()
 
             dedup: Dict[str, Set[str]] = {}
             for ext_row in conn.execute("SELECT podcast_id, external_id FROM episodes"):
@@ -1110,14 +1113,16 @@ class PodcastsMixin(CategoryCacheMixin):
         now_dt = now or now_utc()
         active_filter = self._active_feed_sql()
         with self._get_connection() as conn:
-            reason_rows = conn.execute(f"""
+            reason_rows = conn.execute(
+                f"""
                 SELECT COALESCE(refresh_disabled_reason, 'unknown') AS reason, COUNT(*) AS n
                 FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND (last_refresh_at IS NOT NULL OR last_refresh_error IS NOT NULL)
                   AND {active_filter}
                 GROUP BY reason
-                """).fetchall()
+                """
+            ).fetchall()
             parked_by_reason = {row["reason"]: row["n"] for row in reason_rows}
             active = conn.execute(
                 f"SELECT COUNT(*) AS n FROM podcasts WHERE next_refresh_at IS NOT NULL AND {active_filter}"
@@ -1129,11 +1134,13 @@ class PodcastsMixin(CategoryCacheMixin):
                 """,
                 (now_dt,),
             ).fetchone()["n"]
-            backing_off = conn.execute(f"""
+            backing_off = conn.execute(
+                f"""
                 SELECT COUNT(*) AS n FROM podcasts
                 WHERE next_refresh_at IS NOT NULL AND last_refresh_failure_kind IS NOT NULL
                   AND {active_filter}
-                """).fetchone()["n"]
+                """
+            ).fetchone()["n"]
         return {
             "active": active,
             "due_now": due_now,
@@ -1151,13 +1158,15 @@ class PodcastsMixin(CategoryCacheMixin):
         """
         now_dt = now or now_utc()
         with self._get_connection() as conn:
-            rows = conn.execute(f"""
+            rows = conn.execute(
+                f"""
                 SELECT id FROM podcasts
                 WHERE next_refresh_at IS NULL
                   AND last_refresh_at IS NULL
                   AND last_refresh_error IS NULL
                   AND {self._active_feed_sql()}
-                """).fetchall()
+                """
+            ).fetchall()
             # Spec #69 Phase 8.4 — jitter computed in Python as before,
             # written in one executemany instead of a statement per feed.
             seed_params = []
@@ -1189,6 +1198,30 @@ class PodcastsMixin(CategoryCacheMixin):
                 (now_dt, podcast_id),
             )
             return cur.rowcount > 0
+
+    def get_refresh_on_open_state(self, podcast_id: str) -> Optional[RefreshOnOpenState]:
+        """Spec #74 — see interface (``timestamptz`` columns come back aware)."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT last_refresh_at, refresh_retry_after_at, refresh_disabled_reason FROM podcasts WHERE id = %s",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RefreshOnOpenState(
+            last_refresh_at=ensure_utc(row["last_refresh_at"]),
+            refresh_retry_after_at=ensure_utc(row["refresh_retry_after_at"]),
+            refresh_disabled_reason=row["refresh_disabled_reason"],
+        )
+
+    def has_followers(self, podcast_id: str) -> bool:
+        """Spec #74 — see interface."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM podcast_followers WHERE podcast_id = %s LIMIT 1",
+                (podcast_id,),
+            ).fetchone()
+            return row is not None
 
     def record_refresh_success(
         self,
@@ -1670,7 +1703,8 @@ class PodcastsMixin(CategoryCacheMixin):
         # The cascading NULL guards reproduce ``Episode.state``'s priority
         # order exactly (failed wins; then most-progressed path).
         with self._get_connection() as conn:
-            row = conn.execute("""
+            row = conn.execute(
+                """
                 SELECT
                     (SELECT COUNT(*) FROM podcasts) AS podcasts_tracked,
                     COUNT(*) AS episodes_total,
@@ -1697,7 +1731,8 @@ class PodcastsMixin(CategoryCacheMixin):
                         AND raw_transcript_path IS NULL AND downsampled_audio_path IS NULL
                         AND audio_path IS NULL) AS discovered
                   FROM episodes
-                """).fetchone()
+                """
+            ).fetchone()
             return {key: int(value or 0) for key, value in row.items()}
 
     _EPISODE_STATE_CASE = """

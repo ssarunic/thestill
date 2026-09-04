@@ -33,13 +33,10 @@ from thestill.models.podcast import Podcast
 
 
 def test_resolve_existing_podcast_returns_slug_idempotently(client, app_state):
-    """When the URL already maps to a fully-refreshed ``podcasts`` row, the
-    existing slug is returned and ``is_new`` is False (so no background refresh
-    is kicked off).
-
-    ``last_processed`` being set tells the route this row has finished discovery
-    — a fresh row would have ``last_processed=None`` and we'd still refresh it
-    even on a "duplicate" resolve, which is intentional for half-imported state.
+    """When the URL already maps to a ``podcasts`` row, the existing slug is
+    returned and ``is_new`` is False. Whether a refresh is enqueued is the
+    refresh-on-open service's call (spec #74) — this row has never been
+    refreshed through the handler, so one is, and the response says so.
     """
     now = datetime.now(timezone.utc)
     podcast = Podcast(
@@ -65,6 +62,7 @@ def test_resolve_existing_podcast_returns_slug_idempotently(client, app_state):
     assert body["podcast_slug"] == "already-imported"
     assert body["podcast_id"] == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
     assert body["is_new"] is False
+    assert body["refresh_pending"] is True
 
 
 def test_resolve_empty_url_rejected(client):
@@ -97,11 +95,14 @@ def test_resolve_invalid_url_returns_400(client, monkeypatch, app_state):
     assert response.status_code == 400
 
 
-def test_resolve_new_podcast_returns_slug_and_kicks_off_refresh(client, monkeypatch, app_state):
-    """For genuinely new podcasts the slug is returned synchronously and a
-    background refresh is scheduled. The refresh itself is a fire-and-forget
-    daemon thread — we just verify it was triggered, not the network call.
+def test_resolve_new_podcast_returns_slug_and_enqueues_discovery(client, monkeypatch, app_state):
+    """For genuinely new podcasts the slug is returned synchronously and the
+    first discovery is a durable ``REFRESH_FEED`` task (spec #74) — observable
+    via ``refresh_pending`` and retried by the worker, not a daemon thread.
+    A second resolve coalesces onto the same task.
     """
+    from thestill.core.queue_manager import TaskStage
+
     now = datetime.now(timezone.utc)
     new_podcast = Podcast(
         id="ffffffff-ffff-ffff-ffff-ffffffffffff",
@@ -114,42 +115,21 @@ def test_resolve_new_podcast_returns_slug_and_kicks_off_refresh(client, monkeypa
     )
 
     def fake_add(url: str):
-        # Persist the row so the count-delta check inside the route sees a new
-        # podcast, matching what the real service would do.
         app_state.repository.save(new_podcast)
         return new_podcast
 
-    refresh_calls: list[str] = []
-
-    def fake_refresh(podcast_id=None, **kwargs):
-        refresh_calls.append(podcast_id)
-
-        class _R:
-            total_episodes = 0
-            episodes_by_podcast: list = []
-            podcast_filter_applied = None
-
-        return _R()
-
     monkeypatch.setattr(app_state.podcast_service, "add_podcast", fake_add)
-    monkeypatch.setattr(app_state.refresh_service, "refresh", fake_refresh)
 
-    response = client.post(
-        "/api/podcasts/resolve",
-        json={"url": "https://example.com/fresh.xml"},
-    )
+    response = client.post("/api/podcasts/resolve", json={"url": "https://example.com/fresh.xml"})
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["podcast_slug"] == "fresh-feed"
     assert body["is_new"] is True
+    assert body["refresh_pending"] is True
+    task = app_state.queue_manager.get_next_task(stage=TaskStage.REFRESH_FEED)
+    assert task is not None and task.podcast_id == new_podcast.id
 
-    # Background daemon thread should have been kicked off with this podcast's id.
-    # Give it a brief moment to actually run.
-    import time
-
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not refresh_calls:
-        time.sleep(0.01)
-
-    assert refresh_calls == [new_podcast.id]
+    again = client.post("/api/podcasts/resolve", json={"url": "https://example.com/fresh.xml"})
+    assert again.json()["refresh_pending"] is True
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.REFRESH_FEED) is None

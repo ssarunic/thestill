@@ -240,6 +240,19 @@ class TestFeedTaskCoalescing:
         with pytest.raises(ValueError):
             qm.add_feed_task(PODCAST_ID, stage=TaskStage.DOWNLOAD)
 
+    def test_promote_lifts_queued_feed_task_only(self, qm):
+        """Spec #74 — an open promotes a still-queued refresh to reader
+        priority; it never lowers one and never touches a running task."""
+        feed = qm.add_feed_task(PODCAST_ID)
+        assert qm.promote_pending_feed_task(PODCAST_ID, TaskStage.REFRESH_FEED, 10) is True
+        assert qm.get_task(feed.id).priority == 10
+        assert qm.promote_pending_feed_task(PODCAST_ID, TaskStage.REFRESH_FEED, 5) is False
+
+        claimed = qm.get_next_task(stage=TaskStage.REFRESH_FEED)
+        assert claimed is not None and claimed.id == feed.id
+        assert qm.promote_pending_feed_task(PODCAST_ID, TaskStage.REFRESH_FEED, 20) is False
+        assert qm.get_task(feed.id).priority == 10
+
 
 # ---------------------------------------------------------------------------
 # retry scheduling

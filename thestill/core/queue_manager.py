@@ -930,6 +930,15 @@ class QueueManager:
         Returns:
             Number of episodes for which a first-stage task was enqueued.
         """
+        # Spec #74 — spec #63's "processed = followed" invariant, enforced at
+        # the one point every refresh path funnels through. An unfollowed
+        # feed may still be *refreshed* (its episode list stays current for
+        # browsing) but never drives the paid pipeline. Re-checked per call,
+        # so a follow that lands before the next refresh takes effect then.
+        if not repository.has_followers(podcast_id):
+            logger.info("refresh_enqueue_skipped_unfollowed", podcast_id=podcast_id, initiated_by=initiated_by)
+            return 0
+
         provider = getattr(config, "transcription_provider", "")
         discovered = repository.get_discovered_unqueued_episodes(podcast_id)
 
@@ -1063,6 +1072,27 @@ class QueueManager:
                 (podcast_id, stage.value),
             )
             return cursor.fetchone() is not None
+
+    def promote_pending_feed_task(self, podcast_id: str, stage: TaskStage, priority: int) -> bool:
+        """Spec #74 — raise a still-queued feed task to at least ``priority``.
+
+        A reader opening the podcast should not wait behind a scheduler burst
+        that enqueued the same feed at priority 0. Only ``pending`` /
+        ``retry_scheduled`` rows are touched; a task already ``processing``
+        is left alone. Returns True if a row was promoted.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks SET priority = ?, updated_at = ?
+                WHERE podcast_id = ? AND stage = ?
+                  AND status IN ('pending', 'retry_scheduled')
+                  AND priority < ?
+                """,
+                (priority, now_utc().isoformat(), podcast_id, stage.value, priority),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def get_next_task(
         self,

@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from ..services.inbox_service import InboxService
     from ..services.legacy_claim_service import LegacyClaimService
     from ..services.narration import NarrationRunner
+    from ..services.refresh_on_open import RefreshOnOpenService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
     from .services import HealthService
@@ -163,6 +164,9 @@ class AppState:
     # Spec #66 — readiness probes behind /health/ready. ``Optional`` only
     # for hand-built test fixtures; production wiring always passes it.
     health_service: "Optional[HealthService]" = None
+    # Spec #74 — open-triggered feed refresh. ``Optional`` only for
+    # hand-built test fixtures; production wiring always passes it.
+    refresh_on_open: "Optional[RefreshOnOpenService]" = None
 
 
 def get_app_state(request: Request) -> AppState:

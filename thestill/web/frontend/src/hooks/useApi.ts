@@ -129,7 +129,34 @@ export function usePodcast(podcastSlug: string) {
     queryKey: ['podcasts', podcastSlug],
     queryFn: () => getPodcast(podcastSlug),
     enabled: !!podcastSlug,
+    // Spec #74 — opening the page may have enqueued a feed refresh. Poll
+    // while the server says one is pending so newly discovered episodes
+    // land without a reload; level-gated on the flag, never on task activity.
+    refetchInterval: (query) => (query.state.data?.podcast?.refresh_pending ? 5_000 : false),
   })
+}
+
+/**
+ * Spec #74 — when the open-triggered refresh settles (`refresh_pending`
+ * flips true → false) invalidate the episode list so the rows it discovered
+ * render. A page that was never pending never invalidates.
+ */
+export function useInvalidateEpisodesWhenRefreshSettles(
+  podcastSlug: string,
+  refreshPending: boolean | undefined,
+) {
+  const queryClient = useQueryClient()
+  const wasPending = useRef(false)
+  useEffect(() => {
+    if (refreshPending) {
+      wasPending.current = true
+      return
+    }
+    if (wasPending.current) {
+      wasPending.current = false
+      queryClient.invalidateQueries({ queryKey: ['podcasts', podcastSlug, 'episodes'] })
+    }
+  }, [refreshPending, podcastSlug, queryClient])
 }
 
 export function usePodcastEpisodes(podcastSlug: string, limit = 20) {

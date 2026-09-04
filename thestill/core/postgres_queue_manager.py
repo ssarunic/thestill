@@ -283,6 +283,15 @@ class PostgresQueueManager:
         Returns:
             Number of episodes for which a first-stage task was enqueued.
         """
+        # Spec #74 — spec #63's "processed = followed" invariant, enforced at
+        # the one point every refresh path funnels through. An unfollowed
+        # feed may still be *refreshed* (its episode list stays current for
+        # browsing) but never drives the paid pipeline. Re-checked per call,
+        # so a follow that lands before the next refresh takes effect then.
+        if not repository.has_followers(podcast_id):
+            logger.info("refresh_enqueue_skipped_unfollowed", podcast_id=podcast_id, initiated_by=initiated_by)
+            return 0
+
         provider = getattr(config, "transcription_provider", "")
         discovered = repository.get_discovered_unqueued_episodes(podcast_id)
 
@@ -416,6 +425,22 @@ class PostgresQueueManager:
                 (podcast_id, stage.value),
             ).fetchone()
             return row is not None
+
+    def promote_pending_feed_task(self, podcast_id: str, stage: TaskStage, priority: int) -> bool:
+        """Spec #74 — raise a still-queued feed task to at least ``priority``
+        (``pending`` / ``retry_scheduled`` only; a ``processing`` task is left
+        alone). Returns True if a row was promoted."""
+        with connect(self.dsn) as conn:
+            cur = conn.execute(
+                """
+                UPDATE tasks SET priority = %s, updated_at = %s
+                WHERE podcast_id = %s AND stage = %s
+                  AND status IN ('pending', 'retry_scheduled')
+                  AND priority < %s
+                """,
+                (priority, now_utc(), podcast_id, stage.value, priority),
+            )
+            return cur.rowcount > 0
 
     def get_next_task(
         self,

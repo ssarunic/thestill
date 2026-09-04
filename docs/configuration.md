@@ -174,6 +174,7 @@ the scheduler are off by default.
 | `REFRESH_VIA_QUEUE` | Enqueue `REFRESH_FEED` tasks instead of running the inline batch | `false` |
 | `REFRESH_SCHEDULER_ENABLED` | Run the background tick that enqueues due feeds | `false` |
 | `REFRESH_SCHEDULER_TICK_SECONDS` | How often the scheduler scans for due feeds (granularity, not poll interval) | `60` |
+| `REFRESH_ON_OPEN_ENABLED` | Opening a podcast detail page enqueues one throttled `REFRESH_FEED` (spec #74); discovery only for feeds nobody follows. Set `false` on scratch/E2E servers | `true` |
 
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 
