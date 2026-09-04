@@ -104,6 +104,10 @@ CREATE TABLE IF NOT EXISTS podcasts (
     copyright text NULL,
     etag text NULL,
     last_modified text NULL,
+    -- Spec #73 follow-up: store links copied from top_podcasts on rss_url
+    -- (migration 0009); never parsed from the feed.
+    apple_url text NULL,
+    youtube_url text NULL,
     primary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     secondary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     host_entity_ids jsonb NOT NULL DEFAULT '[]'::jsonb,

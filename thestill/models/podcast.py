@@ -370,6 +370,15 @@ class Podcast(BaseModel):
     show_type: Optional[str] = None  # "episodic" (default, newest first) or "serial" (oldest first)
     website_url: Optional[str] = None  # Podcast website URL (from channel <link>)
 
+    # Chart-sourced store links (spec #73 follow-up). Copied from the
+    # ``top_podcasts`` chart row with the same ``rss_url`` when a chart entry
+    # is lazily imported (or backfilled for rows that already existed); they
+    # are never parsed from the RSS feed and ``save()``/``save_podcast()``
+    # leave them untouched — ``PodcastRepository.sync_podcast_chart_urls``
+    # is the only writer.
+    apple_url: Optional[str] = None  # Apple Podcasts show page
+    youtube_url: Optional[str] = None  # YouTube channel/show page
+
     # THES-145: Feed management (itunes:complete, copyright)
     is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")
     copyright: Optional[str] = None  # Copyright notice (from channel <copyright>)

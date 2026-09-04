@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 
 from thestill.models.podcast import Podcast
 
+from .conftest import seed_top_chart
+
 
 def test_resolve_existing_podcast_returns_slug_idempotently(client, app_state):
     """When the URL already maps to a fully-refreshed ``podcasts`` row, the
@@ -153,3 +155,87 @@ def test_resolve_new_podcast_returns_slug_and_kicks_off_refresh(client, monkeypa
         time.sleep(0.01)
 
     assert refresh_calls == [new_podcast.id]
+
+
+def test_resolve_copies_store_links_from_chart_entry(client, app_state):
+    """A podcast imported from the Top Podcasts chart carries the chart's
+    ``apple_url`` / ``youtube_url`` on its local row, so the detail page can
+    render "Apple Podcasts" / "YouTube" links (spec #73 follow-up).
+
+    The row already exists here (``last_processed`` set) to cover the cheap
+    backfill path too: podcasts imported before the columns existed pick the
+    links up on their next resolve, matched on ``rss_url``.
+    """
+    now = datetime.now(timezone.utc)
+    rss_url = "https://example.com/charted.xml"
+    # Seed the chart first — the helper resets the podcasts table.
+    seed_top_chart(
+        app_state,
+        "us",
+        [
+            {
+                "rank": 1,
+                "name": "Charted Show",
+                "artist": "Someone",
+                "rss_url": rss_url,
+                "apple_url": "https://podcasts.apple.com/us/podcast/charted-show/id123",
+                "youtube_url": "https://www.youtube.com/@chartedshow",
+            }
+        ],
+    )
+    app_state.repository.save(
+        Podcast(
+            id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            rss_url=rss_url,
+            title="Charted Show",
+            description="",
+            slug="charted-show",
+            created_at=now,
+            last_processed=now,
+            episodes=[],
+        )
+    )
+
+    response = client.post("/api/podcasts/resolve", json={"url": rss_url})
+    assert response.status_code == 200, response.text
+    assert response.json()["podcast_slug"] == "charted-show"
+
+    detail = client.get("/api/podcasts/charted-show")
+    assert detail.status_code == 200, detail.text
+    podcast = detail.json()["podcast"]
+    assert podcast["apple_url"] == "https://podcasts.apple.com/us/podcast/charted-show/id123"
+    assert podcast["youtube_url"] == "https://www.youtube.com/@chartedshow"
+
+    # The links live on the local row, not just in the response.
+    stored = app_state.repository.get_by_slug("charted-show")
+    assert stored is not None
+    assert stored.apple_url == "https://podcasts.apple.com/us/podcast/charted-show/id123"
+    assert stored.youtube_url == "https://www.youtube.com/@chartedshow"
+
+
+def test_resolve_off_chart_podcast_has_no_store_links(client, app_state):
+    """A podcast that is on no chart resolves fine and exposes both links as
+    null — the detail page renders nothing extra for it."""
+    now = datetime.now(timezone.utc)
+    rss_url = "https://example.com/indie.xml"
+    app_state.repository.save(
+        Podcast(
+            id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+            rss_url=rss_url,
+            title="Indie Show",
+            description="",
+            slug="indie-show",
+            created_at=now,
+            last_processed=now,
+            episodes=[],
+        )
+    )
+
+    response = client.post("/api/podcasts/resolve", json={"url": rss_url})
+    assert response.status_code == 200, response.text
+
+    detail = client.get("/api/podcasts/indie-show")
+    assert detail.status_code == 200, detail.text
+    podcast = detail.json()["podcast"]
+    assert podcast["apple_url"] is None
+    assert podcast["youtube_url"] is None

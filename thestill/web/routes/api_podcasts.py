@@ -101,6 +101,13 @@ def resolve_podcast(
 
     is_new = podcast.last_processed is None
 
+    # Spec #73 follow-up: the detail page renders "Apple Podcasts" / "YouTube"
+    # links from the local row, so copy them across from the chart entry
+    # (matched on ``rss_url``). Runs for existing rows too — that is the
+    # backfill for podcasts imported before the columns existed — and is a
+    # no-op for URLs that aren't on any chart.
+    chart_urls = state.repository.sync_podcast_chart_urls(str(podcast.id))
+
     if is_new:
         max_episodes_per_podcast = state.config.max_episodes_per_podcast
 
@@ -120,6 +127,8 @@ def resolve_podcast(
         podcast_id=podcast.id,
         podcast_slug=podcast.slug,
         is_new=is_new,
+        has_apple_url=bool(chart_urls.get("apple_url")),
+        has_youtube_url=bool(chart_urls.get("youtube_url")),
     )
 
     return api_response(
@@ -239,6 +248,10 @@ def get_podcast(
                 "website_url": info.website_url,
                 "is_complete": info.is_complete,
                 "copyright": info.copyright,
+                # Chart-sourced store links (spec #73 follow-up); null when
+                # the podcast is not on any Top Podcasts chart.
+                "apple_url": info.apple_url,
+                "youtube_url": info.youtube_url,
             },
         }
     )

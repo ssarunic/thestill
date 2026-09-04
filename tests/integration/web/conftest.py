@@ -160,7 +160,7 @@ def seed_top_chart(app_state: AppState, region: str, entries: list[dict]) -> Non
     """Insert top-podcast rows directly. Mirrors the helper in the repo unit
     tests but lives here so HTTP tests can call it.
 
-    Each entry: ``{rank, name, artist, rss_url, category_name?}``.
+    Each entry: ``{rank, name, artist, rss_url, category_name?, apple_url?, youtube_url?}``.
     """
     now = datetime.now(timezone.utc).isoformat()
     db_path = app_state.repository.db_path
@@ -192,13 +192,16 @@ def seed_top_chart(app_state: AppState, region: str, entries: list[dict]) -> Non
             top_id = conn.execute(
                 """
                 INSERT INTO top_podcasts
-                    (name, artist, rss_url, image_url, category_id, first_seen_at, last_seen_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (name, artist, rss_url, apple_url, youtube_url, image_url, category_id,
+                     first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry["name"],
                     entry.get("artist"),
                     entry["rss_url"],
+                    entry.get("apple_url"),
+                    entry.get("youtube_url"),
                     entry.get("image_url"),
                     category_id,
                     now,

@@ -1079,3 +1079,53 @@ def test_get_recent_activity_rows_tolerates_unparseable_duration(repo):
 # ---------------------------------------------------------------------------
 def test_get_chunks_health_empty(repo):
     assert repo.get_chunks_health() == (0, "")
+
+
+def test_sync_podcast_chart_urls(repo):
+    """Spec #73 follow-up: ``sync_podcast_chart_urls`` copies the chart's
+    ``apple_url``/``youtube_url`` onto the local row matched on ``rss_url``,
+    never clears a stored link with a NULL chart value, and is a no-op for
+    podcasts that are on no chart."""
+    u = _uniq()
+    on_chart = _mk_podcast(rss_url=f"https://p1.test/{u}/charted.xml")
+    off_chart = _mk_podcast(rss_url=f"https://p1.test/{u}/indie.xml")
+    repo.save(on_chart)
+    repo.save(off_chart)
+
+    now = _ts(repo, datetime.now(timezone.utc))
+    apple = f"https://podcasts.apple.com/us/podcast/x/id{u}"
+    youtube = f"https://www.youtube.com/@{u}"
+    _exec(
+        repo,
+        "INSERT INTO top_podcasts (name, artist, rss_url, apple_url, youtube_url, apple_track_id,"
+        " category_id, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+        ("Charted", None, str(on_chart.rss_url), apple, youtube, now, now),
+    )
+
+    # Fresh rows carry nothing until synced.
+    assert repo.get_by_id(on_chart.id).apple_url is None
+    assert repo.get_podcast_row_by_slug(on_chart.slug)["youtube_url"] is None
+
+    assert repo.sync_podcast_chart_urls(on_chart.id) == {"apple_url": apple, "youtube_url": youtube}
+    assert repo.sync_podcast_chart_urls(off_chart.id) == {"apple_url": None, "youtube_url": None}
+    assert repo.sync_podcast_chart_urls("00000000-0000-0000-0000-000000000000") == {
+        "apple_url": None,
+        "youtube_url": None,
+    }
+
+    # Read paths see the stored links: hydrated model + detail-page row.
+    hydrated = repo.get_by_id(on_chart.id)
+    assert (hydrated.apple_url, hydrated.youtube_url) == (apple, youtube)
+    row = repo.get_podcast_row_by_slug(on_chart.slug)
+    assert (row["apple_url"], row["youtube_url"]) == (apple, youtube)
+    assert repo.get_by_id(off_chart.id).apple_url is None
+
+    # Feed-driven writes never touch the chart links.
+    repo.save_podcast(hydrated.model_copy(update={"title": "Renamed", "apple_url": None, "youtube_url": None}))
+    repo.save(hydrated.model_copy(update={"description": "resaved", "apple_url": None, "youtube_url": None}))
+    again = repo.get_by_id(on_chart.id)
+    assert (again.apple_url, again.youtube_url) == (apple, youtube)
+
+    # A chart scrape that lost the YouTube link keeps the one we already have.
+    _exec(repo, "UPDATE top_podcasts SET youtube_url = NULL WHERE rss_url = ?", (str(on_chart.rss_url),))
+    assert repo.sync_podcast_chart_urls(on_chart.id) == {"apple_url": apple, "youtube_url": youtube}

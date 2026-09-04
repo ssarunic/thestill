@@ -539,6 +539,22 @@ class PodcastRepository(ABC):
         podcast = self.get_by_slug(slug)
         return self._podcast_row_from_model(podcast) if podcast else None
 
+    def sync_podcast_chart_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        """Copy ``apple_url`` / ``youtube_url`` from the ``top_podcasts`` chart
+        row with the same ``rss_url`` onto the local podcast (spec #73
+        follow-up).
+
+        Called by the lazy-import path (``POST /api/podcasts/resolve``) so a
+        podcast imported from the chart carries its store links; safe to call
+        for a podcast that is not on any chart (no-op). Chart values only ever
+        *fill or replace* — a NULL chart value never clears a stored link.
+
+        Returns the podcast's ``{"apple_url": ..., "youtube_url": ...}`` after
+        the sync (both ``None`` when the podcast is unknown or off-chart).
+        Backends without a chart table return ``{}``.
+        """
+        return {}
+
     @staticmethod
     def _podcast_row_from_model(podcast: Podcast) -> Dict:
         """Shared row shape for the fallback implementations above."""
@@ -567,6 +583,8 @@ class PodcastRepository(ABC):
             "website_url": podcast.website_url,
             "is_complete": podcast.is_complete,
             "copyright": podcast.copyright,
+            "apple_url": podcast.apple_url,
+            "youtube_url": podcast.youtube_url,
         }
 
 

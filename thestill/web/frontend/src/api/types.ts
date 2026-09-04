@@ -130,6 +130,10 @@ export interface PodcastDetail {
   website_url?: string | null
   is_complete?: boolean
   copyright?: string | null
+  // Chart-sourced store links (spec #73 follow-up). Null unless the podcast
+  // was imported from / matched against a Top Podcasts chart entry.
+  apple_url?: string | null
+  youtube_url?: string | null
 }
 
 export interface PodcastDetailResponse {

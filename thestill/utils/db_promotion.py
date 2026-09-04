@@ -88,7 +88,8 @@ _PROMOTIONS: list[tuple[str, str]] = [
             last_processed, slug, image_url, language, author, explicit, show_type, website_url,
             is_complete, copyright, etag, last_modified, primary_category_id, secondary_category_id,
             host_entity_ids, recurring_entity_ids, synthetic, auto_added, last_processed_at,
-            refresh_interval_seconds, next_refresh_at, last_refresh_at, last_refresh_error)
+            refresh_interval_seconds, next_refresh_at, last_refresh_at, last_refresh_error,
+            apple_url, youtube_url)
         SELECT id::uuid, NULLIF(created_at,'')::timestamptz, NULLIF(updated_at,'')::timestamptz,
                rss_url, title, COALESCE(description,''),
                NULLIF(last_processed,'')::timestamptz, COALESCE(slug,''), image_url,
@@ -103,7 +104,7 @@ _PROMOTIONS: list[tuple[str, str]] = [
                NULLIF(last_processed_at,'')::timestamptz,
                NULLIF(refresh_interval_seconds,'')::bigint,
                NULLIF(next_refresh_at,'')::timestamptz, NULLIF(last_refresh_at,'')::timestamptz,
-               last_refresh_error
+               last_refresh_error, apple_url, youtube_url
         FROM {m}.podcasts
         """,
     ),

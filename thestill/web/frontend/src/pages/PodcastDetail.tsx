@@ -233,6 +233,26 @@ export default function PodcastDetail() {
                     </ExternalLink>
                   </>
                 )}
+                {/* Store links (spec #73 follow-up). Chart-sourced, so they
+                    are null for podcasts that aren't on a Top Podcasts chart;
+                    shown on every viewport — the chart row only carries the
+                    Apple link at sm and up. */}
+                {podcast.apple_url && (
+                  <>
+                    <span className="text-gray-300">·</span>
+                    <ExternalLink href={podcast.apple_url} className="text-sm">
+                      Apple Podcasts
+                    </ExternalLink>
+                  </>
+                )}
+                {podcast.youtube_url && (
+                  <>
+                    <span className="text-gray-300">·</span>
+                    <ExternalLink href={podcast.youtube_url} className="text-sm">
+                      YouTube
+                    </ExternalLink>
+                  </>
+                )}
               </div>
               {/* Complete series indicator */}
               {podcast.is_complete && (

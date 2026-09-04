@@ -198,6 +198,9 @@ class PodcastWithIndex(BaseModel):
     website_url: Optional[str] = None
     is_complete: bool = False
     copyright: Optional[str] = None
+    # Chart-sourced store links (spec #73 follow-up); None when off-chart.
+    apple_url: Optional[str] = None
+    youtube_url: Optional[str] = None
 
     @computed_field  # type: ignore[misc]
     @property
@@ -390,6 +393,8 @@ class PodcastService:
                     website_url=podcast.website_url,
                     is_complete=podcast.is_complete,
                     copyright=podcast.copyright,
+                    apple_url=podcast.apple_url,
+                    youtube_url=podcast.youtube_url,
                 )
             )
 

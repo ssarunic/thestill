@@ -95,6 +95,7 @@ _PODCAST_COLS = """id, created_at, rss_url, title, slug, description, image_url,
 _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
        p.primary_category_id, p.secondary_category_id,
        p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
+       p.apple_url, p.youtube_url,
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
@@ -437,6 +438,9 @@ class PodcastsMixin(CategoryCacheMixin):
                 """,
                 (region, str(path), mtime, inserted, now),
             )
+            # Chart data changed: refresh the store links on every local
+            # podcast that appears on a chart (spec #73 follow-up).
+            self._backfill_chart_urls(conn)
         logger.info("seeded top-podcasts region", region=region, count=inserted)
 
     # ------------------------------------------------------------------
@@ -565,6 +569,44 @@ class PodcastsMixin(CategoryCacheMixin):
                 (region.lower(),),
             ).fetchall()
             return [row["name"] for row in rows]
+
+    @staticmethod
+    def _backfill_chart_urls(conn: psycopg.Connection, podcast_id: Optional[str] = None) -> None:
+        """Copy ``apple_url``/``youtube_url`` from ``top_podcasts`` onto
+        ``podcasts`` rows sharing the same ``rss_url`` (spec #73 follow-up).
+
+        ``COALESCE`` keeps an existing link when the chart row has none.
+        Restricted to one row when ``podcast_id`` is given. Same statement
+        shape as migration 0009's backfill.
+        """
+        params: Tuple[Any, ...] = ()
+        scope = ""
+        if podcast_id is not None:
+            scope = " AND p.id = %s"
+            params = (podcast_id,)
+        conn.execute(
+            f"""
+            UPDATE podcasts AS p
+               SET apple_url = COALESCE(t.apple_url, p.apple_url),
+                   youtube_url = COALESCE(t.youtube_url, p.youtube_url)
+              FROM top_podcasts AS t
+             WHERE t.rss_url = p.rss_url{scope}
+            """,
+            params,
+        )
+
+    def sync_podcast_chart_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        if not podcast_id:
+            return {"apple_url": None, "youtube_url": None}
+        with self._get_connection() as conn:
+            self._backfill_chart_urls(conn, podcast_id)
+            row = conn.execute(
+                "SELECT apple_url, youtube_url FROM podcasts WHERE id = %s",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return {"apple_url": None, "youtube_url": None}
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"]}
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
@@ -1459,6 +1501,8 @@ class PodcastsMixin(CategoryCacheMixin):
                 explicit=_opt_bool(row["explicit"]),
                 show_type=row["show_type"],
                 website_url=row["website_url"],
+                apple_url=row.get("apple_url"),
+                youtube_url=row.get("youtube_url"),
                 is_complete=bool(row["is_complete"]) if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=row["last_processed"],
@@ -1765,6 +1809,8 @@ class PodcastsMixin(CategoryCacheMixin):
             "website_url": row["website_url"],
             "is_complete": bool(row["is_complete"]),
             "copyright": row["copyright"],
+            "apple_url": row["apple_url"],
+            "youtube_url": row["youtube_url"],
         }
 
     def list_podcast_rows(
