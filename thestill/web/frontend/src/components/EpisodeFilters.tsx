@@ -118,7 +118,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
             placeholder="Search episodes by title..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           />
         </div>
 
@@ -128,7 +128,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
           <select
             value={filters.podcast_slug || ''}
             onChange={handlePodcastChange}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           >
             <option value="">All podcasts</option>
             {podcastsData?.podcasts.map((podcast) => (
@@ -142,7 +142,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
           <select
             value={filters.state || ''}
             onChange={handleStateChange}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           >
             {stateOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -158,7 +158,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
               type="date"
               value={filters.date_from || ''}
               onChange={handleDateFromChange}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
 
@@ -169,7 +169,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
               type="date"
               value={filters.date_to || ''}
               onChange={handleDateToChange}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
 
@@ -177,7 +177,7 @@ export default function EpisodeFilters({ filters, onFiltersChange }: EpisodeFilt
           <select
             value={currentSortValue}
             onChange={handleSortChange}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           >
             {sortOptions.map((option) => (
               <option key={option.value} value={option.value}>

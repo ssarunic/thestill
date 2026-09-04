@@ -143,7 +143,7 @@ export default function Episodes() {
               type="checkbox"
               checked={selectedIds.size === allEpisodes.length && allEpisodes.length > 0}
               onChange={handleSelectAll}
-              className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+              className="w-4 h-4 accent-primary-900 border-gray-300 rounded focus:ring-primary-500"
             />
             <span className="text-sm text-gray-600">
               {selectedIds.size === allEpisodes.length ? 'Deselect all' : 'Select all visible'}
@@ -215,7 +215,7 @@ export default function Episodes() {
           <div ref={loadMoreRef} className="py-4">
             {isFetchingNextPage && (
               <div className="flex justify-center">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
               </div>
             )}
             {!hasNextPage && allEpisodes.length > 0 && (

@@ -1,6 +1,6 @@
 # Mobile List Row Density — `ListRow` Primitive
 
-**Status**: 🚧 Phases 1–2 implemented on `claude/mobile-list-layout-design-dm3ypg` (2026-09-04); Phase 3 open
+**Status**: ✅ Complete — phases 1–3 implemented on `claude/mobile-list-layout-design-dm3ypg` (2026-09-04)
 **Created**: 2026-09-04
 **Updated**: 2026-09-04
 **Priority**: Medium (Top podcasts is unreadable on phones; the same row anatomy drifts across five lists)
@@ -161,8 +161,16 @@ fights busy covers, loses the vertical scan).
   `ImportEpisodeModal`, `Inbox`, `PodcastDetail`, `Podcasts`) turn navy.
   `RefreshButton` and `BulkActionsBar` now import `Button` instead of
   carrying its classes; the add-podcast modal's keyboard highlight moved from
-  `bg-indigo-50` to `bg-primary-50`. `ring-indigo-*` selection rings on
-  `EpisodeCard` are left for Phase 3.
+  `bg-indigo-50` to `bg-primary-50`.
+- Phase 3 retired the last two "primary" colours: `FailedTasks` (Retry, Skip,
+  Retry all — were `blue-600`) and `BriefingDetail` (Mark listened — was
+  `primary-600`) now render through `Button`. `EpisodeCard`'s selection ring
+  and the Episodes select-all checkbox use the navy token, and the text
+  inputs in `EpisodeFilters`, `AddPodcastModal` and `ImportEpisodeModal`
+  focus with `ring-primary-500` like the Top podcasts inputs already did.
+  What remains indigo is semantic stage colour (`downsampled` in
+  `PipelineStatus`/`EpisodeCard`, `processing` in `EntityBranchProgress`),
+  which is deliberately not the accent.
 
 ### 5.2 One list typography scale
 
@@ -183,8 +191,8 @@ BriefingCard hero). Repeated rows stop being cards.
 | Inbox | 2 ✅ | Rows via `ListRow` (`overline` = podcast name + timestamp, `footer` = progress pill); full-bleed group replaces `space-y-3` cards | +64 px title width on phones, tighter list; read/unread/saved/dismissed semantics unchanged |
 | Briefings | 2 ✅ | `ListRow`; trailing keeps the status badge, drops "Read →" (the row is the link) | No more three-element collisions |
 | Activity feed | 2 ✅ | `ListRow` (`overline` = action badge + relative time); `truncate` → clamp-2; 48 px art; `border-gray-100` normalised | Matches Inbox density |
-| Search entity cards | 3 | Title scale + `rounded-md` avatar; stays a grid | Minor |
-| Episodes / podcast detail | 3 | `text-row`, thumbnail radius; keeps its card (selection + badges) | 1 px larger title on phones |
+| Search entity cards | 3 ✅ | `text-row sm:text-base` title, `rounded-md` avatar; stays a two-column grid | Minor |
+| Episodes / podcast detail | 3 ✅ | `text-row sm:text-base leading-snug` title, navy selection ring and checkbox; keeps its card (selection + badges) and its 40 px `rounded-md` thumbnail | 1 px larger title on phones; selection reads navy instead of indigo |
 | Podcasts grid, dashboard tiles | – | None (cards, not rows) | None |
 | Desktop, all pages | 1–2 | Apple link becomes an icon; Button primary turns navy | Otherwise unchanged |
 
@@ -198,6 +206,9 @@ BriefingCard hero). Repeated rows stop being cards.
   `BulkActionsBar.tsx`.
 - **Edited, phase 2:** `Inbox.tsx`, `Briefings.tsx`, `ActivityFeed.tsx`
   (skeletons moved inside the group too).
+- **Edited, phase 3:** `EpisodeCard.tsx`, `Episodes.tsx`, `SearchResults.tsx`,
+  `EpisodeFilters.tsx`, `FailedTasks.tsx`, `BriefingDetail.tsx`, plus the
+  focus rings in `AddPodcastModal.tsx` and `ImportEpisodeModal.tsx`.
 - **Tests:** `TopPodcasts.test.tsx` and `AddPodcastModal.test.tsx` query
   buttons by accessible name ("Follow", "Following ✓"); the `sr-only` label
   preserves them. `Inbox.test.tsx` scopes its sr-only state assertion to the
@@ -214,6 +225,11 @@ BriefingCard hero). Repeated rows stop being cards.
 - **Out of scope, noted:** the Top podcasts header wraps search, category
   and region controls onto two lines on phones; a flag-only region select
   would recover ~40 px of height. Separate pass.
+- **Follow-up, not in this spec:** Apple Podcasts / YouTube links belong on
+  the podcast detail page on every viewport. The local `podcasts` row does
+  not store `apple_url` / `youtube_url`, so that is a small backend change
+  (persist the chart's URLs on lazy import, expose them on the detail
+  payload) before the detail page can show them.
 
 ## 7. Phases and gates
 
@@ -221,4 +237,4 @@ BriefingCard hero). Repeated rows stop being cards.
 |---|---|---|---|
 | 1 | Primitives + Button changes + Top podcasts + Add podcast modal | Vitest green; Playwright 393 px assertions; visual check on Podcasts/Inbox/PodcastDetail for the navy primary | ✅ Done |
 | 2 | Inbox, Briefings, activity feed on `ListRow` | Inbox tests green; no change in Inbox read/unread/dismissed semantics | ✅ Done |
-| 3 | Search entity cards, EpisodeCard tokens (`text-row`, `rounded-md`, `ring-primary-*` selection) | Optional; land with the next touch of those files | ⏳ Open |
+| 3 | Search entity cards, EpisodeCard tokens (`text-row`, `rounded-md`, `ring-primary-*` selection), last hand-rolled primaries onto `Button` | Vitest + build green; no semantic stage colour touched | ✅ Done |

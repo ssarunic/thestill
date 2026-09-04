@@ -6,6 +6,7 @@ import {
   useBriefingScript,
   useMarkBriefingListened,
 } from '../hooks/useApi'
+import Button from '../components/Button'
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -90,14 +91,14 @@ export default function BriefingDetail() {
       </div>
 
       <div className="flex items-center justify-end">
-        <button
+        <Button
           type="button"
           onClick={() => markListened.mutate(briefing.id)}
           disabled={isListened || markListened.isPending}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          isLoading={markListened.isPending}
         >
           {isListened ? 'Marked listened' : markListened.isPending ? 'Saving…' : 'Mark listened'}
-        </button>
+        </Button>
       </div>
     </div>
   )

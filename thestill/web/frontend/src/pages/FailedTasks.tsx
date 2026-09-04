@@ -5,6 +5,7 @@ import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { DLQTask, DLQBranchFilter, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
 import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
+import Button from '../components/Button'
 
 // Spec #28 entity-branch failures don't normally appear here — they go
 // to ``entity_extraction_status='failed'``, not the ``tasks`` DLQ — but
@@ -110,32 +111,23 @@ function DLQTaskCard({ task, onRetry, onSkip, isRetrying, isSkipping }: DLQTaskC
 
           {/* Actions */}
           <div className="flex flex-col gap-2">
-            <button
+            <Button
+              size="sm"
               onClick={() => onRetry(task.task_id)}
               disabled={isRetrying || isSkipping}
-              className={`
-                px-3 py-1.5 text-sm font-medium rounded-lg transition-colors
-                ${isRetrying
-                  ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-                }
-              `}
+              isLoading={isRetrying}
             >
               {isRetrying ? 'Retrying...' : 'Retry'}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
               onClick={() => onSkip(task.task_id)}
               disabled={isRetrying || isSkipping}
-              className={`
-                px-3 py-1.5 text-sm font-medium rounded-lg transition-colors
-                ${isSkipping
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
-                }
-              `}
+              isLoading={isSkipping}
             >
               {isSkipping ? 'Skipping...' : 'Skip'}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -317,16 +309,10 @@ export default function FailedTasks() {
                 Select all
               </button>
             )}
-            <button
+            <Button
               onClick={handleRetryAll}
               disabled={retryAllMutation.isPending}
-              className={`
-                px-4 py-2 text-sm font-medium rounded-lg transition-colors
-                ${retryAllMutation.isPending
-                  ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-                }
-              `}
+              isLoading={retryAllMutation.isPending}
             >
               {retryAllMutation.isPending
                 ? 'Retrying...'
@@ -334,7 +320,7 @@ export default function FailedTasks() {
                   ? `Retry ${selectedTasks.size} selected`
                   : 'Retry all'
               }
-            </button>
+            </Button>
           </div>
         )}
       </div>
