@@ -40,19 +40,28 @@ providers without caching (Ollama / Mistral) have their batch budget
 widened to amortise the repeated prefix.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
-from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, SegmentKind
+from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, CleaningProvenance, SegmentKind
 from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.exceptions import ProhibitedContentError
 from thestill.utils.language_config import resolve_language_spec
 from thestill.utils.text_sanitizer import sanitize_text
 
 logger = get_logger(__name__)
+
+# Revision of the cleanup system prompt built by
+# ``SegmentedTranscriptCleaner._build_system_prompt``. Bump on any
+# behavioural prompt change (new rules, reworded instructions, changed
+# facts rendering) so provenance records distinguish outputs of the old
+# and new prompts. Orthogonal to ``AnnotatedTranscript.algorithm_version``,
+# which tracks the sidecar output *contract*.
+CLEANUP_PROMPT_VERSION = "v1"
 
 
 class CleanupPatch(BaseModel):
@@ -196,10 +205,11 @@ class SegmentedTranscriptCleaner:
 
         The returned transcript carries the same ``episode_id``,
         ``playback_time_offset_seconds``, and ``algorithm_version`` as
-        the input. Segment ids are reassigned positionally after all
-        patches apply. ``source_segment_ids`` and ``source_word_span``
-        are preserved unchanged — the patch schema forbids the LLM from
-        touching them.
+        the input, plus a ``cleaning`` provenance record identifying the
+        provider, model, and prompt revision of this run. Segment ids are
+        reassigned positionally after all patches apply.
+        ``source_segment_ids`` and ``source_word_span`` are preserved
+        unchanged — the patch schema forbids the LLM from touching them.
         """
         source = _apply_speaker_mapping(annotated.segments, episode_facts.speaker_mapping)
 
@@ -301,6 +311,14 @@ class SegmentedTranscriptCleaner:
             segments=cleaned,
             playback_time_offset_seconds=annotated.playback_time_offset_seconds,
             algorithm_version=annotated.algorithm_version,
+            cleaning=CleaningProvenance(
+                provider=self.provider.get_provider_name(),
+                model=self.provider.get_model_name(),
+                prompt_version=CLEANUP_PROMPT_VERSION,
+                language=language,
+                temperature=self.temperature,
+                cleaned_at=datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
     # ------------------------------------------------------------------

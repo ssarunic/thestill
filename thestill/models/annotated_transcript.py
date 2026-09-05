@@ -102,6 +102,32 @@ class AnnotatedSegment(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class CleaningProvenance(BaseModel):
+    """Record of the LLM run that produced a cleaned transcript.
+
+    Stamped by ``SegmentedTranscriptCleaner.clean`` and persisted in the
+    JSON sidecar so every cleaned artefact can be traced back to the
+    provider, model, and prompt revision that generated it. Without this,
+    regressions between cleaning runs (e.g. a chunk silently emitted as
+    raw text) can't be attributed to a model or prompt change after the
+    fact.
+
+    ``prompt_version`` tracks the cleaner's system-prompt revision
+    (``CLEANUP_PROMPT_VERSION``), independent of ``algorithm_version``
+    which covers the segmenter/cleaner *output contract*: a prompt-only
+    tweak changes text quality but not the sidecar schema.
+
+    ``cleaned_at`` is an ISO-8601 UTC timestamp (``+00:00`` offset).
+    """
+
+    provider: str
+    model: str
+    prompt_version: str
+    language: str
+    temperature: float
+    cleaned_at: str
+
+
 class AnnotatedTranscript(BaseModel):
     """Top-level container for the segmented-cleanup output.
 
@@ -121,6 +147,10 @@ class AnnotatedTranscript(BaseModel):
     later returns a file of a different length. ``None`` means "unknown" —
     either we never recorded it (legacy artefacts) or the transcriber
     didn't surface it.
+
+    ``cleaning`` is the provenance of the LLM cleanup run. ``None`` on
+    legacy sidecars written before provenance recording, and on
+    ``from_raw`` wrappers (no LLM ever ran).
     """
 
     episode_id: str
@@ -128,6 +158,7 @@ class AnnotatedTranscript(BaseModel):
     playback_time_offset_seconds: float = 0.0
     algorithm_version: str = "v1"
     transcript_source_duration_s: Optional[float] = None
+    cleaning: Optional[CleaningProvenance] = None
 
     @classmethod
     def from_raw(cls, transcript: Transcript, *, episode_id: str = "") -> "AnnotatedTranscript":

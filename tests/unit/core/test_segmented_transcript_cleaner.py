@@ -20,6 +20,7 @@ a real LLM happens in integration tests, not here.
 """
 
 import json
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
 import pytest
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 
 from tests.conftest import MockLLMProvider
 from thestill.core.segmented_transcript_cleaner import (
+    CLEANUP_PROMPT_VERSION,
     CleanupPatch,
     CleanupPatchBatch,
     SegmentedTranscriptCleaner,
@@ -660,3 +662,55 @@ class TestOmitUnchangedContract:
         assert result.segments[0].text == "fixed text"
         assert result.segments[1].text == "already clean"
         assert result.segments[1].kind == "content"
+
+
+class TestCleaningProvenance:
+    """``clean()`` stamps a provenance record identifying the run."""
+
+    def test_clean_stamps_provenance(self) -> None:
+        provider = FakeProvider(model_name="gemini-3-flash-preview")
+        cleaner = SegmentedTranscriptCleaner(provider, temperature=0.0)
+
+        result = cleaner.clean(
+            _annotated([_segment(seg_id=0)]),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="hr",
+        )
+
+        provenance = result.cleaning
+        assert provenance is not None
+        assert provenance.provider == "fake"  # FakeProvider -> "fake"
+        assert provenance.model == "gemini-3-flash-preview"
+        assert provenance.prompt_version == CLEANUP_PROMPT_VERSION
+        assert provenance.language == "hr"
+        assert provenance.temperature == 0.0
+
+    def test_cleaned_at_is_utc_iso8601(self) -> None:
+        provider = FakeProvider()
+        cleaner = SegmentedTranscriptCleaner(provider)
+
+        result = cleaner.clean(
+            _annotated([_segment(seg_id=0)]),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="en",
+        )
+
+        assert result.cleaning is not None
+        parsed = datetime.fromisoformat(result.cleaning.cleaned_at)
+        assert parsed.utcoffset() == timedelta(0)
+
+    def test_provenance_survives_sidecar_round_trip(self) -> None:
+        provider = FakeProvider(model_name="test-model")
+        cleaner = SegmentedTranscriptCleaner(provider)
+
+        result = cleaner.clean(
+            _annotated([_segment(seg_id=0)]),
+            podcast_facts=None,
+            episode_facts=_facts(),
+            language="hr",
+        )
+
+        reloaded = AnnotatedTranscript.model_validate_json(result.model_dump_json())
+        assert reloaded.cleaning == result.cleaning

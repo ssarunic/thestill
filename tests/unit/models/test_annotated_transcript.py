@@ -29,7 +29,7 @@ fallback for missing speakers. One test per behaviour so drift localises.
 from typing import List, Optional
 
 from thestill.core.transcript_formatter import TranscriptFormatter
-from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, WordSpan
+from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, CleaningProvenance, WordSpan
 from thestill.models.transcript import Segment, Transcript, Word
 
 
@@ -605,3 +605,45 @@ class TestPlaybackOffset:
         )
 
         assert base.to_blended_markdown() == explicit_zero.to_blended_markdown()
+
+
+class TestCleaningProvenanceField:
+    """Sidecars written before provenance recording keep parsing."""
+
+    def test_legacy_sidecar_without_cleaning_field_parses(self) -> None:
+        legacy = {
+            "episode_id": "ep",
+            "segments": [],
+            "playback_time_offset_seconds": 0.0,
+            "algorithm_version": "v1",
+        }
+
+        parsed = AnnotatedTranscript.model_validate(legacy)
+
+        assert parsed.cleaning is None
+
+    def test_from_raw_wrapper_has_no_provenance(self) -> None:
+        raw = _transcript([_segment(seg_id=0, start=0.0, end=1.0, text="hi", speaker="A")])
+
+        assert AnnotatedTranscript.from_raw(raw).cleaning is None
+
+    def test_provenance_serialises_into_sidecar_json(self) -> None:
+        annotated = AnnotatedTranscript(
+            episode_id="ep",
+            segments=[],
+            cleaning=CleaningProvenance(
+                provider="gemini",
+                model="gemini-3-flash-preview",
+                prompt_version="v1",
+                language="hr",
+                temperature=0.0,
+                cleaned_at="2026-07-23T00:00:00+00:00",
+            ),
+        )
+
+        dumped = annotated.model_dump_json()
+        reloaded = AnnotatedTranscript.model_validate_json(dumped)
+
+        assert reloaded.cleaning is not None
+        assert reloaded.cleaning.model == "gemini-3-flash-preview"
+        assert reloaded.cleaning == annotated.cleaning

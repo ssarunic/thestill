@@ -298,6 +298,15 @@ export interface AnnotatedSegment {
   metadata: Record<string, unknown>
 }
 
+export interface CleaningProvenance {
+  provider: string
+  model: string
+  prompt_version: string
+  language: string
+  temperature: number
+  cleaned_at: string
+}
+
 export interface AnnotatedTranscriptDump {
   episode_id: string
   segments: AnnotatedSegment[]
@@ -307,6 +316,9 @@ export interface AnnotatedTranscriptDump {
   // the live audio element's duration to detect DAI-induced drift.
   // `null` for legacy transcripts cleaned before we recorded this.
   transcript_source_duration_s: number | null
+  // Provenance of the LLM cleaning run (provider, model, prompt
+  // revision). `null` for sidecars written before provenance recording.
+  cleaning: CleaningProvenance | null
 }
 
 // ---------------------------------------------------------------------------
