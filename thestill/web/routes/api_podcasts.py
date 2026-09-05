@@ -18,7 +18,6 @@ Podcast API endpoints for Thestill web UI.
 Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
-import threading
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -57,8 +56,12 @@ def resolve_podcast(
     This is the "lazy import" path used by the Top Podcasts list when a user
     clicks a chart entry that hasn't been imported yet. The synchronous part
     only fetches RSS metadata and persists the ``podcasts`` row (~1–2s); the
-    full episode discovery runs in a background daemon thread so the caller
-    can navigate to the detail page immediately and watch episodes fill in.
+    episode discovery is a ``REFRESH_FEED`` task enqueued through the
+    refresh-on-open service (spec #74) so the caller can navigate to the
+    detail page immediately and watch episodes fill in. A queue row — not a
+    daemon thread — means the first discovery is observable
+    (``refresh_pending``), retried on failure, and re-triggerable by a later
+    open if it never completed.
 
     Unlike ``POST /api/commands/add``, this endpoint:
       - does NOT auto-follow the podcast for the caller in multi-user
@@ -78,10 +81,10 @@ def resolve_podcast(
 
     # ``podcast_service.add_podcast`` is idempotent and resolves Apple/YouTube
     # URLs to a canonical RSS URL before checking existence, so we can't tell
-    # "new vs existing" from the URL alone. Use ``last_processed`` instead:
-    # it's ``None`` until the first refresh completes, so it's True for both
-    # genuinely-new rows and stale rows that never finished discovery — both
-    # cases want a background refresh.
+    # "new vs existing" from the URL alone. ``is_new`` (informational) keys
+    # off ``last_processed``, which stays ``None`` until a refresh has
+    # persisted a dated episode; the refresh decision itself is the
+    # service's (queue state + cooldowns), never this watermark.
     try:
         podcast = add_podcast_and_auto_follow(
             state.podcast_service,
@@ -101,25 +104,18 @@ def resolve_podcast(
 
     is_new = podcast.last_processed is None
 
-    if is_new:
-        max_episodes_per_podcast = state.config.max_episodes_per_podcast
-
-        def _background_refresh(podcast_id: str) -> None:
-            try:
-                state.refresh_service.refresh(
-                    podcast_id=podcast_id,
-                    max_episodes_per_podcast=max_episodes_per_podcast,
-                )
-            except Exception:
-                logger.exception("resolve_podcast_background_refresh_failed", podcast_id=podcast_id)
-
-        threading.Thread(target=_background_refresh, args=(str(podcast.id),), daemon=True).start()
+    refresh_pending = False
+    if state.refresh_on_open is not None:
+        refresh_pending = state.refresh_on_open.maybe_trigger(str(podcast.id)).pending
+    else:  # hand-built fixtures only; production wiring always passes the service
+        logger.warning("resolve_podcast_refresh_service_missing", podcast_id=podcast.id)
 
     logger.info(
         "podcast_resolved",
         podcast_id=podcast.id,
         podcast_slug=podcast.slug,
         is_new=is_new,
+        refresh_pending=refresh_pending,
     )
 
     return api_response(
@@ -127,6 +123,7 @@ def resolve_podcast(
             "podcast_slug": podcast.slug,
             "podcast_id": podcast.id,
             "is_new": is_new,
+            "refresh_pending": refresh_pending,
         }
     )
 
@@ -205,6 +202,14 @@ def get_podcast(
 
     is_following = bool(user) and state.follower_repository.exists(user.id, row["id"])
 
+    # Spec #74 — an open is a demand signal the follower gate can't see.
+    # Enqueue at most one REFRESH_FEED for this feed (coalesced with the
+    # lazy-import discovery and scheduler tasks; throttled by the feed's
+    # cooldowns). ``refresh_pending`` tells the UI to poll until it lands.
+    refresh_pending = False
+    if state.refresh_on_open is not None:
+        refresh_pending = state.refresh_on_open.maybe_trigger(row["id"]).pending
+
     # PodcastWithIndex normalizes the row (ISO-string datetimes from the
     # SQLite backend become datetime objects) so the response shape is
     # backend-independent.
@@ -232,6 +237,9 @@ def get_podcast(
                 "episodes_count": info.episodes_count,
                 "episodes_processed": info.episodes_processed,
                 "is_following": is_following,
+                # Spec #74 — True while an open-triggered (or any) REFRESH_FEED
+                # for this podcast is queued or running.
+                "refresh_pending": refresh_pending,
                 # THES-146: New metadata fields
                 "author": info.author,
                 "explicit": info.explicit,

@@ -267,7 +267,7 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
             <FollowButton
               status={statusOf(parsed.value, addInFlight, addDone)}
               onClick={() => handleFollow(parsed.value)}
-              labels={{ idle: 'Add', pending: 'Adding…', done: 'Added ✓' }}
+              labels={{ idle: 'Add', pending: 'Adding…', done: 'Added' }}
             />
           </div>
         )}
@@ -320,7 +320,7 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
                       <FollowButton
                         status={status}
                         onClick={() => handleFollow(podcast.rss_url)}
-                        labels={{ idle: 'Follow', pending: 'Adding…', done: 'Following ✓' }}
+                        labels={{ idle: 'Follow', pending: 'Adding…', done: 'Following' }}
                       />
                     </li>
                   )

@@ -54,7 +54,8 @@ from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
-from ..utils.config import Config, load_config
+from ..services.refresh_on_open import RefreshOnOpenService
+from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
 from ..utils.path_manager import PathManager
 from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
@@ -286,6 +287,17 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     search_backend = make_search_backend(config, embedding_model)
 
     # Create placeholder app_state first (task_worker needs it for handlers)
+    # Spec #74 — opening a podcast enqueues one throttled REFRESH_FEED so the
+    # episode list stays current even for feeds the scheduler skips (no
+    # followers). Shares the scheduler's per-feed floor so an open can never
+    # poll a feed faster than the AIMD minimum.
+    refresh_on_open = RefreshOnOpenService(
+        repository,
+        queue_manager,
+        min_interval_seconds=get_refresh_min_interval_seconds(),
+        enabled=is_refresh_on_open_enabled(),
+    )
+
     app_state = AppState(
         config=config,
         path_manager=path_manager,
@@ -319,6 +331,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         ),
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
+        refresh_on_open=refresh_on_open,
     )
 
     # Create task worker with handlers that have access to app_state.

@@ -10,6 +10,8 @@ network), so we can assert real task rows.
 
 from __future__ import annotations
 
+import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,9 +29,33 @@ EPISODE_ID = "11111111-1111-1111-1111-111111111111"
 RSS = "https://example.com/feed.xml"
 
 
+def _add_follower(db_path: str, podcast_id: str) -> None:
+    """Spec #74 — the auto-enqueue helper is follower-gated; seed one."""
+    con = sqlite3.connect(db_path)
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.execute(
+        "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), str(uuid.uuid4()), podcast_id, datetime.now(timezone.utc).isoformat()),
+    )
+    con.commit()
+    con.close()
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> str:
-    """DB seeded with one podcast whose single episode is DISCOVERED-unqueued."""
+    """DB seeded with one FOLLOWED podcast whose single episode is DISCOVERED-unqueued."""
+    db_path = _seed_db(tmp_path)
+    _add_follower(db_path, PODCAST_ID)
+    return db_path
+
+
+@pytest.fixture
+def db_unfollowed(tmp_path: Path) -> str:
+    """Same seed, nobody follows the podcast (spec #74 discover-only case)."""
+    return _seed_db(tmp_path)
+
+
+def _seed_db(tmp_path: Path) -> str:
     db_path = str(tmp_path / "refresh_autoenqueue.db")
     repo = SqlitePodcastRepository(db_path=db_path)
     repo.save(
@@ -153,3 +179,18 @@ def test_enqueue_is_idempotent_across_two_refreshes(db: str):
     ).fetchone()[0]
     con.close()
     assert n == 1
+
+
+def test_unfollowed_podcast_is_discover_only_until_followed(db_unfollowed: str):
+    """Spec #74 — a refresh persists episodes for a feed nobody follows but
+    never enqueues the pipeline; the first refresh after a follow does."""
+    svc, _repo, qm = _refresh_service(db_unfollowed, wired=True)
+
+    svc.refresh(dry_run=False)
+    assert qm.get_next_task(stage=TaskStage.DOWNLOAD) is None
+
+    _add_follower(db_unfollowed, PODCAST_ID)
+    svc.refresh(dry_run=False)
+    task = qm.get_next_task(stage=TaskStage.DOWNLOAD)
+    assert task is not None
+    assert task.episode_id == EPISODE_ID

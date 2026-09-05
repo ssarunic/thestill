@@ -7,7 +7,7 @@ enabling easy swapping between different storage backends (JSON, SQLite, Postgre
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ..models.podcast import AlternateEnclosure, Episode, Podcast, TranscriptLink
 
@@ -15,6 +15,18 @@ if TYPE_CHECKING:
     # Pure dataclasses from the core layer, imported type-only to keep the
     # repository layer free of runtime core dependencies.
     from ..core.refresh_failure import RefreshDecision, RefreshFailure, RefreshPolicySettings
+
+
+class RefreshOnOpenState(NamedTuple):
+    """Spec #74 — the facts ``RefreshOnOpenService`` needs to decide whether
+    opening a podcast should enqueue a refresh. Datetimes are tz-aware UTC."""
+
+    last_refresh_at: Optional[datetime]
+    """Last refresh attempt (success or failure) recorded by the handler."""
+    refresh_retry_after_at: Optional[datetime]
+    """Server-directed ``Retry-After`` from the last failure (spec #60); ``None`` if none."""
+    refresh_disabled_reason: Optional[str]
+    """Quarantine reason (spec #60); ``None`` for a healthy feed."""
 
 
 class PodcastRepository(ABC):
@@ -364,6 +376,18 @@ class PodcastRepository(ABC):
         schedule before it had followers must resume when someone follows it.
         Quarantined feeds (``refresh_disabled_reason`` set) stay parked; they
         have their own probe/operator path. Returns True if rescheduled."""
+        pass
+
+    @abstractmethod
+    def get_refresh_on_open_state(self, podcast_id: str) -> Optional[RefreshOnOpenState]:
+        """Spec #74 — refresh bookkeeping for the open-triggered refresh
+        decision. ``None`` if the podcast does not exist."""
+        pass
+
+    @abstractmethod
+    def has_followers(self, podcast_id: str) -> bool:
+        """True if at least one user follows the podcast — spec #63's
+        "processed = followed" invariant, queried for one feed."""
         pass
 
     @abstractmethod

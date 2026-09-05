@@ -1079,3 +1079,45 @@ def test_get_recent_activity_rows_tolerates_unparseable_duration(repo):
 # ---------------------------------------------------------------------------
 def test_get_chunks_health_empty(repo):
     assert repo.get_chunks_health() == (0, "")
+
+
+def test_refresh_on_open_state_and_has_followers(repo):
+    """Spec #74 — the open-triggered refresh reads three facts per feed and
+    a per-feed follower probe; both must round-trip identically on both
+    backends, with tz-aware UTC datetimes."""
+    base = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    p = _mk_podcast()
+    repo.save(p)
+
+    state = repo.get_refresh_on_open_state(p.id)
+    assert state is not None
+    assert state.last_refresh_at is None
+    assert state.refresh_retry_after_at is None
+    assert state.refresh_disabled_reason is None
+    assert repo.has_followers(p.id) is False
+    assert repo.get_refresh_on_open_state(str(uuid.uuid4())) is None
+
+    _seed_user_and_follow(repo, p.id)
+    assert repo.has_followers(p.id) is True
+
+    # A 429 with Retry-After lands in ``refresh_retry_after_at`` and the
+    # attempt itself in ``last_refresh_at`` — both tz-aware on both engines.
+    repo.seed_unscheduled_feeds(3600, now=base)
+    throttled = RefreshFailure(
+        kind=RefreshFailureKind.REMOTE_TRANSIENT,
+        http_status=429,
+        retry_after=base + timedelta(hours=2),
+        exception="429 Too Many Requests",
+    )
+    repo.record_refresh_failure(p.id, throttled, _SETTINGS, now=base)
+    state = repo.get_refresh_on_open_state(p.id)
+    assert state.last_refresh_at == base
+    assert state.last_refresh_at.tzinfo is not None
+    assert state.refresh_retry_after_at == base + timedelta(hours=2)
+    assert state.refresh_disabled_reason is None
+
+    # Quarantine surfaces through the same read.
+    decision = repo.record_refresh_failure(p.id, _gone_410(), _SETTINGS, now=base + timedelta(days=1))
+    assert decision.disabled_reason == "feed_gone"
+    assert repo.get_refresh_on_open_state(p.id).refresh_disabled_reason == "feed_gone"

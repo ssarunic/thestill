@@ -80,6 +80,14 @@ def is_refresh_scheduler_enabled() -> bool:
     return _env_bool("REFRESH_SCHEDULER_ENABLED", False)
 
 
+def is_refresh_on_open_enabled() -> bool:
+    """Spec #74 — when true, opening a podcast's detail page enqueues one
+    throttled ``REFRESH_FEED`` for that feed (discovery only for feeds nobody
+    follows; discovery + processing for followed ones). Default: on. Turn off
+    for scratch/E2E servers alongside ``REFRESH_SCHEDULER_ENABLED``."""
+    return _env_bool("REFRESH_ON_OPEN_ENABLED", True)
+
+
 def get_refresh_scheduler_tick_seconds() -> int:
     """How often the scheduler scans for due feeds (default 60s). This is the
     scheduling granularity, NOT the per-feed poll interval."""

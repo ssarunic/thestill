@@ -47,6 +47,7 @@ from thestill.services import FollowerService, PodcastService, RefreshService, S
 from thestill.services.auth_service import AuthService
 from thestill.services.import_service import ImportService
 from thestill.services.inbox_service import InboxService
+from thestill.services.refresh_on_open import RefreshOnOpenService
 from thestill.utils.config import Config
 from thestill.utils.path_manager import PathManager
 from thestill.web.app import create_app
@@ -115,6 +116,7 @@ def app_state(app_config: Config) -> AppState:
     )
 
     entity_repository = SqliteEntityRepository(db_path=app_config.database_path)
+    refresh_on_open = RefreshOnOpenService(repository, queue_manager, min_interval_seconds=900)
 
     return AppState(
         config=app_config,
@@ -138,6 +140,7 @@ def app_state(app_config: Config) -> AppState:
         briefing_repository=briefing_repository,
         briefing_service=briefing_service,
         entity_repository=entity_repository,
+        refresh_on_open=refresh_on_open,
     )
 
 

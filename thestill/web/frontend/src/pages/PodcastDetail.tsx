@@ -1,6 +1,13 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { usePodcast, usePodcastEpisodesInfinite, useFollowPodcast, useUnfollowPodcast, useProcessingStageByEpisodeId } from '../hooks/useApi'
+import {
+  usePodcast,
+  usePodcastEpisodesInfinite,
+  useFollowPodcast,
+  useUnfollowPodcast,
+  useProcessingStageByEpisodeId,
+  useInvalidateEpisodesWhenRefreshSettles,
+} from '../hooks/useApi'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import SmartImage from '../components/SmartImage'
@@ -15,6 +22,8 @@ export default function PodcastDetail() {
   const { showToast } = useToast()
   const [isMutating, setIsMutating] = useState(false)
   const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastSlug!)
+  // Spec #74 — refetch the episode list once the open-triggered refresh lands.
+  useInvalidateEpisodesWhenRefreshSettles(podcastSlug!, podcastData?.podcast?.refresh_pending)
   const { mutate: follow } = useFollowPodcast()
   const { mutate: unfollow } = useUnfollowPodcast()
   const {
@@ -198,11 +207,11 @@ export default function PodcastDetail() {
                     <span className="text-gray-300">·</span>
                   </>
                 )}
-                {/* Episode count — replaced with a loading indicator while the
-                    initial feed refresh runs (server signals this with a null
-                    ``last_processed``). The 5s refetchInterval will replace
-                    this with the real counts as soon as discovery completes. */}
-                {podcast.last_processed === null ? (
+                {/* Episode count — replaced with a loading indicator while a
+                    feed refresh is pending and nothing has been discovered
+                    yet (spec #74: the lazy-import discovery is a queue task
+                    the podcast query polls on via ``refresh_pending``). */}
+                {podcast.refresh_pending && podcast.episodes_count === 0 ? (
                   <span className="inline-flex items-center gap-2 text-gray-500">
                     <span
                       className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
@@ -216,6 +225,21 @@ export default function PodcastDetail() {
                     <span className="text-gray-300">·</span>
                     {/* Processed count */}
                     <span className="text-green-600">{podcast.episodes_processed} processed</span>
+                    {/* Spec #74 — an open enqueued a feed refresh; the podcast
+                        query polls until it settles and the episode list is
+                        invalidated then. */}
+                    {podcast.refresh_pending && (
+                      <>
+                        <span className="text-gray-300">·</span>
+                        <span className="inline-flex items-center gap-2 text-gray-500">
+                          <span
+                            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+                            aria-hidden="true"
+                          />
+                          Checking for new episodes…
+                        </span>
+                      </>
+                    )}
                   </>
                 )}
                 {/* Website link */}

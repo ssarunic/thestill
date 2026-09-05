@@ -14,7 +14,7 @@ describe('FollowButton', () => {
 
   it('renders done as a disabled success state', () => {
     render(<FollowButton status="done" onClick={vi.fn()} />)
-    const button = screen.getByRole('button', { name: 'Following ✓' })
+    const button = screen.getByRole('button', { name: 'Following' })
     expect(button).toBeDisabled()
     expect(button.className).toContain('bg-green-100')
   })
@@ -35,9 +35,9 @@ describe('FollowButton', () => {
       <FollowButton
         status="done"
         onClick={vi.fn()}
-        labels={{ idle: 'Add', pending: 'Adding…', done: 'Added ✓' }}
+        labels={{ idle: 'Add', pending: 'Adding…', done: 'Added' }}
       />,
     )
-    expect(screen.getByRole('button', { name: 'Added ✓' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Added' })).toBeDisabled()
   })
 })
