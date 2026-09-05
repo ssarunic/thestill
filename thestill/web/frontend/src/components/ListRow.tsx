@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import SmartImage from './SmartImage'
 
 export interface ListRowProps {
   /**
@@ -123,35 +124,38 @@ export default function ListRow({
 }
 
 interface ListRowArtworkProps {
-  src?: string | null
+  /**
+   * Candidate image URLs, most preferred first (e.g. episode artwork, then
+   * podcast artwork). Broken URLs advance down the chain before the
+   * placeholder shows.
+   */
+  sources: (string | null | undefined)[]
   /** 48 px for podcast/inbox rows, 40 px for episode rows inside a podcast. */
   size?: 12 | 10
   className?: string
 }
 
 /** Standard square thumbnail with the generic-podcast placeholder. */
-export function ListRowArtwork({ src, size = 12, className = '' }: ListRowArtworkProps) {
+export function ListRowArtwork({ sources, size = 12, className = '' }: ListRowArtworkProps) {
   const box = size === 12 ? 'w-12 h-12' : 'w-10 h-10'
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt=""
-        width={size * 4}
-        height={size * 4}
-        loading="lazy"
-        className={`${box} rounded-md object-cover shrink-0 aspect-square bg-gray-100 ${className}`}
-      />
-    )
-  }
   return (
-    <div
-      aria-hidden="true"
-      className={`${box} rounded-md shrink-0 aspect-square bg-gradient-to-br from-primary-100 to-secondary-100 flex items-center justify-center ${className}`}
-    >
-      <svg className="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-      </svg>
-    </div>
+    <SmartImage
+      sources={sources}
+      alt=""
+      width={size * 4}
+      height={size * 4}
+      loading="lazy"
+      className={`${box} rounded-md object-cover shrink-0 aspect-square bg-gray-100 ${className}`}
+      fallback={
+        <div
+          aria-hidden="true"
+          className={`${box} rounded-md shrink-0 aspect-square bg-gradient-to-br from-primary-100 to-secondary-100 flex items-center justify-center ${className}`}
+        >
+          <svg className="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+          </svg>
+        </div>
+      }
+    />
   )
 }

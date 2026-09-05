@@ -145,6 +145,42 @@ describe('Inbox progress badges', () => {
   })
 })
 
+describe('Inbox row artwork', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('prefers episode artwork over podcast artwork', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([
+        {
+          ...inboxItem({}, episodeWith('summarized', { image_url: 'https://img.example/episode.jpg' })),
+          podcast: { id: 'p-1', title: 'Sample Pod', slug: 'sample-pod', image_url: 'https://img.example/podcast.jpg' },
+        },
+      ]),
+      isLoading: false,
+      error: null,
+    })
+    const { container } = render(<Inbox />, { wrapper: createWrapper() })
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://img.example/episode.jpg')
+  })
+
+  it('falls back to podcast artwork when the episode has none', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([
+        {
+          ...inboxItem({}, episodeWith('summarized', { image_url: null })),
+          podcast: { id: 'p-1', title: 'Sample Pod', slug: 'sample-pod', image_url: 'https://img.example/podcast.jpg' },
+        },
+      ]),
+      isLoading: false,
+      error: null,
+    })
+    const { container } = render(<Inbox />, { wrapper: createWrapper() })
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://img.example/podcast.jpg')
+  })
+})
+
 describe('Inbox empty state + import button', () => {
   beforeEach(() => {
     vi.clearAllMocks()

@@ -111,7 +111,9 @@ function InboxRow({ item }: { item: InboxItem }) {
       to={episodeHref}
       state={{ backgroundLocation: location }}
       className={isDismissed ? 'opacity-60' : ''}
-      leading={<ListRowArtwork src={podcast.image_url} />}
+      // Episode artwork first (matches the reader header), podcast artwork as
+      // the fallback when the feed item carries none.
+      leading={<ListRowArtwork sources={[episode.image_url, podcast.image_url]} />}
       overline={
         <div className="flex items-center gap-1.5">
           {entry.state === 'saved' && <SavedIcon />}
