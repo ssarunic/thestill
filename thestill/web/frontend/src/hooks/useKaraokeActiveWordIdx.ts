@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { WordTimestamp } from '../api/types'
+import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveWordIndex } from '../utils/wordSearch'
 
 export interface KaraokeWordCursor {
@@ -7,7 +8,9 @@ export interface KaraokeWordCursor {
    *  the first word. Drives `aria-current` on the active span. */
   activeIdx: number
   /** Highest-indexed word whose start has been crossed by the audio
-   *  cursor — i.e. the cutoff for "read" colouring. Does NOT regress
+   *  cursor plus the perceptual lead — i.e. the cutoff for "read"
+   *  colouring, biased ~150 ms early so the highlight feels simultaneous
+   *  with the speech (see `HIGHLIGHT_LEAD_SECONDS`). Does NOT regress
    *  on pauses (the speaker stopping doesn't unread the previous
    *  word), but DOES regress on backward seeks (rewinding past a
    *  word's start un-reads it). */
@@ -61,12 +64,14 @@ export function useKaraokeActiveWordIdx(
   // Lazy-init so the FIRST render already has correct values — without
   // this, every active-segment swap would flash through { -1, -1 } for
   // one frame before the rAF catches up.
+  // `readUpTo` (the visual) leads the audio by HIGHLIGHT_LEAD_SECONDS;
+  // `activeIdx` (aria-current) tracks the actual acoustic position.
   const [cursor, setCursor] = useState<KaraokeWordCursor>(() => {
     if (!words || words.length === 0) return { activeIdx: -1, readUpTo: -1 }
     const t = getCurrentTime()
     return {
       activeIdx: findActiveWordIndex(words, t, offset),
-      readUpTo: findReadUpToIndex(words, t, offset),
+      readUpTo: findReadUpToIndex(words, t + HIGHLIGHT_LEAD_SECONDS, offset),
     }
   })
 
@@ -78,15 +83,16 @@ export function useKaraokeActiveWordIdx(
     // Sync once on deps change. When the active segment swaps, the
     // cursor carried over from the previous segment is wrong until
     // we re-seed it from this segment's word list.
-    let lastActive = findActiveWordIndex(words, getCurrentTime(), offset)
-    let lastReadUpTo = findReadUpToIndex(words, getCurrentTime(), offset)
+    const t0 = getCurrentTime()
+    let lastActive = findActiveWordIndex(words, t0, offset)
+    let lastReadUpTo = findReadUpToIndex(words, t0 + HIGHLIGHT_LEAD_SECONDS, offset)
     setCursor({ activeIdx: lastActive, readUpTo: lastReadUpTo })
 
     let handle = 0
     const tick = () => {
       const t = getCurrentTime()
       const nextActive = findActiveWordIndex(words, t, offset)
-      const nextReadUpTo = findReadUpToIndex(words, t, offset)
+      const nextReadUpTo = findReadUpToIndex(words, t + HIGHLIGHT_LEAD_SECONDS, offset)
       if (nextActive !== lastActive || nextReadUpTo !== lastReadUpTo) {
         lastActive = nextActive
         lastReadUpTo = nextReadUpTo

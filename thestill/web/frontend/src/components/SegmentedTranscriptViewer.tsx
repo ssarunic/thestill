@@ -26,6 +26,7 @@ import {
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
+import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
 import KaraokeWord from './KaraokeWord'
@@ -551,7 +552,14 @@ export function ActiveSegmentTracker({
 }: ActiveSegmentTrackerProps) {
   const currentTime = usePlayerTime()
   const activeId = useMemo(() => {
-    const idx = findActiveSegmentIndex(segments, currentTime, offset)
+    // The lead keeps the segment highlight in step with the karaoke
+    // read-word colouring, and lets a new segment's first word lead too
+    // (words only render once their segment is active).
+    const idx = findActiveSegmentIndex(
+      segments,
+      currentTime + HIGHLIGHT_LEAD_SECONDS,
+      offset,
+    )
     if (idx < 0) return null
     for (let i = idx; i >= 0; i -= 1) {
       if (renderedIdSet.has(segments[i].id)) {

@@ -56,4 +56,29 @@ describe('useKaraokeActiveWordIdx', () => {
     expect(result.current.readUpTo).toBe(1)
     unmount()
   })
+
+  it('leads readUpTo ahead of the acoustic onset, but not activeIdx', () => {
+    // currentTime is 0.1s before word 2's start (5.0) — inside the
+    // 0.15s perceptual lead. The visual cutoff marks it read early so
+    // the eye lands on it as it's spoken; aria-current stays honest
+    // (-1, the audio is still in the gap).
+    const getCurrentTime = () => 4.9
+    const { result, unmount } = renderHook(() =>
+      useKaraokeActiveWordIdx(words, 0, getCurrentTime),
+    )
+    expect(result.current.activeIdx).toBe(-1)
+    expect(result.current.readUpTo).toBe(2)
+    unmount()
+  })
+
+  it('does not lead past the perceptual window', () => {
+    // 0.2s before word 2's start — beyond the 0.15s lead, so the word
+    // is still unread.
+    const getCurrentTime = () => 4.8
+    const { result, unmount } = renderHook(() =>
+      useKaraokeActiveWordIdx(words, 0, getCurrentTime),
+    )
+    expect(result.current.readUpTo).toBe(1)
+    unmount()
+  })
 })
