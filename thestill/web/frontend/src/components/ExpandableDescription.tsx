@@ -61,10 +61,12 @@ export default function ExpandableDescription({
       />
       {needsTruncation && (
         <button
+          type="button"
+          aria-expanded={isExpanded}
           onClick={() => setIsExpanded(!isExpanded)}
           className="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700 focus:outline-none"
         >
-          {isExpanded ? '← Show less' : 'Show more →'}
+          {isExpanded ? 'Less' : 'More'}
         </button>
       )}
     </div>

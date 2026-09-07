@@ -96,8 +96,13 @@ async function expectReaderContent() {
   for (const link of podcastLinks) {
     expect(link).toHaveAttribute('href', '/podcasts/sample-pod')
   }
-  expect(screen.getByText('Ready')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: /play/i })).toBeInTheDocument()
+  // Spec #76 §5.5 — pipeline state is operator information; the reader
+  // never shows a state pill above the primary action.
+  expect(screen.queryByText('Ready')).toBeNull()
+  // Spec #76 §3.2 — the primary action carries the duration.
+  expect(screen.getByRole('button', { name: 'Play episode, 60 min' })).toHaveTextContent('60 min')
+  // jsdom has no Web Share API, so the share action names its fallback.
+  expect(screen.getByRole('button', { name: 'Copy link' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /summary/i })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /transcript/i })).toBeInTheDocument()
   // Lazy viewer resolves async
@@ -160,6 +165,40 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     mockLiveRefresh.mockClear()
     renderAtEpisodeRoute(<EpisodeDetail />)
     expect(mockLiveRefresh).toHaveBeenCalledWith(expect.objectContaining(expected))
+  })
+
+  it('renders the eyebrow, show row and show-notes action from the episode (spec #76 §3.1–3.2)', () => {
+    const response = episodeResponse()
+    response.episode.season_number = 3
+    response.episode.episode_number = 12
+    response.episode.explicit = true
+    response.episode.episode_type = 'bonus'
+    response.episode.website_url = 'https://example.com/notes'
+    mockUseEpisode.mockReturnValue({ data: response, isLoading: false, error: null })
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+
+    const eyebrow = screen.getByText('S3 E12').closest('p')!
+    expect(eyebrow).toHaveTextContent('Bonus')
+    expect(eyebrow).toHaveTextContent('Explicit')
+    expect(screen.getByRole('link', { name: 'Show notes' })).toHaveAttribute('href', 'https://example.com/notes')
+    // Watch video only under the spec #62 §6 condition — absent here.
+    expect(screen.queryByRole('button', { name: 'Watch video' })).toBeNull()
+  })
+
+  it('offers Watch video for an audio episode with a YouTube rendition (spec #62 §6)', () => {
+    const response = episodeResponse()
+    response.episode.playback = {
+      kind: 'audio',
+      audio: { url: 'https://example.com/x.mp3', mime_type: 'audio/mpeg' },
+      video: null,
+      poster_url: null,
+      youtube: { video_id: 'abc123', url: 'https://youtube.com/watch?v=abc123' },
+    } as never
+    mockUseEpisode.mockReturnValue({ data: response, isLoading: false, error: null })
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+    expect(screen.getByRole('button', { name: 'Watch video' })).toBeInTheDocument()
   })
 
   it('shows the error card when the episode fails to load', () => {

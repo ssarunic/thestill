@@ -8,6 +8,7 @@ import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
 import FailureDetailsModal from './FailureDetailsModal'
 import SmartImage from './SmartImage'
+import { STATE_BADGE_COLOR, STATE_LABEL } from '../utils/stateColors'
 
 interface EpisodeCardProps {
   episode: Episode | EpisodeWithPodcast
@@ -22,24 +23,6 @@ interface EpisodeCardProps {
 }
 
 const stageLabels = STAGE_LABEL_ACTIVE
-
-const stateColors: Record<string, string> = {
-  discovered: 'bg-gray-100 text-gray-600',
-  downloaded: 'bg-blue-100 text-blue-700',
-  downsampled: 'bg-indigo-100 text-indigo-700',
-  transcribed: 'bg-purple-100 text-purple-700',
-  cleaned: 'bg-amber-100 text-amber-700',
-  summarized: 'bg-green-100 text-green-700',
-}
-
-const stateLabels: Record<string, string> = {
-  discovered: 'Discovered',
-  downloaded: 'Downloaded',
-  downsampled: 'Downsampled',
-  transcribed: 'Transcribed',
-  cleaned: 'Cleaned',
-  summarized: 'Ready',
-}
 
 const failureTypeColors: Record<FailureType, string> = {
   fatal: 'bg-red-100 text-red-700 border-red-200',
@@ -183,8 +166,8 @@ export default function EpisodeCard({
               )
             })()}
             {/* Always show state badge */}
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stateColors[episode.state]}`}>
-              {stateLabels[episode.state]}
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATE_BADGE_COLOR[episode.state]}`}>
+              {STATE_LABEL[episode.state]}
             </span>
           </div>
         </div>

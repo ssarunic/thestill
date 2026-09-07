@@ -41,6 +41,13 @@ export default {
         // List-row title scale (spec #73): 15 px on phones, one step under
         // ``text-base``; rows switch to ``text-base`` at ``sm``.
         row: ['15px', { lineHeight: '1.35' }],
+        // Detail-page type scale (spec #76 §5.6): eyebrow above the title,
+        // the title itself (``title-lg`` from ``sm``), in-page section
+        // headings that sit clearly above body and clearly below the title.
+        eyebrow: ['13px', { lineHeight: '1.4', fontWeight: '500' }],
+        title: ['22px', { lineHeight: '1.2', fontWeight: '700' }],
+        'title-lg': ['28px', { lineHeight: '1.2', fontWeight: '700' }],
+        section: ['17px', { lineHeight: '1.3', fontWeight: '600' }],
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

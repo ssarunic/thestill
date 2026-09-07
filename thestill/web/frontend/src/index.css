@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/* Spec #76 §3.1 — the blurred hero backdrop is decorative and switches off
+   for readers who asked for reduced transparency. */
+@custom-variant transparency-reduce (@media (prefers-reduced-transparency: reduce));
+
 /* Preserve Tailwind v3 default border color (v4 changed it to currentColor). */
 @layer base {
   *,
