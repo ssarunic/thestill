@@ -109,6 +109,7 @@ def _episode_from_row(row: Dict[str, Any], *, prefix: str = "") -> Episode:
         created_at=col("created_at"),
         updated_at=col("updated_at"),
         external_id=col("external_id"),
+        canonical_id=(col("canonical_id") if has("canonical_id") else None),
         title=col("title"),
         slug=col("slug") or "",
         description=col("description"),
@@ -1212,13 +1213,15 @@ class EpisodesMixin(CategoryCacheMixin):
             return []
 
         with connect(self.dsn) as conn:
-            rows = conn.execute(f"""
+            rows = conn.execute(
+                f"""
                 SELECT {_PODCAST_TUPLE_COLS}
                 FROM episodes e
                 JOIN podcasts p ON e.podcast_id = p.id
                 WHERE {condition}
                 ORDER BY e.pub_date DESC NULLS LAST
-                """).fetchall()
+                """
+            ).fetchall()
 
             _, id_to_pair = self._category_maps(conn)
             return [(self._podcast_from_row_minimal(row, id_to_pair), self._row_to_episode(row)) for row in rows]
@@ -1514,13 +1517,15 @@ class EpisodesMixin(CategoryCacheMixin):
                     (podcast_id,),
                 ).fetchall()
             else:
-                rows = conn.execute("""
+                rows = conn.execute(
+                    """
                     SELECT e.*
                     FROM episodes e
                     WHERE EXISTS (SELECT 1 FROM episode_transcript_links etl
                                   WHERE etl.episode_id = e.id AND etl.downloaded_path IS NULL)
                     ORDER BY e.pub_date DESC NULLS LAST
-                    """).fetchall()
+                    """
+                ).fetchall()
 
             episodes = [self._row_to_episode(row) for row in rows]
 

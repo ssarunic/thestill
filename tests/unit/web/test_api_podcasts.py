@@ -180,6 +180,75 @@ class TestListPodcastsQueryFilter:
         assert data["podcasts"] == []
 
 
+class TestGetEpisodeBySlugs:
+    """Spec #76 §3.6 / §6 — show facts and provenance on the episode response."""
+
+    @staticmethod
+    def _result(canonical_id=None, author="Prof G Media", language="en"):
+        episode = Episode(
+            title="Why Nobody Trusts the News",
+            description="Description",
+            audio_url="https://example.com/episode.mp3",
+            external_id="episode-1",
+            slug="why-nobody-trusts-the-news",
+            canonical_id=canonical_id,
+        )
+        podcast = Podcast(
+            title="Prof G Markets",
+            description="Description",
+            rss_url="https://example.com/show.rss",
+            slug="prof-g-markets",
+            author=author,
+            language=language,
+            episodes=[episode],
+        )
+        return podcast, episode
+
+    def _get(self, client, mock_app_state, **kwargs):
+        podcast, episode = self._result(**kwargs)
+        mock_app_state.repository.get_episode_by_slug.return_value = (podcast, episode)
+        mock_app_state.repository.get_alternate_enclosures.return_value = []
+        response = client.get("/api/podcasts/prof-g-markets/episodes/why-nobody-trusts-the-news")
+        assert response.status_code == 200
+        return response.json()["episode"]
+
+    def test_exposes_podcast_author_and_language(self, client, mock_app_state):
+        data = self._get(client, mock_app_state, author="Prof G Media", language="hr")
+        assert data["podcast_author"] == "Prof G Media"
+        assert data["podcast_language"] == "hr"
+
+    def test_null_author_passes_through(self, client, mock_app_state):
+        data = self._get(client, mock_app_state, author=None)
+        assert data["podcast_author"] is None
+
+    def test_feed_episode_has_feed_origin(self, client, mock_app_state):
+        data = self._get(client, mock_app_state, canonical_id=None)
+        assert data["origin"] == "feed"
+        assert data["import_kind"] is None
+
+    @pytest.mark.parametrize(
+        ("canonical_id", "kind"),
+        [
+            ("audio:" + "f" * 64, "bare_audio"),
+            ("youtube:abc123", "youtube"),
+            ("apple:42", "apple_episode"),
+        ],
+    )
+    def test_imported_episode_reports_kind(self, client, mock_app_state, canonical_id, kind):
+        data = self._get(client, mock_app_state, canonical_id=canonical_id)
+        assert data["origin"] == "import"
+        assert data["import_kind"] == kind
+
+    def test_unknown_prefix_is_import_without_kind(self, client, mock_app_state):
+        data = self._get(client, mock_app_state, canonical_id="future:xyz")
+        assert data["origin"] == "import"
+        assert data["import_kind"] is None
+
+    def test_canonical_id_itself_is_not_exposed(self, client, mock_app_state):
+        data = self._get(client, mock_app_state, canonical_id="youtube:abc123")
+        assert "canonical_id" not in data
+
+
 class TestEpisodeSummaryLanguages:
     @staticmethod
     def _episode_result():

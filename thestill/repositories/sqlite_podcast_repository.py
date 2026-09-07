@@ -109,6 +109,7 @@ def episode_from_row(row: sqlite3.Row, *, prefix: str = "") -> Episode:
         created_at=datetime.fromisoformat(col("created_at")),
         updated_at=datetime.fromisoformat(col("updated_at")),
         external_id=col("external_id"),
+        canonical_id=(col("canonical_id") if has("canonical_id") else None),
         title=col("title"),
         slug=col("slug") or "",
         description=col("description"),

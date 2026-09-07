@@ -829,6 +829,9 @@ def test_insert_imported_episode_and_canonical_lookup(h):
 
     podcast, episode = h.repo.get_episode(episode_id)
     assert podcast.id == pid
+    # Spec #76 — the row mappers surface canonical_id so the episode page
+    # can report provenance; a feed episode reads back None.
+    assert episode.canonical_id == canonical
     assert episode.state == EpisodeState.DISCOVERED
     assert episode.duration == 1800
     assert episode.pub_date == datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
@@ -848,9 +851,12 @@ def test_find_by_audio_url_and_set_canonical_id(h):
     assert h.repo.find_episode_id_by_audio_url(pid, str(ep.audio_url)) == ep.id
     assert h.repo.find_episode_id_by_audio_url(pid, "https://example.com/other.mp3") is None
 
+    assert h.repo.get_episode(ep.id)[1].canonical_id is None
+
     canonical = f"apple:{uid}:999"
     h.repo.set_episode_canonical_id(ep.id, canonical)
     assert h.repo.find_episode_id_by_canonical_id(canonical) == ep.id
+    assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
     # Idempotent re-stamp of the same canonical id.
     h.repo.set_episode_canonical_id(ep.id, canonical)
     assert h.repo.find_episode_id_by_canonical_id(canonical) == ep.id
