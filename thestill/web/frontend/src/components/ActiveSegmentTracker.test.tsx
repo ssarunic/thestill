@@ -67,17 +67,26 @@ describe('ActiveSegmentTracker', () => {
     expect(onActiveChange).toHaveBeenLastCalledWith(1)
     const callsAfterMount = onActiveChange.mock.calls.length
 
-    // Four ticks inside the same segment: no further upward reports.
+    // Four ticks inside the same segment: no further upward reports. The
+    // last one stays clear of the segment boundary by more than the spec
+    // #38 highlight lead (150 ms), which deliberately flips the highlight
+    // just before the next segment's acoustic onset.
     tick(2)
     tick(4)
     tick(6)
-    tick(9.9)
+    tick(9.5)
     expect(onActiveChange.mock.calls.length).toBe(callsAfterMount)
 
     // Crossing into segment 2 reports exactly once.
     tick(11)
     expect(onActiveChange).toHaveBeenLastCalledWith(2)
     expect(onActiveChange.mock.calls.length).toBe(callsAfterMount + 1)
+  })
+
+  it('leads the segment boundary by the highlight lead (spec #38)', () => {
+    const { onActiveChange, tick } = renderTracker(new Set([1, 2, 3]))
+    tick(9.9) // within 150 ms of segment 2's onset → already highlighted
+    expect(onActiveChange).toHaveBeenLastCalledWith(2)
   })
 
   it('walks back to the nearest visible segment when the active one is filtered out', () => {
