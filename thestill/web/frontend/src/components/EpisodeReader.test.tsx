@@ -298,8 +298,12 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     })
     const bar = screen.getByTestId('collapsed-episode-bar')
     expect(bar).toHaveTextContent('Sample Episode')
-    expect(bar.parentElement?.className).toContain('sticky')
-    expect(bar.parentElement?.className).toContain('top-14')
+    const sticky = bar.closest('.sticky')
+    expect(sticky).not.toBeNull()
+    expect(sticky?.className).toContain('top-14')
+    // Zero-height so mounting the bar never shifts the title back into
+    // view (that shift un-collapsed the header in a loop).
+    expect(sticky?.className).toContain('h-0')
 
     act(() => {
       observeCallback!([
