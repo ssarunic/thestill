@@ -48,13 +48,24 @@ export default function EpisodeDetail() {
         </nav>
       )}
 
-      {collapsedHeader && (
-        <div className="sticky top-14 z-20 -mx-4 border-b border-hairline bg-surface px-4 sm:top-0 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
-          <CollapsedEpisodeBar state={collapsedHeader} />
-        </div>
-      )}
+      {/* The bar and the reader share one flow item so mounting the bar
+          adds no height above the title. The sticky wrapper is zero-height
+          and lets the 56 px bar overflow downward: if the bar took up
+          space, mounting it would push the title back under the viewport
+          edge, the observer would un-collapse, the bar would unmount, and
+          the title would climb back out — a flicker loop across the first
+          ~80 px past the fold. */}
+      <div>
+        {collapsedHeader && (
+          <div className="sticky top-14 z-20 h-0 sm:top-0">
+            <div className="-mx-4 border-b border-hairline bg-surface px-4 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
+              <CollapsedEpisodeBar state={collapsedHeader} />
+            </div>
+          </div>
+        )}
 
-      <EpisodeReader onCollapsedHeaderChange={setCollapsedHeader} collapseTopOffset={collapseTopOffset} />
+        <EpisodeReader onCollapsedHeaderChange={setCollapsedHeader} collapseTopOffset={collapseTopOffset} />
+      </div>
     </div>
   )
 }

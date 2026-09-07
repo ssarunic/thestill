@@ -63,6 +63,43 @@ test.describe('episode hero on a phone (spec #76)', () => {
     await expect(page.getByTestId('collapsed-episode-bar')).toHaveCount(0)
   })
 
+  test('collapsed header mounts once just past the fold and the scroll position holds', async ({ page }) => {
+    // Regression: the page-mode bar used to take up flow space above the
+    // reader, so mounting it pushed the title back under the header edge,
+    // the observer un-collapsed, the bar unmounted, and the title climbed
+    // back out — a mount/unmount loop across the first ~80 px past the fold.
+    await mockEpisodeApi(page)
+    await page.goto(EPISODE_PATH)
+    const title = page.getByRole('heading', { name: EPISODE_TITLE })
+    await expect(title).toBeVisible()
+    const titleBottom = await title.evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY)
+    // A few px past the point where the title slides under the 56 px header.
+    const target = Math.ceil(titleBottom - 56) + 8
+
+    const result = await page.evaluate(async (top) => {
+      let mounts = 0
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue
+            if (node.dataset.testid === 'collapsed-episode-bar' || node.querySelector('[data-testid="collapsed-episode-bar"]')) {
+              mounts++
+            }
+          }
+        }
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+      window.scrollTo(0, top)
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      observer.disconnect()
+      return { mounts, scrollY: window.scrollY }
+    }, target)
+
+    expect(result.mounts).toBe(1)
+    expect(result.scrollY).toBe(target)
+    await expect(page.getByTestId('collapsed-episode-bar')).toBeVisible()
+  })
+
   test('People and Information render below the tabs', async ({ page }) => {
     await mockEpisodeApi(page)
     await page.goto(EPISODE_PATH)
