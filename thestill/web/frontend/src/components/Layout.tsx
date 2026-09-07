@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import MobileHeader from './MobileHeader'
 import MiniPlayer from './MiniPlayer'
+import NowPlayingSheet from './NowPlayingSheet'
 import NavigationDrawer from './NavigationDrawer'
 import UserMenu from './UserMenu'
 import CommandBar from './CommandBar'
@@ -281,6 +282,7 @@ function LayoutContent() {
       </main>
 
       <MiniPlayer isOpen={isNowPlayingOpen} onExpand={toggleNowPlaying} />
+      <NowPlayingSheet isOpen={isNowPlayingOpen} onClose={() => setNowPlayingOpenedAt(null)} />
 
       <CommandBar isOpen={isCommandBarOpen} onClose={() => setIsCommandBarOpen(false)} />
     </div>
