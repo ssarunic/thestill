@@ -26,6 +26,7 @@ function makeEvents(): EngineEvents {
     onVolumeChange: vi.fn(),
     onError: vi.fn(),
     onEnded: vi.fn(),
+    onAvailableRatesChange: vi.fn(),
   }
 }
 
@@ -67,6 +68,29 @@ describe('YouTubeEngine', () => {
     expect(player.playVideo).toHaveBeenCalled()
     expect(events.onDurationChange).toHaveBeenCalledWith(3600)
     expect(events.onPlaying).toHaveBeenCalled()
+  })
+
+  it('publishes the accepted rates once ready and clamps carried/explicit rates to them (spec #72 §5)', async () => {
+    engine.load({ videoId: 'validVID001' }, { autoplay: false, rate: 1.2 })
+    await flush()
+    const player = fakePlayers[0]
+
+    expect(events.onAvailableRatesChange).toHaveBeenCalledWith([0.5, 1, 1.25, 1.5, 2])
+    // 1.2 is not accepted → nearest (1.25).
+    expect(player.setPlaybackRate).toHaveBeenCalledWith(1.25)
+
+    engine.setRate(0.8)
+    expect(player.setPlaybackRate).toHaveBeenLastCalledWith(1)
+
+    // An unchanged list is not re-published on later state changes.
+    const calls = (events.onAvailableRatesChange as ReturnType<typeof vi.fn>).mock.calls.length
+    player.emit(1)
+    expect((events.onAvailableRatesChange as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls)
+
+    // A new video with a different list re-publishes.
+    player.availableRates = [1, 2]
+    engine.load({ videoId: 'validVID002' }, { autoplay: false })
+    expect(events.onAvailableRatesChange).toHaveBeenLastCalledWith([1, 2])
   })
 
   it('proxies transport calls to the IFrame API', async () => {

@@ -15,6 +15,7 @@ import {
   setMediaSessionPlaybackState,
   updateMediaSessionPositionState,
 } from '../utils/mediaSession'
+import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { NativeEngine } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
@@ -76,6 +77,11 @@ export interface PlayerContextValue {
   isLoading: boolean
   duration: number
   playbackRate: number
+  // Spec #72 §5 — rates the active engine accepts for the current source;
+  // null = no restriction (native) or not reported yet. Consumers disable
+  // chips outside the list. The persisted preference itself is applied by
+  // the provider on every new source, so no consumer needs to re-apply it.
+  availableRates: number[] | null
   play: (track: PlayerTrack, options?: PlayOptions) => void
   pause: () => void
   resume: () => void
@@ -209,6 +215,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
+  const [availableRates, setAvailableRates] = useState<number[] | null>(null)
+  // Spec #72 §5 — the one global rate preference, read synchronously inside
+  // play()/playYouTube() so a fresh source starts at the user's speed.
+  const { preferredRateRef, persistRate } = usePlayerRatePreference()
   const [activeRendition, setActiveRendition] = useState<RenditionKind>('audio')
   const [videoPreference, setVideoPreference] = useState<VideoPreference>('shown')
   const [pipActive, setPipActive] = useState(false)
@@ -283,6 +293,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setIsPlaying(false)
         setCurrentTime(0)
       },
+      onAvailableRatesChange: (rates: number[] | null) => setAvailableRates(rates),
     }),
     [syncPositionState]
   )
@@ -304,6 +315,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onVolumeChange: (volume, isMuted) => active() && base.onVolumeChange(volume, isMuted),
         onError: (message) => active() && base.onError(message),
         onEnded: () => active() && base.onEnded(),
+        onAvailableRatesChange: (rates) => active() && base.onAvailableRatesChange(rates),
       }
     },
     [engineEventBodies]
@@ -416,10 +428,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       options?.startAt !== undefined && Number.isFinite(options.startAt)
         ? Math.max(0, options.startAt)
         : null,
-      null
+      // Spec #72 §5 — a fresh source starts at the persisted preference.
+      preferredRateRef.current
     )
     native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, setEngineKind, setRendition])
+  }, [beginSource, preferredRateRef, setEngineKind, setRendition])
 
   const pause = useCallback(() => {
     currentEngine()?.pause()
@@ -460,9 +473,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const setRate = useCallback(
     (rate: number) => {
+      // Explicit choice → the preference. Engine-side snapping (YouTube
+      // clamping to its list) reports back through onRateChange only.
+      persistRate(rate)
       currentEngine()?.setRate(rate)
     },
-    [currentEngine]
+    [currentEngine, persistRate]
   )
 
   const stop = useCallback(() => {
@@ -485,6 +501,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrentTime(0)
     setDuration(0)
     setMediaError(null)
+    setAvailableRates(null)
   }, [setEngineKind, setRendition])
 
   const isCurrent = useCallback(
@@ -525,6 +542,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const rate = yt?.getRate() ?? 1
       yt?.pause()
       setEngineKind('native')
+      setAvailableRates(null)
       setRendition(desired.rendition)
       const engineTime = Math.max(0, logical + desired.offset)
       activeOffsetRef.current = desired.offset
@@ -583,7 +601,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
 
       let startAt = 0
-      let rate: number | null = null
+      // Spec #72 §5 — a fresh YouTube session starts at the preference;
+      // same-episode entry carries the native engine's live rate instead.
+      let rate: number | null = preferredRateRef.current
       if (current && current.episodeId === next.episodeId) {
         if (engineKindRef.current === 'youtube') {
           // Already on the YouTube rendition — just make sure it plays.
@@ -609,7 +629,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setMediaError(null)
       engine.load({ videoId }, { seekTo: startAt, rate, autoplay: true })
     },
-    [ensureYouTubeEngine, setEngineKind, setRendition]
+    [ensureYouTubeEngine, preferredRateRef, setEngineKind, setRendition]
   )
 
   const registerTheaterSlot = useCallback((episodeId: string, el: HTMLElement) => {
@@ -818,6 +838,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isLoading,
       duration,
       playbackRate,
+      availableRates,
       play,
       pause,
       resume,
@@ -857,6 +878,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isLoading,
       duration,
       playbackRate,
+      availableRates,
       play,
       pause,
       resume,
