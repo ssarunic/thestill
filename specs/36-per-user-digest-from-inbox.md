@@ -111,7 +111,7 @@ problems:
 │    1. cursor = last_briefing_at(user_id) or epoch               │
 │    2. inbox = InboxService.list(user_id, since=cursor,          │
 │                                 state in {unread, saved})       │
-│    3. if inbox empty → return None (or "nothing new" briefing)  │
+│    3. if inbox empty → latest briefing if < 24h old, else None   │
 │    4. script = DigestGenerator.generate(inbox.episodes, …)      │
 │    5. persist user_briefings row + script artifact              │
 │    6. (optional / spec #34) render audio, persist briefing_audio│
