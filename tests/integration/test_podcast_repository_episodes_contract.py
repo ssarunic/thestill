@@ -829,6 +829,9 @@ def test_insert_imported_episode_and_canonical_lookup(h):
 
     podcast, episode = h.repo.get_episode(episode_id)
     assert podcast.id == pid
+    # Spec #76 — the row mappers surface canonical_id so the episode page
+    # can report provenance; a feed episode reads back None.
+    assert episode.canonical_id == canonical
     assert episode.state == EpisodeState.DISCOVERED
     assert episode.duration == 1800
     assert episode.pub_date == datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
@@ -837,6 +840,27 @@ def test_insert_imported_episode_and_canonical_lookup(h):
     # The generated slug makes the (podcast_slug, episode_slug) URL resolvable.
     found = h.repo.get_episode_by_slug(f"pod-{uid}", episode.slug)
     assert found is not None and found[1].id == episode_id
+
+
+def test_canonical_id_survives_save_episode_and_full_save(h):
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    canonical = f"youtube:{uid}"
+
+    # Idempotent insert path (save_episode) keeps the model's canonical_id.
+    ep = _mk_episode(pid, uid, canonical_id=canonical)
+    h.repo.save_episode(ep)
+    assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
+
+    # Full save deletes and re-inserts every episode from the model; the
+    # provenance key must come back with it. The Postgres harness composes
+    # only the episodes mixin, so the destructive path is exercised on SQLite
+    # (the PG insert SQL is pinned by tests/unit/repositories).
+    if h.backend == "sqlite":
+        podcast, episode = h.repo.get_episode(ep.id)
+        podcast.episodes = [episode]
+        h.repo.save(podcast)
+        assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
 
 
 def test_find_by_audio_url_and_set_canonical_id(h):
@@ -848,9 +872,12 @@ def test_find_by_audio_url_and_set_canonical_id(h):
     assert h.repo.find_episode_id_by_audio_url(pid, str(ep.audio_url)) == ep.id
     assert h.repo.find_episode_id_by_audio_url(pid, "https://example.com/other.mp3") is None
 
+    assert h.repo.get_episode(ep.id)[1].canonical_id is None
+
     canonical = f"apple:{uid}:999"
     h.repo.set_episode_canonical_id(ep.id, canonical)
     assert h.repo.find_episode_id_by_canonical_id(canonical) == ep.id
+    assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
     # Idempotent re-stamp of the same canonical id.
     h.repo.set_episode_canonical_id(ep.id, canonical)
     assert h.repo.find_episode_id_by_canonical_id(canonical) == ep.id

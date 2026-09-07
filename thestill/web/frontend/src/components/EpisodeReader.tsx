@@ -11,14 +11,16 @@ import { useBackgroundLocation } from '../hooks/useBackgroundLocation'
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
 const SegmentedTranscriptViewer = lazy(() => import('./SegmentedTranscriptViewer'))
 const SummaryViewer = lazy(() => import('./SummaryViewer'))
-import ExpandableDescription from './ExpandableDescription'
 import TheaterSurface from './TheaterSurface'
-import { EpisodeNumber } from './EpisodeNumber'
-import { ExplicitBadge } from './ExplicitBadge'
 import PipelineActionButton from './PipelineActionButton'
 import FailureBanner from './FailureBanner'
-import ShareButton from './ShareButton'
-import SmartImage from './SmartImage'
+import Panel from './Panel'
+import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
+import People from './episode-header/People'
+import { buildEpisodeInformationRows } from './episode-header/episodeInformation'
+import DefinitionList from './DefinitionList'
+import { useCollapsingHeader } from '../hooks/useCollapsingHeader'
+import type { CollapsedHeaderState } from './CollapsedEpisodeBar'
 import KeyEntitiesStrip from './episode-entities/KeyEntitiesStrip'
 import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
@@ -38,31 +40,19 @@ function getBrowserLanguage(): string {
   return normalizeLanguageCode(typeof navigator === 'undefined' ? undefined : navigator.language) ?? 'en'
 }
 
-const stateColors: Record<string, string> = {
-  discovered: 'bg-gray-100 text-gray-600',
-  downloaded: 'bg-blue-100 text-blue-700',
-  downsampled: 'bg-indigo-100 text-indigo-700',
-  transcribed: 'bg-purple-100 text-purple-700',
-  cleaned: 'bg-amber-100 text-amber-700',
-  summarized: 'bg-green-100 text-green-700',
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return 'Unknown date'
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
-}
-
 export interface EpisodeReaderProps {
   // Spec #52 — when rendered inside the reader overlay, scrolling happens in
   // the overlay panel's own div rather than the window. Reading-position
   // persistence needs to know which one to observe.
   scrollContainerRef?: RefObject<HTMLElement | null>
+  // Spec #76 §3.7 — the reader detects when its title scrolls away and
+  // reports what a collapsed bar needs; the host renders the bar in its own
+  // chrome (the overlay swaps its header, the page pins a sticky bar).
+  // Called with ``null`` when the title is back in view or on unmount.
+  onCollapsedHeaderChange?: (state: CollapsedHeaderState | null) => void
+  // Height of fixed chrome above the scroll area (the mobile shell header in
+  // page mode); the title counts as gone once it slides under it.
+  collapseTopOffset?: number
 }
 
 /**
@@ -72,7 +62,11 @@ export interface EpisodeReaderProps {
  * keyed off route params so both modes behave identically — including
  * spec #29 read-on-view marking.
  */
-export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps) {
+export default function EpisodeReader({
+  scrollContainerRef,
+  onCollapsedHeaderChange,
+  collapseTopOffset = 0,
+}: EpisodeReaderProps) {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [searchParams] = useSearchParams()
   const location = useLocation()
@@ -373,6 +367,61 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
     [episode, playerTrack, player],
   )
 
+  // Spec #76 §3.2 — one derivation feeds the hero's primary action (and,
+  // in phase 2, the collapsed bar). ``isPlaying``/``isLoading`` are global
+  // player flags, meaningful only when this episode is the loaded track.
+  const isCurrent = episode ? player.isCurrent(episode.id) : false
+  const isPlaying = isCurrent && player.isPlaying
+  const isPlayerLoading = isCurrent && player.isLoading
+  const handleTogglePlay = useCallback(() => {
+    if (isCurrent) player.toggle()
+    else if (playerTrack) player.play(playerTrack)
+  }, [isCurrent, player, playerTrack])
+  // Spec #62 §6 — audio-kind episodes carrying an episode-level YouTube
+  // link enter the YouTube rendition from the action row (the theater
+  // mounts once the engine switches). Video-kind episodes get their
+  // YouTube entry in the theater menu.
+  const showWatchVideo = Boolean(
+    playerTrack &&
+      episode?.playback?.youtube &&
+      episode.playback.kind !== 'video' &&
+      !(player.activeEngine === 'youtube' && isCurrent),
+  )
+  const handleWatchVideo = useCallback(() => {
+    if (playerTrack) player.playYouTube(playerTrack)
+  }, [player, playerTrack])
+
+  const { titleRef, collapsed } = useCollapsingHeader(scrollContainerRef, collapseTopOffset)
+  useEffect(() => {
+    if (!onCollapsedHeaderChange) return
+    onCollapsedHeaderChange(
+      collapsed && episode
+        ? {
+            title: episode.title,
+            artworkUrl: episode.image_url ?? episode.podcast_image_url,
+            isPlaying,
+            isLoading: isPlayerLoading,
+            onTogglePlay: handleTogglePlay,
+          }
+        : null,
+    )
+  }, [onCollapsedHeaderChange, collapsed, episode, isPlaying, isPlayerLoading, handleTogglePlay])
+  useEffect(() => () => onCollapsedHeaderChange?.(null), [onCollapsedHeaderChange])
+
+  const transcriptSegments = transcriptData?.segments?.segments ?? null
+
+  // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
+  // jump, not a playback action: same tab-switch + segment-scroll path as a
+  // citation, without the seek. The chip carries its first segment's id.
+  const handleSpeakerSelect = useCallback(
+    (segmentId: number) => {
+      clearEntityFilter()
+      if (activeTab !== 'transcript') setTab('transcript', { push: true })
+      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
+    },
+    [clearEntityFilter, activeTab, setTab],
+  )
+
   const handleSummaryCitation = useCallback(
     (citation: SummaryCitation) => {
       const seconds = citation.target_playback_s ?? citation.cited_playback_s
@@ -410,205 +459,46 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header — spec #76 §3: hero, action row, description (plain
+          surface, no card, no dividers), then operator status below the
+          primary action (§3.4). */}
       {episodeLoading ? (
-        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
-          {/* Match real header layout: artwork + title area */}
-          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-            <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gray-200 rounded-lg flex-shrink-0 mx-auto sm:mx-0 aspect-square" />
-            <div className="flex-1 space-y-2 text-center sm:text-left">
-              <div className="h-7 bg-gray-200 rounded w-3/4 mx-auto sm:mx-0" />
-              <div className="h-5 bg-gray-200 rounded w-1/2 mx-auto sm:mx-0" />
-            </div>
-          </div>
-          {/* Meta info */}
-          <div className="h-5 bg-gray-200 rounded w-1/3" />
-          {/* Pipeline button area */}
-          <div className="border-t border-gray-100 pt-4">
-            <div className="h-10 bg-gray-200 rounded w-40" />
-          </div>
-          {/* Audio player area */}
-          <div className="border-t border-gray-100 pt-4">
-            <div className="h-12 bg-gray-200 rounded" />
-          </div>
-        </div>
+        <EpisodeHeaderSkeleton />
       ) : episode ? (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-            {/* Episode/Podcast artwork - prioritize episode artwork, fall back to podcast artwork */}
-            <SmartImage
-              sources={[episode.image_url, episode.podcast_image_url]}
-              alt={`${episode.title} artwork`}
-              width={96}
-              height={96}
-              loading="eager"
-              className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
-              fallback={
-                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
-                  <svg className="w-8 h-8 sm:w-10 sm:h-10 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                </div>
-              }
-            />
-            <div className="flex-1 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4 text-center sm:text-left">
-              <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{episode.title}</h1>
-                {/* Plain navigation, deliberately leaving any inbox overlay
-                    context (spec #52 interaction table). */}
-                <Link
-                  to={`/podcasts/${podcastSlug}`}
-                  className="mt-1 inline-block text-gray-600 hover:text-primary-700 hover:underline"
-                >
-                  {episode.podcast_title}
-                </Link>
-              </div>
-              <span className={`px-3 py-1 rounded-full text-sm font-medium self-center sm:self-start ${stateColors[episode.state]}`}>
-                {episode.state === 'summarized' ? 'Ready' : episode.state.charAt(0).toUpperCase() + episode.state.slice(1)}
-              </span>
-            </div>
-          </div>
+        <>
+          <EpisodeHeader
+            episode={episode}
+            podcastSlug={podcastSlug!}
+            titleRef={titleRef}
+            playback={{ isCurrent, isPlaying, isLoading: isPlayerLoading, onToggle: handleTogglePlay }}
+            showWatchVideo={showWatchVideo}
+            onWatchVideo={handleWatchVideo}
+            shareUrl={window.location.href}
+          />
 
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-sm text-gray-500">
-            <EpisodeNumber
-              seasonNumber={episode.season_number}
-              episodeNumber={episode.episode_number}
-            />
-            <ExplicitBadge explicit={episode.explicit} />
-            <span>{formatDate(episode.pub_date)}</span>
-            {episode.duration_formatted && (
-              <>
-                <span className="hidden sm:inline">•</span>
-                <span>{episode.duration_formatted}</span>
-              </>
-            )}
-            <span className="hidden sm:inline">•</span>
-            <ShareButton
-              title={`${episode.title} - ${episode.podcast_title}`}
-              url={window.location.href}
-            />
-            {/* Show Notes link */}
-            {episode.website_url && (
-              <>
-                <span className="hidden sm:inline">•</span>
-                <a
-                  href={episode.website_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
-                >
-                  Show Notes
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </a>
-              </>
-            )}
-          </div>
-
-          {/* Failure Banner */}
           {episode.is_failed && episode.failed_at_stage && (
-            <div className="border-t border-gray-100 pt-4">
-              <FailureBanner
-                episodeId={episode.id}
-                failedAtStage={episode.failed_at_stage}
-                failureReason={episode.failure_reason ?? null}
-                failureType={(episode.failure_type as FailureType) ?? null}
-                failedAt={episode.failed_at ?? null}
-                onRetrySuccess={() => {
-                  queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
-                }}
-              />
-            </div>
+            <FailureBanner
+              episodeId={episode.id}
+              failedAtStage={episode.failed_at_stage}
+              failureReason={episode.failure_reason ?? null}
+              failureType={(episode.failure_type as FailureType) ?? null}
+              failedAt={episode.failed_at ?? null}
+              onRetrySuccess={() => {
+                queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
+              }}
+            />
           )}
 
-          {/* Pipeline Action Button */}
           {!episode.is_failed && episode.state !== 'summarized' && (
-            <div className="border-t border-gray-100 pt-4">
-              <PipelineActionButton
-                podcastSlug={podcastSlug!}
-                episodeSlug={episodeSlug!}
-                episodeId={episode.id}
-                episodeState={episode.state}
-                tasks={episodeTasks}
-              />
-            </div>
+            <PipelineActionButton
+              podcastSlug={podcastSlug!}
+              episodeSlug={episodeSlug!}
+              episodeId={episode.id}
+              episodeState={episode.state}
+              tasks={episodeTasks}
+            />
           )}
-
-          {/* Play button — delegates transport to the floating mini-player */}
-          <div className="border-t border-gray-100 pt-4">
-            {(() => {
-              const isCurrent = player.isCurrent(episode.id)
-              const isPlaying = isCurrent && player.isPlaying
-              const isLoading = isCurrent && player.isLoading
-              const handleClick = () => {
-                if (isCurrent) {
-                  player.toggle()
-                } else if (playerTrack) {
-                  player.play(playerTrack)
-                }
-              }
-              return (
-                <button
-                  type="button"
-                  onClick={handleClick}
-                  disabled={isLoading && !isPlaying}
-                  aria-label={isPlaying ? 'Pause' : 'Play'}
-                  className="inline-flex items-center gap-3 px-5 py-2.5 rounded-full bg-primary-900 text-white font-medium hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50 transition-colors"
-                >
-                  {isLoading && !isPlaying ? (
-                    <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                    </svg>
-                  ) : isPlaying ? (
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <rect x="6" y="5" width="4" height="14" rx="1" />
-                      <rect x="14" y="5" width="4" height="14" rx="1" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  )}
-                  <span>{isPlaying ? 'Pause' : isCurrent ? 'Resume' : 'Play episode'}</span>
-                </button>
-              )
-            })()}
-            {/* Spec #62 §6 — "Watch video": audio-kind episodes carrying an
-                episode-level YouTube link enter the YouTube rendition here
-                (the theater mounts once the engine switches). Video-kind
-                episodes get their YouTube entry in the theater menu. */}
-            {playerTrack &&
-              episode.playback?.youtube &&
-              episode.playback.kind !== 'video' &&
-              !(player.activeEngine === 'youtube' && player.isCurrent(episode.id)) && (
-                <button
-                  type="button"
-                  onClick={() => player.playYouTube(playerTrack)}
-                  className="ml-3 inline-flex items-center gap-2 rounded-full border border-gray-300 px-5 py-2.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 active:bg-gray-100"
-                >
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M21.6 7.2a2.5 2.5 0 00-1.76-1.77C18.25 5 12 5 12 5s-6.25 0-7.84.43A2.5 2.5 0 002.4 7.2 26.2 26.2 0 002 12c0 1.62.13 3.23.4 4.8a2.5 2.5 0 001.76 1.77C5.75 19 12 19 12 19s6.25 0 7.84-.43a2.5 2.5 0 001.76-1.77c.27-1.57.4-3.18.4-4.8 0-1.62-.13-3.23-.4-4.8zM10 15.5v-7l6 3.5-6 3.5z" />
-                  </svg>
-                  <span>Watch video</span>
-                </button>
-              )}
-          </div>
-
-          {/* Spec #28 §"Failure isolation" — entity branch is its own
-              status row, independent of the user chain. Renders only
-              when entity-branch tasks exist for this episode. */}
-          <div className="border-t border-gray-100 pt-4">
-            <EntityBranchProgress episodeId={episode.id} tasks={episodeTasks} />
-          </div>
-
-          {(episode.description_html || episode.description) && (
-            <div className="border-t border-gray-100 pt-4">
-              <ExpandableDescription html={episode.description_html || episode.description} maxLines={3} />
-            </div>
-          )}
-        </div>
+        </>
       ) : null}
 
       {/* Spec #61 §2 — theater surface for video episodes: a 16:9 slot
@@ -643,16 +533,16 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
       {/* Content Tabs + right rail. lg+ becomes a 2-col grid; below lg
           the rail wraps under the panel. */}
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
-        <div className="bg-white rounded-lg border border-gray-200 min-h-[400px]">
+        <Panel className="min-h-[400px]">
           {/* Tab Headers */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pr-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-hairline pr-3">
             <nav className="flex">
               <button
                 onClick={() => setTab('summary')}
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'summary'
                     ? 'border-primary-600 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                    : 'border-transparent text-muted hover:text-gray-700'
                 }`}
               >
                 Summary
@@ -662,7 +552,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'transcript'
                     ? 'border-primary-600 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                    : 'border-transparent text-muted hover:text-gray-700'
                 }`}
               >
                 Transcript
@@ -681,7 +571,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                   </span>
                 )}
                 <div
-                  className="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium"
+                  className="inline-flex items-center rounded-lg border border-hairline bg-page p-0.5 text-xs font-medium"
                   aria-label="Summary language"
                 >
                   {summaryLanguageOptions.map(({ code, original }) => (
@@ -693,8 +583,8 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
                       aria-pressed={selectedSummaryLanguage === code}
                       className={`rounded-md px-2.5 py-1.5 transition-colors disabled:cursor-wait ${
                         selectedSummaryLanguage === code
-                          ? 'bg-white text-primary-700 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
+                          ? 'bg-surface text-primary-700 shadow-sm'
+                          : 'text-muted hover:text-gray-700'
                       }`}
                     >
                       {original ? `${code.toUpperCase()} (original)` : code.toUpperCase()}
@@ -704,6 +594,16 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
               </div>
             )}
           </div>
+
+          {/* Spec #76 §3.4 — the entity branch reports here as a one-line
+              strip only while a task is running or failed. Spec #28
+              "failure isolation": independent of the user chain. */}
+          <EntityBranchProgress
+            episodeId={episode?.id ?? null}
+            tasks={episodeTasks}
+            hideWhenComplete
+            className="mx-4 mt-3 sm:mx-6"
+          />
 
           {/* Tab Content */}
           <div className="p-4 sm:p-6">
@@ -754,7 +654,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
               )}
             </Suspense>
           </div>
-        </div>
+        </Panel>
 
         {/* Right rail — only on lg+; collapses below the breakpoint
             (the strip carries the gist on mobile). Shown when there are
@@ -762,7 +662,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
             episodes without entity extraction. */}
         {(entities.length > 0 || relatedEpisodes.length > 0 || relatedLoading) && (
           <div className="hidden lg:block">
-            <div className="sticky top-4 space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+            <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
               <EntityRail
                 entities={entities}
                 onSeek={handleSegmentSeek}
@@ -774,6 +674,18 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
           </div>
         )}
       </div>
+
+      {/* Spec #76 §3.5–3.6 — people as content, then every remaining fact
+          in one labelled place. Both sit below the tabs so late-arriving
+          transcript data cannot move the fold. */}
+      {episode && (
+        <People entities={entities} segments={transcriptSegments} onSpeakerSelect={handleSpeakerSelect} />
+      )}
+      {episode && (
+        <Panel className="px-4 py-3 sm:px-6 sm:py-4">
+          <DefinitionList heading="Information" rows={buildEpisodeInformationRows(episode)} />
+        </Panel>
+      )}
 
       {/* Mention density timeline — fixed-position strip beside the
           MiniPlayer when this episode is the current track. Only

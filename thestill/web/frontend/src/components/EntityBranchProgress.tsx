@@ -54,6 +54,11 @@ interface EntityBranchProgressProps {
   // stage is complete. Defaults to true — this matches the spec's
   // "minimise visual weight when nothing's wrong" intent.
   collapseWhenIdle?: boolean
+  // Spec #76 §3.4 — content pages render nothing once the branch is
+  // complete; the collapsed "Indexed" pill is operator information and
+  // stays on the Queue and entity surfaces.
+  hideWhenComplete?: boolean
+  className?: string
 }
 
 function CheckIcon() {
@@ -93,6 +98,8 @@ export default function EntityBranchProgress({
   episodeId,
   tasks,
   collapseWhenIdle = true,
+  hideWhenComplete = false,
+  className = '',
 }: EntityBranchProgressProps) {
   if (!episodeId) return null
 
@@ -149,6 +156,10 @@ export default function EntityBranchProgress({
   const anyFailed = stageStatuses.some((s) => s.status === 'failed')
   const anyActive = stageStatuses.some((s) => s.status === 'processing' || s.status === 'queued')
 
+  if (allComplete && hideWhenComplete && !anyActive && !anyFailed) {
+    return null
+  }
+
   // Collapsed "Indexed" pill — when every stage is green and the
   // caller asked for the compact form. One subtle row in the page
   // chrome instead of four big circles.
@@ -166,7 +177,7 @@ export default function EntityBranchProgress({
 
   return (
     <div
-      className="rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-2"
+      className={`rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-2 ${className}`}
       data-testid="entity-branch-progress"
     >
       <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-500">

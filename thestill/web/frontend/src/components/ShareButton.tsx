@@ -1,17 +1,20 @@
 import { useCallback, useState, useEffect } from 'react'
 import { useToast } from './Toast'
+import Button, { LinkIcon, ShareIcon } from './Button'
 
 interface ShareButtonProps {
   title: string
   url: string
   className?: string
+  /** Spec #76 §3.2 — a 44 px circular icon action with a screen-reader label. */
+  iconOnly?: boolean
 }
 
 /**
  * Share button that uses native Web Share API on supported browsers,
  * falling back to copy-to-clipboard on desktop/unsupported browsers.
  */
-export default function ShareButton({ title, url, className = '' }: ShareButtonProps) {
+export default function ShareButton({ title, url, className = '', iconOnly = false }: ShareButtonProps) {
   const { showToast } = useToast()
   const [canShare, setCanShare] = useState(false)
 
@@ -46,34 +49,32 @@ export default function ShareButton({ title, url, className = '' }: ShareButtonP
     }
   }, [canShare, title, url, showToast])
 
+  const label = canShare ? 'Share' : 'Copy link'
+  const hint = canShare ? 'Share episode' : 'Copy link to clipboard'
+
+  if (iconOnly) {
+    return (
+      <Button
+        variant="secondary"
+        size="icon"
+        icon={canShare ? <ShareIcon /> : <LinkIcon />}
+        onClick={handleShare}
+        title={hint}
+        className={className}
+      >
+        <span className="sr-only">{label}</span>
+      </Button>
+    )
+  }
+
   return (
     <button
       onClick={handleShare}
-      className={`flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors ${className}`}
-      title={canShare ? 'Share episode' : 'Copy link to clipboard'}
+      className={`flex items-center gap-1.5 text-sm text-muted hover:text-gray-700 transition-colors ${className}`}
+      title={hint}
     >
-      {canShare ? (
-        // Share icon for native share
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-          />
-        </svg>
-      ) : (
-        // Link icon for copy-to-clipboard fallback
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-          />
-        </svg>
-      )}
-      <span className="hidden sm:inline">{canShare ? 'Share' : 'Copy link'}</span>
+      <span className="h-4 w-4">{canShare ? <ShareIcon /> : <LinkIcon />}</span>
+      <span className="hidden sm:inline">{label}</span>
     </button>
   )
 }

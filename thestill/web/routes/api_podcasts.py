@@ -30,6 +30,7 @@ from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
 from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
+from ...utils.episode_origin import derive_episode_origin
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state, get_current_user, require_auth
 from ..responses import api_response, conflict, etag_json_response, not_found, paginated_response
@@ -318,6 +319,7 @@ def get_episode_by_slugs(
 
     podcast, episode = result
     alternate_enclosures = state.repository.get_alternate_enclosures(episode.id)
+    origin, import_kind = derive_episode_origin(episode.canonical_id)
 
     return api_response(
         {
@@ -326,6 +328,13 @@ def get_episode_by_slugs(
                 "podcast_id": podcast.id,
                 "podcast_slug": podcast.slug,
                 "podcast_title": podcast.title,
+                # Spec #76 §3.6 — the Information list reads show facts from
+                # this one response; ``podcast`` is already loaded by the
+                # slug lookup, so these cost no extra query.
+                "podcast_author": podcast.author,
+                "podcast_language": podcast.language,
+                "origin": origin,
+                "import_kind": import_kind,
                 "title": episode.title,
                 "description": episode.description,
                 "description_html": episode.description_html,

@@ -2,24 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlayer } from '../contexts/PlayerContext'
 import { abovePlayer } from '../constants/layers'
+import { useIsSmUp } from '../hooks/useMediaQuery'
 
 // Spec #61 §2 — desktop-only surface; on mobile playback continues
 // audio-first in the mini-player bar. Falls back to "desktop" when
 // matchMedia is unavailable (tests).
 function useIsDesktop(): boolean {
-  const [isDesktop, setIsDesktop] = useState(() =>
-    typeof window === 'undefined' || typeof window.matchMedia !== 'function'
-      ? true
-      : window.matchMedia('(min-width: 640px)').matches
-  )
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia('(min-width: 640px)')
-    const onChange = () => setIsDesktop(mql.matches)
-    mql.addEventListener?.('change', onChange)
-    return () => mql.removeEventListener?.('change', onChange)
-  }, [])
-  return isDesktop
+  return useIsSmUp(true)
 }
 
 /**

@@ -1,8 +1,8 @@
 # Episode Detail Page Hierarchy — Hero, Action Row, Information
 
-**Status**: 💡 Proposal — for review, not scheduled
+**Status**: ✅ Implemented (phases 0–4, branch `feat/76-episode-detail-hierarchy`, 2026-09-07); overflow menu (§3.2) deferred
 **Created**: 2026-09-07
-**Updated**: 2026-09-07 (review round 1 addressed: sticky-bar ownership, People navigation, phone height budget, 44 px icons, data contracts, primary label)
+**Updated**: 2026-09-07 (implemented; see §9 for what landed and what was deferred)
 **Priority**: Medium (the episode page is the product's most-visited surface and reads as an admin record rather than a content page)
 
 > **Related:** [#09 single-user-web-ui](09-single-user-web-ui.md) §Visual Design (palette, 8 px grid, Inter scale), [#73 mobile-list-row-density](73-mobile-list-row-density.md) (full-bleed-below-`sm` rule, `Button` variants, navy primary token), [#52 inbox-reader-overlay](52-inbox-reader-overlay.md) (the same reader renders as a page and as an overlay), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) §5.2 (key entities strip, entity branch progress), [#62 youtube-video-rendition](62-youtube-video-rendition.md) §6 ("Watch video" entry point), [#71 player-shell-layer](71-player-shell-layer.md) (mini player height budget), [#58 original-language-summaries](58-original-language-summaries.md) (summary language toggle in the tab bar)
@@ -194,16 +194,13 @@ its label. Width is handled by priority instead of by scaling:
 - Budget at 361 px content width: primary ≈ 120 px + 3 × 44 px icons +
   3 × 12 px gaps = 288 px. Every phone the project targets (≥ 320 px
   viewport, 288 px content) fits all four slots.
-- If the container is narrower than the sum of its slots (measured with a
-  `ResizeObserver`, not a breakpoint, so the overlay's `lg:max-w-4xl`
-  panel and the desktop split view behave the same way), icons drop in
-  reverse priority order into a trailing `⋯` overflow menu (`Button
-  size="icon"` trigger, `role="menu"` popover; no shared menu component
-  exists yet, so this is the first and becomes the primitive the theater
-  menu in #62 §6 adopts). Priority,
-  highest first: primary, Watch video, Share, Show notes. Show notes
-  is always also reachable from Information (§3.6), so it is the first
-  to go.
+- **Deferred.** Because every supported viewport fits all four slots, the
+  priority-based overflow menu is not built. If a fifth slot or a narrower
+  host ever appears: icons drop in reverse priority order into a trailing
+  `⋯` menu (`Button size="icon"` trigger, `role="menu"` popover — the
+  repo has no shared menu primitive, so that would be the first). Priority,
+  highest first: primary, Watch video, Share, Show notes; Show notes is
+  always also reachable from Information (§3.6), so it goes first.
 
 | Slot | Content | Component |
 |---|---|---|
@@ -301,7 +298,7 @@ when the value is null:
 | Type | Bonus / Trailer | `episode_type`, only when not `full` |
 | Explicit | Yes / No | `explicit` |
 | Show notes | host name of `website_url`, external link | `website_url` |
-| Source | `Imported (YouTube)` / `Imported (audio file)` / `Imported (RSS episode)` | `origin` + `import_kind` on `EpisodeDetail` (new, §6); row omitted when `origin === 'feed'` |
+| Source | `Imported (YouTube)` / `Imported (Apple Podcasts)` / `Imported (audio file)` / `Imported (RSS episode)`; plain `Imported` when the kind is unknown | `origin` + `import_kind` on `EpisodeDetail` (new, §6); row omitted when `origin === 'feed'` |
 
 ### 3.7 Sticky collapsed header
 
@@ -369,11 +366,14 @@ inside the screen's frame.
 
 ### 5.2 `Button`: `icon` size
 
-`sizeStyles` gains `icon: 'w-11 h-11 p-0 rounded-full justify-center'`
-(44 px) and `iconSm: 'w-11 h-11 p-0 rounded-full justify-center
-[&>svg]:h-9 [&>svg]:w-9'` for the sticky bar: the visual disc is 36 px
-but the button's box and hit area stay 44 × 44 px, matching the #73
-touch-target floor. Visual size never sets the hit area. With `iconOnlyMobile`
+`sizeStyles` gains `icon` (44 px circle) and `iconSm` for the sticky bar:
+a 44 × 44 px box with a transparent 4 px border and `bg-clip-padding`, so
+the painted disc is 36 px while the hit area stays at the #73 floor. (The
+`[&>svg]` selector first proposed cannot reach the glyph, which `Button`
+wraps in a span; the glyph size comes from the `iconSizes` map instead.)
+`Button` also gains `pill` for the primary action's radius, and the class
+recipe moves to `buttonStyles.ts` so an external-link `<a>` in an action
+row can share it. Visual size never sets the hit area. With `iconOnlyMobile`
 already present this closes the last case where pages hand-roll circular
 buttons (the play and watch buttons in `EpisodeReader`, the share button).
 `ActionRow` is a layout component only: `primary` slot plus `actions`
@@ -411,7 +411,7 @@ Alongside the existing `text-row` (#73 §5.2) in `tailwind.config.js`:
 | Token | Phone | `sm+` | Weight | Use |
 |---|---:|---:|---|---|
 | `text-eyebrow` | 13 px | 13 px | 500 | `MetaEyebrow` |
-| `text-title` | 22 px / 1.2 | 28 px / 1.2 | 700 | page title in `PageHero` |
+| `text-title` / `text-title-lg` | 22 px / 1.2 | 28 px / 1.2 (`sm:text-title-lg`) | 700 | page title in `PageHero` |
 | `text-section` | 17 px / 1.3 | 17 px / 1.3 | 600 | in-page headings (`People`, `Information`) |
 
 The `section` size sits clearly above body (16 px) and clearly below the
@@ -419,12 +419,17 @@ title, which is what makes Apple's hierarchy scan.
 
 ### 5.7 Colour tokens (dark-mode prerequisite, not dark mode)
 
-The frontend has no `dark:` variants today, and `index.css` hard-codes
-scrollbar greys. Introduce CSS variables on `:root` for `--bg`, `--surface`,
-`--text`, `--text-muted`, `--border`, `--accent`, `--accent-contrast`, map
-them into the Tailwind theme (`bg-surface`, `text-muted`, `border-hairline`,
-…) and migrate the components touched by this spec plus `Button`, `ListRow`,
-`Layout` and `MiniPlayer` to them. Existing `gray-*` classes elsewhere keep
+The frontend has no `dark:` variants today, and `index.css` hard-coded
+scrollbar greys. CSS variables on `:root` for `--bg`, `--surface`, `--text`,
+`--text-muted`, `--border`, `--accent`, `--accent-contrast` (plus three
+`--scrollbar-*`) are mapped into the Tailwind theme through the existing
+`@config` bridge as `bg-page`, `bg-surface`, `text-ink`, `text-muted`,
+`border-hairline`, `bg-accent` / `text-accent-contrast`. Values are
+Tailwind's own stops copied verbatim (the v4 `oklch` greys, `#1a365d`
+navy), so the light rendering is unchanged — verified by a full-page
+screenshot diff at 393 px and 1280 px. The components touched by this spec
+plus `Button`, `ListRow`/`ListGroup`, `Layout`/`MobileHeader` and
+`MiniPlayer` use the tokens; existing `gray-*` classes elsewhere keep
 working. Dark mode itself is a separate spec: a transcript reader needs its
 own contrast pass before a dark surface is better than the current light
 one.
@@ -432,9 +437,12 @@ one.
 ### 5.8 `Artwork`
 
 A thin wrapper over `SmartImage` fixing size and radius per role:
-`inline` 28 px / 6 px radius, `row` 48 px / 8 px (#73's `ListRowArtwork`
-becomes an alias), `card` 96 px / 8 px, `hero` 200–240 px / 12 px, optional
-`backdrop`. Ends the seven size/radius combinations #73 §2 counted.
+`inline` 28 px / 6 px radius, `bar` 32 px / 6 px (collapsed header),
+`rowSm` 40 px / 8 px, `row` 48 px / 8 px (#73's `ListRowArtwork` and
+`EpisodeCard` delegate to these), `card` 96 px / 8 px, `hero` 40 vw ≤ 160 px
+on phones and 200 px from `sm` / 12 px. The blurred backdrop belongs to
+`PageHero` (it spans the hero, not the image). Ends the seven size/radius
+combinations #73 §2 counted.
 
 ## 6. Implementation notes
 
@@ -471,11 +479,11 @@ becomes an alias), `card` 96 px / 8 px, `hero` 200–240 px / 12 px, optional
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 0 | Static prototype of §3.1–3.3 at 393 × 852 (Storybook story or a throwaway route), measured in Safari iOS with the real browser chrome | The tab header's top edge is within the first viewport for a two-line title and three-line description; the height budget below is confirmed or the artwork/description knobs are turned before phase 1 starts |
-| 1 | §5.2 `icon`/`iconSm` sizes, §5.3 `MetaEyebrow`, §5.4 `DefinitionList`, §5.6 type scale, §5.8 `Artwork`; hero + action row + description + status relocation on the episode page (§3.1–3.4); skeleton updated | Same fold criterion as phase 0, now on the real page; no state or index pill above the fold; every action-row and sticky-bar control has a ≥ 44 × 44 px hit area at 320 px viewport; `make check` green |
-| 2 | Episode response fields (§6), §3.6 Information, §3.5 People, §3.7 sticky bar with both hosts | People row hidden when both sources empty; speaker chip selects the Transcript tab and scrolls without starting playback; Information omits null rows; overlay shows one 56 px header collapsed or expanded; page mode bar clears the mobile shell header |
-| 3 | Adopt `PageHero`, `ActionRow`, `MetaEyebrow`, `DefinitionList` on `PodcastDetail` and `BriefingDetail`; `stateColors` extraction; §5.1 surface tiers applied to those pages | Three detail pages share one header anatomy; no page-local circular button styles remain |
-| 4 | §5.7 colour tokens on the components this spec touched plus `Button`, `ListRow`, `Layout`, `MiniPlayer` | No hard-coded hex in `index.css`; light rendering pixel-identical to phase 3 |
+| 0 | Hermetic Playwright spec (`tests/episode-hero-fold.spec.ts`) at 393 × 732 (852 minus browser chrome) with a stubbed two-line title and clamped description, kept as a CI regression check; a final look on a real iPhone remains the sign-off | ✅ Tab header fully inside the first viewport (bottom edge ≈ 690 px of 732) without turning either knob |
+| 1 | §5.2 `icon`/`iconSm` sizes, §5.3 `MetaEyebrow`, §5.4 `DefinitionList`, §5.6 type scale, §5.8 `Artwork`; hero + action row + description + status relocation on the episode page (§3.1–3.4); skeleton updated | ✅ Same fold criterion on the real page; no state or index pill above the fold; every action-row and sticky-bar control ≥ 44 × 44 px at 320 px with no horizontal overflow (Playwright) |
+| 2 | Episode response fields (§6), §3.6 Information, §3.5 People, §3.7 sticky bar with both hosts | ✅ People row hidden when both sources empty; speaker chip selects the Transcript tab and scrolls without starting playback (unit test); Information omits null rows; overlay shows one 56 px header collapsed or expanded (unit test); page-mode bar pins at y = 56 under the mobile header (Playwright) |
+| 3 | Adopt `PageHero`, `ActionRow`, `MetaEyebrow`, `DefinitionList` on `PodcastDetail` and `BriefingDetail`; `stateColors` extraction; §5.1 surface tiers applied to those pages | ✅ Three detail pages share one header anatomy; no page-local circular button styles remain (`ShareButton` and the external-link actions use `Button`/`buttonClassName`) |
+| 4 | §5.7 colour tokens on the components this spec touched plus `Button`, `ListRow`, `Layout`, `MiniPlayer` | ✅ No colour literal in `index.css` outside the `:root` token block; full-page screenshot at 393 px pixel-identical to phase 3, at 1280 px identical except the right rail's loading text (a timing artefact, not a colour change) |
 
 ### 7.1 Phone height budget (393 × 852)
 
@@ -518,6 +526,26 @@ until the phase 0 prototype passes.
 3. Should `Indexed` survive anywhere on the reader for people who want to
    know entity highlighting is complete, for example as a tooltip on the key
    entities strip heading? The spec removes it entirely.
-4. Overlay mode on desktop (`lg:max-w-4xl` panel): does the hero use the
-   phone layout (centred artwork) or the desktop one? The spec proposes the
-   desktop layout since the panel is 896 px wide.
+4. Resolved: `PageHero` switches at the `sm` viewport breakpoint, so the
+   overlay panel (always wider than `sm`) gets the desktop layout.
+
+## 9. Implementation notes (2026-09-07)
+
+- **Backend**: `Episode.canonical_id` is now hydrated by both row mappers
+  (the column already existed in SQLite and Postgres; no migration).
+  `utils/episode_origin.derive_episode_origin` maps its prefix to
+  `origin`/`import_kind`; an unknown prefix is `import` with no kind and
+  never raises. The endpoint reads `podcast_author`/`podcast_language` off
+  the podcast row it already loads. The raw `canonical_id` is not exposed.
+- **Frontend structure**: `components/episode-header/` holds the
+  episode-specific composition (`EpisodeHeader`, `People`, `buildPeople`,
+  `episodeInformation`); the primitives are flat in `components/`.
+  `useCollapsingHeader` takes a callback ref because the title mounts after
+  the skeleton. `useMediaQuery`/`useIsSmUp` replaces the local hook in
+  `FloatingVideoTile`.
+- **Deferred**: the action-row overflow menu (§3.2); `DefinitionList` on
+  Settings (§5.4 names it; no phase required it); alias merging for People
+  (entity-index concern).
+- **Known pre-existing failure**: `ActiveSegmentTracker.test.tsx` fails on
+  `main` independently of this work ("reports the active id once per
+  transition"); tracked as a follow-up.

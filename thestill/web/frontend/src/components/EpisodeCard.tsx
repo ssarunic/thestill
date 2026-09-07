@@ -7,7 +7,8 @@ import { useRetryFailedEpisode } from '../hooks/useApi'
 import { EpisodeNumber } from './EpisodeNumber'
 import { ExplicitBadge } from './ExplicitBadge'
 import FailureDetailsModal from './FailureDetailsModal'
-import SmartImage from './SmartImage'
+import Artwork from './Artwork'
+import { STATE_BADGE_COLOR, STATE_LABEL } from '../utils/stateColors'
 
 interface EpisodeCardProps {
   episode: Episode | EpisodeWithPodcast
@@ -22,24 +23,6 @@ interface EpisodeCardProps {
 }
 
 const stageLabels = STAGE_LABEL_ACTIVE
-
-const stateColors: Record<string, string> = {
-  discovered: 'bg-gray-100 text-gray-600',
-  downloaded: 'bg-blue-100 text-blue-700',
-  downsampled: 'bg-indigo-100 text-indigo-700',
-  transcribed: 'bg-purple-100 text-purple-700',
-  cleaned: 'bg-amber-100 text-amber-700',
-  summarized: 'bg-green-100 text-green-700',
-}
-
-const stateLabels: Record<string, string> = {
-  discovered: 'Discovered',
-  downloaded: 'Downloaded',
-  downsampled: 'Downsampled',
-  transcribed: 'Transcribed',
-  cleaned: 'Cleaned',
-  summarized: 'Ready',
-}
 
 const failureTypeColors: Record<FailureType, string> = {
   fatal: 'bg-red-100 text-red-700 border-red-200',
@@ -81,7 +64,7 @@ export default function EpisodeCard({
   const isSelectable = onSelect !== undefined
 
   // Artwork sources in priority order - episode image, then podcast image.
-  // SmartImage self-heals broken (e.g. expired Transistor) URLs and falls back
+  // Artwork (SmartImage) self-heals broken (e.g. expired Transistor) URLs and falls back
   // down the chain before showing the placeholder.
   const episodeWithPodcast = episode as EpisodeWithPodcast
   const artworkSources = [
@@ -115,33 +98,7 @@ export default function EpisodeCard({
   const content = (
     <div className="flex items-start gap-3 sm:gap-4">
       {/* Episode artwork */}
-      <SmartImage
-        sources={artworkSources}
-        alt=""
-        width={40}
-        height={40}
-        loading="lazy"
-        className="w-10 h-10 rounded-md object-cover flex-shrink-0 aspect-square"
-        fallback={
-          <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 aspect-square ${
-            isFailed
-              ? episode.failure_type === 'fatal'
-                ? 'bg-red-100'
-                : 'bg-yellow-100'
-              : 'bg-gray-100'
-          }`}>
-            <svg className={`w-5 h-5 ${
-              isFailed
-                ? episode.failure_type === 'fatal'
-                  ? 'text-red-400'
-                  : 'text-yellow-400'
-                : 'text-gray-400'
-            }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-            </svg>
-          </div>
-        }
-      />
+      <Artwork role="rowSm" sources={artworkSources} />
 
       <div className="flex-1 min-w-0">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-2">
@@ -183,8 +140,8 @@ export default function EpisodeCard({
               )
             })()}
             {/* Always show state badge */}
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stateColors[episode.state]}`}>
-              {stateLabels[episode.state]}
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATE_BADGE_COLOR[episode.state]}`}>
+              {STATE_LABEL[episode.state]}
             </span>
           </div>
         </div>

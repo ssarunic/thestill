@@ -148,6 +148,12 @@ class Episode(BaseModel):
 
     # External identifiers
     external_id: str  # External ID from RSS feed (publisher's GUID)
+    # Spec #31 — resolver-issued dedup key for imported episodes
+    # (``audio:<sha256>``, ``youtube:<video_id>``, ``apple:<episode_id>``).
+    # ``None`` for episodes discovered from a followed feed. The prefix is
+    # the only persisted record of *how* an episode was imported; see
+    # ``utils.episode_origin`` for the mapping to a listener-facing kind.
+    canonical_id: Optional[str] = None
 
     # Episode metadata
     title: str

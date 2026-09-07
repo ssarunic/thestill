@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import SmartImage from './SmartImage'
+import Artwork from './Artwork'
 
 export interface ListRowProps {
   /**
@@ -35,7 +35,7 @@ export interface ListRowProps {
   ariaLabel?: string
   /** ``center`` for single-purpose rows, ``start`` when the body stacks lines. */
   align?: 'center' | 'start'
-  /** Weight/colour classes for the title. Defaults to ``font-medium text-gray-900``. */
+  /** Weight/colour classes for the title. Defaults to ``font-medium text-ink``. */
   titleClassName?: string
   className?: string
 }
@@ -62,7 +62,7 @@ export default function ListRow({
   busy = false,
   ariaLabel,
   align = 'center',
-  titleClassName = 'font-medium text-gray-900',
+  titleClassName = 'font-medium text-ink',
   className = '',
 }: ListRowProps) {
   const titleClasses = `block text-row sm:text-base leading-snug line-clamp-2 ${
@@ -98,7 +98,7 @@ export default function ListRow({
   return (
     <li
       aria-busy={busy || undefined}
-      className={`group relative flex gap-3 px-4 py-2.5 sm:py-3 min-h-[64px] transition-colors hover:bg-gray-50 ${
+      className={`group relative flex gap-3 px-4 py-2.5 sm:py-3 min-h-[64px] transition-colors hover:bg-page ${
         align === 'center' ? 'items-center' : 'items-start'
       } ${busy ? 'opacity-70' : ''} ${className}`}
     >
@@ -112,7 +112,7 @@ export default function ListRow({
         {overline}
         {titleNode}
         {subtitle !== undefined && subtitle !== null && (
-          <div className="mt-0.5 text-xs sm:text-sm text-gray-500 truncate">{subtitle}</div>
+          <div className="mt-0.5 text-xs sm:text-sm text-muted truncate">{subtitle}</div>
         )}
         {footer}
       </div>
@@ -135,27 +135,7 @@ interface ListRowArtworkProps {
   className?: string
 }
 
-/** Standard square thumbnail with the generic-podcast placeholder. */
+/** Standard square row thumbnail — the ``row`` / ``rowSm`` roles of ``Artwork`` (spec #76 §5.8). */
 export function ListRowArtwork({ sources, size = 12, className = '' }: ListRowArtworkProps) {
-  const box = size === 12 ? 'w-12 h-12' : 'w-10 h-10'
-  return (
-    <SmartImage
-      sources={sources}
-      alt=""
-      width={size * 4}
-      height={size * 4}
-      loading="lazy"
-      className={`${box} rounded-md object-cover shrink-0 aspect-square bg-gray-100 ${className}`}
-      fallback={
-        <div
-          aria-hidden="true"
-          className={`${box} rounded-md shrink-0 aspect-square bg-gradient-to-br from-primary-100 to-secondary-100 flex items-center justify-center ${className}`}
-        >
-          <svg className="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-          </svg>
-        </div>
-      }
-    />
-  )
+  return <Artwork role={size === 12 ? 'row' : 'rowSm'} sources={sources} className={className} />
 }

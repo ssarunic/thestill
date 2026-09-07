@@ -8,6 +8,8 @@
  * - Neither: returns null
  */
 
+import { episodeNumberLabel } from '../utils/episodeFormat'
+
 interface EpisodeNumberProps {
   seasonNumber?: number | null
   episodeNumber?: number | null
@@ -19,16 +21,8 @@ export function EpisodeNumber({
   episodeNumber,
   className = '',
 }: EpisodeNumberProps) {
-  if (!seasonNumber && !episodeNumber) return null
-
-  let label = ''
-  if (seasonNumber && episodeNumber) {
-    label = `S${seasonNumber} E${episodeNumber}`
-  } else if (episodeNumber) {
-    label = `E${episodeNumber}`
-  } else if (seasonNumber) {
-    label = `S${seasonNumber}`
-  }
+  const label = episodeNumberLabel(seasonNumber, episodeNumber)
+  if (!label) return null
 
   return (
     <span

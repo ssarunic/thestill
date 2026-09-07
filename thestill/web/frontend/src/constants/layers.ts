@@ -24,3 +24,6 @@ export const PLAYER_HEIGHT_VAR = '--player-h'
 export function abovePlayer(gap = '0px'): string {
   return gap === '0px' ? `var(${PLAYER_HEIGHT_VAR}, 0px)` : `calc(var(${PLAYER_HEIGHT_VAR}, 0px) + ${gap})`
 }
+
+/** Height of the fixed mobile shell header (``MobileHeader``, ``h-14``); ``Layout`` pads ``main`` by it below ``sm``. */
+export const MOBILE_HEADER_HEIGHT = 56

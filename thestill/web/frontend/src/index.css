@@ -1,6 +1,29 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/* Spec #76 §3.1 — the blurred hero backdrop is decorative and switches off
+   for readers who asked for reduced transparency. */
+@custom-variant transparency-reduce (@media (prefers-reduced-transparency: reduce));
+
+/* Spec #76 §5.7 — colour tokens, the dark-mode prerequisite. This block is
+   the only place a colour is written down in this file; every rule and the
+   ``page``/``surface``/``ink``/``muted``/``hairline``/``accent`` utilities in
+   tailwind.config.js read these. Values are Tailwind's own stops (gray-50,
+   white, gray-900, gray-500, gray-200, primary-900) copied verbatim so light
+   rendering is unchanged; a future ``[data-theme="dark"]`` overrides them. */
+:root {
+  --bg: oklch(98.5% 0.002 247.839);
+  --surface: #ffffff;
+  --text: oklch(21% 0.034 264.665);
+  --text-muted: oklch(55.1% 0.027 264.364);
+  --border: oklch(92.8% 0.006 264.531);
+  --accent: #1a365d;
+  --accent-contrast: #ffffff;
+  --scrollbar-track: #f1f1f1;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-thumb-hover: #a1a1a1;
+}
+
 /* Preserve Tailwind v3 default border color (v4 changed it to currentColor). */
 @layer base {
   *,
@@ -8,7 +31,7 @@
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentColor);
+    border-color: var(--border);
   }
 }
 
@@ -19,16 +42,16 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Smooth scrolling */
@@ -38,7 +61,7 @@ html {
 
 /* Base styles */
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-page text-ink antialiased;
 }
 
 /* Transcript styling - mobile optimized */

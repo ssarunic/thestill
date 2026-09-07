@@ -77,6 +77,23 @@ describe('EntityBranchProgress', () => {
     expect(screen.queryByTestId('entity-branch-progress')).toBeNull()
   })
 
+  it('renders nothing once complete when hideWhenComplete is set (spec #76 §3.4)', () => {
+    withTasks([
+      task('extract-entities', 'completed'),
+      task('resolve-entities', 'completed'),
+      task('reindex', 'completed'),
+    ])
+    const { container } = render(<EntityBranchProgress tasks={currentTasks} episodeId="ep1" hideWhenComplete />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('still shows the strip while running or failed when hideWhenComplete is set', () => {
+    withTasks([task('extract-entities', 'completed'), task('resolve-entities', 'failed')])
+    render(<EntityBranchProgress tasks={currentTasks} episodeId="ep1" hideWhenComplete className="mx-4" />)
+    expect(screen.getByTestId('entity-branch-progress')).toHaveClass('mx-4')
+    expect(screen.getByText('Indexing incomplete')).toBeInTheDocument()
+  })
+
   it('keeps the full strip visible when collapseWhenIdle is false', () => {
     withTasks([
       task('extract-entities', 'completed'),
