@@ -315,11 +315,21 @@ class SqliteInboxRepository(InboxRepository):
         since: datetime,
         until: datetime,
         states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+        read_since: Optional[datetime] = None,
     ) -> List[str]:
         state_list = tuple(states)
-        if not state_list:
+        if not state_list and read_since is None:
             return []
-        placeholders = ",".join("?" for _ in state_list)
+        clauses: List[str] = []
+        params: List[object] = [user_id, since.isoformat(), until.isoformat()]
+        if state_list:
+            placeholders = ",".join("?" for _ in state_list)
+            clauses.append(f"state IN ({placeholders})")
+            params.extend(state_list)
+        if read_since is not None:
+            clauses.append("(state = 'read' AND state_changed_at >= ?)")
+            params.append(read_since.isoformat())
+        state_filter = " OR ".join(clauses)
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
@@ -328,10 +338,10 @@ class SqliteInboxRepository(InboxRepository):
                  WHERE user_id = ?
                    AND delivered_at >= ?
                    AND delivered_at < ?
-                   AND state IN ({placeholders})
+                   AND ({state_filter})
                  ORDER BY delivered_at ASC
                 """,
-                (user_id, since.isoformat(), until.isoformat(), *state_list),
+                params,
             ).fetchall()
             return [row["episode_id"] for row in rows]
 

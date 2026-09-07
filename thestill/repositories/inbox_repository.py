@@ -126,10 +126,17 @@ class InboxRepository(ABC):
         since: datetime,
         until: datetime,
         states: Iterable[InboxState] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+        read_since: Optional[datetime] = None,
     ) -> List[str]:
         """
         Return episode IDs of inbox rows delivered in ``[since, until)`` whose
         ``state`` is in ``states``, ordered oldest-delivered first.
+
+        ``read_since`` additionally admits ``read`` rows whose
+        ``state_changed_at`` is at or after it. Narration uses this with the
+        briefing's ``created_at`` so an episode read *after* the cut still
+        narrates, while one read *before* the cut (never counted by the
+        briefing) stays out.
 
         Used by the briefing path (spec #36) to compose the candidate set for
         a single briefing window.

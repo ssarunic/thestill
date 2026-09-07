@@ -31,7 +31,7 @@ from typing import List, Optional, Tuple
 from structlog import get_logger
 
 from ...models.briefing import Briefing
-from ...models.inbox import InboxState
+from ...models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxState
 from ...models.podcast import Episode, Podcast
 from ...repositories.briefing_repository import BriefingRepository
 from ...repositories.inbox_repository import InboxRepository
@@ -42,11 +42,14 @@ from .narration_generator import NarrationConfig, NarrationGenerator
 logger = get_logger(__name__)
 
 # States considered when re-resolving a briefing's episodes for narration.
-# The briefing was generated over ``unread``/``saved`` rows; ``read`` is
-# included here so an episode the user read *after* generation still
-# narrates (the briefing covered it). ``dismissed`` stays excluded — a
+# The briefing was generated over ``unread``/``saved`` rows. ``read`` rows
+# are admitted only when they flipped to read *after* the briefing was cut
+# (``read_since=briefing.created_at``): the briefing covered those, so they
+# still narrate. Rows already read before the cut were never counted by the
+# briefing and must not resurface here, or the narration lists more
+# episodes than the briefing claims. ``dismissed`` stays excluded — a
 # negative signal (spec #36).
-_NARRATION_STATES: tuple[InboxState, ...] = ("unread", "saved", "read")
+_NARRATION_STATES: tuple[InboxState, ...] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING
 
 
 class NarrationRunnerError(Exception):
@@ -164,6 +167,7 @@ class NarrationRunner:
             since=briefing.cursor_from,
             until=briefing.cursor_to,
             states=_NARRATION_STATES,
+            read_since=briefing.created_at,
         )
         # Spec #69 Phase 8.2 — batched lookup, order preserved (see
         # briefing_renderer for the same pattern).

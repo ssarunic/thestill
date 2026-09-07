@@ -692,6 +692,60 @@ def test_list_episode_ids_in_window_empty_states_returns_empty(env):
     assert env.repo.list_episode_ids_in_window(user, since=BASE, until=BASE + timedelta(hours=1), states=()) == []
 
 
+def test_list_episode_ids_in_window_read_since_admits_only_post_cut_reads(env):
+    """Narration path: a row read *after* the briefing cut still narrates;
+    one read *before* the cut was never counted by the briefing and stays
+    out. ``dismissed`` is never admitted by ``read_since``.
+    """
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+    ep_unread = env.add_episode(podcast, "unread-ep")
+    ep_read_before = env.add_episode(podcast, "read-before-cut")
+    ep_read_at_cut = env.add_episode(podcast, "read-at-cut")
+    ep_read_after = env.add_episode(podcast, "read-after-cut")
+    ep_dismissed_after = env.add_episode(podcast, "dismissed-after-cut")
+    cut = BASE + timedelta(minutes=30)
+    until = BASE + timedelta(hours=1)
+
+    env.repo.insert_many(
+        [
+            _entry(user, ep_unread, state="unread", delivered_at=BASE),
+            _entry(
+                user,
+                ep_read_before,
+                state="read",
+                delivered_at=BASE + timedelta(minutes=1),
+                state_changed_at=cut - timedelta(minutes=1),
+            ),
+            _entry(user, ep_read_at_cut, state="read", delivered_at=BASE + timedelta(minutes=2), state_changed_at=cut),
+            _entry(
+                user,
+                ep_read_after,
+                state="read",
+                delivered_at=BASE + timedelta(minutes=3),
+                state_changed_at=cut + timedelta(minutes=5),
+            ),
+            _entry(
+                user,
+                ep_dismissed_after,
+                state="dismissed",
+                delivered_at=BASE + timedelta(minutes=4),
+                state_changed_at=cut + timedelta(minutes=5),
+            ),
+        ]
+    )
+
+    ids = env.repo.list_episode_ids_in_window(user, since=BASE, until=until, read_since=cut)
+    assert ids == [ep_unread, ep_read_at_cut, ep_read_after]
+
+    # Without ``read_since`` the briefing-cut semantics are unchanged.
+    assert env.repo.list_episode_ids_in_window(user, since=BASE, until=until) == [ep_unread]
+
+    # ``read_since`` alone (empty ``states``) still yields the post-cut reads.
+    ids = env.repo.list_episode_ids_in_window(user, since=BASE, until=until, states=(), read_since=cut)
+    assert ids == [ep_read_at_cut, ep_read_after]
+
+
 # ---------------------------------------------------------------------------
 # count_imports_for_user_since (quota plumbing)
 # ---------------------------------------------------------------------------
