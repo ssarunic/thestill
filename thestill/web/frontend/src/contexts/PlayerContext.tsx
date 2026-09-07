@@ -136,6 +136,12 @@ export interface PlayerContextValue {
   // not pathname). Returns an unregister function.
   registerTheaterSlot: (episodeId: string, el: HTMLElement) => () => void
   registerFloatingSlot: (el: HTMLElement) => () => void
+  // Spec #72 2c — synchronous "is a theater slot registered right now?" for
+  // a would-be second host (the phone Now Playing sheet) to yield to the
+  // reader's slot instead of stealing it. A getter, not state: reactive
+  // state would re-run the sheet's registration effect on its own
+  // registration and oscillate.
+  hasTheaterSlot: () => boolean
   // Native PiP — user-initiated, progressive enhancement only (§2).
   // Browser state is authoritative: pipActive follows the
   // enter/leavepictureinpicture events, never assumptions.
@@ -642,6 +648,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const hasTheaterSlot = useCallback(() => theaterSlotRef.current !== null, [])
+
   const registerFloatingSlot = useCallback((el: HTMLElement) => {
     // The ref is written synchronously so the §7 compliance effect (which
     // runs after child effects in the same commit) can distinguish "tile
@@ -861,6 +869,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       playYouTube,
       registerTheaterSlot,
       registerFloatingSlot,
+      hasTheaterSlot,
       // PiP is a native-engine feature; while the iframe renders, the
       // affordance disappears rather than silently failing (spec #62 §7).
       pipSupported: pipSupported && activeEngine !== 'youtube',
@@ -899,6 +908,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       playYouTube,
       registerTheaterSlot,
       registerFloatingSlot,
+      hasTheaterSlot,
       pipSupported,
       pipActive,
       requestPip,

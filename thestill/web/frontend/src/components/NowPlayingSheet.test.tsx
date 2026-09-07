@@ -81,26 +81,48 @@ const track: PlayerTrack = {
 }
 const episodePath = '/podcasts/pod/episodes/ep-1-slug'
 
-function renderSheet(initialPath = '/inbox', props: { isOpen?: boolean; onClose?: () => void } = {}) {
-  const onClose = props.onClose ?? vi.fn()
-  const utils = render(
+const videoTrack: PlayerTrack = {
+  ...track,
+  episodeId: 'ep-video',
+  episodeSlug: 'ep-video-slug',
+  audioUrl: 'https://cdn.test/ep2.mp4',
+  playback: {
+    kind: 'video',
+    video: { url: 'https://cdn.test/ep2.mp4', mime_type: 'video/mp4', timeline_offset: 0 },
+    audio: { url: 'https://cdn.test/ep2.mp3', mime_type: 'audio/mpeg', timeline_offset: 0 },
+    poster_url: null,
+    captions_url: null,
+  },
+}
+
+function tree(initialPath: string, isOpen: boolean, onClose: () => void) {
+  return (
     <MemoryRouter initialEntries={[initialPath]}>
       <PlayerProvider>
         <Probe />
         <Routes>
           <Route path="*" element={<LocationProbe />} />
         </Routes>
-        <button type="button" aria-haspopup="dialog" aria-expanded={props.isOpen ?? true}>
+        <button type="button" aria-haspopup="dialog" aria-expanded={isOpen}>
           opener
         </button>
         <button type="button">elsewhere</button>
-        <NowPlayingSheet isOpen={props.isOpen ?? true} onClose={onClose} />
+        <NowPlayingSheet isOpen={isOpen} onClose={onClose} />
       </PlayerProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
-  const video = document.querySelector('video') as HTMLVideoElement
-  return { ...utils, onClose, video }
 }
+
+function renderSheet(initialPath = '/inbox', props: { isOpen?: boolean; onClose?: () => void } = {}) {
+  const onClose = props.onClose ?? vi.fn()
+  const isOpen = props.isOpen ?? true
+  const utils = render(tree(initialPath, isOpen, onClose))
+  const video = document.querySelector('video') as HTMLVideoElement
+  const setOpen = (open: boolean) => utils.rerender(tree(initialPath, open, onClose))
+  return { ...utils, onClose, video, setOpen }
+}
+
+const mediaLayer = () => document.querySelector('[data-testid="player-media-layer"]') as HTMLElement
 
 // Minimal media stubs so toggle/setRate/seek have observable effects in jsdom.
 const state = { paused: true, rate: 1, time: 0 }
@@ -270,6 +292,52 @@ describe('NowPlayingSheet (spec #72)', () => {
     await userEvent.click(toggle)
     expect(screen.getByRole('button', { name: 'Following playback' })).toHaveAttribute('aria-pressed', 'true')
     expect(localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
+  })
+
+  it('phone: hosts the video when nothing else presents it, and releases it on close (2c)', () => {
+    isSmUp.current = false
+    const { setOpen } = renderSheet()
+    act(() => ctx.play(videoTrack))
+    expect(screen.getByTestId('now-playing-video-slot')).toBeInTheDocument()
+    expect(ctx.presentation).toBe('theater')
+    expect(mediaLayer().style.zIndex).toBe('71')
+
+    act(() => setOpen(false))
+    // The slot is released: the machine falls back to `floating`, which on a
+    // phone presents nothing (the tile is desktop-only) — audio-first, still
+    // playing.
+    expect(ctx.presentation).toBe('floating')
+    expect(mediaLayer().style.visibility).toBe('hidden')
+    expect(ctx.isPlaying).toBe(true)
+  })
+
+  it('phone: yields to a theater slot the reader already holds (2c)', () => {
+    isSmUp.current = false
+    const { setOpen } = renderSheet('/inbox', { isOpen: false })
+    act(() => ctx.play(videoTrack))
+    const readerSlot = document.createElement('div')
+    document.body.appendChild(readerSlot)
+    act(() => {
+      ctx.registerTheaterSlot('ep-video', readerSlot)
+    })
+    expect(mediaLayer().style.zIndex).toBe('40')
+
+    act(() => setOpen(true))
+    expect(ctx.presentation).toBe('theater')
+    expect(mediaLayer().style.zIndex).toBe('40') // still the reader's slot
+  })
+
+  it('desktop: no video slot; Hide/Show video toggles the visual preference (2c)', async () => {
+    renderSheet()
+    act(() => ctx.play(videoTrack))
+    expect(screen.queryByTestId('now-playing-video-slot')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Hide video' }))
+    expect(ctx.videoPreference).toBe('audio-only')
+    await userEvent.click(screen.getByRole('button', { name: 'Show video' }))
+    expect(ctx.videoPreference).toBe('shown')
+    // Audio-only tracks get neither chip.
+    act(() => ctx.play(track))
+    expect(screen.queryByRole('button', { name: /video/i })).not.toBeInTheDocument()
   })
 
   it('closing never touches playback', () => {

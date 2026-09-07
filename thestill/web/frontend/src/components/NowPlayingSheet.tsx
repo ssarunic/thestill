@@ -69,6 +69,26 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const active = isOpen && track !== null
   const [followPlayback, setFollowPlayback] = useFollowPlayback()
 
+  // Spec #72 2c — on a phone there is no floating tile, so when the session
+  // has a visual rendition and nothing presents it, the sheet's header hosts
+  // the video: it registers a theater slot (spec #61 §3) and the media layer
+  // positions the stable node over it, one rung above the sheet (layers.ts).
+  // It yields to a slot the reader already holds — the reader is the primary
+  // surface — and unregisters on close, at which point the existing #62 §7
+  // effect drops a YouTube session to audio exactly as leaving the reader does.
+  const videoPresentable =
+    track !== null && ((player.mediaKind === 'video' && player.activeRendition === 'video') || player.activeEngine === 'youtube')
+  const hostVideo = active && isPhone && videoPresentable && player.videoPreference === 'shown'
+  const videoSlotRef = useRef<HTMLDivElement>(null)
+  const episodeId = track?.episodeId
+  const { registerTheaterSlot, hasTheaterSlot } = player
+  useEffect(() => {
+    const el = videoSlotRef.current
+    if (!hostVideo || !el || !episodeId) return
+    if (hasTheaterSlot()) return
+    return registerTheaterSlot(episodeId, el)
+  }, [hostVideo, episodeId, hasTheaterSlot, registerTheaterSlot])
+
   // Spec #72 §2 entity ticks — the #28 §5.2 density timeline's home. Same
   // query key as the reader, so the cache entry is shared; fetched only
   // while the sheet is open.
@@ -181,7 +201,8 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
   if (!active || !track) return null
 
-  const { isPlaying, isLoading, playbackRate, availableRates, mediaError, volume, muted } = player
+  const { isPlaying, isLoading, playbackRate, availableRates, mediaError, volume, muted, videoPreference, pipSupported, pipActive } = player
+  const hasVisualRendition = player.mediaKind === 'video' || player.activeEngine === 'youtube'
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const busy = isLoading && !isPlaying
 
@@ -222,9 +243,17 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
       )}
 
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2 sm:px-5 sm:pt-4">
+        {hostVideo && (
+          <div
+            ref={videoSlotRef}
+            data-testid="now-playing-video-slot"
+            className="mb-4 aspect-video w-full overflow-hidden rounded-lg bg-black"
+          />
+        )}
+
         {/* Header */}
         <div className="flex items-start gap-4">
-          <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />
+          {!hostVideo && <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />}
           <div className="min-w-0 flex-1">
             <Link
               to={episodePath}
@@ -315,6 +344,20 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           >
             {followPlayback ? 'Following playback' : 'Follow playback'}
           </Button>
+          {hasVisualRendition && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => player.setVideoPreference(videoPreference === 'shown' ? 'audio-only' : 'shown')}
+            >
+              {videoPreference === 'shown' ? 'Hide video' : 'Show video'}
+            </Button>
+          )}
+          {pipSupported && videoPresentable && (
+            <Button size="sm" variant="secondary" onClick={player.requestPip}>
+              {pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
+            </Button>
+          )}
         </div>
 
         {/* Volume — pointer devices only; phones use the hardware rocker. */}
