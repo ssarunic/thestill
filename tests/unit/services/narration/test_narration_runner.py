@@ -63,8 +63,10 @@ class _InboxRepo:
         self._episode_ids = episode_ids
         self.calls: List[dict] = []
 
-    def list_episode_ids_in_window(self, user_id, *, since, until, states=None) -> List[str]:
-        self.calls.append({"user_id": user_id, "since": since, "until": until, "states": states})
+    def list_episode_ids_in_window(self, user_id, *, since, until, states=None, read_since=None) -> List[str]:
+        self.calls.append(
+            {"user_id": user_id, "since": since, "until": until, "states": states, "read_since": read_since}
+        )
         return list(self._episode_ids)
 
 
@@ -197,9 +199,10 @@ def test_artifact_exists_tracks_written_narrations(storage: PathManager, file_st
 
 
 def test_runner_resolves_episodes_from_briefing_cursor_window(storage: PathManager, file_storage) -> None:
-    """The episode set comes from the briefing's inbox cursor window,
-    including ``read`` rows (an episode read after generation still
-    narrates) but never ``dismissed``.
+    """The episode set comes from the briefing's inbox cursor window:
+    ``unread``/``saved`` rows plus ``read`` rows that flipped to read
+    after the briefing was cut (``read_since=created_at``), never
+    ``dismissed`` and never rows already read before the cut.
     """
     from thestill.services.narration.models import Segment, ThemePlan
 
@@ -223,7 +226,8 @@ def test_runner_resolves_episodes_from_briefing_cursor_window(storage: PathManag
     assert call["user_id"] == "user-1"
     assert call["since"] == _WINDOW_START
     assert call["until"] == _WINDOW_END
-    assert call["states"] == ("unread", "saved", "read")
+    assert call["states"] == ("unread", "saved")
+    assert call["read_since"] == _WINDOW_END  # == briefing.created_at
 
 
 def test_runner_captures_latency_ms_and_briefing_id(storage: PathManager, file_storage) -> None:
