@@ -13,6 +13,13 @@ Operational assets for running thestill on one EC2 instance:
 The last four are fetched onto the instance by `thestill-aws launch`; they
 also work standalone if you provision by hand.
 
+Tag-triggered deploys live in
+[`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml): a
+`v*` tag runs `thestill-aws reconcile` from a GitHub runner via an OIDC
+role that `thestill-aws github-oidc` creates. The runner reads the
+deployment state from the SSM parameter `/thestill/deploy/state` instead
+of a local `~/.thestill/aws-state.json`.
+
 The step-by-step runbook — provisioning, first deploy, data migration,
 backup/restore drill, upgrades — lives in
 [docs/aws-deployment.md](../../docs/aws-deployment.md). Design rationale and

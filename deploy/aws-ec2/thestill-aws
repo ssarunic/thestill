@@ -12,6 +12,8 @@ Usage:
     thestill-aws launch                                # EC2 + cloud-init bootstrap
     thestill-aws dns                                   # Route53 A record -> instance
     thestill-aws reconcile [--image-tag T]             # re-apply on-box config / upgrade
+    thestill-aws github-oidc [--environment production]
+    thestill-aws state show|push [--force]
     thestill-aws status                                # instance + bootstrap + health
     thestill-aws logs [--service thestill] [--lines N]
     thestill-aws ssh                                   # SSM Session Manager shell
@@ -58,6 +60,7 @@ if sys.version_info < (3, 10):  # noqa: UP036 — runtime guard against a 3.9 sh
 
 import argparse
 import json
+import os
 import re
 import secrets as pysecrets
 import shlex
@@ -72,7 +75,7 @@ from typing import Any, NoReturn, Optional
 
 try:
     import boto3
-    from botocore.exceptions import ClientError, WaiterError
+    from botocore.exceptions import BotoCoreError, ClientError, WaiterError
 except ImportError:  # pragma: no cover - environment guard
     sys.stderr.write(
         "boto3 is not installed. Install it with:\n" "  ./venv/bin/pip install boto3      # or: uv sync --extra s3\n"
@@ -92,6 +95,22 @@ DEFAULT_REGION = "eu-west-2"
 INSTANCE_TYPE = "t4g.medium"
 ROOT_VOLUME_SIZE = 30
 SSM_PREFIX = "/thestill/prod/"
+# Deployment state mirrored to SSM so a second laptop or a CI runner can
+# `reconcile` without ~/.thestill/aws-state.json. Deliberately OUTSIDE
+# SSM_PREFIX: fetch-secrets.sh materializes everything under that prefix
+# into the box's .env, and the instance role can only read that prefix.
+DEPLOY_STATE_PARAM = "/thestill/deploy/state"
+# GitHub Actions OIDC federation for the tag-triggered deploy workflow.
+GITHUB_OIDC_HOST = "token.actions.githubusercontent.com"
+GITHUB_OIDC_AUDIENCE = "sts.amazonaws.com"
+# AWS validates GitHub's certificate against its trusted root store now and
+# ignores these, but older SDKs still require the field to be present.
+GITHUB_OIDC_THUMBPRINTS = (
+    "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "1c58a3a8518e8759bf075b76b750d4f2df264fcd",
+)
+GITHUB_DEPLOY_ROLE = f"{NAME_PREFIX}-github-deploy"
+DEFAULT_GITHUB_ENVIRONMENT = "production"
 
 # AL2023 arm64, resolved through the public SSM parameter so we never pin a
 # stale AMI id (Graviton — the image is arm64 and so is the prod container).
@@ -237,19 +256,85 @@ class Deployment:
     created_at: str = ""
 
 
+def _state_from_dict(data: dict) -> Deployment:
+    # Filter unknown keys so an older state file still loads forward.
+    known = {f.name for f in fields(Deployment)}
+    return Deployment(**{k: v for k, v in data.items() if k in known})
+
+
+def _state_region(hint: str = "") -> str:
+    """Region to look the mirrored state up in, before we have the state
+    (which is where the region normally lives)."""
+    return (
+        hint
+        or os.environ.get("THESTILL_AWS_REGION", "")
+        or os.environ.get("AWS_REGION", "")
+        or os.environ.get("AWS_DEFAULT_REGION", "")
+        or DEFAULT_REGION
+    )
+
+
+def push_state(state: Deployment) -> bool:
+    """Mirror the state to SSM. Warns and returns False on failure rather
+    than failing a command that has just changed real resources."""
+    try:
+        client("ssm", state.region).put_parameter(
+            Name=DEPLOY_STATE_PARAM,
+            Type="String",
+            Value=json.dumps(asdict(state)),
+            Overwrite=True,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        warn(f"Could not mirror deployment state to SSM {DEPLOY_STATE_PARAM}: {exc}")
+        return False
+    return True
+
+
 def save_state(state: Deployment) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     STATE_FILE.write_text(json.dumps(asdict(state), indent=2) + "\n")
     STATE_FILE.chmod(0o600)
+    push_state(state)
 
 
-def load_state() -> Optional[Deployment]:
+def _load_local_state() -> Optional[Deployment]:
     if not STATE_FILE.exists():
         return None
-    data = json.loads(STATE_FILE.read_text() or "{}")
-    # Filter unknown keys so an older state file still loads forward.
-    known = {f.name for f in fields(Deployment)}
-    return Deployment(**{k: v for k, v in data.items() if k in known})
+    return _state_from_dict(json.loads(STATE_FILE.read_text() or "{}"))
+
+
+def _load_remote_state(region: str) -> Optional[Deployment]:
+    try:
+        resp = client("ssm", region).get_parameter(Name=DEPLOY_STATE_PARAM)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ParameterNotFound":
+            return None
+        raise
+    return _state_from_dict(json.loads(resp["Parameter"]["Value"] or "{}"))
+
+
+def load_state_with_source(region_hint: str = "") -> tuple[Optional[Deployment], str]:
+    """SSM first, the local file as a fallback cache. Returns (state, source).
+
+    SSM wins because it is shared: after CI reconciles to a new tag, a
+    laptop whose local copy still says the old tag would otherwise roll
+    prod back with a bare ``reconcile``. The local file only serves when
+    SSM is unreachable (no credentials, offline) or not seeded yet.
+    """
+    local = _load_local_state()
+    region = _state_region(region_hint or (local.region if local else ""))
+    try:
+        remote = _load_remote_state(region)
+    except (ClientError, BotoCoreError) as exc:
+        warn(f"Deployment state in SSM is unreadable ({exc.__class__.__name__}: {exc})")
+        return (local, f"local cache {STATE_FILE}") if local else (None, "")
+    if remote is not None:
+        return remote, f"SSM {DEPLOY_STATE_PARAM} ({region})"
+    return (local, f"local cache {STATE_FILE}") if local else (None, "")
+
+
+def load_state(region_hint: str = "") -> Optional[Deployment]:
+    return load_state_with_source(region_hint)[0]
 
 
 def require_state() -> Deployment:
@@ -1064,7 +1149,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         if alias not in aliases:
             aliases.append(alias)
 
-    existing = load_state()
+    existing = load_state(region)
     if existing and existing.instance_id:
         log("Existing deployment found — verifying infrastructure")
 
@@ -1538,15 +1623,226 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
     log("Reconcile complete. Check 'thestill-aws status'.")
 
 
+# ---------------------------------------------------------------------------
+# GitHub Actions OIDC (tag-triggered deploys, .github/workflows/deploy.yml)
+# ---------------------------------------------------------------------------
+
+
+def _github_trust_policy(provider_arn: str, environment: str) -> dict:
+    """Only this repo's workflow runs that target ``environment`` may assume
+    the role — a fork, another repo, or a plain branch build cannot."""
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"Federated": provider_arn},
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {
+                        f"{GITHUB_OIDC_HOST}:aud": GITHUB_OIDC_AUDIENCE,
+                        f"{GITHUB_OIDC_HOST}:sub": f"repo:{GITHUB_REPO}:environment:{environment}",
+                    }
+                },
+            }
+        ],
+    }
+
+
+def _github_deploy_policy(region: str, account: str) -> dict:
+    """Least privilege for ``reconcile`` + ``status``: find the tagged
+    instance, run the bootstrap on it, read/write the mirrored state.
+    Nothing here can launch, stop or terminate anything, read a secret
+    under SSM_PREFIX, or touch the backup bucket."""
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "DiscoverInstance",
+                "Effect": "Allow",
+                "Action": ["ec2:DescribeInstances"],
+                "Resource": "*",
+            },
+            {
+                "Sid": "RunShellOnAppInstanceOnly",
+                "Effect": "Allow",
+                "Action": ["ssm:SendCommand"],
+                "Resource": f"arn:aws:ec2:{region}:{account}:instance/*",
+                "Condition": {"StringEquals": {f"ssm:resourceTag/{NAME_PREFIX}:role": "app"}},
+            },
+            {
+                "Sid": "RunShellDocument",
+                "Effect": "Allow",
+                "Action": ["ssm:SendCommand"],
+                "Resource": f"arn:aws:ssm:{region}::document/AWS-RunShellScript",
+            },
+            {
+                "Sid": "ReadCommandOutput",
+                "Effect": "Allow",
+                "Action": ["ssm:GetCommandInvocation"],
+                "Resource": "*",
+            },
+            {
+                "Sid": "DeployState",
+                "Effect": "Allow",
+                "Action": ["ssm:GetParameter", "ssm:PutParameter"],
+                "Resource": f"arn:aws:ssm:{region}:{account}:parameter{DEPLOY_STATE_PARAM}",
+            },
+        ],
+    }
+
+
+def ensure_github_oidc_provider(region: str) -> str:
+    """Get-or-create the account-wide GitHub OIDC identity provider."""
+    iam = client("iam")
+    arn = f"arn:aws:iam::{account_id(region)}:oidc-provider/{GITHUB_OIDC_HOST}"
+    try:
+        iam.get_open_id_connect_provider(OpenIDConnectProviderArn=arn)
+        log("GitHub OIDC identity provider already exists")
+        return arn
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "NoSuchEntity":
+            raise
+    log("Creating the GitHub OIDC identity provider")
+    iam.create_open_id_connect_provider(
+        Url=f"https://{GITHUB_OIDC_HOST}",
+        ClientIDList=[GITHUB_OIDC_AUDIENCE],
+        ThumbprintList=list(GITHUB_OIDC_THUMBPRINTS),
+        Tags=[{"Key": "Project", "Value": NAME_PREFIX}],
+    )
+    audit("oidc_provider_created", host=GITHUB_OIDC_HOST)
+    return arn
+
+
+def cmd_github_oidc(args: argparse.Namespace) -> None:
+    """Create/converge the IAM role GitHub Actions assumes to deploy tags."""
+    state, source = load_state_with_source()
+    if state is None:
+        die("No deployment found. Run 'thestill-aws setup --domain <your-domain>' first.")
+    region = state.region
+    account = account_id(region)
+    environment = args.environment.strip()
+    if not environment:
+        die("--environment must not be empty")
+
+    provider_arn = ensure_github_oidc_provider(region)
+    iam = client("iam")
+    trust = json.dumps(_github_trust_policy(provider_arn, environment))
+    try:
+        role_arn = iam.get_role(RoleName=GITHUB_DEPLOY_ROLE)["Role"]["Arn"]
+        log(f"IAM role {GITHUB_DEPLOY_ROLE} already exists — converging its trust policy")
+        iam.update_assume_role_policy(RoleName=GITHUB_DEPLOY_ROLE, PolicyDocument=trust)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "NoSuchEntity":
+            raise
+        log(f"Creating IAM role: {GITHUB_DEPLOY_ROLE}")
+        role_arn = iam.create_role(
+            RoleName=GITHUB_DEPLOY_ROLE,
+            AssumeRolePolicyDocument=trust,
+            Description=f"GitHub Actions deploys of {GITHUB_REPO} tags (thestill-aws reconcile)",
+            MaxSessionDuration=3600,
+            Tags=[{"Key": "Project", "Value": NAME_PREFIX}],
+        )["Role"]["Arn"]
+        audit("iam_role_created", role=GITHUB_DEPLOY_ROLE)
+    iam.put_role_policy(
+        RoleName=GITHUB_DEPLOY_ROLE,
+        PolicyName=f"{NAME_PREFIX}-github-deploy",
+        PolicyDocument=json.dumps(_github_deploy_policy(region, account)),
+    )
+
+    # The runner has no ~/.thestill; it reads the state from SSM. Seed it
+    # from the laptop's copy if that has not happened yet.
+    if not source.startswith("SSM"):
+        if push_state(state):
+            log(f"Seeded {DEPLOY_STATE_PARAM} from {source}")
+        else:
+            die("Could not seed the deployment state in SSM — the workflow cannot run without it.")
+
+    audit("github_oidc_converged", role=GITHUB_DEPLOY_ROLE, environment=environment)
+    log(f"Role ready: {role_arn}")
+    print(
+        "\nNext:\n"
+        f"  gh variable set AWS_DEPLOY_ROLE_ARN --body {role_arn}\n"
+        "  git tag v<version> && git push origin v<version>     # deploys via .github/workflows/deploy.yml\n"
+        f"  (the '{environment}' GitHub environment is created on the first run; add required reviewers there\n"
+        "   if you want a manual approval gate)"
+    )
+
+
+def cmd_state(args: argparse.Namespace) -> None:
+    if args.action == "show":
+        state, source = load_state_with_source()
+        if state is None:
+            die("No deployment state locally or in SSM.")
+        log(f"Deployment state from {source}")
+        print(_indent(json.dumps(asdict(state), indent=2)))
+        return
+
+    # push: seed or overwrite the SSM mirror from the local file.
+    local = _load_local_state()
+    if local is None:
+        die(f"No local state at {STATE_FILE} to push.")
+    remote = _load_remote_state(local.region)
+    if remote is not None and remote != local and not args.force:
+        die(
+            f"SSM {DEPLOY_STATE_PARAM} already holds a different state (image_tag={remote.image_tag}, "
+            f"local={local.image_tag}). It may be newer — a CI deploy updates SSM, not this laptop.\n"
+            "Re-run with --force to overwrite it."
+        )
+    if not push_state(local):
+        die("Push failed.")
+    audit("state_pushed", region=local.region, image_tag=local.image_tag)
+    log(f"Mirrored {STATE_FILE} to SSM {DEPLOY_STATE_PARAM} ({local.region})")
+
+
+_COMPOSE_PS = (
+    f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml ps --format "
+    "'{{.Service}} {{.State}} {{.Status}} {{.Image}}'"
+)
+# The app port is NOT published to the host — only Caddy binds 80/443 —
+# so probe inside the container rather than on the host's localhost.
+_READY_PROBE = (
+    f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml exec -T thestill "
+    'python -c "import urllib.request;'
+    "print(urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status)\" 2>&1 || true"
+)
+
+
+def _running_image(ps_output: str, service: str = "thestill") -> str:
+    """Image reference of ``service`` from ``_COMPOSE_PS`` output, where the
+    service is the first token and the image the last (status may contain
+    spaces). '' when the service is not listed."""
+    for line in (ps_output or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[0] == service:
+            return parts[-1]
+    return ""
+
+
+def _image_tag(image_ref: str) -> str:
+    return image_ref.rsplit(":", 1)[1] if ":" in image_ref else ""
+
+
 def cmd_status(args: argparse.Namespace) -> None:
+    """Report the instance; with --expect-image-tag, VERIFY it instead:
+    exit non-zero unless that tag is running and ready (optionally polling
+    for --wait seconds, since `up -d` returns before the app is up)."""
     state = require_state()
     region = state.region
+    expect_tag: str = getattr(args, "expect_image_tag", "") or ""
+    wait: int = getattr(args, "wait", 0) or 0
+
+    def not_yet(reason: str) -> None:
+        # Plain status just reports; verification turns "not there" into a failure.
+        if expect_tag:
+            die(f"Verification failed: {reason}")
 
     inst = discover_instance(region)
     if not inst:
         log("No app instance is running.")
         print(f"  Region:  {region}\n  Domain:  {state.domain}\n  Bucket:  {state.bucket}")
         print("\n  Launch one with: thestill-aws launch")
+        not_yet("no app instance found")
         return
 
     instance_id = inst["InstanceId"]
@@ -1560,6 +1856,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"  Bucket:    {state.bucket}")
 
     if inst["State"]["Name"] != "running":
+        not_yet(f"instance is {inst['State']['Name']}")
         return
 
     code, out = run_remote(
@@ -1569,32 +1866,42 @@ def cmd_status(args: argparse.Namespace) -> None:
     )
     if code == 255:
         print(f"  Bootstrap: unknown — {out}")
+        not_yet("SSM agent unreachable")
         return
     if out.startswith("COMPLETE"):
         print("  Bootstrap: complete")
     else:
         print(f"  Bootstrap: in progress\n{_indent(out)}")
+        not_yet("bootstrap still in progress")
         return
 
-    code, out = run_remote(
-        region,
-        instance_id,
-        f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml ps --format "
-        "'{{.Service}} {{.State}} {{.Status}}'",
-    )
-    print(f"  Containers:\n{_indent(out)}")
+    deadline = time.time() + wait
+    while True:
+        _, ps_out = run_remote(region, instance_id, _COMPOSE_PS)
+        _, probe = run_remote(region, instance_id, _READY_PROBE)
+        ready = probe.strip().endswith("200")
+        remaining = int(deadline - time.time())
+        if ready or remaining <= 0:
+            break
+        log(f"Not ready yet — polling for up to {remaining}s more")
+        time.sleep(10)
 
-    # The app port is NOT published to the host — only Caddy binds 80/443 —
-    # so probe inside the container rather than on the host's localhost.
-    code, out = run_remote(
-        region,
-        instance_id,
-        f"cd {REMOTE_DIR} && docker compose -f docker-compose.prod.yml exec -T thestill "
-        'python -c "import urllib.request;'
-        "print(urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status)\" 2>&1 || true",
-    )
-    verdict = "ready (200)" if out.strip().endswith("200") else f"NOT ready (got {out.strip() or 'no response'})"
+    image = _running_image(ps_out)
+    print(f"  Containers:\n{_indent(ps_out)}")
+    print(f"  App image: {image or 'unknown'}")
+    verdict = "ready (200)" if ready else f"NOT ready (got {probe.strip() or 'no response'})"
     print(f"  Readiness: {verdict}")
+
+    if expect_tag:
+        problems = []
+        running_tag = _image_tag(image)
+        if running_tag != expect_tag:
+            problems.append(f"running image tag is {running_tag or 'unknown'}, expected {expect_tag}")
+        if not ready:
+            problems.append("app is not ready")
+        if problems:
+            die("Verification failed: " + "; ".join(problems))
+        log(f"Verified: {expect_tag} is running and ready on {instance_id}")
 
 
 def _indent(text: str, prefix: str = "    ") -> str:
@@ -1836,7 +2143,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_reconcile.set_defaults(func=cmd_reconcile)
 
     p_status = sub.add_parser("status", help="instance, bootstrap, containers and readiness")
+    p_status.add_argument(
+        "--expect-image-tag",
+        default="",
+        help="verify: exit non-zero unless this GHCR tag is running and ready (used by the deploy workflow)",
+    )
+    p_status.add_argument("--wait", type=int, default=0, help="keep polling readiness for up to N seconds (default 0)")
     p_status.set_defaults(func=cmd_status)
+
+    p_state = sub.add_parser("state", help="show or mirror the deployment state (SSM + local cache)")
+    p_state.add_argument("action", choices=["show", "push"])
+    p_state.add_argument("--force", action="store_true", help="push even when SSM holds a different state")
+    p_state.set_defaults(func=cmd_state)
+
+    p_oidc = sub.add_parser("github-oidc", help="IAM role GitHub Actions assumes to deploy tags (idempotent)")
+    p_oidc.add_argument(
+        "--environment",
+        default=DEFAULT_GITHUB_ENVIRONMENT,
+        help=f"GitHub environment the deploy job runs under (default {DEFAULT_GITHUB_ENVIRONMENT})",
+    )
+    p_oidc.set_defaults(func=cmd_github_oidc)
 
     p_logs = sub.add_parser("logs", help="tail container logs via SSM")
     p_logs.add_argument("--service", default="", help="compose service (default: all)")
