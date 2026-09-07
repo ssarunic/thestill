@@ -1,0 +1,112 @@
+name: Deploy
+
+# Tag-triggered production deploy (spec #66 follow-up).
+#
+# Pushing a `v*` tag — or dispatching with a ref — runs `thestill-aws
+# reconcile` against the live EC2 box over SSM, pinned to BOTH the image
+# `prod-<sha>` and the deploy kit at that same sha, then asserts that tag
+# is what is running and ready. Nothing is built here: the image must
+# already have been published by CI's "Publish prod image" job, which only
+# runs for commits on main — so a tag off a branch fails fast instead of
+# shipping something unreviewed.
+#
+# One-time setup (docs/aws-deployment.md § "Deploy on tag"):
+#   thestill-aws github-oidc
+#   gh variable set AWS_DEPLOY_ROLE_ARN --body arn:aws:iam::<account>:role/thestill-github-deploy
+#
+# Rollback: dispatch this workflow with an older tag. Migrations are
+# forward-only, so check the schema delta first.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit on main to deploy (must have a published prod-<sha> image)"
+        required: true
+        type: string
+
+# One reconcile at a time, and never cancel one mid-flight: an interrupted
+# bootstrap leaves the box half-converged.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-west-2
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://thestill.me
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve the commit and require it to be on main
+        id: rev
+        run: |
+          sha="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not on main; only merged commits have a published prod image"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying \`${{ inputs.ref || github.ref_name }}\` @ \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for the published image
+        # A tag pushed right after a merge races the publish job (~4 min
+        # warm cache, 30+ min cold). Poll rather than fail.
+        run: |
+          image="ghcr.io/${{ github.repository }}:prod-${{ steps.rev.outputs.sha }}"
+          for _ in $(seq 1 80); do
+            if docker manifest inspect "$image" >/dev/null 2>&1; then
+              echo "Found $image"
+              exit 0
+            fi
+            echo "Waiting for $image ..."
+            sleep 30
+          done
+          echo "::error::$image was never published; check CI's 'Publish prod image' job for this commit"
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install boto3
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Reconcile the instance to this tag
+        run: |
+          python deploy/aws-ec2/thestill-aws reconcile \
+            --image-tag "prod-${{ steps.rev.outputs.sha }}" \
+            --kit-ref "${{ steps.rev.outputs.sha }}"
+
+      - name: Verify the tag is running and ready
+        run: |
+          python deploy/aws-ec2/thestill-aws status \
+            --expect-image-tag "prod-${{ steps.rev.outputs.sha }}" \
+            --wait 300 | tee -a "$GITHUB_STEP_SUMMARY"

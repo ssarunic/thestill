@@ -51,6 +51,9 @@ Day-2 operations:
 | `thestill-aws ssh` | shell via SSM Session Manager (no key pair, no port 22) |
 | `thestill-aws reconcile --image-tag prod-<sha>` | upgrade or re-apply on-box config in place |
 | `thestill-aws secrets list` | parameter names under `/thestill/prod/` (never values) |
+| `thestill-aws status --expect-image-tag prod-<sha> --wait 300` | verify: non-zero exit unless that tag is running and ready |
+| `thestill-aws github-oidc` | IAM role + OIDC provider for the tag-triggered deploy workflow |
+| `thestill-aws state show` / `state push` | inspect or seed the deployment state mirrored in SSM |
 | `thestill-aws teardown` | delete instance/SG/IAM; keeps S3, secrets and DNS |
 
 What the script deliberately does **not** do: the data migration (section 4
@@ -224,6 +227,48 @@ the default is `prod-latest` (pushed by CI on every merge to `main`).
 Rollback is the same command with the previous sha tag — migrations are
 forward-only, so verify a revision is backward-compatible before shipping
 schema changes you may want to roll back across.
+
+### Deploy on tag (CI)
+
+Merging to `main` publishes an image but ships nothing. Pushing a version
+tag ships it: [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)
+runs `thestill-aws reconcile` from a GitHub runner, pinned to the image
+`prod-<sha>` **and** the deploy kit at that same sha, then verifies with
+`status --expect-image-tag`. The runner authenticates with OIDC (no
+long-lived AWS keys in GitHub) and assumes a role that can only discover
+the tagged instance, run commands on it, and read/write the deployment
+state — it cannot launch or terminate anything, read a secret, or touch
+the backup bucket.
+
+One-time setup:
+
+```bash
+thestill-aws github-oidc           # OIDC provider + thestill-github-deploy role; seeds state in SSM
+gh variable set AWS_DEPLOY_ROLE_ARN --body arn:aws:iam::<account>:role/thestill-github-deploy
+```
+
+Then, to deploy:
+
+```bash
+git tag v1.2.0 <merge-commit-on-main>
+git push origin v1.2.0
+gh run watch                       # or: gh run list --workflow Deploy
+```
+
+The workflow refuses a commit that is not on `main` (no published image
+exists for it) and waits for a still-building image rather than failing
+when a tag lands right after a merge. Rollback is a manual dispatch of the
+same workflow with an older tag (`gh workflow run Deploy -f ref=v1.1.0`);
+migrations remain forward-only. The job runs under the `production`
+GitHub environment, created on the first run — add required reviewers
+there for a manual approval gate.
+
+The deployment state (`region`, bucket, domain, aliases, pinned tag) is
+mirrored to the SSM parameter `/thestill/deploy/state` and that copy is
+authoritative: a CI deploy updates it, and a laptop's
+`~/.thestill/aws-state.json` is only a cache used when SSM is unreachable.
+This is deliberately outside `/thestill/prod/`, so `fetch-secrets.sh`
+never writes it into the box's `.env`.
 
 ## Compose-level variables
 

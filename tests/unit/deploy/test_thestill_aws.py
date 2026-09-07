@@ -79,6 +79,8 @@ class TestScriptFile:
             "logs",
             "ssh",
             "teardown",
+            "state",
+            "github-oidc",
         }
 
 
@@ -396,3 +398,247 @@ class TestSecretsDiff:
         src = SCRIPT.read_text()
         body = src[src.index("def _secrets_diff") : src.index("def cmd_secrets")]
         assert "sys.exit(1)" in body
+
+
+# ---------------------------------------------------------------------------
+# Tag-triggered deploys: SSM state mirror, GitHub OIDC role, verification
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+import yaml  # noqa: E402
+from botocore.exceptions import ClientError, NoCredentialsError  # noqa: E402
+
+WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "deploy.yml"
+
+
+class _FakeSSM:
+    """Just enough of the SSM client for the state mirror."""
+
+    def __init__(self, value: str | None = None, error: Exception | None = None):
+        self.value = value
+        self.error = error
+        self.puts: list[dict] = []
+
+    def get_parameter(self, Name: str):
+        if self.error:
+            raise self.error
+        if self.value is None:
+            raise ClientError({"Error": {"Code": "ParameterNotFound", "Message": ""}}, "GetParameter")
+        return {"Parameter": {"Name": Name, "Value": self.value}}
+
+    def put_parameter(self, **kwargs):
+        if self.error:
+            raise self.error
+        self.puts.append(kwargs)
+        return {"Version": 1}
+
+
+@pytest.fixture
+def state_files(cli, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(cli, "STATE_FILE", tmp_path / "aws-state.json")
+    monkeypatch.setattr(cli, "AUDIT_LOG", tmp_path / "audit.log")
+    monkeypatch.delenv("THESTILL_AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    return tmp_path / "aws-state.json"
+
+
+def _use_ssm(cli, monkeypatch, fake: _FakeSSM) -> None:
+    monkeypatch.setattr(cli, "client", lambda service, region="": fake)
+
+
+class TestDeploymentStateMirror:
+    """The runner has no ~/.thestill, so the state must also live in SSM —
+    and SSM must win, or a stale laptop copy rolls prod back."""
+
+    def test_state_param_is_outside_the_secrets_prefix(self, cli):
+        # fetch-secrets.sh writes everything under SSM_PREFIX into .env.
+        assert not cli.DEPLOY_STATE_PARAM.startswith(cli.SSM_PREFIX)
+
+    def test_remote_wins_over_local(self, cli, state_files, monkeypatch):
+        state_files.write_text(json.dumps({"region": "eu-west-2", "image_tag": "prod-old"}))
+        _use_ssm(cli, monkeypatch, _FakeSSM(json.dumps({"region": "eu-west-2", "image_tag": "prod-new"})))
+        state, source = cli.load_state_with_source()
+        assert state.image_tag == "prod-new"
+        assert source.startswith("SSM")
+
+    def test_local_when_remote_not_seeded(self, cli, state_files, monkeypatch):
+        state_files.write_text(json.dumps({"region": "eu-west-2", "image_tag": "prod-old"}))
+        _use_ssm(cli, monkeypatch, _FakeSSM())
+        state, source = cli.load_state_with_source()
+        assert state.image_tag == "prod-old"
+        assert source.startswith("local")
+
+    def test_local_when_ssm_unreachable(self, cli, state_files, monkeypatch):
+        state_files.write_text(json.dumps({"region": "eu-west-2", "image_tag": "prod-old"}))
+        _use_ssm(cli, monkeypatch, _FakeSSM(error=NoCredentialsError()))
+        state, _ = cli.load_state_with_source()
+        assert state.image_tag == "prod-old"
+
+    def test_nothing_anywhere(self, cli, state_files, monkeypatch):
+        _use_ssm(cli, monkeypatch, _FakeSSM())
+        assert cli.load_state() is None
+
+    def test_remote_only_is_enough_for_a_runner(self, cli, state_files, monkeypatch):
+        _use_ssm(cli, monkeypatch, _FakeSSM(json.dumps({"region": "eu-west-2", "bucket": "b", "domain": "d"})))
+        assert cli.load_state().bucket == "b"
+        assert not state_files.exists()
+
+    def test_region_hint_env_before_default(self, cli, state_files, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        assert cli._state_region() == "us-east-1"
+        assert cli._state_region("eu-west-1") == "eu-west-1"
+        monkeypatch.delenv("AWS_REGION")
+        assert cli._state_region() == cli.DEFAULT_REGION
+
+    def test_save_state_writes_local_and_mirrors(self, cli, state_files, monkeypatch):
+        fake = _FakeSSM()
+        _use_ssm(cli, monkeypatch, fake)
+        cli.save_state(cli.Deployment(region="eu-west-2", image_tag="prod-abc"))
+        assert json.loads(state_files.read_text())["image_tag"] == "prod-abc"
+        assert len(fake.puts) == 1
+        put = fake.puts[0]
+        assert put["Name"] == cli.DEPLOY_STATE_PARAM
+        assert put["Overwrite"] is True
+        assert json.loads(put["Value"])["image_tag"] == "prod-abc"
+
+    def test_save_state_survives_a_failed_mirror(self, cli, state_files, monkeypatch):
+        # A command that has just changed real resources must not die on
+        # the bookkeeping step.
+        _use_ssm(cli, monkeypatch, _FakeSSM(error=NoCredentialsError()))
+        cli.save_state(cli.Deployment(region="eu-west-2", image_tag="prod-abc"))
+        assert json.loads(state_files.read_text())["image_tag"] == "prod-abc"
+
+    def test_push_refuses_to_clobber_a_different_remote(self, cli, state_files, monkeypatch):
+        state_files.write_text(json.dumps({"region": "eu-west-2", "image_tag": "prod-old"}))
+        fake = _FakeSSM(json.dumps({"region": "eu-west-2", "image_tag": "prod-new"}))
+        _use_ssm(cli, monkeypatch, fake)
+        with pytest.raises(SystemExit):
+            cli.cmd_state(argparse_ns(action="push", force=False))
+        assert fake.puts == []
+        cli.cmd_state(argparse_ns(action="push", force=True))
+        assert len(fake.puts) == 1
+
+
+def argparse_ns(**kwargs):
+    import argparse
+
+    return argparse.Namespace(**kwargs)
+
+
+class TestGitHubOidc:
+    def test_trust_policy_pins_repo_environment_and_audience(self, cli):
+        doc = cli._github_trust_policy("arn:aws:iam::123:oidc-provider/x", "production")
+        (stmt,) = doc["Statement"]
+        assert stmt["Action"] == "sts:AssumeRoleWithWebIdentity"
+        cond = stmt["Condition"]["StringEquals"]
+        assert cond[f"{cli.GITHUB_OIDC_HOST}:aud"] == "sts.amazonaws.com"
+        assert cond[f"{cli.GITHUB_OIDC_HOST}:sub"] == f"repo:{cli.GITHUB_REPO}:environment:production"
+        # Exact match, never a wildcard: a fork or a branch build must not qualify.
+        assert "StringLike" not in stmt["Condition"]
+
+    def test_deploy_policy_is_least_privilege(self, cli):
+        doc = cli._github_deploy_policy("eu-west-2", "123456789012")
+        actions = {a for st in doc["Statement"] for a in st["Action"]}
+        assert actions == {
+            "ec2:DescribeInstances",
+            "ssm:SendCommand",
+            "ssm:GetCommandInvocation",
+            "ssm:GetParameter",
+            "ssm:PutParameter",
+        }
+        # SendCommand on instances is gated by the app tag; the document
+        # statement carries no tag condition (documents have no tags).
+        instance_stmts = [
+            st for st in doc["Statement"] if "ssm:SendCommand" in st["Action"] and ":instance/" in st["Resource"]
+        ]
+        (inst,) = instance_stmts
+        assert inst["Condition"] == {"StringEquals": {f"ssm:resourceTag/{cli.NAME_PREFIX}:role": "app"}}
+        # Parameter access is the one state document, never the secrets prefix.
+        param_stmts = [st for st in doc["Statement"] if "ssm:GetParameter" in st["Action"]]
+        (param,) = param_stmts
+        assert param["Resource"].endswith(f"parameter{cli.DEPLOY_STATE_PARAM}")
+        assert cli.SSM_PREFIX not in param["Resource"]
+        for st in doc["Statement"]:
+            assert "kms:Decrypt" not in st["Action"]
+            assert not any(a.startswith("s3:") for a in st["Action"])
+
+
+class TestStatusVerification:
+    PS = (
+        "caddy running Up 2 hours caddy:2\n"
+        "postgres running Up 2 hours (healthy) pgvector/pgvector:pg17\n"
+        "thestill running Up 3 minutes (healthy) ghcr.io/ssarunic/thestill:prod-abc123\n"
+    )
+
+    def test_running_image_from_compose_ps(self, cli):
+        assert cli._running_image(self.PS) == "ghcr.io/ssarunic/thestill:prod-abc123"
+        assert cli._image_tag(cli._running_image(self.PS)) == "prod-abc123"
+
+    def test_running_image_missing(self, cli):
+        assert cli._running_image("caddy running Up caddy:2\n") == ""
+        assert cli._running_image("") == ""
+        assert cli._image_tag("") == ""
+
+    def test_status_flags_exist(self, cli):
+        parser = cli.build_parser()
+        args = parser.parse_args(["status", "--expect-image-tag", "prod-x", "--wait", "30"])
+        assert args.expect_image_tag == "prod-x" and args.wait == 30
+        assert parser.parse_args(["status"]).expect_image_tag == ""
+        assert parser.parse_args(["github-oidc"]).environment == "production"
+        assert parser.parse_args(["state", "push", "--force"]).force is True
+
+
+class TestDeployWorkflow:
+    """The workflow is the deploy path now; pin the properties that make it safe."""
+
+    @pytest.fixture(scope="class")
+    def wf(self):
+        return yaml.safe_load(WORKFLOW.read_text())
+
+    @pytest.fixture(scope="class")
+    def job(self, wf):
+        return wf["jobs"]["deploy"]
+
+    @pytest.fixture(scope="class")
+    def steps(self, job):
+        return job["steps"]
+
+    def test_triggers_on_version_tags_and_manual_dispatch(self, wf):
+        on = wf.get("on") or wf[True]  # YAML 1.1 parses a bare `on` key as True
+        assert on["push"]["tags"] == ["v*"]
+        assert "branches" not in on["push"]
+        assert on["workflow_dispatch"]["inputs"]["ref"]["required"] is True
+
+    def test_never_cancels_a_reconcile_in_flight(self, wf):
+        assert wf["concurrency"] == {"group": "deploy-production", "cancel-in-progress": False}
+
+    def test_oidc_permissions_only(self, wf):
+        assert wf["permissions"] == {"contents": "read", "packages": "read", "id-token": "write"}
+
+    def test_runs_under_the_environment_the_role_trusts(self, cli, job):
+        assert job["environment"]["name"] == cli.DEFAULT_GITHUB_ENVIRONMENT
+
+    def test_requires_commit_on_main(self, steps):
+        run = next(s["run"] for s in steps if s.get("id") == "rev")
+        assert "merge-base --is-ancestor" in run and "origin/main" in run
+
+    def test_waits_for_the_published_image_before_touching_the_box(self, steps):
+        names = [s.get("name", s.get("uses", "")) for s in steps]
+        assert names.index("Wait for the published image") < names.index("Reconcile the instance to this tag")
+
+    def test_reconcile_pins_image_and_kit_to_the_same_sha(self, steps):
+        run = next(s["run"] for s in steps if s.get("name") == "Reconcile the instance to this tag")
+        assert '--image-tag "prod-${{ steps.rev.outputs.sha }}"' in run
+        assert '--kit-ref "${{ steps.rev.outputs.sha }}"' in run
+
+    def test_verifies_the_deployed_tag(self, steps):
+        run = next(s["run"] for s in steps if s.get("name") == "Verify the tag is running and ready")
+        assert '--expect-image-tag "prod-${{ steps.rev.outputs.sha }}"' in run
+        assert "--wait" in run
+
+    def test_assumes_role_from_repo_variable(self, steps):
+        creds = next(s for s in steps if s.get("uses", "").startswith("aws-actions/configure-aws-credentials"))
+        assert creds["with"]["role-to-assume"] == "${{ vars.AWS_DEPLOY_ROLE_ARN }}"
