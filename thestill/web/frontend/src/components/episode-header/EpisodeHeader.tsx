@@ -4,12 +4,13 @@ import type { EpisodeDetail } from '../../api/types'
 import PageHero from '../PageHero'
 import ActionRow from '../ActionRow'
 import Artwork from '../Artwork'
+import { artworkFrameClass } from '../artworkRoles'
 import MetaEyebrow from '../MetaEyebrow'
 import Button, { ChevronRightIcon, ExternalLinkIcon, PauseIcon, PlayIcon, YouTubeIcon } from '../Button'
 import { buttonClassName } from '../buttonStyles'
 import ShareButton from '../ShareButton'
 import ExpandableDescription from '../ExpandableDescription'
-import { episodeNumberLabel, formatEyebrowDate, formatMinutes } from '../../utils/episodeFormat'
+import { episodeNumberLabel, episodeTypeLabel, formatEyebrowDate, formatMinutes } from '../../utils/episodeFormat'
 
 export interface EpisodePlaybackState {
   /** The player's loaded track is this episode. */
@@ -29,11 +30,6 @@ interface EpisodeHeaderProps {
   showWatchVideo: boolean
   onWatchVideo: () => void
   shareUrl: string
-}
-
-function typeLabel(episodeType: string | null | undefined): string | null {
-  if (!episodeType || episodeType === 'full') return null
-  return episodeType.charAt(0).toUpperCase() + episodeType.slice(1)
 }
 
 /**
@@ -74,7 +70,7 @@ export default function EpisodeHeader({
           items={[
             formatEyebrowDate(episode.pub_date),
             episodeNumberLabel(episode.season_number, episode.episode_number),
-            typeLabel(episode.episode_type),
+            episodeTypeLabel(episode.episode_type),
             episode.explicit ? 'Explicit' : null,
           ]}
         />
@@ -146,7 +142,7 @@ export function EpisodeHeaderSkeleton() {
     <div className="animate-pulse" aria-hidden="true">
       <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
         <div className="flex justify-center sm:block">
-          <div className="aspect-square w-[40vw] max-w-[160px] rounded-xl bg-gray-200 sm:w-[200px] sm:max-w-none" />
+          <div className={`${artworkFrameClass('hero')} bg-gray-200`} />
         </div>
         <div className="flex-1 space-y-3">
           <div className="h-4 w-1/3 rounded bg-gray-200" />

@@ -34,9 +34,14 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
     .sort((a, b) => b.salience - a.salience)
     .slice(0, MAX_ENTITY_PEOPLE)
 
+  // Only segments the transcript renders as speaker rows count; ad breaks,
+  // music and intros can carry a preserved speaker and would otherwise
+  // both surface a chip and shift the palette away from the viewer's
+  // colours (see buildSpeakerColorMap's contract).
   const speakerLabels: string[] = []
   const seenSpeakers = new Set<string>()
   for (const segment of segments ?? []) {
+    if (segment.kind !== 'content' && segment.kind !== 'filler') continue
     const label = segment.speaker?.trim()
     if (!label || PLACEHOLDER_SPEAKER.test(label)) continue
     const key = normalizePersonName(label)

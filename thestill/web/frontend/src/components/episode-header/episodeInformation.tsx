@@ -2,18 +2,13 @@ import { Link } from 'react-router-dom'
 import type { EpisodeDetail, ImportKind } from '../../api/types'
 import type { DefinitionRow } from '../DefinitionList'
 import { ExternalLink } from '../ExternalLink'
-import { formatLength, formatPublished, hostOf, languageName } from '../../utils/episodeFormat'
+import { episodeTypeLabel, formatLength, formatPublished, hostOf, languageName } from '../../utils/episodeFormat'
 
 const IMPORT_KIND_LABEL: Record<ImportKind, string> = {
   bare_audio: 'Imported (audio file)',
   youtube: 'Imported (YouTube)',
   apple_episode: 'Imported (Apple Podcasts)',
   rss_episode: 'Imported (RSS episode)',
-}
-
-function typeLabel(episodeType: string | null | undefined): string | null {
-  if (!episodeType || episodeType === 'full') return null
-  return episodeType.charAt(0).toUpperCase() + episodeType.slice(1)
 }
 
 function sourceLabel(episode: EpisodeDetail): string | null {
@@ -41,7 +36,7 @@ export function buildEpisodeInformationRows(episode: EpisodeDetail): DefinitionR
     { label: 'Published', value: formatPublished(episode.pub_date), numeric: true },
     { label: 'Length', value: formatLength(episode.duration), numeric: true },
     { label: 'Language', value: languageName(episode.podcast_language) },
-    { label: 'Type', value: typeLabel(episode.episode_type) },
+    { label: 'Type', value: episodeTypeLabel(episode.episode_type) },
     { label: 'Explicit', value: episode.explicit == null ? null : episode.explicit ? 'Yes' : 'No' },
     {
       label: 'Show notes',

@@ -17,8 +17,8 @@ function person(id: string, name: string, speaker_kind: EpisodeEntity['speaker_k
   }
 }
 
-function segment(id: number, speaker: string | null): AnnotatedSegment {
-  return { id, start: id, end: id + 1, speaker, text: '', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} }
+function segment(id: number, speaker: string | null, kind: AnnotatedSegment['kind'] = 'content'): AnnotatedSegment {
+  return { id, start: id, end: id + 1, speaker, text: '', kind, sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} }
 }
 
 describe('buildPeople (spec #76 §3.5)', () => {
@@ -30,8 +30,18 @@ describe('buildPeople (spec #76 §3.5)', () => {
       person('e4', 'Mentioned Person', 'unknown', 1),
       person('e5', 'Recurring Guest', 'recurring', 1),
     ]
-    const segments = [segment(1, 'ed elson'), segment(2, 'SPEAKER_00'), segment(3, 'Unknown'), segment(4, 'Scott'), segment(5, ' Scott '), segment(6, null)]
+    const segments = [
+      segment(0, 'Announcer', 'ad_break'),
+      segment(1, 'ed elson'),
+      segment(2, 'SPEAKER_00'),
+      segment(3, 'Unknown'),
+      segment(4, 'Scott'),
+      segment(5, ' Scott '),
+      segment(6, null),
+      segment(7, 'DJ', 'music'),
+    ]
     const chips = buildPeople(entities, segments)
+    // Ad-break/music speakers never become people, and never take a palette slot.
     expect(chips.map((c) => c.name)).toEqual(['Jim VandeHei', 'Ed Elson', 'Scott'])
     expect(chips[0].href).toContain('/entities/')
     expect(chips[2].href).toBeNull()

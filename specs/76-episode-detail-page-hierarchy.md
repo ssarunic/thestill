@@ -298,7 +298,7 @@ when the value is null:
 | Type | Bonus / Trailer | `episode_type`, only when not `full` |
 | Explicit | Yes / No | `explicit` |
 | Show notes | host name of `website_url`, external link | `website_url` |
-| Source | `Imported (YouTube)` / `Imported (audio file)` / `Imported (RSS episode)` | `origin` + `import_kind` on `EpisodeDetail` (new, §6); row omitted when `origin === 'feed'` |
+| Source | `Imported (YouTube)` / `Imported (Apple Podcasts)` / `Imported (audio file)` / `Imported (RSS episode)`; plain `Imported` when the kind is unknown | `origin` + `import_kind` on `EpisodeDetail` (new, §6); row omitted when `origin === 'feed'` |
 
 ### 3.7 Sticky collapsed header
 

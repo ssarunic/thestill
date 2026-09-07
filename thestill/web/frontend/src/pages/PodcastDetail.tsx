@@ -17,6 +17,7 @@ import { buttonClassName } from '../components/buttonStyles'
 import PageHero from '../components/PageHero'
 import ActionRow from '../components/ActionRow'
 import Artwork from '../components/Artwork'
+import { artworkFrameClass } from '../components/artworkRoles'
 import MetaEyebrow from '../components/MetaEyebrow'
 import DefinitionList from '../components/DefinitionList'
 import Panel from '../components/Panel'
@@ -108,7 +109,7 @@ export default function PodcastDetail() {
         <div className="animate-pulse" aria-hidden="true">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
             <div className="flex justify-center sm:block">
-              <div className="h-24 w-24 rounded-lg bg-gray-200" />
+              <div className={`${artworkFrameClass('card')} bg-gray-200`} />
             </div>
             <div className="flex-1 space-y-3">
               <div className="h-4 w-1/3 rounded bg-gray-200" />

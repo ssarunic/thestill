@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   episodeNumberLabel,
+  episodeTypeLabel,
   formatEyebrowDate,
   formatLength,
   formatMinutes,
@@ -48,5 +49,8 @@ describe('episodeFormat (spec #76)', () => {
     expect(episodeNumberLabel(null, 12)).toBe('E12')
     expect(episodeNumberLabel(3, null)).toBe('S3')
     expect(episodeNumberLabel(null, null)).toBeNull()
+    expect(episodeTypeLabel('bonus')).toBe('Bonus')
+    expect(episodeTypeLabel('full')).toBeNull()
+    expect(episodeTypeLabel(null)).toBeNull()
   })
 })

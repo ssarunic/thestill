@@ -79,3 +79,9 @@ export function episodeNumberLabel(
   if (seasonNumber) return `S${seasonNumber}`
   return null
 }
+
+/** ``Bonus`` / ``Trailer``; ``null`` for a full episode or no type. */
+export function episodeTypeLabel(episodeType: string | null | undefined): string | null {
+  if (!episodeType || episodeType === 'full') return null
+  return episodeType.charAt(0).toUpperCase() + episodeType.slice(1)
+}
