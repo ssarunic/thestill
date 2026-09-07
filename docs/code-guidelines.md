@@ -793,3 +793,8 @@ new link out of a page cannot quietly break them:
 - **When you add a link out of a page**, run the check: scroll down, follow the
   link, press Back, confirm the position is kept. Add the route to the
   navigation-contract spec's table if it is not there yet.
+- **Clickable means the hand cursor.** `index.css` gives every enabled
+  `button`, `[role="button"]` and `summary` `cursor: pointer` (links have it
+  natively). Do not add `cursor-pointer` to individual buttons; do add it to a
+  non-button element you make clickable (a row with `onClick`), or better,
+  make it a button or a link.

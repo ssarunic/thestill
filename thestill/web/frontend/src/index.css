@@ -33,6 +33,17 @@
   ::file-selector-button {
     border-color: var(--border);
   }
+
+  /* Clickable means the hand cursor, app-wide. Tailwind v4 dropped v3's
+     ``button { cursor: pointer }`` to match the platform default, which left
+     links (hand) and buttons (arrow) inconsistent. Set once here; never
+     add ``cursor-pointer`` to individual buttons. Disabled controls keep
+     ``cursor-not-allowed`` from the Button component. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
 }
 
 /* Custom scrollbar */

@@ -142,6 +142,8 @@ test.describe('action row at the narrowest supported width', () => {
       const box = (await control.boundingBox())!
       expect(box.width).toBeGreaterThanOrEqual(44)
       expect(box.height).toBeGreaterThanOrEqual(44)
+      // Buttons and links alike show the hand (index.css base rule).
+      await expect(control).toHaveCSS('cursor', 'pointer')
     }
     const boxes = await Promise.all(controls.map((c) => c.boundingBox()))
     // Single row (centres aligned; the 48 px primary and 44 px icons have
