@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
-import { useBackgroundLocation } from '../hooks/useBackgroundLocation'
+import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 import { PLAYER_HEIGHT_VAR } from '../constants/layers'
+import Artwork from './Artwork'
+import { ChevronUpIcon } from './Button'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -21,14 +23,22 @@ function formatTime(seconds: number): string {
 const SPACE_OWNER_SELECTOR =
   'input, textarea, select, button, [contenteditable=""], [contenteditable="true"], [role="slider"], iframe'
 
+interface MiniPlayerProps {
+  /** Spec #72 — whether the expanded Now Playing surface is open. */
+  isOpen?: boolean
+  /** Spec #72 — expand/collapse request from the artwork/title block. */
+  onExpand?: () => void
+}
+
 /**
  * Spec #22 — persistent transport. Spec #71 — the bar is shell chrome: it
  * sits above the reader overlay (z-50 vs z-[45]) and publishes its rendered
  * height as `--player-h` on the document root so the overlay, page padding
  * and every bottom-anchored pill can inset above it instead of being
- * covered by it.
+ * covered by it. Spec #72 — the artwork/title block is the expand
+ * affordance for the Now Playing sheet; the link to the episode lives there.
  */
-export default function MiniPlayer() {
+export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps) {
   const {
     track,
     isPlaying,
@@ -43,10 +53,10 @@ export default function MiniPlayer() {
     setVideoPreference,
   } = usePlayer()
   const currentTime = usePlayerTime()
-  const location = useLocation()
-  const backgroundLocation = useBackgroundLocation()
   const barRef = useRef<HTMLDivElement>(null)
   const hasTrack = track != null
+  const episodePath = track ? `/podcasts/${track.podcastSlug}/episodes/${track.episodeSlug}` : ''
+  const { state: linkState } = useEpisodeLinkState(episodePath)
 
   // Publish the bar's height (0 when hidden). ResizeObserver covers the
   // sm/lg padding changes and safe-area insets; the resize fallback is for
@@ -90,19 +100,6 @@ export default function MiniPlayer() {
 
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const progress = hasDuration ? Math.min(1, currentTime / duration) : 0
-  const episodePath = `/podcasts/${track.podcastSlug}/episodes/${track.episodeSlug}`
-
-  // Links into the episode keep the inbox's overlay contract (spec #52):
-  // from the inbox, or from inside an overlay already open over it, the
-  // reader opens above the still-mounted list. Elsewhere it is a plain
-  // navigation to the standalone page, as before.
-  const inInbox = location.pathname === '/inbox' || location.pathname.startsWith('/inbox/')
-  const linkState = backgroundLocation
-    ? { backgroundLocation }
-    : inInbox
-      ? { backgroundLocation: location }
-      : undefined
-  const alreadyOnEpisode = location.pathname === episodePath
 
   return (
     <div
@@ -129,32 +126,31 @@ export default function MiniPlayer() {
       </div>
 
       <div className="flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
-        {track.artworkUrl ? (
-          <img
-            src={track.artworkUrl}
-            alt=""
-            width={40}
-            height={40}
-            className="w-9 h-9 sm:w-10 sm:h-10 rounded object-cover flex-shrink-0"
-          />
-        ) : null}
-
-        <div className="flex-1 min-w-0">
-          <Link
-            to={episodePath}
-            state={linkState}
-            onClick={(e) => {
-              if (alreadyOnEpisode) e.preventDefault()
-            }}
-            className="block text-sm font-medium text-ink truncate hover:underline"
-            title={track.title}
+        {/* Spec #72 — the whole artwork/title block opens the Now Playing
+            sheet. The chevron makes that legible from sm up; on phones the
+            block is the obvious tap target already. */}
+        <button
+          type="button"
+          onClick={onExpand}
+          aria-expanded={isOpen}
+          aria-haspopup="dialog"
+          aria-label={`Now playing: ${track.title}`}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 -mx-1 text-left hover:bg-gray-100 sm:gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+        >
+          <Artwork role="rowSm" sources={[track.artworkUrl]} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-ink truncate">{track.title}</span>
+            {track.podcastTitle ? (
+              <span className="block text-xs text-muted truncate">{track.podcastTitle}</span>
+            ) : null}
+          </span>
+          <span
+            className={`hidden sm:block h-4 w-4 shrink-0 text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            aria-hidden="true"
           >
-            {track.title}
-          </Link>
-          {track.podcastTitle ? (
-            <p className="text-xs text-muted truncate">{track.podcastTitle}</p>
-          ) : null}
-        </div>
+            <ChevronUpIcon />
+          </span>
+        </button>
 
         {/* Spec #61 §2 — for video episodes the mini player keeps episode
             artwork (no live thumbnail: one DOM video cannot render in two
@@ -240,8 +236,8 @@ export default function MiniPlayer() {
           </button>
         </div>
 
-        {/* Stop-and-dismiss is destructive next to Play; on phones it moves
-            into the expanded Now Playing sheet (spec #72). */}
+        {/* Stop-and-dismiss is destructive next to Play; on phones it lives
+            in the expanded Now Playing sheet (spec #72). */}
         <button
           type="button"
           onClick={stop}

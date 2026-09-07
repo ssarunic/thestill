@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Outlet, NavLink } from 'react-router-dom'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import MobileHeader from './MobileHeader'
 import MiniPlayer from './MiniPlayer'
 import NavigationDrawer from './NavigationDrawer'
@@ -71,6 +71,13 @@ function LayoutContent() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false)
+  // Spec #72 — the expanded Now Playing surface is transient UI: not in the
+  // URL, not in history. It remembers the pathname it was opened on, so a
+  // route change closes it by derivation (no effect, no extra render).
+  const { pathname } = useLocation()
+  const [nowPlayingOpenedAt, setNowPlayingOpenedAt] = useState<string | null>(null)
+  const isNowPlayingOpen = nowPlayingOpenedAt === pathname
+  const toggleNowPlaying = () => setNowPlayingOpenedAt(isNowPlayingOpen ? null : pathname)
   const screenSize = useScreenSize()
   const { isAdmin } = useAuth()
 
@@ -273,7 +280,7 @@ function LayoutContent() {
         </div>
       </main>
 
-      <MiniPlayer />
+      <MiniPlayer isOpen={isNowPlayingOpen} onExpand={toggleNowPlaying} />
 
       <CommandBar isOpen={isCommandBarOpen} onClose={() => setIsCommandBarOpen(false)} />
     </div>
