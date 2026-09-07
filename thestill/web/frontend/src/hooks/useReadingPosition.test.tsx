@@ -1,14 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { renderHook, render, screen, waitFor, act } from '@testing-library/react'
 import { fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import { useReadingPosition } from './useReadingPosition'
 
 // Spec #52 — the hook must work against an overlay's own scroll container,
 // not just the window (standalone-page default, unchanged).
 
+// Each test gets its own history-entry key: the hook remembers entries it
+// has mounted on (module state, like useScrollRestoration), and MemoryRouter
+// would otherwise hand every test the same ``default`` key.
+let entrySeq = 0
+function freshEntry(pathname: string) {
+  entrySeq += 1
+  return { pathname, key: `test-entry-${entrySeq}` }
+}
+
 function wrapper({ children }: { children: React.ReactNode }) {
-  return <MemoryRouter initialEntries={['/podcasts/p/episodes/e']}>{children}</MemoryRouter>
+  return <MemoryRouter initialEntries={[freshEntry('/podcasts/p/episodes/e')]}>{children}</MemoryRouter>
 }
 
 function makeContainer({ scrollTop = 0, scrollHeight = 2000, clientHeight = 1000 } = {}) {
@@ -69,5 +78,65 @@ describe('useReadingPosition scroll-container awareness', () => {
 
     expect(localStorage.getItem('reading-position-ep-1')).toBeNull()
     vi.useRealTimers()
+  })
+})
+
+// A reader page that navigates away and back through the router, the way a
+// People / entity link and the browser's Back button do.
+function ReaderPage() {
+  useReadingPosition('ep-back')
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => navigate('/entities/person/x')}>
+      leave
+    </button>
+  )
+}
+
+function EntityPage() {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      back
+    </button>
+  )
+}
+
+describe('useReadingPosition on in-app Back (spec #76 People links)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('restores the saved position when the router pops back to the reader entry', async () => {
+    Object.defineProperty(document.documentElement, 'scrollHeight', { value: 3000, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true })
+    render(
+      <MemoryRouter initialEntries={[freshEntry('/podcasts/p/episodes/e')]}>
+        <Routes>
+          <Route path="/podcasts/:p/episodes/:e" element={<ReaderPage />} />
+          <Route path="/entities/:type/:id" element={<EntityPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    // First visit: top.
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'instant' })
+
+    // Scroll to 40 % and leave inside the debounce window — the position is
+    // flushed on unmount, not lost.
+    Object.defineProperty(window, 'scrollY', { value: 800, configurable: true })
+    fireEvent.scroll(window)
+    await act(async () => {
+      screen.getByRole('button', { name: 'leave' }).click()
+    })
+    expect(JSON.parse(localStorage.getItem('reading-position-ep-back')!).scrollPercent).toBeCloseTo(0.4)
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'back' }).click()
+    })
+    await waitFor(() => {
+      expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 800, behavior: 'instant' })
+    })
   })
 })

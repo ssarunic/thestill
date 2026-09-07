@@ -80,6 +80,49 @@ test.describe('episode hero on a phone (spec #76)', () => {
   })
 })
 
+test.describe('leaving and returning', () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true })
+
+  test('Back from a People link returns to the reading position', async ({ page }) => {
+    await mockEpisodeApi(page)
+    // A host entity so the People row has a link out (registered after the
+    // fixture, so it takes precedence over its empty entities stub).
+    await page.route('**/api/episodes/*/entities*', (route) =>
+      route.fulfill({
+        json: {
+          status: 'ok',
+          episode_id: 'ep-uuid-1',
+          podcast_id: 'p-1',
+          entities: [
+            {
+              entity: { id: 'ent-ed', type: 'person', canonical_name: 'Ed Elson', wikidata_qid: null },
+              mention_count: 3,
+              first_mention_ms: 0,
+              speaker_kind: 'host',
+              salience: 0.9,
+              mentions: [],
+            },
+          ],
+        },
+      }),
+    )
+    await page.route('**/api/entities/**', (route) => route.fulfill({ status: 404, json: { detail: 'not found' } }))
+    await page.goto(EPISODE_PATH)
+    await expect(page.getByRole('heading', { name: EPISODE_TITLE })).toBeVisible()
+
+    const people = page.getByRole('region', { name: 'People' })
+    await people.scrollIntoViewIfNeeded()
+    const before = await page.evaluate(() => window.scrollY)
+    expect(before).toBeGreaterThan(300)
+
+    await people.getByRole('link', { name: 'Ed Elson' }).click()
+    await expect(page).toHaveURL(/\/entities\//)
+    await page.goBack()
+    await expect(page.getByRole('heading', { name: EPISODE_TITLE })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 3000 }).toBeGreaterThan(before - 60)
+  })
+})
+
 test.describe('action row at the narrowest supported width', () => {
   test.use({ viewport: { width: 320, height: 732 }, isMobile: true, hasTouch: true })
 

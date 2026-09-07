@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef, type RefObject } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigationType } from 'react-router-dom'
 
 interface ReadingPositionData {
   scrollPercent: number
@@ -8,6 +8,12 @@ interface ReadingPositionData {
 
 const STORAGE_PREFIX = 'reading-position-'
 const POSITION_EXPIRY_DAYS = 30
+
+// History entries (``location.key``) the reader has already been mounted on
+// in this session. Coming back to one of them via Back/Forward is a return
+// and restores the saved position; a fresh entry starts at the top. Same
+// per-entry convention as ``useScrollRestoration`` on the list pages.
+const seenEntries = new Set<string>()
 
 /**
  * Hook to persist and restore reading position for an episode.
@@ -27,6 +33,7 @@ export function useReadingPosition(
   scrollContainerRef?: RefObject<HTMLElement | null>,
 ) {
   const location = useLocation()
+  const navigationType = useNavigationType()
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
   const hasRestoredRef = useRef<string | null>(null)
@@ -112,6 +119,10 @@ export function useReadingPosition(
       target.removeEventListener('scroll', handleScroll)
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
+        // A link tapped inside the debounce window (scroll, then tap a
+        // person) must not lose the position it was about to save. The
+        // old page is still laid out when this cleanup runs.
+        savePosition()
       }
     }
   }, [episodeId, savePosition, scrollContainerRef])
@@ -124,11 +135,17 @@ export function useReadingPosition(
     // Don't restore if we already restored for this episode
     if (hasRestoredRef.current === episodeId) return
 
-    // Only restore position on back/forward navigation (POP), not on fresh link clicks (PUSH)
-    // location.state?.fromBack is set by the browser on back navigation
-    // We use the history API's navigation type when available
-    const navigationType = (window.performance?.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming)?.type
-    const isBackNavigation = navigationType === 'back_forward' || location.state?.restoreScroll
+    // Restore only when coming back: an in-app Back/Forward to a history
+    // entry this reader was already mounted on (router POP + seen key — the
+    // router reports POP for the very first render too, so the key check is
+    // what separates a return from a first visit), or a browser-level
+    // back/forward document load. Fresh link clicks start at the top.
+    const documentNavigation = (
+      window.performance?.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming | undefined
+    )?.type
+    const isReturn = navigationType === 'POP' && seenEntries.has(location.key)
+    seenEntries.add(location.key)
+    const isBackNavigation = isReturn || documentNavigation === 'back_forward' || location.state?.restoreScroll
 
     if (!isBackNavigation) {
       // Fresh navigation - scroll to top and don't restore
@@ -176,7 +193,7 @@ export function useReadingPosition(
     } catch {
       // Invalid stored data
     }
-  }, [episodeId, location.state, getMaxScroll, scrollToTop])
+  }, [episodeId, location.key, location.state, navigationType, getMaxScroll, scrollToTop])
 
   return {
     clearPosition,
