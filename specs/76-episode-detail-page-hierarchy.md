@@ -2,7 +2,7 @@
 
 **Status**: 💡 Proposal — for review, not scheduled
 **Created**: 2026-09-07
-**Updated**: 2026-09-07
+**Updated**: 2026-09-07 (review round 1 addressed: sticky-bar ownership, People navigation, phone height budget, 44 px icons, data contracts, primary label)
 **Priority**: Medium (the episode page is the product's most-visited surface and reads as an admin record rather than a content page)
 
 > **Related:** [#09 single-user-web-ui](09-single-user-web-ui.md) §Visual Design (palette, 8 px grid, Inter scale), [#73 mobile-list-row-density](73-mobile-list-row-density.md) (full-bleed-below-`sm` rule, `Button` variants, navy primary token), [#52 inbox-reader-overlay](52-inbox-reader-overlay.md) (the same reader renders as a page and as an overlay), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) §5.2 (key entities strip, entity branch progress), [#62 youtube-video-rendition](62-youtube-video-rendition.md) §6 ("Watch video" entry point), [#71 player-shell-layer](71-player-shell-layer.md) (mini player height budget), [#58 original-language-summaries](58-original-language-summaries.md) (summary language toggle in the tab bar)
@@ -124,7 +124,7 @@ desktop differences noted inline.
 │ ← Inbox                                  │  overlay chrome (unchanged)
 ├──────────────────────────────────────────┤
 │           ┌────────────────┐             │  3.1 PageHero
-│           │                │             │  artwork 60 vw, max 240 px,
+│           │                │             │  artwork 40 vw, max 160 px,
 │           │    artwork     │             │  blurred copy behind at 20 %
 │           │                │             │  (desktop: 200 px, left)
 │           └────────────────┘             │
@@ -163,8 +163,11 @@ desktop differences noted inline.
 ### 3.1 Hero
 
 - Artwork: `SmartImage` with the existing `[episode.image_url, podcast_image_url]`
-  fallback chain, rendered at 60 vw (max 240 px) centred on phones, 200 px
-  left-aligned on `sm+`, 12 px radius, `loading="eager"`. Behind it, the same
+  fallback chain, rendered at 40 vw (max 160 px) centred on phones, 200 px
+  left-aligned on `sm+`, 12 px radius, `loading="eager"`. 160 px is twice
+  today's 80 px and is the largest size that keeps the tabs above the fold
+  on a 393 × 852 phone (§7 height budget); 60 vw was tried on paper first
+  and overshoots the budget by ~30 px. Behind it, the same
   image at `blur-2xl opacity-20` clipped to the hero, fading to the page
   background at the bottom. The blur is decorative (`aria-hidden`) and
   disabled under `prefers-reduced-transparency`.
@@ -184,7 +187,23 @@ desktop differences noted inline.
 ### 3.2 Action row
 
 `ActionRow` (§5.2): one primary and up to three icon actions, 12 px gaps,
-left-aligned, wrapping never (icons shrink before the primary does).
+left-aligned, never wrapping. Nothing in the row shrinks: icon buttons are
+44 px at every width (the #73 touch-target floor), and the primary keeps
+its label. Width is handled by priority instead of by scaling:
+
+- Budget at 361 px content width: primary ≈ 120 px + 3 × 44 px icons +
+  3 × 12 px gaps = 288 px. Every phone the project targets (≥ 320 px
+  viewport, 288 px content) fits all four slots.
+- If the container is narrower than the sum of its slots (measured with a
+  `ResizeObserver`, not a breakpoint, so the overlay's `lg:max-w-4xl`
+  panel and the desktop split view behave the same way), icons drop in
+  reverse priority order into a trailing `⋯` overflow menu (`Button
+  size="icon"` trigger, `role="menu"` popover; no shared menu component
+  exists yet, so this is the first and becomes the primitive the theater
+  menu in #62 §6 adopts). Priority,
+  highest first: primary, Watch video, Share, Show notes. Show notes
+  is always also reachable from Information (§3.6), so it is the first
+  to go.
 
 | Slot | Content | Component |
 |---|---|---|
@@ -220,20 +239,52 @@ action row with 16 px of space and no `border-t`.
 ### 3.5 People
 
 A horizontal row of circular 56 px avatars with a name under each,
-`section` heading `People`. Sources, merged and de-duplicated by name:
+`section` heading `People`. Sources, merged in this order:
 
-1. Person entities from `useEpisodeEntities` with `speaker_kind` of host or
-   guest, sorted by `salience`, capped at eight.
-2. Distinct transcript `speaker` labels that are not already covered and are
-   not placeholder labels (`SPEAKER_00`, `Unknown`).
+1. Person entities from `useEpisodeEntities` (`entity.type === 'person'`)
+   with `speaker_kind` of `host` or `guest`, sorted by `salience`, capped
+   at eight.
+2. Distinct `speaker` labels from the segmented transcript
+   (`transcriptData.segments.segments[].speaker`) that are not already
+   covered and are not placeholder labels (`SPEAKER_\d+`, `Unknown`,
+   null). Legacy transcripts (no `segments` field) contribute nothing.
 
-Avatar image: the entity's image when the entity index carries one;
-otherwise an initials disc using the existing speaker colour map
-(`utils/speakerColors`), which keeps the avatar colour consistent with the
-transcript's speaker labels. Tapping a person entity opens its entity page;
-tapping a plain speaker label scrolls the transcript to that speaker's first
-segment (the `KeyEntitiesStrip` `onSeek` path). Hidden when both sources are
-empty.
+**De-duplication contract.** A speaker label is "covered" when its
+normalised form (trim, collapse whitespace, case-fold) equals the
+normalised `canonical_name` of a listed person entity. Nothing else is
+merged: `Jim` and `James VandeHei` are two people to this row. Alias
+merging is an entity-index concern (spec #28 alias resolution), not a UI
+one; until the index exposes aliases the row may show a duplicate for an
+episode whose diarisation label and entity name differ, and that is
+accepted for phase 2.
+
+**Avatar contract.** `EntityRef` carries no image today, so phase 2 ships
+initials discs only, coloured by the existing speaker colour map
+(`utils/speakerColors`) so the avatar matches the transcript's speaker
+labels. The component reads an optional `entity.image_url` and renders it
+when present; adding that field to `EntityRef` is a backend change outside
+this spec and does not alter the component.
+
+**Navigation contract.** Tapping a person entity opens its entity page
+(existing `Link`). Tapping a plain speaker label is a transcript jump,
+not a playback action:
+
+- Segmented transcript: select the Transcript tab via the reader's
+  `setTab('transcript', { push: true })` (same history semantics as a
+  citation jump, spec #54) and set the reader's existing
+  `SegmentScrollTarget` to the `id` of the first `AnnotatedSegment` whose
+  `speaker` matches. This reuses the citation path end to end; it does
+  not call `handleSegmentSeek` / `KeyEntitiesStrip.onSeek`, which start
+  playback. Playback state is untouched.
+- Legacy transcript: there is no segmented data and therefore no
+  speaker-labelled row at all, so this case cannot arise; a People row on
+  a legacy episode is entities only, and entity chips navigate as above.
+- Entity with `speaker_kind` host/guest whose canonical name matches a
+  speaker label: the chip opens the entity page (primary), and a
+  secondary `In transcript` affordance on the entity page is out of
+  scope; the transcript jump stays reserved for plain speaker chips.
+
+Hidden when both sources are empty.
 
 ### 3.6 Information
 
@@ -243,24 +294,53 @@ when the value is null:
 | Label | Value | Source |
 |---|---|---|
 | Show | podcast title, link | `podcast_title`, `podcast_slug` |
-| Author | `author` | podcast `author` (needs adding to `EpisodeDetail`, §7) |
+| Author | `author` | `podcast_author` on `EpisodeDetail` (new, §6) |
 | Published | full date and local time | `pub_date` |
 | Length | `58 min 25 s` | `duration` |
-| Language | language name | summary `podcast_language` / `canonical_language` |
+| Language | language name | `podcast_language` on `EpisodeDetail` (new, §6); the summary response's `podcast_language` is not used because it is absent until a summary exists |
 | Type | Bonus / Trailer | `episode_type`, only when not `full` |
 | Explicit | Yes / No | `explicit` |
 | Show notes | host name of `website_url`, external link | `website_url` |
-| Source | `Imported` / feed | present only for #31 imported episodes |
+| Source | `Imported (YouTube)` / `Imported (audio file)` / `Imported (RSS episode)` | `origin` + `import_kind` on `EpisodeDetail` (new, §6); row omitted when `origin === 'feed'` |
 
 ### 3.7 Sticky collapsed header
 
-Once the title scrolls out of view, a 56 px bar pins to the top of the
-scroll container (the window in page mode, the overlay panel in overlay
-mode): 32 px artwork, one-line truncated title, a 36 px play/pause icon
-button. In overlay mode it merges into the existing `← Inbox` header rather
-than stacking under it. Implemented as a `useCollapsingHeader` hook
-(`IntersectionObserver` on the title) so Podcast and Briefing detail can
-reuse it.
+Once the title scrolls out of view, a 56 px bar shows at the top of the
+scroll area: 32 px artwork, one-line truncated title, a play/pause icon
+button drawn at 36 px inside a 44 × 44 px hit area (`Button
+size="iconSm"`, §5.2) so it meets the touch-target floor within the bar's
+56 px height. The reader cannot render this
+bar itself in overlay mode: `EpisodeReaderOverlay` places its `← Inbox`
+`<header>` as a sibling of the scroll `div`, above it, and a bar inside the
+scroll div would stack under that header. Ownership is therefore split:
+
+- **`EpisodeReader` detects, the host renders.** `EpisodeReader` gains a
+  prop `onCollapsedHeaderChange?: (state: CollapsedHeaderState | null) =>
+  void`. `CollapsedHeaderState` is `{ title, artworkUrl, isPlaying,
+  isLoading, onTogglePlay }`. The reader calls it with a state object when
+  the title leaves the viewport and with `null` when it returns or on
+  unmount. A `useCollapsingHeader(titleRef, scrollContainerRef, topOffset)`
+  hook wraps the `IntersectionObserver` (root = the scroll container or the
+  viewport, `rootMargin` top = `-topOffset`) so Podcast and Briefing detail
+  reuse the detection.
+- **`CollapsedEpisodeBar`** is a presentational component taking that state;
+  both hosts render it.
+- **Page mode** (`EpisodeDetail`): renders `CollapsedEpisodeBar` as
+  `position: sticky` at the top of the page column. Below `sm` the shell's
+  global header is `position: fixed` and 56 px tall (`Layout` pads `main`
+  with `pt-14`), so the bar uses `top-14 sm:top-0`; the observer's
+  `topOffset` is 56 below `sm` and 0 above. The bar sits at the shell's
+  `z` tier for sticky page chrome, below the drawer and command bar.
+- **Overlay mode** (`EpisodeReaderOverlay`): keeps its single `<header>`
+  and swaps its content. Collapsed: `← Inbox` button, then the bar's
+  artwork, title and play control in the same row, still 56 px, no second
+  header. Expanded: `← Inbox` alone, as today. `topOffset` is 0 because
+  the scroll container starts below the header.
+- Reduced motion: no slide-in; the bar appears and disappears with an
+  opacity fade or instantly under `prefers-reduced-motion`.
+
+`EpisodeReaderOverlay.tsx` and `EpisodeDetail.tsx` are therefore touched
+by phase 2 (the §6 note is updated accordingly).
 
 ## 4. Options considered
 
@@ -290,7 +370,10 @@ inside the screen's frame.
 ### 5.2 `Button`: `icon` size
 
 `sizeStyles` gains `icon: 'w-11 h-11 p-0 rounded-full justify-center'`
-(44 px) and `iconSm` (36 px, for the sticky bar). With `iconOnlyMobile`
+(44 px) and `iconSm: 'w-11 h-11 p-0 rounded-full justify-center
+[&>svg]:h-9 [&>svg]:w-9'` for the sticky bar: the visual disc is 36 px
+but the button's box and hit area stay 44 × 44 px, matching the #73
+touch-target floor. Visual size never sets the hit area. With `iconOnlyMobile`
 already present this closes the last case where pages hand-roll circular
 buttons (the play and watch buttons in `EpisodeReader`, the share button).
 `ActionRow` is a layout component only: `primary` slot plus `actions`
@@ -355,20 +438,24 @@ becomes an alias), `card` 96 px / 8 px, `hero` 200–240 px / 12 px, optional
 
 ## 6. Implementation notes
 
-- All header changes are inside `EpisodeReader.tsx`; `EpisodeDetail.tsx`
-  and `EpisodeReaderOverlay.tsx` are untouched except for the sticky bar's
-  merge into the overlay header (§3.7).
-- `EpisodeDetail` API type needs `podcast_author` and `podcast_language`
-  (or the Information section reads them from the `usePodcast` cache entry,
-  which the breadcrumb pattern in `EpisodeDetail.tsx` shows is free when
-  the key is shared). Prefer extending the episode detail response; one
-  request, no second cache dependency.
+- Phase 1 header changes are inside `EpisodeReader.tsx`. Phase 2 adds the
+  `onCollapsedHeaderChange` prop and touches `EpisodeDetail.tsx` and
+  `EpisodeReaderOverlay.tsx` as hosts of the collapsed bar (§3.7).
+- **Episode response contract (mandatory, phase 2).** `EpisodeDetail`
+  gains `podcast_author: string | null`, `podcast_language: string | null`,
+  `origin: 'feed' | 'import'` and `import_kind: ImportKind | null`, set by
+  the episode detail endpoint from the podcast row and the #31 import
+  record. Reading author and language from the podcast query cache is
+  not an option: `EpisodeDetail.tsx` shares the *episode* query with the
+  reader, not the podcast query, so a `usePodcast` lookup would be a
+  second request with its own loading state. The Information section
+  renders from the episode response alone.
 - People §3.5 depends on `useEpisodeEntities`, which already loads for the
-  key entities strip; no new request. Speaker labels come from the
-  transcript response already in cache when the Transcript tab has been
-  opened; when it has not, the row renders from entities only and fills in
-  later. This must not cause layout shift above the fold: People is below
-  the tabs.
+  key entities strip, and on `useEpisodeTranscript`, which the reader
+  already issues on mount regardless of the active tab; no new request.
+  Speaker labels come from `transcriptData.segments` and are absent for
+  legacy transcripts. People sits below the tabs, so late-arriving
+  transcript data cannot shift the fold.
 - The loading skeleton is updated to the new anatomy (hero, eyebrow, title,
   show row, action row) so first paint matches the loaded layout.
 - `stateColors` extraction (§5.5) touches `EpisodeCard`, `Episodes`,
@@ -384,20 +471,50 @@ becomes an alias), `card` 96 px / 8 px, `hero` 200–240 px / 12 px, optional
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 1 | §5.2 `icon` size, §5.3 `MetaEyebrow`, §5.4 `DefinitionList`, §5.6 type scale, §5.8 `Artwork`; hero + action row + description + status relocation on the episode page (§3.1–3.4); skeleton updated | Tabs visible without scrolling on a 393 × 852 phone for a two-line title; no state or index pill above the fold; `make check` green |
-| 2 | §3.6 Information (API fields added), §3.5 People, §3.7 sticky bar | People row hidden when both sources empty; Information omits null rows; sticky bar merges into overlay header |
+| 0 | Static prototype of §3.1–3.3 at 393 × 852 (Storybook story or a throwaway route), measured in Safari iOS with the real browser chrome | The tab header's top edge is within the first viewport for a two-line title and three-line description; the height budget below is confirmed or the artwork/description knobs are turned before phase 1 starts |
+| 1 | §5.2 `icon`/`iconSm` sizes, §5.3 `MetaEyebrow`, §5.4 `DefinitionList`, §5.6 type scale, §5.8 `Artwork`; hero + action row + description + status relocation on the episode page (§3.1–3.4); skeleton updated | Same fold criterion as phase 0, now on the real page; no state or index pill above the fold; every action-row and sticky-bar control has a ≥ 44 × 44 px hit area at 320 px viewport; `make check` green |
+| 2 | Episode response fields (§6), §3.6 Information, §3.5 People, §3.7 sticky bar with both hosts | People row hidden when both sources empty; speaker chip selects the Transcript tab and scrolls without starting playback; Information omits null rows; overlay shows one 56 px header collapsed or expanded; page mode bar clears the mobile shell header |
 | 3 | Adopt `PageHero`, `ActionRow`, `MetaEyebrow`, `DefinitionList` on `PodcastDetail` and `BriefingDetail`; `stateColors` extraction; §5.1 surface tiers applied to those pages | Three detail pages share one header anatomy; no page-local circular button styles remain |
 | 4 | §5.7 colour tokens on the components this spec touched plus `Button`, `ListRow`, `Layout`, `MiniPlayer` | No hard-coded hex in `index.css`; light rendering pixel-identical to phase 3 |
+
+### 7.1 Phone height budget (393 × 852)
+
+Usable first viewport: 852 − ~120 browser chrome − 56 `← Inbox` header =
+~676 px. Proposed header, phone layout, two-line title, three-line
+description, one-row entity strip:
+
+| Block | Height (px) |
+|---|---:|
+| Panel padding top (`p-4`) | 16 |
+| Artwork 40 vw = 157, + 16 gap | 173 |
+| Eyebrow 13 px / 20 + 8 gap | 28 |
+| Title 2 × 26 (22 px / 1.2) + 8 gap | 60 |
+| Show row 28 + 16 gap | 44 |
+| Action row 48 + 16 gap | 64 |
+| Description 3 × 24 + `More` 28 + 16 gap | 116 |
+| Key entities strip | 64 |
+| Tab header row | 48 |
+| **Total to bottom of tab header** | **613** |
+
+63 px of headroom. With 60 vw artwork (236 px) the same stack is 692 px
+and misses; that is why §3.1 fixes the phone artwork at 40 vw / 160 px.
+If phase 0 measures the real components taller than the estimates, the
+knobs are, in order: description clamp to two lines (−24), artwork to
+35 vw (−20). The gate is measured, not computed: phase 1 does not start
+until the phase 0 prototype passes.
 
 ## 8. Open questions
 
 1. Should the primary button read `58 min` (Apple) or keep `Play episode`?
-   The spec assumes the duration; a listener who has partly played the
-   episode could instead see `Resume · 31 min left` from the reading
-   position store, which is a stronger reason to put the number in the pill.
-2. Does the entity index carry person images today, or is the initials disc
-   the only avatar in phase 2? If images arrive later the component does
-   not change.
+   The spec assumes the duration. `Resume` keeps its current meaning: the
+   loaded, paused track (`player.isCurrent`). A `Resume · 31 min left`
+   label is *not* in scope: nothing persists playback position today (the
+   reading-position store saves scroll percentage, and the player forgets
+   position when the track unloads). It becomes possible only after a
+   playback-position store exists, which would be its own spec.
+2. Resolved: `EntityRef` carries no image, so phase 2 avatars are initials
+   discs only (§3.5 avatar contract). The component reads an optional
+   `image_url` so a later index change needs no UI work.
 3. Should `Indexed` survive anywhere on the reader for people who want to
    know entity highlighting is complete, for example as a tooltip on the key
    entities strip heading? The spec removes it entirely.
