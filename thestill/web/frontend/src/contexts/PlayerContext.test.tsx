@@ -724,3 +724,47 @@ describe('spec #72 §5 — persisted rate preference', () => {
     expect(ctx.availableRates).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+
+describe('media layer z-index follows the slot host (spec #71 ladder, #72 2c)', () => {
+  const layer = () => document.querySelector('[data-testid="player-media-layer"]') as HTMLElement
+
+  it('sits on the shell rung for a page slot, above the reader for a dialog slot, above the sheet for its marker', () => {
+    renderPlayer()
+    act(() => ctx.play(videoTrack))
+
+    const pageSlot = document.createElement('div')
+    document.body.appendChild(pageSlot)
+    let unregister!: () => void
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', pageSlot)
+    })
+    expect(ctx.presentation).toBe('theater')
+    expect(layer().style.zIndex).toBe('40')
+    act(() => unregister())
+
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const readerSlot = document.createElement('div')
+    dialog.appendChild(readerSlot)
+    document.body.appendChild(dialog)
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', readerSlot)
+    })
+    expect(layer().style.zIndex).toBe('60')
+    act(() => unregister())
+
+    const sheet = document.createElement('div')
+    sheet.setAttribute('role', 'dialog')
+    sheet.setAttribute('data-media-host', 'now-playing')
+    const sheetSlot = document.createElement('div')
+    sheet.appendChild(sheetSlot)
+    document.body.appendChild(sheet)
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', sheetSlot)
+    })
+    expect(layer().style.zIndex).toBe('71')
+    act(() => unregister())
+  })
+})

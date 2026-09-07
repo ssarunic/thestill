@@ -16,6 +16,7 @@ import {
   updateMediaSessionPositionState,
 } from '../utils/mediaSession'
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
+import { mediaLayerZIndex } from '../constants/layers'
 import { NativeEngine } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
@@ -806,12 +807,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     layer.style.visibility = 'visible'
     layer.style.pointerEvents = 'auto'
-    // The reader overlay (spec #52) is a z-[45] dialog; a slot registered
-    // inside it needs the layer above its scrim (and above the z-50 mini
-    // player, which the overlay insets above — spec #71). Everywhere else
-    // stay at the shell rung (z-40): below the overlay and the z-[70]
-    // transient modals, beside the floating tile.
-    layer.style.zIndex = positionTarget.closest('[role="dialog"]') ? '60' : '40'
+    // One rung above the fixed surface hosting the slot (spec #71 ladder,
+    // resolved in constants/layers.ts): 60 inside the z-[45] reader
+    // overlay, 71 inside the z-[70] Now Playing sheet (spec #72 2c), the
+    // shell rung 40 in page content beside the floating tile.
+    layer.style.zIndex = String(mediaLayerZIndex(positionTarget))
     let handle = 0
     const tick = () => {
       const rect = positionTarget.getBoundingClientRect()
