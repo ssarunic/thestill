@@ -54,6 +54,14 @@ class Deferred:
     deadline: datetime
 
 
+# How long an existing briefing stays "today's briefing" once the throttle
+# has lapsed and a fresh cut finds nothing new. Without this the inbox card
+# vanished mid-afternoon on any day the user had already read everything:
+# the 6h throttle expired, the new window was empty, and the endpoint
+# answered 404 even though the morning's briefing was still current.
+EMPTY_WINDOW_REUSE = timedelta(hours=24)
+
+
 @dataclass(frozen=True)
 class _LazyDeferral:
     """First lazy-open cutoff/deadline for one unchanged cursor window."""
@@ -221,13 +229,19 @@ class BriefingService:
 
         episode_ids = self._inbox.list_episode_ids_in_window(user_id, since=cursor_from, until=cursor_to)
         if not episode_ids:
+            # Nothing new past the cursor. A recent briefing is still the
+            # day's briefing, so hand it back rather than hiding the card;
+            # the cursor does not move, so the next real cut covers the same
+            # window.
+            reuse_latest = latest is not None and clock_now - latest.created_at < EMPTY_WINDOW_REUSE
             logger.debug(
                 "briefing_empty_inbox",
                 user_id=user_id,
                 cursor_from=cursor_from.isoformat(),
                 cursor_to=cursor_to.isoformat(),
+                reused_latest=reuse_latest,
             )
-            return None
+            return latest if reuse_latest else None
 
         briefing = Briefing(
             user_id=user_id,

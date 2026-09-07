@@ -464,8 +464,8 @@ def test_cursor_advances_across_briefings(service, db_path, user_repo, inbox_rep
     assert second.episode_count == 1
 
 
-def test_returns_none_when_only_throttled_inbox_is_empty_after_cursor(service, db_path, user_repo, inbox_repo):
-    """No new items past the previous cursor → no briefing, even after throttle."""
+def test_empty_window_after_throttle_keeps_todays_briefing_then_expires(service, db_path, user_repo, inbox_repo):
+    """No new items past the cursor: today's briefing stays current for 24h, then nothing."""
     user = _make_user(user_repo, "alice@example.com")
     podcast_id = str(uuid.uuid4())
     base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
@@ -475,9 +475,23 @@ def test_returns_none_when_only_throttled_inbox_is_empty_after_cursor(service, d
     first = service.generate_for_user(user.id, now=base + timedelta(hours=1))
     assert first is not None
 
-    # No new inbox items; throttle elapsed.
+    # No new inbox items; throttle elapsed. The morning briefing is still
+    # the day's briefing, so the card keeps it — and the cursor stays put.
     second = service.generate_for_user(user.id, now=base + timedelta(hours=10))
-    assert second is None
+    assert second is not None
+    assert second.id == first.id
+    assert service.latest_for_user(user.id).cursor_to == first.cursor_to
+
+    # A day later it is stale: nothing new means no briefing.
+    third = service.generate_for_user(user.id, now=base + timedelta(hours=26))
+    assert third is None
+
+    # Fresh items after that produce a new briefing covering the gap.
+    ep2 = _publish_episode(db_path, podcast_id, "ep-2")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep2, delivered_at=base + timedelta(hours=27))
+    fourth = service.generate_for_user(user.id, now=base + timedelta(hours=28))
+    assert fourth is not None and fourth.id != first.id
+    assert fourth.cursor_from == first.cursor_to
 
 
 # ============================================================================
