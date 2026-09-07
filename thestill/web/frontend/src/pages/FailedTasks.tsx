@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useDLQTasks, useRetryDLQTask, useSkipDLQTask, useRetryAllDLQTasks } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { DLQTask, DLQBranchFilter, FailureType } from '../api/types'
 import FailureDetailsModal from '../components/FailureDetailsModal'
 import { STAGE_BADGE_COLOR, ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
@@ -163,7 +162,6 @@ function DLQTaskCard({ task, onRetry, onSkip, isRetrying, isSkipping }: DLQTaskC
 
 export default function FailedTasks() {
   // Restore scroll position on Back from an episode detail page.
-  useScrollRestoration()
   // Spec #28 Phase 3.2 — default to ``user`` so the entity branch
   // doesn't drown the user-facing critical path on page load. The active tab
   // lives in the URL so the browser Back button restores it when returning

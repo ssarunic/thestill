@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { addPodcast, resolvePodcast } from '../api/client'
 import { useTopPodcasts } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import { useToast } from '../components/Toast'
@@ -16,7 +15,6 @@ export default function TopPodcasts() {
   const navigate = useNavigate()
   const { showToast } = useToast()
   // Restore scroll position on Back from a podcast detail page.
-  useScrollRestoration()
   // Filters live in the URL query string so the browser Back button restores
   // both them *and* the scroll position when returning from a podcast detail
   // page — the app-wide convention (Episodes, Search, …). Combined with the

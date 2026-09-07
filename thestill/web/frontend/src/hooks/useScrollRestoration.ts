@@ -1,27 +1,41 @@
 import { useEffect, useRef } from 'react'
 import { useLocation, useNavigationType } from 'react-router-dom'
+import { useBackgroundLocation } from './useBackgroundLocation'
 
-// Per-entry scroll-position memory for scrollable list/index pages.
+// Window scroll behaviour for every route, mounted once in ``Layout``:
 //
-// React Router (plain `<Routes>`, not a data router) does no scroll
-// restoration, and the browser's native restoration is unreliable in SPAs — on
-// Back it fires before the list has re-rendered, so it lands at the top. This
-// hook records the window scroll offset for the active history entry and, when
-// the user returns to that entry via Back/Forward, restores it — retrying
-// across animation frames so a list whose height grows as (cached) data and
-// lazy images settle still ends up at the right spot.
+//   PUSH to a new pathname  → start at the top
+//   POP (Back/Forward)      → restore the offset recorded for that entry
+//   same-pathname PUSH/REPLACE (filters, ``?view=transcript``, citation jumps)
+//                           → leave the offset alone; the page owns it
 //
-// Keyed by `location.key` (unique per history entry) so Back/Forward restore
-// while a fresh navigation to the same page starts at the top. Apply to every
-// scrollable list page so returning from a detail page keeps the user where
-// they were (app-wide convention — see the [[feedback_list_pages_preserve_filters_scroll]] rule).
+// React Router (plain ``<Routes>``, not a data router) does no scroll
+// restoration, and the browser's native restoration is unreliable in SPAs —
+// on Back it fires before the page has re-rendered, so it lands at the top.
+// Recording is keyed by ``location.key`` (unique per history entry) so
+// Back/Forward restore while a fresh navigation to the same page starts at
+// the top. Living in ``Layout`` rather than per page is what makes the
+// convention hold for detail pages too (the 2026-09-07 People-row bug, PR
+// #197, was a page that had opted out without noticing) — see
+// docs/code-guidelines.md "Navigation invariants".
+//
+// The spec #52 reader overlay pushes an episode URL over the inbox while the
+// inbox stays mounted and the body is scroll-locked: while a background
+// location is present nothing here runs, so opening the overlay never moves
+// the page beneath it, and closing it is a POP back to an entry whose offset
+// is still on screen.
+//
+// Pages with their own scroll container (the overlay reader) keep their own
+// hook (``useReadingPosition``); this one only ever touches the window.
 const positions = new Map<string, number>()
 
 export function useScrollRestoration(): void {
   const location = useLocation()
   const navType = useNavigationType()
+  const inOverlay = useBackgroundLocation() != null
   const keyRef = useRef(location.key)
   keyRef.current = location.key
+  const prevPathnameRef = useRef<string | null>(null)
 
   // Continuously record this entry's scroll offset. Recorded synchronously:
   // a Map.set per scroll event is free, and deferring it to a frame lost the
@@ -35,15 +49,28 @@ export function useScrollRestoration(): void {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
-  // On Back/Forward (POP) to a remembered entry, restore its offset. The retry
-  // loop keeps re-applying the target until the page is tall enough to reach it
-  // (cached content renders on the first commit; lazy images may add height a
-  // few frames later), capped so a now-shorter list doesn't spin forever.
-  // ``behavior: 'instant'`` opts out of the document's ``scroll-behavior:
-  // smooth``: Back should land where the user was, not animate there, and an
-  // animated scroll would also defeat the per-frame convergence check.
   useEffect(() => {
+    if (inOverlay) return
+    const prevPathname = prevPathnameRef.current
+    prevPathnameRef.current = location.pathname
+
+    if (navType === 'PUSH') {
+      // A new page starts at the top; a same-page push (search params) keeps
+      // whatever offset the page has arranged for itself.
+      if (prevPathname !== null && prevPathname !== location.pathname) {
+        window.scrollTo({ top: 0, behavior: 'instant' })
+      }
+      return
+    }
     if (navType !== 'POP') return
+
+    // The retry loop keeps re-applying the target until the page is tall
+    // enough to reach it (cached content renders on the first commit; lazy
+    // chunks and images add height a few frames later), capped so a
+    // now-shorter page doesn't spin forever. ``behavior: 'instant'`` opts out
+    // of the document's ``scroll-behavior: smooth``: Back should land where
+    // the user was, not animate there, and an animated scroll would also
+    // defeat the per-frame convergence check.
     const target = positions.get(location.key)
     if (!target) return
     let frames = 0
@@ -55,5 +82,5 @@ export function useScrollRestoration(): void {
       }
     })
     return () => cancelAnimationFrame(raf)
-  }, [location.key, navType])
+  }, [location.key, location.pathname, navType, inOverlay])
 }

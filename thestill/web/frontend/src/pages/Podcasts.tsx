@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { usePodcastsInfinite } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import PodcastCard from '../components/PodcastCard'
 import AddPodcastModal from '../components/AddPodcastModal'
 import Button, { PlusIcon } from '../components/Button'
@@ -50,7 +49,6 @@ function SearchBox({ value, onChange, inputClassName, testId }: SearchBoxProps) 
 
 export default function Podcasts() {
   // Restore scroll position on Back from a podcast detail page.
-  useScrollRestoration()
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   // Search state. The active filter lives in the URL ``q`` param so the browser
   // Back button restores it (and the scroll position) when returning from a

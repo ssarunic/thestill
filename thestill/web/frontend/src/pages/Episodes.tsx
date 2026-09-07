@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAllEpisodesInfinite, useProcessingStageByEpisodeId } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import EpisodeCard from '../components/EpisodeCard'
 import EpisodeFilters from '../components/EpisodeFilters'
 import BulkActionsBar from '../components/BulkActionsBar'
@@ -9,7 +8,6 @@ import type { EpisodeFilters as EpisodeFiltersType, EpisodeState } from '../api/
 
 export default function Episodes() {
   // Restore scroll position on Back from an episode detail page.
-  useScrollRestoration()
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
