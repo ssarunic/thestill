@@ -41,9 +41,9 @@ describe('useReadingPosition scroll-container awareness', () => {
     document.body.innerHTML = ''
   })
 
-  it('scrolls the window to top on fresh navigation when no container is given', () => {
+  it('leaves window scrolling to the layout hook when no container is given', () => {
     renderHook(() => useReadingPosition('ep-1'), { wrapper })
-    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' })
+    expect(window.scrollTo).not.toHaveBeenCalled()
   })
 
   it('scrolls the container — not the window — on fresh navigation', () => {
@@ -83,8 +83,12 @@ describe('useReadingPosition scroll-container awareness', () => {
 
 // A reader page that navigates away and back through the router, the way a
 // People / entity link and the browser's Back button do.
+// The overlay reader scrolls its own container; the hook owns that
+// container's top-on-fresh / restore-on-return behaviour.
+const containerRef: { current: HTMLDivElement | null } = { current: null }
+
 function ReaderPage() {
-  useReadingPosition('ep-back')
+  useReadingPosition('ep-back', containerRef)
   const navigate = useNavigate()
   return (
     <button type="button" onClick={() => navigate('/entities/person/x')}>
@@ -109,9 +113,9 @@ describe('useReadingPosition on in-app Back (spec #76 People links)', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('restores the saved position when the router pops back to the reader entry', async () => {
-    Object.defineProperty(document.documentElement, 'scrollHeight', { value: 3000, configurable: true })
-    Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true })
+  it('restores the container position when the router pops back to the reader entry', async () => {
+    const el = makeContainer({ scrollHeight: 3000, clientHeight: 1000 })
+    containerRef.current = el
     render(
       <MemoryRouter initialEntries={[freshEntry('/podcasts/p/episodes/e')]}>
         <Routes>
@@ -121,12 +125,12 @@ describe('useReadingPosition on in-app Back (spec #76 People links)', () => {
       </MemoryRouter>,
     )
     // First visit: top.
-    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'instant' })
+    expect(el.scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'instant' })
 
     // Scroll to 40 % and leave inside the debounce window — the position is
     // flushed on unmount, not lost.
-    Object.defineProperty(window, 'scrollY', { value: 800, configurable: true })
-    fireEvent.scroll(window)
+    el.scrollTop = 800
+    fireEvent.scroll(el)
     await act(async () => {
       screen.getByRole('button', { name: 'leave' }).click()
     })
@@ -136,7 +140,8 @@ describe('useReadingPosition on in-app Back (spec #76 People links)', () => {
       screen.getByRole('button', { name: 'back' }).click()
     })
     await waitFor(() => {
-      expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 800, behavior: 'instant' })
+      expect(el.scrollTo).toHaveBeenLastCalledWith({ top: 800, behavior: 'instant' })
     })
+    expect(window.scrollTo).not.toHaveBeenCalled()
   })
 })

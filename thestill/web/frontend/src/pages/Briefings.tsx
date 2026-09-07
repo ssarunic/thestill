@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import { useBriefingsInfinite } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type { Briefing } from '../api/types'
 import ListGroup from '../components/ListGroup'
 import ListRow from '../components/ListRow'
@@ -64,7 +63,6 @@ function BriefingRow({ briefing }: { briefing: Briefing }) {
 
 export default function Briefings() {
   // Restore scroll position on Back from a briefing detail page.
-  useScrollRestoration()
   const query = useBriefingsInfinite(20)
 
   const briefings = query.data?.pages.flatMap((page) => page.briefings) ?? []

@@ -12,8 +12,13 @@ const POSITION_EXPIRY_DAYS = 30
 // History entries (``location.key``) the reader has already been mounted on
 // in this session. Coming back to one of them via Back/Forward is a return
 // and restores the saved position; a fresh entry starts at the top. Same
-// per-entry convention as ``useScrollRestoration`` on the list pages.
+// per-entry convention as ``useScrollRestoration`` in ``Layout``.
 const seenEntries = new Set<string>()
+
+// A browser-level back/forward document load restores the reader's saved
+// position once, on the first reader mount of that document; later mounts in
+// the same document are in-app navigations and must not read it again.
+let documentBackConsumed = false
 
 /**
  * Hook to persist and restore reading position for an episode.
@@ -135,21 +140,30 @@ export function useReadingPosition(
     // Don't restore if we already restored for this episode
     if (hasRestoredRef.current === episodeId) return
 
-    // Restore only when coming back: an in-app Back/Forward to a history
-    // entry this reader was already mounted on (router POP + seen key — the
-    // router reports POP for the very first render too, so the key check is
-    // what separates a return from a first visit), or a browser-level
-    // back/forward document load. Fresh link clicks start at the top.
+    // Which navigations restore:
+    // - Overlay (own scroll container): an in-app Back/Forward to a history
+    //   entry this reader was already mounted on (router POP + seen key —
+    //   the router reports POP for the very first render too, so the key
+    //   check is what separates a return from a first visit). Fresh entries
+    //   start the container at the top.
+    // - Page mode (window): in-session Back is ``useScrollRestoration`` in
+    //   ``Layout``'s job (exact offset, retry loop), and so is scrolling a
+    //   fresh page to the top. This hook only restores the cross-session
+    //   position on a browser-level back/forward document load.
+    const ownsScroll = !!scrollContainerRef
     const documentNavigation = (
       window.performance?.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming | undefined
     )?.type
+    const isDocumentBack = documentNavigation === 'back_forward' && !documentBackConsumed
+    documentBackConsumed = true
     const isReturn = navigationType === 'POP' && seenEntries.has(location.key)
     seenEntries.add(location.key)
-    const isBackNavigation = isReturn || documentNavigation === 'back_forward' || location.state?.restoreScroll
+    const isBackNavigation = ownsScroll
+      ? isReturn || isDocumentBack || location.state?.restoreScroll
+      : isDocumentBack || location.state?.restoreScroll
 
     if (!isBackNavigation) {
-      // Fresh navigation - scroll to top and don't restore
-      scrollToTop(0)
+      if (ownsScroll) scrollToTop(0)
       hasRestoredRef.current = episodeId
       return
     }

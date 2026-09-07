@@ -19,7 +19,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useCorpusSearch, useQuickSearch } from '../hooks/useApi'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import type {
   EntityType,
   QuickEntityItem,
@@ -39,7 +38,6 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 export default function SearchResults() {
   // Restore scroll position on Back from a result's detail page.
-  useScrollRestoration()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialQuery = searchParams.get('q') ?? ''
   const initialTab = (searchParams.get('tab') as Tab) ?? 'all'
