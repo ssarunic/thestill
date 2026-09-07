@@ -7,6 +7,10 @@ import {
   useMarkBriefingListened,
 } from '../hooks/useApi'
 import Button from '../components/Button'
+import PageHero from '../components/PageHero'
+import ActionRow from '../components/ActionRow'
+import MetaEyebrow from '../components/MetaEyebrow'
+import Panel from '../components/Panel'
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -27,8 +31,9 @@ export default function BriefingDetail() {
   if (briefingQuery.isLoading) {
     return (
       <div className="space-y-4">
-        <div className="animate-pulse h-8 w-48 bg-gray-100 rounded" />
         <div className="animate-pulse h-4 w-72 bg-gray-100 rounded" />
+        <div className="animate-pulse h-8 w-48 bg-gray-100 rounded" />
+        <div className="animate-pulse h-12 w-36 bg-gray-100 rounded-full" />
         <div className="animate-pulse h-64 bg-white border border-gray-200 rounded-lg" />
       </div>
     )
@@ -52,17 +57,37 @@ export default function BriefingDetail() {
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Today's briefing</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {briefing.episode_count} episode{briefing.episode_count === 1 ? '' : 's'}
-          {' • '}
-          generated {formatDateTime(briefing.created_at)}
-          {isListened ? ` • listened ${formatDateTime(briefing.listened_at!)}` : ''}
-        </p>
-      </div>
+      {/* Spec #76 §5 — same hero anatomy as the episode page, no artwork;
+          the one action sits under the title instead of below the script. */}
+      <PageHero
+        eyebrow={
+          <MetaEyebrow
+            items={[
+              `${briefing.episode_count} episode${briefing.episode_count === 1 ? '' : 's'}`,
+              `Generated ${formatDateTime(briefing.created_at)}`,
+              isListened ? `Listened ${formatDateTime(briefing.listened_at!)}` : null,
+            ]}
+          />
+        }
+        title="Today's briefing"
+      >
+        <ActionRow
+          primary={
+            <Button
+              type="button"
+              size="lg"
+              pill
+              onClick={() => markListened.mutate(briefing.id)}
+              disabled={isListened || markListened.isPending}
+              isLoading={markListened.isPending}
+            >
+              {isListened ? 'Marked listened' : markListened.isPending ? 'Saving…' : 'Mark listened'}
+            </Button>
+          }
+        />
+      </PageHero>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
+      <Panel className="p-4 sm:p-6">
         <NarrationView
           briefingId={briefing.id}
           narrations={briefing.narrations ?? []}
@@ -88,18 +113,7 @@ export default function BriefingDetail() {
             </>
           }
         />
-      </div>
-
-      <div className="flex items-center justify-end">
-        <Button
-          type="button"
-          onClick={() => markListened.mutate(briefing.id)}
-          disabled={isListened || markListened.isPending}
-          isLoading={markListened.isPending}
-        >
-          {isListened ? 'Marked listened' : markListened.isPending ? 'Saving…' : 'Mark listened'}
-        </Button>
-      </div>
+      </Panel>
     </div>
   )
 }

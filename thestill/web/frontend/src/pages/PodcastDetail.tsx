@@ -10,11 +10,17 @@ import {
 } from '../hooks/useApi'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
-import SmartImage from '../components/SmartImage'
 import ExpandableDescription from '../components/ExpandableDescription'
-import { ExplicitBadge } from '../components/ExplicitBadge'
 import { ExternalLink } from '../components/ExternalLink'
-import Button, { MinusIcon, PlusIcon } from '../components/Button'
+import Button, { ExternalLinkIcon, MinusIcon, PlusIcon } from '../components/Button'
+import { buttonClassName } from '../components/buttonStyles'
+import PageHero from '../components/PageHero'
+import ActionRow from '../components/ActionRow'
+import Artwork from '../components/Artwork'
+import MetaEyebrow from '../components/MetaEyebrow'
+import DefinitionList from '../components/DefinitionList'
+import Panel from '../components/Panel'
+import { hostOf } from '../utils/episodeFormat'
 
 export default function PodcastDetail() {
   const { podcastSlug } = useParams<{ podcastSlug: string }>()
@@ -97,186 +103,134 @@ export default function PodcastDetail() {
         <span className="text-gray-900">{podcastLoading ? '...' : podcast?.title}</span>
       </nav>
 
-      {/* Header */}
+      {/* Header — spec #76 §5 primitives: hero, action row, description. */}
       {podcastLoading ? (
-        <div className="animate-pulse bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
-          <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
-            <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gray-200 rounded-lg mx-auto sm:mx-0 flex-shrink-0" />
-            <div className="flex-1 space-y-4">
-              <div className="h-6 bg-gray-200 rounded w-3/4 sm:w-1/2" />
-              <div className="h-4 bg-gray-200 rounded w-full sm:w-3/4" />
-              <div className="h-4 bg-gray-200 rounded w-1/2 sm:w-1/4" />
+        <div className="animate-pulse" aria-hidden="true">
+          <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
+            <div className="flex justify-center sm:block">
+              <div className="h-24 w-24 rounded-lg bg-gray-200" />
+            </div>
+            <div className="flex-1 space-y-3">
+              <div className="h-4 w-1/3 rounded bg-gray-200" />
+              <div className="h-7 w-3/4 rounded bg-gray-200 sm:w-1/2" />
+              <div className="h-5 w-1/3 rounded bg-gray-200" />
+              <div className="h-12 w-32 rounded-full bg-gray-200" />
             </div>
           </div>
         </div>
       ) : podcast ? (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
-          <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
-            {/* Podcast artwork */}
-            <SmartImage
-              sources={[podcast.image_url]}
-              alt={`${podcast.title} artwork`}
-              width={96}
-              height={96}
-              loading="eager"
-              className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover flex-shrink-0 mx-auto sm:mx-0 aspect-square"
-              fallback={
-                <div className="w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-lg flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0 aspect-square">
-                  <svg className="w-10 h-10 sm:w-12 sm:h-12 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                </div>
-              }
+        <PageHero
+          artwork={<Artwork role="card" sources={[podcast.image_url]} alt={`${podcast.title} artwork`} loading="eager" />}
+          eyebrow={
+            <MetaEyebrow
+              items={[
+                podcast.primary_category,
+                podcast.primary_subcategory,
+                podcast.show_type === 'serial' ? 'Serial' : null,
+                podcast.explicit ? 'Explicit' : null,
+              ]}
             />
-
-            <div className="flex-1 text-center sm:text-left">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{podcast.title}</h1>
-                  <ExplicitBadge explicit={podcast.explicit} />
-                </div>
-                {podcast.is_following ? (
-                  <Button
-                    variant="secondary"
-                    icon={<MinusIcon />}
-                    iconOnlyMobile
-                    isLoading={isMutating}
-                    onClick={() => {
-                      if (isMutating) return
-                      setIsMutating(true)
-                      unfollow(podcastSlug!, {
-                        onSuccess: () => {
-                          showToast(`Unfollowed ${podcast.title}`, 'success')
-                          navigate('/podcasts')
-                        },
-                        onError: (error) => {
-                          showToast(`Failed to unfollow: ${error.message}`, 'error')
-                          setIsMutating(false)
-                        },
-                      })
-                    }}
-                  >
-                    Unfollow
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    icon={<PlusIcon />}
-                    iconOnlyMobile
-                    isLoading={isMutating}
-                    onClick={() => {
-                      if (isMutating) return
-                      setIsMutating(true)
-                      follow(podcastSlug!, {
-                        onSuccess: () => {
-                          showToast(`Followed ${podcast.title}`, 'success')
-                          setIsMutating(false)
-                        },
-                        onError: (error) => {
-                          showToast(`Failed to follow: ${error.message}`, 'error')
-                          setIsMutating(false)
-                        },
-                      })
-                    }}
-                  >
-                    Follow
-                  </Button>
-                )}
-              </div>
-              {/* Author */}
-              {podcast.author && (
-                <p className="text-gray-600 text-sm mt-1">By {podcast.author}</p>
-              )}
-              {podcast.description ? (
-                <div className="mt-2">
-                  <ExpandableDescription html={podcast.description} maxLines={3} />
-                </div>
+          }
+          title={podcast.title}
+          identity={podcast.author ? <p className="text-base text-gray-700">By {podcast.author}</p> : undefined}
+        >
+          <ActionRow
+            primary={
+              podcast.is_following ? (
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  pill
+                  icon={<MinusIcon />}
+                  isLoading={isMutating}
+                  onClick={() => {
+                    if (isMutating) return
+                    setIsMutating(true)
+                    unfollow(podcastSlug!, {
+                      onSuccess: () => {
+                        showToast(`Unfollowed ${podcast.title}`, 'success')
+                        navigate('/podcasts')
+                      },
+                      onError: (error) => {
+                        showToast(`Failed to unfollow: ${error.message}`, 'error')
+                        setIsMutating(false)
+                      },
+                    })
+                  }}
+                >
+                  Unfollow
+                </Button>
               ) : (
-                <p className="text-gray-600 mt-2">No description</p>
-              )}
-
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-2 gap-y-1 mt-4 text-sm text-gray-600">
-                {/* Category */}
-                {podcast.primary_category && (
-                  <>
-                    <span>
-                      {podcast.primary_subcategory
-                        ? `${podcast.primary_category} › ${podcast.primary_subcategory}`
-                        : podcast.primary_category}
-                    </span>
-                    <span className="text-gray-300">·</span>
-                  </>
-                )}
-                {/* Episode count — replaced with a loading indicator while a
-                    feed refresh is pending and nothing has been discovered
-                    yet (spec #74: the lazy-import discovery is a queue task
-                    the podcast query polls on via ``refresh_pending``). */}
-                {podcast.refresh_pending && podcast.episodes_count === 0 ? (
-                  <span className="inline-flex items-center gap-2 text-gray-500">
-                    <span
-                      className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
-                      aria-hidden="true"
-                    />
-                    Loading episodes…
+                <Button
+                  variant="primary"
+                  size="lg"
+                  pill
+                  icon={<PlusIcon />}
+                  isLoading={isMutating}
+                  onClick={() => {
+                    if (isMutating) return
+                    setIsMutating(true)
+                    follow(podcastSlug!, {
+                      onSuccess: () => {
+                        showToast(`Followed ${podcast.title}`, 'success')
+                        setIsMutating(false)
+                      },
+                      onError: (error) => {
+                        showToast(`Failed to follow: ${error.message}`, 'error')
+                        setIsMutating(false)
+                      },
+                    })
+                  }}
+                >
+                  Follow
+                </Button>
+              )
+            }
+            actions={
+              podcast.website_url ? (
+                <a
+                  href={podcast.website_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Website"
+                  className={buttonClassName({ variant: 'secondary', size: 'icon' })}
+                >
+                  <span className="h-5 w-5">
+                    <ExternalLinkIcon />
                   </span>
-                ) : (
-                  <>
-                    <span>{podcast.episodes_count} episodes</span>
-                    <span className="text-gray-300">·</span>
-                    {/* Processed count */}
-                    <span className="text-green-600">{podcast.episodes_processed} processed</span>
-                    {/* Spec #74 — an open enqueued a feed refresh; the podcast
-                        query polls until it settles and the episode list is
-                        invalidated then. */}
-                    {podcast.refresh_pending && (
-                      <>
-                        <span className="text-gray-300">·</span>
-                        <span className="inline-flex items-center gap-2 text-gray-500">
-                          <span
-                            className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
-                            aria-hidden="true"
-                          />
-                          Checking for new episodes…
-                        </span>
-                      </>
-                    )}
-                  </>
-                )}
-                {/* Website link */}
-                {podcast.website_url && (
-                  <>
-                    <span className="text-gray-300">·</span>
-                    <ExternalLink href={podcast.website_url} className="text-sm">
-                      {(() => {
-                        try {
-                          return new URL(podcast.website_url).hostname
-                        } catch {
-                          return 'Website'
-                        }
-                      })()}
-                    </ExternalLink>
-                  </>
-                )}
-              </div>
-              {/* Complete series indicator */}
-              {podcast.is_complete && (
-                <p className="text-sm text-gray-500 mt-2">Complete series · No new episodes</p>
-              )}
-              {/* Copyright */}
-              {podcast.copyright && (
-                <p className="text-xs text-gray-400 mt-4">{podcast.copyright}</p>
-              )}
-            </div>
-          </div>
-        </div>
+                  <span className="sr-only">Website</span>
+                </a>
+              ) : null
+            }
+          />
+          {podcast.description ? (
+            <ExpandableDescription html={podcast.description} maxLines={3} />
+          ) : (
+            <p className="text-gray-600">No description</p>
+          )}
+        </PageHero>
       ) : null}
 
       {/* Episodes */}
       <div>
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Episodes
-          {totalEpisodes > 0 && ` (${totalEpisodes})`}
-        </h2>
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <h2 className="text-section text-gray-900">
+            Episodes
+            {totalEpisodes > 0 && ` (${totalEpisodes})`}
+          </h2>
+          {/* Spec #74 — an open enqueued a feed refresh; the podcast query
+              polls until it settles and the episode list is invalidated
+              then. */}
+          {podcast?.refresh_pending && (
+            <span className="inline-flex items-center gap-2 text-sm text-gray-500" role="status">
+              <span
+                className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
+                aria-hidden="true"
+              />
+              {podcast.episodes_count === 0 ? 'Loading episodes…' : 'Checking for new episodes…'}
+            </span>
+          )}
+        </div>
 
         {!episodesData ||
         episodesLoading ||
@@ -333,6 +287,40 @@ export default function PodcastDetail() {
           </div>
         )}
       </div>
+
+      {/* Spec #76 §5.4 — every remaining show fact in one labelled place. */}
+      {podcast && (
+        <Panel className="px-4 py-3 sm:px-6 sm:py-4">
+          <DefinitionList
+            heading="Details"
+            rows={[
+              { label: 'Author', value: podcast.author },
+              {
+                label: 'Category',
+                value: podcast.primary_category
+                  ? podcast.primary_subcategory
+                    ? `${podcast.primary_category} › ${podcast.primary_subcategory}`
+                    : podcast.primary_category
+                  : null,
+              },
+              { label: 'Episodes', value: podcast.episodes_count, numeric: true },
+              { label: 'Processed', value: podcast.episodes_processed, numeric: true },
+              { label: 'Status', value: podcast.is_complete ? 'Complete series · No new episodes' : null },
+              { label: 'Explicit', value: podcast.explicit == null ? null : podcast.explicit ? 'Yes' : 'No' },
+              {
+                label: 'Website',
+                value:
+                  podcast.website_url && hostOf(podcast.website_url) ? (
+                    <ExternalLink href={podcast.website_url} className="text-sm">
+                      {hostOf(podcast.website_url)}
+                    </ExternalLink>
+                  ) : null,
+              },
+              { label: 'Copyright', value: podcast.copyright },
+            ]}
+          />
+        </Panel>
+      )}
     </div>
   )
 }
