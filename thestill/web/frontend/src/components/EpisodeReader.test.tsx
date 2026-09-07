@@ -259,7 +259,7 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
         segments: {
           segments: [
             { id: 1, start: 0, end: 5, speaker: 'Ed Elson', text: 'Hi', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
-            { id: 2, start: 5, end: 9, speaker: 'Jim VandeHei', text: 'Hello', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
+            { id: 2, start: 5, end: 9, speaker: ' Jim VandeHei ', text: 'Hello', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
             { id: 3, start: 9, end: 12, speaker: 'SPEAKER_02', text: '…', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
           ],
         },

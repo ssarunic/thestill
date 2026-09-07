@@ -842,6 +842,27 @@ def test_insert_imported_episode_and_canonical_lookup(h):
     assert found is not None and found[1].id == episode_id
 
 
+def test_canonical_id_survives_save_episode_and_full_save(h):
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    canonical = f"youtube:{uid}"
+
+    # Idempotent insert path (save_episode) keeps the model's canonical_id.
+    ep = _mk_episode(pid, uid, canonical_id=canonical)
+    h.repo.save_episode(ep)
+    assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
+
+    # Full save deletes and re-inserts every episode from the model; the
+    # provenance key must come back with it. The Postgres harness composes
+    # only the episodes mixin, so the destructive path is exercised on SQLite
+    # (the PG insert SQL is pinned by tests/unit/repositories).
+    if h.backend == "sqlite":
+        podcast, episode = h.repo.get_episode(ep.id)
+        podcast.episodes = [episode]
+        h.repo.save(podcast)
+        assert h.repo.get_episode(ep.id)[1].canonical_id == canonical
+
+
 def test_find_by_audio_url_and_set_canonical_id(h):
     uid = _nonce()
     pid = _mk_parent(h, uid)

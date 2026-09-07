@@ -44,7 +44,11 @@ describe('buildPeople (spec #76 §3.5)', () => {
     // Ad-break/music speakers never become people, and never take a palette slot.
     expect(chips.map((c) => c.name)).toEqual(['Jim VandeHei', 'Ed Elson', 'Scott'])
     expect(chips[0].href).toContain('/entities/')
+    expect(chips[0].segmentId).toBeNull()
     expect(chips[2].href).toBeNull()
+    // The jump target is the first segment carrying the label, even when a
+    // later segment spells it with stray whitespace.
+    expect(chips[2].segmentId).toBe(4)
   })
 
   it('caps entity people at eight and keeps Jim and James apart', () => {
@@ -83,6 +87,6 @@ describe('People', () => {
     )
     expect(screen.getByRole('link', { name: 'Ed Elson' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Scott' }))
-    expect(onSpeakerSelect).toHaveBeenCalledWith('Scott')
+    expect(onSpeakerSelect).toHaveBeenCalledWith(1)
   })
 })

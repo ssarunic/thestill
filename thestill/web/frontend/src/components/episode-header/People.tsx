@@ -14,8 +14,8 @@ interface PeopleProps {
   entities: EpisodeEntity[]
   /** Segmented transcript rows; ``null`` for legacy transcripts (no speaker labels). */
   segments: AnnotatedSegment[] | null | undefined
-  /** A plain speaker chip was tapped: jump the transcript to that speaker. */
-  onSpeakerSelect: (speakerLabel: string) => void
+  /** A plain speaker chip was tapped: jump the transcript to its first segment. */
+  onSpeakerSelect: (segmentId: number) => void
 }
 
 export default function People({ entities, segments, onSpeakerSelect }: PeopleProps) {
@@ -55,7 +55,7 @@ export default function People({ entities, segments, onSpeakerSelect }: PeoplePr
               ) : (
                 <button
                   type="button"
-                  onClick={() => onSpeakerSelect(chip.name)}
+                  onClick={() => chip.segmentId != null && onSpeakerSelect(chip.segmentId)}
                   title={`Find ${chip.name} in the transcript`}
                   className={chipClass}
                 >

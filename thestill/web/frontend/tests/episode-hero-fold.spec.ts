@@ -83,18 +83,30 @@ test.describe('episode hero on a phone (spec #76)', () => {
 test.describe('action row at the narrowest supported width', () => {
   test.use({ viewport: { width: 320, height: 732 }, isMobile: true, hasTouch: true })
 
-  test('every control is a 44 px target and nothing overflows', async ({ page }) => {
+  test('all four slots are 44 px targets and nothing overflows', async ({ page }) => {
     await mockEpisodeApi(page)
     await page.goto(EPISODE_PATH)
-    await expect(page.getByRole('button', { name: 'Play episode, 58 min' })).toBeVisible()
-    for (const control of [
+    // Primary + Watch video + Share + Show notes: the full slot set the
+    // deferred overflow menu (spec §3.2) would have to handle.
+    const controls = [
+      page.getByRole('button', { name: 'Play episode, 58 min' }),
+      page.getByRole('button', { name: 'Watch video' }),
       page.getByRole('button', { name: /^(share|copy link)$/i }),
       page.getByRole('link', { name: 'Show notes' }),
-    ]) {
+    ]
+    for (const control of controls) {
+      await expect(control).toBeVisible()
       const box = (await control.boundingBox())!
       expect(box.width).toBeGreaterThanOrEqual(44)
       expect(box.height).toBeGreaterThanOrEqual(44)
     }
+    const boxes = await Promise.all(controls.map((c) => c.boundingBox()))
+    // Single row (centres aligned; the 48 px primary and 44 px icons have
+    // different top edges), in order, entirely inside the viewport.
+    const centres = boxes.map((b) => Math.round(b!.y + b!.height / 2))
+    expect(Math.max(...centres) - Math.min(...centres)).toBeLessThanOrEqual(1)
+    for (let i = 1; i < boxes.length; i += 1) expect(boxes[i]!.x).toBeGreaterThan(boxes[i - 1]!.x)
+    expect(boxes[3]!.x + boxes[3]!.width).toBeLessThanOrEqual(320)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow).toBeLessThanOrEqual(0)
   })

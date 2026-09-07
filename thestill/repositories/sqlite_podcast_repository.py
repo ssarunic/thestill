@@ -4068,8 +4068,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     explicit, episode_type, episode_number, season_number, website_url,
                     audio_file_size, audio_mime_type,
                     audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
-                    clean_transcript_json_path, summary_path, playback_time_offset_seconds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    clean_transcript_json_path, summary_path, playback_time_offset_seconds, canonical_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     episode.id,
@@ -4100,6 +4100,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode.clean_transcript_json_path,
                     episode.summary_path,
                     episode.playback_time_offset_seconds,
+                    episode.canonical_id,
                 ),
             )
             logger.debug(f"Inserted new episode: {episode.title}")
@@ -4904,8 +4905,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 audio_file_size, audio_mime_type,
                 audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
                 clean_transcript_json_path, summary_path, playback_time_offset_seconds,
-                failed_at_stage, failure_reason, failure_type, failed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                failed_at_stage, failure_reason, failure_type, failed_at, canonical_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 episode.id,
@@ -4942,6 +4943,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 episode.failure_reason,
                 episode.failure_type.value if episode.failure_type else None,
                 episode.failed_at.isoformat() if episode.failed_at else None,
+                # Spec #31/#76 — import provenance survives a full re-save.
+                episode.canonical_id,
             ),
         )
 

@@ -9,6 +9,8 @@ export interface PersonChip {
   imageUrl: string | null
   /** Entity chips navigate; speaker chips (``null``) jump the transcript. */
   href: string | null
+  /** First segment spoken by this label — the jump target for speaker chips. */
+  segmentId: number | null
 }
 
 const MAX_ENTITY_PEOPLE = 8
@@ -38,7 +40,7 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
   // music and intros can carry a preserved speaker and would otherwise
   // both surface a chip and shift the palette away from the viewer's
   // colours (see buildSpeakerColorMap's contract).
-  const speakerLabels: string[] = []
+  const speakerLabels: { label: string; segmentId: number }[] = []
   const seenSpeakers = new Set<string>()
   for (const segment of segments ?? []) {
     if (segment.kind !== 'content' && segment.kind !== 'filler') continue
@@ -47,12 +49,12 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
     const key = normalizePersonName(label)
     if (seenSpeakers.has(key)) continue
     seenSpeakers.add(key)
-    speakerLabels.push(label)
+    speakerLabels.push({ label, segmentId: segment.id })
   }
 
   // One colour map, transcript speakers first so a person heard in the
   // episode keeps the colour the transcript gives their label.
-  const colors = buildSpeakerColorMap([...speakerLabels, ...people.map((p) => p.entity.canonical_name)])
+  const colors = buildSpeakerColorMap([...speakerLabels.map((s) => s.label), ...people.map((p) => p.entity.canonical_name)])
   const covered = new Set<string>()
   const chips: PersonChip[] = []
 
@@ -65,9 +67,10 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
       color: resolveSpeakerColor(name, colors),
       imageUrl: person.entity.image_url ?? null,
       href: entityHref(person.entity.type, person.entity.id),
+      segmentId: null,
     })
   }
-  for (const label of speakerLabels) {
+  for (const { label, segmentId } of speakerLabels) {
     if (covered.has(normalizePersonName(label))) continue
     chips.push({
       key: `speaker:${label}`,
@@ -75,6 +78,7 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
       color: resolveSpeakerColor(label, colors),
       imageUrl: null,
       href: null,
+      segmentId,
     })
   }
   return chips

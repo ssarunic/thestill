@@ -111,8 +111,8 @@ _EPISODE_INSERT_SQL = """
         audio_file_size, audio_mime_type,
         audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
         clean_transcript_json_path, summary_path, playback_time_offset_seconds,
-        failed_at_stage, failure_reason, failure_type, failed_at
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        failed_at_stage, failure_reason, failure_type, failed_at, canonical_id
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -149,6 +149,8 @@ def _episode_insert_params(podcast_id: str, episode: Episode, now: datetime) -> 
         episode.failure_reason,
         episode.failure_type.value if episode.failure_type else None,
         episode.failed_at,
+        # Spec #31/#76 — import provenance survives a full re-save.
+        episode.canonical_id,
     )
 
 
@@ -180,6 +182,7 @@ def _episode_from_row(row: dict) -> Episode:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         external_id=row["external_id"],
+        canonical_id=row.get("canonical_id"),
         title=row["title"],
         slug=row["slug"] or "",
         description=row["description"],

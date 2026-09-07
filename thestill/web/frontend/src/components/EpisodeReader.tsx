@@ -412,16 +412,14 @@ export default function EpisodeReader({
 
   // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
   // jump, not a playback action: same tab-switch + segment-scroll path as a
-  // citation, without the seek.
+  // citation, without the seek. The chip carries its first segment's id.
   const handleSpeakerSelect = useCallback(
-    (speakerLabel: string) => {
-      const target = transcriptSegments?.find((segment) => segment.speaker === speakerLabel)
-      if (!target) return
+    (segmentId: number) => {
       clearEntityFilter()
       if (activeTab !== 'transcript') setTab('transcript', { push: true })
-      setCitationScrollTarget((prev) => ({ segmentId: target.id, nonce: (prev?.nonce ?? 0) + 1 }))
+      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
     },
-    [transcriptSegments, clearEntityFilter, activeTab, setTab],
+    [clearEntityFilter, activeTab, setTab],
   )
 
   const handleSummaryCitation = useCallback(

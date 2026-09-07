@@ -232,6 +232,7 @@ class TestGetEpisodeBySlugs:
             ("audio:" + "f" * 64, "bare_audio"),
             ("youtube:abc123", "youtube"),
             ("apple:42", "apple_episode"),
+            ("rss:https://example.com/feed#ep", "rss_episode"),
         ],
     )
     def test_imported_episode_reports_kind(self, client, mock_app_state, canonical_id, kind):

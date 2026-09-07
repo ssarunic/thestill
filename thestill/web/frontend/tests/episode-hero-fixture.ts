@@ -118,6 +118,15 @@ export async function mockEpisodeApi(page: Page) {
           slug: EPISODE,
           pub_date: '2026-09-06T07:00:00Z',
           audio_url: 'https://example.com/a.mp3',
+          // Audio kind with an episode-level YouTube link (spec #62 §6) so
+          // the action row carries all four slots.
+          playback: {
+            kind: 'audio',
+            audio: { url: 'https://example.com/a.mp3', mime_type: 'audio/mpeg' },
+            video: null,
+            youtube: { video_id: 'abc123', watch_url: 'https://www.youtube.com/watch?v=abc123' },
+            poster_url: null,
+          },
           duration: 3505,
           duration_formatted: '58:25',
           external_id: 'ext-1',

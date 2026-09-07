@@ -810,9 +810,9 @@ class EpisodesMixin(CategoryCacheMixin):
                     explicit, episode_type, episode_number, season_number, website_url,
                     audio_file_size, audio_mime_type,
                     audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
-                    clean_transcript_json_path, summary_path, playback_time_offset_seconds
+                    clean_transcript_json_path, summary_path, playback_time_offset_seconds, canonical_id
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     episode.id,
@@ -843,6 +843,7 @@ class EpisodesMixin(CategoryCacheMixin):
                     episode.clean_transcript_json_path,
                     episode.summary_path,
                     episode.playback_time_offset_seconds,
+                    episode.canonical_id,
                 ),
             )
             logger.debug(f"Inserted new episode: {episode.title}")
@@ -1372,9 +1373,9 @@ class EpisodesMixin(CategoryCacheMixin):
                 audio_file_size, audio_mime_type,
                 audio_path, downsampled_audio_path, raw_transcript_path, clean_transcript_path,
                 clean_transcript_json_path, summary_path, playback_time_offset_seconds,
-                failed_at_stage, failure_reason, failure_type, failed_at
+                failed_at_stage, failure_reason, failure_type, failed_at, canonical_id
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 episode.id,
@@ -1411,6 +1412,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 episode.failure_reason,
                 episode.failure_type.value if episode.failure_type else None,
                 episode.failed_at,
+                episode.canonical_id,
             ),
         )
 
