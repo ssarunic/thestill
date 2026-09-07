@@ -27,17 +27,34 @@ vi.mock('../hooks/useApi', () => ({
 }))
 
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))
+
+// jsdom has no IntersectionObserver; capture the observer so a test can
+// drive the collapsing header (spec #76 §3.7).
+type IOCallback = (entries: Partial<IntersectionObserverEntry>[]) => void
+let observeCallback: IOCallback | null = null
+class FakeIntersectionObserver {
+  constructor(cb: IOCallback) {
+    observeCallback = cb
+  }
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+}
+vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
 vi.mock('./SummaryViewer', () => ({ default: () => <div>SUMMARY_VIEWER</div> }))
 
 import {
   useEpisode,
   useEpisodeSummary,
+  useEpisodeTranscript,
   useMarkInboxReadOnView,
   useEpisodeLiveRefresh,
 } from '../hooks/useApi'
+import { act } from '@testing-library/react'
 
 const mockUseEpisode = useEpisode as ReturnType<typeof vi.fn>
 const mockUseSummary = useEpisodeSummary as ReturnType<typeof vi.fn>
+const mockUseTranscript = useEpisodeTranscript as ReturnType<typeof vi.fn>
 const mockMarkOnView = useMarkInboxReadOnView as ReturnType<typeof vi.fn>
 const mockLiveRefresh = useEpisodeLiveRefresh as ReturnType<typeof vi.fn>
 
@@ -50,6 +67,10 @@ function episodeResponse(): EpisodeDetailResponse {
       podcast_id: 'p-1',
       podcast_slug: 'sample-pod',
       podcast_title: 'Sample Pod',
+      podcast_author: 'Sample Media',
+      podcast_language: 'en',
+      origin: 'feed',
+      import_kind: null,
       title: 'Sample Episode',
       description: 'A test episode',
       slug: 'sample-episode',
@@ -199,6 +220,93 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
 
     renderAtEpisodeRoute(<EpisodeReader />)
     expect(screen.getByRole('button', { name: 'Watch video' })).toBeInTheDocument()
+  })
+
+  it('lists Information rows from the response and omits empty ones (spec #76 §3.6)', () => {
+    const response = episodeResponse()
+    response.episode.website_url = 'https://www.example.com/notes'
+    response.episode.origin = 'import'
+    response.episode.import_kind = 'youtube'
+    response.episode.explicit = false
+    mockUseEpisode.mockReturnValue({ data: response, isLoading: false, error: null })
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+
+    const info = screen.getByRole('region', { name: 'Information' })
+    const terms = Array.from(info.querySelectorAll('dt')).map((el) => el.textContent)
+    expect(terms).toEqual(['Show', 'Author', 'Published', 'Length', 'Language', 'Explicit', 'Show notes', 'Source'])
+    expect(info).toHaveTextContent('Sample Media')
+    expect(info).toHaveTextContent('1 h')
+    expect(info).toHaveTextContent('English')
+    expect(info).toHaveTextContent('Imported (YouTube)')
+    expect(screen.getByRole('link', { name: /example\.com/ })).toHaveAttribute('href', 'https://www.example.com/notes')
+  })
+
+  it('hides the Source row for feed episodes and People when there is nobody to show', () => {
+    renderAtEpisodeRoute(<EpisodeReader />)
+    const info = screen.getByRole('region', { name: 'Information' })
+    expect(info).not.toHaveTextContent('Source')
+    expect(screen.queryByRole('region', { name: 'People' })).toBeNull()
+  })
+
+  it('jumps the transcript to a speaker without starting playback (spec #76 §3.5)', async () => {
+    mockUseTranscript.mockReturnValue({
+      data: {
+        status: 'ok',
+        timestamp: '',
+        available: true,
+        content: '',
+        segments: {
+          segments: [
+            { id: 1, start: 0, end: 5, speaker: 'Ed Elson', text: 'Hi', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
+            { id: 2, start: 5, end: 9, speaker: 'Jim VandeHei', text: 'Hello', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
+            { id: 3, start: 9, end: 12, speaker: 'SPEAKER_02', text: '…', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
+          ],
+        },
+      },
+      isLoading: false,
+    })
+    const user = userEvent.setup()
+
+    renderAtEpisodeRoute(<EpisodeReader />)
+
+    const people = screen.getByRole('region', { name: 'People' })
+    expect(people).toHaveTextContent('Ed Elson')
+    expect(people).toHaveTextContent('Jim VandeHei')
+    expect(people).not.toHaveTextContent('SPEAKER_02')
+
+    await user.click(screen.getByRole('button', { name: 'Jim VandeHei' }))
+
+    // Transcript tab selected (the router commits in a transition), and the
+    // primary still offers to play: nothing started.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^transcript$/i }).className).toContain('border-primary-600')
+    })
+    expect(screen.getByRole('button', { name: 'Play episode, 60 min' })).toBeInTheDocument()
+    mockUseTranscript.mockReturnValue({ data: undefined, isLoading: false })
+  })
+
+  it('reports the collapsed header to the page host, which pins a sticky bar (spec #76 §3.7)', () => {
+    renderAtEpisodeRoute(<EpisodeDetail />)
+    expect(screen.queryByTestId('collapsed-episode-bar')).toBeNull()
+    expect(observeCallback).not.toBeNull()
+
+    act(() => {
+      observeCallback!([
+        { isIntersecting: false, boundingClientRect: { bottom: -20 } as DOMRect, rootBounds: { top: 0 } as DOMRect },
+      ])
+    })
+    const bar = screen.getByTestId('collapsed-episode-bar')
+    expect(bar).toHaveTextContent('Sample Episode')
+    expect(bar.parentElement?.className).toContain('sticky')
+    expect(bar.parentElement?.className).toContain('top-14')
+
+    act(() => {
+      observeCallback!([
+        { isIntersecting: true, boundingClientRect: { bottom: 40 } as DOMRect, rootBounds: { top: 0 } as DOMRect },
+      ])
+    })
+    expect(screen.queryByTestId('collapsed-episode-bar')).toBeNull()
   })
 
   it('shows the error card when the episode fails to load', () => {

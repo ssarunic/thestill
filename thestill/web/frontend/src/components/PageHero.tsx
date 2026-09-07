@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react'
+import type { ReactNode, Ref } from 'react'
 import SmartImage from './SmartImage'
 
 interface PageHeroProps {
@@ -10,7 +10,7 @@ interface PageHeroProps {
   eyebrow?: ReactNode
   title: ReactNode
   /** Lets the host observe the title for the collapsing header (spec #76 §3.7). */
-  titleRef?: RefObject<HTMLHeadingElement | null>
+  titleRef?: Ref<HTMLHeadingElement>
   /** The identity row under the title: show row, byline. */
   identity?: ReactNode
   /** Action row, description — anything that belongs in the title column. */

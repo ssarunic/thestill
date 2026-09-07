@@ -16,6 +16,11 @@ import PipelineActionButton from './PipelineActionButton'
 import FailureBanner from './FailureBanner'
 import Panel from './Panel'
 import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
+import People from './episode-header/People'
+import { buildEpisodeInformationRows } from './episode-header/episodeInformation'
+import DefinitionList from './DefinitionList'
+import { useCollapsingHeader } from '../hooks/useCollapsingHeader'
+import type { CollapsedHeaderState } from './CollapsedEpisodeBar'
 import KeyEntitiesStrip from './episode-entities/KeyEntitiesStrip'
 import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
@@ -40,6 +45,14 @@ export interface EpisodeReaderProps {
   // the overlay panel's own div rather than the window. Reading-position
   // persistence needs to know which one to observe.
   scrollContainerRef?: RefObject<HTMLElement | null>
+  // Spec #76 §3.7 — the reader detects when its title scrolls away and
+  // reports what a collapsed bar needs; the host renders the bar in its own
+  // chrome (the overlay swaps its header, the page pins a sticky bar).
+  // Called with ``null`` when the title is back in view or on unmount.
+  onCollapsedHeaderChange?: (state: CollapsedHeaderState | null) => void
+  // Height of fixed chrome above the scroll area (the mobile shell header in
+  // page mode); the title counts as gone once it slides under it.
+  collapseTopOffset?: number
 }
 
 /**
@@ -49,7 +62,11 @@ export interface EpisodeReaderProps {
  * keyed off route params so both modes behave identically — including
  * spec #29 read-on-view marking.
  */
-export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps) {
+export default function EpisodeReader({
+  scrollContainerRef,
+  onCollapsedHeaderChange,
+  collapseTopOffset = 0,
+}: EpisodeReaderProps) {
   const { podcastSlug, episodeSlug } = useParams<{ podcastSlug: string; episodeSlug: string }>()
   const [searchParams] = useSearchParams()
   const location = useLocation()
@@ -374,6 +391,39 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
     if (playerTrack) player.playYouTube(playerTrack)
   }, [player, playerTrack])
 
+  const { titleRef, collapsed } = useCollapsingHeader(scrollContainerRef, collapseTopOffset)
+  useEffect(() => {
+    if (!onCollapsedHeaderChange) return
+    onCollapsedHeaderChange(
+      collapsed && episode
+        ? {
+            title: episode.title,
+            artworkUrl: episode.image_url ?? episode.podcast_image_url,
+            isPlaying,
+            isLoading: isPlayerLoading,
+            onTogglePlay: handleTogglePlay,
+          }
+        : null,
+    )
+  }, [onCollapsedHeaderChange, collapsed, episode, isPlaying, isPlayerLoading, handleTogglePlay])
+  useEffect(() => () => onCollapsedHeaderChange?.(null), [onCollapsedHeaderChange])
+
+  const transcriptSegments = transcriptData?.segments?.segments ?? null
+
+  // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
+  // jump, not a playback action: same tab-switch + segment-scroll path as a
+  // citation, without the seek.
+  const handleSpeakerSelect = useCallback(
+    (speakerLabel: string) => {
+      const target = transcriptSegments?.find((segment) => segment.speaker === speakerLabel)
+      if (!target) return
+      clearEntityFilter()
+      if (activeTab !== 'transcript') setTab('transcript', { push: true })
+      setCitationScrollTarget((prev) => ({ segmentId: target.id, nonce: (prev?.nonce ?? 0) + 1 }))
+    },
+    [transcriptSegments, clearEntityFilter, activeTab, setTab],
+  )
+
   const handleSummaryCitation = useCallback(
     (citation: SummaryCitation) => {
       const seconds = citation.target_playback_s ?? citation.cited_playback_s
@@ -421,6 +471,7 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
           <EpisodeHeader
             episode={episode}
             podcastSlug={podcastSlug!}
+            titleRef={titleRef}
             playback={{ isCurrent, isPlaying, isLoading: isPlayerLoading, onToggle: handleTogglePlay }}
             showWatchVideo={showWatchVideo}
             onWatchVideo={handleWatchVideo}
@@ -625,6 +676,18 @@ export default function EpisodeReader({ scrollContainerRef }: EpisodeReaderProps
           </div>
         )}
       </div>
+
+      {/* Spec #76 §3.5–3.6 — people as content, then every remaining fact
+          in one labelled place. Both sit below the tabs so late-arriving
+          transcript data cannot move the fold. */}
+      {episode && (
+        <People entities={entities} segments={transcriptSegments} onSpeakerSelect={handleSpeakerSelect} />
+      )}
+      {episode && (
+        <Panel className="px-4 py-3 sm:px-6 sm:py-4">
+          <DefinitionList heading="Information" rows={buildEpisodeInformationRows(episode)} />
+        </Panel>
+      )}
 
       {/* Mention density timeline — fixed-position strip beside the
           MiniPlayer when this episode is the current track. Only

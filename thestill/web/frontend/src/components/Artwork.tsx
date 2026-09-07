@@ -2,11 +2,13 @@ import SmartImage from './SmartImage'
 
 // Spec #76 §5.8 — one wrapper fixes size and radius per role, replacing the
 // seven size/radius combinations spec #73 §2 counted.
-export type ArtworkRole = 'inline' | 'rowSm' | 'row' | 'card' | 'hero'
+export type ArtworkRole = 'inline' | 'bar' | 'rowSm' | 'row' | 'card' | 'hero'
 
 const ROLE: Record<ArtworkRole, { box: string; radius: string; px: number; glyph: string }> = {
   /** 28 px — the show row under a title, the collapsed bar. */
   inline: { box: 'w-7 h-7', radius: 'rounded-md', px: 28, glyph: 'w-3.5 h-3.5' },
+  /** 32 px — the collapsed header bar. */
+  bar: { box: 'w-8 h-8', radius: 'rounded-md', px: 32, glyph: 'w-4 h-4' },
   /** 40 px — episode rows inside a podcast. */
   rowSm: { box: 'w-10 h-10', radius: 'rounded-lg', px: 40, glyph: 'w-5 h-5' },
   /** 48 px — podcast and inbox rows (``ListRowArtwork``). */

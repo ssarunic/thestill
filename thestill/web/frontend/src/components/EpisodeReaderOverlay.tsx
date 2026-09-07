@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import EpisodeReader from './EpisodeReader'
+import CollapsedEpisodeBar, { type CollapsedHeaderState } from './CollapsedEpisodeBar'
 import { abovePlayer } from '../constants/layers'
 
 // Elements the focus trap cycles through. Mirrors what a browser considers
@@ -22,6 +23,9 @@ export default function EpisodeReaderOverlay() {
   const navigate = useNavigate()
   const panelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Spec #76 §3.7 — the reader reports when its title scrolls away; this
+  // header swaps its content rather than stacking a second bar under it.
+  const [collapsedHeader, setCollapsedHeader] = useState<CollapsedHeaderState | null>(null)
 
   // Captured at mount: the history index of the entry the reader opened on.
   // Every close affordance pops back to the entry *before* it (the inbox) in
@@ -119,22 +123,23 @@ export default function EpisodeReaderOverlay() {
         onKeyDown={trapFocus}
         className="absolute inset-y-0 right-0 flex w-full flex-col bg-gray-50 shadow-xl outline-none lg:max-w-4xl"
       >
-        <header className="flex items-center border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
+        <header className="flex h-14 items-center gap-3 border-b border-gray-200 bg-white px-4 sm:px-6">
           <button
             type="button"
             onClick={close}
-            className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
             Inbox
           </button>
+          {collapsedHeader && <CollapsedEpisodeBar state={collapsedHeader} className="min-w-0 flex-1" />}
         </header>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
           <div className="p-4 md:p-6 lg:p-8">
-            <EpisodeReader scrollContainerRef={scrollRef} />
+            <EpisodeReader scrollContainerRef={scrollRef} onCollapsedHeaderChange={setCollapsedHeader} />
           </div>
         </div>
       </div>

@@ -234,6 +234,11 @@ export interface EpisodeDetail {
   podcast_id: string
   podcast_slug: string
   podcast_title: string
+  // Spec #76 §3.6 — show facts and provenance for the Information list.
+  podcast_author: string | null
+  podcast_language: string | null
+  origin: 'feed' | 'import'
+  import_kind: ImportKind | null
   title: string
   description: string  // Plain text description (for CLI, LLM prompts)
   description_html?: string  // HTML description with links (for web UI)
@@ -1063,6 +1068,9 @@ export interface EntityRef {
   type: EntityType
   canonical_name: string
   wikidata_qid: string | null
+  // Spec #76 §3.5 — not populated by the index today; the People row
+  // renders it when a later index change supplies one.
+  image_url?: string | null
 }
 
 export interface MentionLite {
@@ -1353,7 +1361,7 @@ export interface BriefingScheduleUpdate {
 // Imports (spec #31) — POST /api/imports
 // ============================================================================
 
-export type ImportKind = 'bare_audio' | 'youtube' | 'rss_episode'
+export type ImportKind = 'bare_audio' | 'youtube' | 'apple_episode' | 'rss_episode'
 
 export interface ImportRequest {
   url: string

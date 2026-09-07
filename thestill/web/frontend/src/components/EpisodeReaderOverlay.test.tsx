@@ -7,10 +7,27 @@ import EpisodeReaderOverlay from './EpisodeReaderOverlay'
 // The reader's data/rendering is covered by EpisodeReader tests; here we
 // only exercise the overlay chrome (close affordances, focus, scroll lock).
 vi.mock('./EpisodeReader', () => ({
-  default: () => (
+  default: ({ onCollapsedHeaderChange }: { onCollapsedHeaderChange?: (s: unknown) => void }) => (
     <div>
       READER_CONTENT
       <button type="button">inner action</button>
+      <button
+        type="button"
+        onClick={() =>
+          onCollapsedHeaderChange?.({
+            title: 'Scrolled Episode',
+            artworkUrl: null,
+            isPlaying: false,
+            isLoading: false,
+            onTogglePlay: () => {},
+          })
+        }
+      >
+        collapse
+      </button>
+      <button type="button" onClick={() => onCollapsedHeaderChange?.(null)}>
+        expand
+      </button>
     </div>
   ),
 }))
@@ -43,6 +60,22 @@ describe('EpisodeReaderOverlay (spec #52)', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(screen.getByText('READER_CONTENT')).toBeInTheDocument()
+  })
+
+  it('swaps the collapsed bar into its single header instead of stacking one (spec #76 §3.7)', async () => {
+    const user = userEvent.setup()
+    renderOverlay()
+    expect(screen.queryByTestId('collapsed-episode-bar')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'collapse' }))
+    const bar = screen.getByTestId('collapsed-episode-bar')
+    expect(bar).toHaveTextContent('Scrolled Episode')
+    expect(bar.closest('header')).not.toBeNull()
+    expect(screen.getAllByRole('banner')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: /inbox/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'expand' }))
+    expect(screen.queryByTestId('collapsed-episode-bar')).toBeNull()
   })
 
   it('insets above the mini player instead of covering it (spec #71)', () => {

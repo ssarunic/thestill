@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import type { Ref } from 'react'
 import { Link } from 'react-router-dom'
 import type { EpisodeDetail } from '../../api/types'
 import PageHero from '../PageHero'
@@ -23,7 +23,7 @@ export interface EpisodePlaybackState {
 interface EpisodeHeaderProps {
   episode: EpisodeDetail
   podcastSlug: string
-  titleRef?: RefObject<HTMLHeadingElement | null>
+  titleRef?: Ref<HTMLHeadingElement>
   playback: EpisodePlaybackState
   /** Spec #62 §6 — audio-kind episode with an episode-level YouTube link. */
   showWatchVideo: boolean
