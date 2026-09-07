@@ -1,4 +1,5 @@
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
+import { formatClock } from '../utils/formatClock'
 
 export interface ScrubberTick {
   /** Position as a fraction of the duration, 0..1. */
@@ -18,17 +19,6 @@ interface NowPlayingScrubberProps {
 }
 
 const REMAINING_KEY = 'thestill:player:remaining'
-
-function formatClock(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-  const total = Math.floor(seconds)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  return h > 0
-    ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
-    : `${m}:${s.toString().padStart(2, '0')}`
-}
 
 /**
  * Spec #72 §2 — the full-width scrubber: a 44 px hit area over a 4 px track,
@@ -60,11 +50,6 @@ export default function NowPlayingScrubber({ currentTime, duration, onSeek, tick
           aria-label="Seek"
           aria-valuetext={hasDuration ? `${formatClock(currentTime)} of ${formatClock(duration)}` : 'Duration unknown'}
           className="absolute inset-0 h-11 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed [&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:-mt-1.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-accent"
-          style={{
-            // The track is painted on the input itself so the fill follows
-            // the same geometry as the thumb.
-            ['--scrub-fill' as string]: `${progress * 100}%`,
-          }}
         />
         <div
           aria-hidden="true"

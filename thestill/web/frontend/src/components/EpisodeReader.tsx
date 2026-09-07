@@ -3,14 +3,23 @@ import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'reac
 import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
-import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import { usePlayer } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
-import { useBackgroundLocation } from '../hooks/useBackgroundLocation'
+import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
 const SegmentedTranscriptViewer = lazy(() => import('./SegmentedTranscriptViewer'))
 const SummaryViewer = lazy(() => import('./SummaryViewer'))
+
+// Episode states at which the entity branch has had a chance to run — it
+// is enqueued off the `clean` stage (thestill/core/queue_manager.py).
+const ENTITY_READY_STATES: ReadonlySet<string> = new Set<EpisodeState>(['cleaned', 'summarized'])
+const ACTIVE_TASK_STATUSES: ReadonlySet<EpisodeTask['status']> = new Set([
+  'pending',
+  'processing',
+  'retry_scheduled',
+])
 import TheaterSurface from './TheaterSurface'
 import PipelineActionButton from './PipelineActionButton'
 import FailureBanner from './FailureBanner'
@@ -24,9 +33,9 @@ import type { CollapsedHeaderState } from './CollapsedEpisodeBar'
 import KeyEntitiesStrip from './episode-entities/KeyEntitiesStrip'
 import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
-import MentionDensityTimeline from './episode-entities/MentionDensityTimeline'
 import EntityBranchProgress from './EntityBranchProgress'
-import type { FailureType, EntityType, EpisodeEntity, MentionLite, SummaryCitation } from '../api/types'
+import type { FailureType, EntityType, EpisodeEntity, EpisodeState, EpisodeTask, MentionLite, SummaryCitation } from '../api/types'
+import { ENTITY_BRANCH_STAGES } from '../constants/stages'
 
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
@@ -73,7 +82,6 @@ export default function EpisodeReader({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const player = usePlayer()
-  const inOverlay = useBackgroundLocation() != null
 
   // The active tab lives in the URL (`?view=transcript`) rather than local
   // state, so a citation jump can push a history entry and browser Back
@@ -271,6 +279,17 @@ export default function EpisodeReader({
   const { data: relatedData, isLoading: relatedLoading } = useRelatedEpisodes(episode?.id ?? null)
   const relatedEpisodes = relatedData?.episodes ?? []
 
+  // The entity branch only runs once the transcript is cleaned, and it can
+  // still be queued or mid-flight after that. Either way an empty rail
+  // means "not yet" rather than "nothing found"; the rail picks its
+  // empty-state copy from this.
+  const extractionPending = useMemo(() => {
+    if (!episode?.state || !ENTITY_READY_STATES.has(episode.state)) return true
+    return episodeTasks.some(
+      (t) => ENTITY_BRANCH_STAGES.has(t.stage) && ACTIVE_TASK_STATUSES.has(t.status),
+    )
+  }, [episode?.state, episodeTasks])
+
   const [hiddenEntityTypes, setHiddenEntityTypes] = useState<Set<EntityType>>(() => new Set())
   const [filterEntityIds, setFilterEntityIds] = useState<Set<string>>(() => new Set())
   const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null)
@@ -409,6 +428,20 @@ export default function EpisodeReader({
   useEffect(() => () => onCollapsedHeaderChange?.(null), [onCollapsedHeaderChange])
 
   const transcriptSegments = transcriptData?.segments?.segments ?? null
+
+  // Spec #72 §Deep link — `?t=` lands the reader on that segment regardless
+  // of the follow toggle: once per history entry, fresh entries only. A POP
+  // back to an entry already handled does nothing here, so the saved
+  // reading position (useReadingPosition) wins on return.
+  const handleDeepLinkTarget = useCallback((segmentId: number) => {
+    setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
+  }, [])
+  useDeepLinkScrollTarget({
+    episodeId: episode?.id,
+    segments: transcriptSegments,
+    offset: transcriptData?.segments?.playback_time_offset_seconds ?? 0,
+    onTarget: handleDeepLinkTarget,
+  })
 
   // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
   // jump, not a playback action: same tab-switch + segment-scroll path as a
@@ -657,22 +690,23 @@ export default function EpisodeReader({
         </Panel>
 
         {/* Right rail — only on lg+; collapses below the breakpoint
-            (the strip carries the gist on mobile). Shown when there are
-            entities OR related episodes so the rail surfaces even on
-            episodes without entity extraction. */}
-        {(entities.length > 0 || relatedEpisodes.length > 0 || relatedLoading) && (
-          <div className="hidden lg:block">
-            <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
-              <EntityRail
-                entities={entities}
-                onSeek={handleSegmentSeek}
-                onFocusEntity={setFocusedEntityId}
-                relatedEpisodes={relatedEpisodes}
-                relatedLoading={relatedLoading}
-              />
-            </div>
+            (the strip carries the gist on mobile). Always rendered on
+            lg+ so the grid's rail column is never a blank gutter and the
+            reading column keeps one width across episodes and across
+            the related-episodes fetch; the rail supplies its own
+            empty-state copy when there is nothing to list. */}
+        <div className="hidden lg:block">
+          <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
+            <EntityRail
+              entities={entities}
+              onSeek={handleSegmentSeek}
+              onFocusEntity={setFocusedEntityId}
+              relatedEpisodes={relatedEpisodes}
+              relatedLoading={relatedLoading}
+              extractionPending={extractionPending}
+            />
           </div>
-        )}
+        </div>
       </div>
 
       {/* Spec #76 §3.5–3.6 — people as content, then every remaining fact
@@ -687,44 +721,7 @@ export default function EpisodeReader({
         </Panel>
       )}
 
-      {/* Mention density timeline — fixed-position strip beside the
-          MiniPlayer when this episode is the current track. Only
-          rendered on md+ screens (hides itself when there's no room).
-          Not inside the reader overlay (spec #71): a viewport-fixed strip
-          would paint across the panel's bottom edge; spec #72 moves it
-          onto the Now Playing scrubber. */}
-      {!inOverlay && episode && entities.length > 0 && episode.duration && (
-        <PlayerScopedTimeline
-          episodeId={episode.id}
-          entities={entities}
-          durationSeconds={episode.duration}
-          onSeek={handleSegmentSeek}
-        />
-      )}
     </div>
-  )
-}
-
-interface PlayerScopedTimelineProps {
-  episodeId: string
-  entities: EpisodeEntity[]
-  durationSeconds: number
-  onSeek: (seconds: number) => void
-}
-
-// Renders the MentionDensityTimeline only when the global player is
-// actually on this episode. We co-locate the gating here rather than
-// inside MentionDensityTimeline so the latter stays pure UI.
-function PlayerScopedTimeline({ episodeId, entities, durationSeconds, onSeek }: PlayerScopedTimelineProps) {
-  const player = usePlayer()
-  // Subscribing to the high-frequency time context here is a no-op
-  // outside React's rendering pass; it just ensures the component
-  // re-renders whenever playback changes — useful in case we add
-  // timeline cursor markers later.
-  usePlayerTime()
-  if (!player.isCurrent(episodeId)) return null
-  return (
-    <MentionDensityTimeline entities={entities} durationSeconds={durationSeconds} onSeek={onSeek} />
   )
 }
 

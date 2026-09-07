@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { abovePlayer } from '../constants/layers'
+import { useFollowPlayback } from '../hooks/useFollowPlayback'
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
@@ -37,7 +38,6 @@ import {
   type SegmentMentionSet,
 } from './episode-entities/applyHighlights'
 
-const FOLLOW_STORAGE_KEY = 'thestill:transcript:followPlayback'
 const SHOW_FILLER_STORAGE_KEY = 'thestill:transcript:showFiller'
 // Global preference, not per-episode: matches reader intent ("I never
 // want to see ads" carries across episodes).
@@ -610,7 +610,8 @@ export default function SegmentedTranscriptViewer({
       ),
     [transcript.segments],
   )
-  const [followPlayback, setFollowPlayback] = usePersistedBoolean(FOLLOW_STORAGE_KEY, false)
+  // Spec #72 §6 — shared with the Now Playing sheet's toggle.
+  const [followPlayback, setFollowPlayback] = useFollowPlayback()
   const [showFiller, setShowFiller] = usePersistedBoolean(SHOW_FILLER_STORAGE_KEY, false)
   const [hiddenKinds, setHiddenKinds] = useState<Set<TogglableKind>>(loadHiddenKinds)
   const [searchInput, setSearchInput] = useState('')

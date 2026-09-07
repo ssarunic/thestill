@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
+import { useEpisodeEntities } from '../hooks/useApi'
+import { useFollowPlayback } from '../hooks/useFollowPlayback'
 import { abovePlayer, MEDIA_HOST_ATTR } from '../constants/layers'
+import { selectTopEntities } from '../utils/mentionDensity'
+import { entityStyle } from '../utils/entityColors'
+import { formatClock } from '../utils/formatClock'
 import Artwork from './Artwork'
 import Button, { CloseIcon, PauseIcon, PlayIcon } from './Button'
-import NowPlayingScrubber from './NowPlayingScrubber'
+import { buttonClassName } from './buttonStyles'
+import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 
 interface NowPlayingSheetProps {
@@ -61,6 +67,28 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const panelRef = useRef<HTMLDivElement>(null)
   const isPhone = !isSmUp
   const active = isOpen && track !== null
+  const [followPlayback, setFollowPlayback] = useFollowPlayback()
+
+  // Spec #72 §2 entity ticks — the #28 §5.2 density timeline's home. Same
+  // query key as the reader, so the cache entry is shared; fetched only
+  // while the sheet is open.
+  const { data: entitiesData } = useEpisodeEntities(active ? track.episodeId : null)
+  const duration = player.duration
+  const seek = player.seek
+  const ticks = useMemo<ScrubberTick[]>(() => {
+    if (!(duration > 0) || !entitiesData?.entities) return []
+    return selectTopEntities(entitiesData.entities).flatMap((item) =>
+      item.mentions.map((m) => {
+        const seconds = m.start_ms / 1000
+        return {
+          at: seconds / duration,
+          colorClass: entityStyle(item.entity.type).dot,
+          label: `${item.entity.canonical_name} at ${formatClock(seconds)}`,
+          onSelect: () => seek(seconds),
+        }
+      }),
+    )
+  }, [duration, entitiesData, seek])
 
   // Esc closes unless a surface layered above owns the key (⌘K's input) —
   // same two guards as the reader overlay.
@@ -153,7 +181,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
   if (!active || !track) return null
 
-  const { isPlaying, isLoading, duration, playbackRate, availableRates, mediaError, volume, muted } = player
+  const { isPlaying, isLoading, playbackRate, availableRates, mediaError, volume, muted } = player
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const busy = isLoading && !isPlaying
 
@@ -226,7 +254,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
         {/* Scrubber */}
         <div className="mt-4">
-          <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} />
+          <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
         </div>
 
         {/* Transport */}
@@ -267,6 +295,26 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         <div className="mt-4 flex items-center justify-between gap-3">
           <span className="text-xs font-medium uppercase tracking-wide text-muted">Speed</span>
           <NowPlayingSpeedControl rate={playbackRate} availableRates={availableRates} onChange={player.setRate} />
+        </div>
+
+        {/* Secondary actions (spec #72 §6) */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Link
+            to={{ pathname: episodePath, search: `?view=transcript&t=${Math.floor(currentTime)}` }}
+            state={linkState}
+            onClick={onClose}
+            className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+          >
+            Open transcript here
+          </Link>
+          <Button
+            size="sm"
+            variant={followPlayback ? 'tonal' : 'secondary'}
+            aria-pressed={followPlayback}
+            onClick={() => setFollowPlayback(!followPlayback)}
+          >
+            {followPlayback ? 'Following playback' : 'Follow playback'}
+          </Button>
         </div>
 
         {/* Volume — pointer devices only; phones use the hardware rocker. */}

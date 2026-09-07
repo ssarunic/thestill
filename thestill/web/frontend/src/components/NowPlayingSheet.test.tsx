@@ -6,6 +6,39 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { PlayerProvider, usePlayer, type PlayerContextValue, type PlayerTrack } from '../contexts/PlayerContext'
 import NowPlayingSheet from './NowPlayingSheet'
+import { __resetFollowPlaybackForTests } from '../hooks/useFollowPlayback'
+
+// Entities for the tick row come from the reader's query hook; stub it so
+// the sheet test needs no QueryClient. Two people, three mentions.
+vi.mock('../hooks/useApi', () => ({
+  useEpisodeEntities: vi.fn((episodeId: string | null) => ({
+    data: episodeId
+      ? {
+          entities: [
+            {
+              entity: { id: 'person:ed', type: 'person', canonical_name: 'Ed Elson', wikidata_qid: null },
+              mention_count: 2,
+              first_mention_ms: 600_000,
+              speaker_kind: 'host',
+              salience: 0.9,
+              mentions: [
+                { id: 'm1', start_ms: 600_000, end_ms: 601_000, segment_id: 1, surface_form: 'Ed', confidence: 1 },
+                { id: 'm2', start_ms: 1_800_000, end_ms: 1_801_000, segment_id: 2, surface_form: 'Ed', confidence: 1 },
+              ],
+            },
+            {
+              entity: { id: 'company:openai', type: 'company', canonical_name: 'OpenAI', wikidata_qid: null },
+              mention_count: 1,
+              first_mention_ms: 900_000,
+              speaker_kind: null,
+              salience: 0.5,
+              mentions: [{ id: 'm3', start_ms: 900_000, end_ms: 901_000, segment_id: 3, surface_form: 'OpenAI', confidence: 1 }],
+            },
+          ],
+        }
+      : undefined,
+  })),
+}))
 
 // The form is chosen by the sm breakpoint; drive it per test.
 const isSmUp = { current: true }
@@ -32,7 +65,7 @@ function LocationProbe() {
   const background = (location.state as { backgroundLocation?: { pathname: string } } | null)?.backgroundLocation
   return (
     <div data-testid="location">
-      {location.pathname}|{background?.pathname ?? 'none'}
+      {location.pathname}{location.search}|{background?.pathname ?? 'none'}
     </div>
   )
 }
@@ -76,6 +109,7 @@ beforeEach(() => {
   state.rate = 1
   state.time = 0
   localStorage.clear()
+  __resetFollowPlaybackForTests()
   isSmUp.current = true
   vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockImplementation(() => state.paused)
   vi.spyOn(HTMLMediaElement.prototype, 'playbackRate', 'get').mockImplementation(() => state.rate)
@@ -202,6 +236,40 @@ describe('NowPlayingSheet (spec #72)', () => {
     act(() => ctx.play(track))
     await userEvent.click(screen.getByRole('link', { name: 'Audio Episode' }))
     expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}|/inbox`)
+  })
+
+  it('entity ticks sit at mention positions on the scrubber and seek on tap', async () => {
+    renderSheet()
+    act(() => ctx.play(track)) // durationHint 3600 → duration known at once
+    const ticks = screen.getByTestId('scrubber-ticks')
+    expect(ticks.querySelectorAll('button')).toHaveLength(3)
+    const ed = screen.getByRole('button', { name: 'Ed Elson at 10:00' })
+    expect(ed.style.left).toBe(`${(600 / 3600) * 100}%`)
+    await userEvent.click(ed)
+    expect(state.time).toBe(600)
+  })
+
+  it('Open transcript here deep-links to the current moment with the overlay contract, and closes', async () => {
+    const { onClose, video } = renderSheet('/inbox')
+    act(() => ctx.play(track))
+    act(() => {
+      // The sheet reads the 4 Hz time context, which follows `timeupdate`.
+      state.time = 754
+      video.dispatchEvent(new Event('timeupdate'))
+    })
+    await userEvent.click(screen.getByRole('link', { name: 'Open transcript here' }))
+    expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}?view=transcript&t=754|/inbox`)
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('the follow-playback toggle writes the shared preference', async () => {
+    renderSheet()
+    act(() => ctx.play(track))
+    const toggle = screen.getByRole('button', { name: 'Follow playback' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(toggle)
+    expect(screen.getByRole('button', { name: 'Following playback' })).toHaveAttribute('aria-pressed', 'true')
+    expect(localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
   })
 
   it('closing never touches playback', () => {
