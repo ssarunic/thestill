@@ -70,7 +70,7 @@ export default function ShareButton({ title, url, className = '', iconOnly = fal
   return (
     <button
       onClick={handleShare}
-      className={`flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors ${className}`}
+      className={`flex items-center gap-1.5 text-sm text-muted hover:text-gray-700 transition-colors ${className}`}
       title={hint}
     >
       <span className="h-4 w-4">{canShare ? <ShareIcon /> : <LinkIcon />}</span>

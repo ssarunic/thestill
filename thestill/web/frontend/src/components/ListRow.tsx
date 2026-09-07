@@ -35,7 +35,7 @@ export interface ListRowProps {
   ariaLabel?: string
   /** ``center`` for single-purpose rows, ``start`` when the body stacks lines. */
   align?: 'center' | 'start'
-  /** Weight/colour classes for the title. Defaults to ``font-medium text-gray-900``. */
+  /** Weight/colour classes for the title. Defaults to ``font-medium text-ink``. */
   titleClassName?: string
   className?: string
 }
@@ -62,7 +62,7 @@ export default function ListRow({
   busy = false,
   ariaLabel,
   align = 'center',
-  titleClassName = 'font-medium text-gray-900',
+  titleClassName = 'font-medium text-ink',
   className = '',
 }: ListRowProps) {
   const titleClasses = `block text-row sm:text-base leading-snug line-clamp-2 ${
@@ -98,7 +98,7 @@ export default function ListRow({
   return (
     <li
       aria-busy={busy || undefined}
-      className={`group relative flex gap-3 px-4 py-2.5 sm:py-3 min-h-[64px] transition-colors hover:bg-gray-50 ${
+      className={`group relative flex gap-3 px-4 py-2.5 sm:py-3 min-h-[64px] transition-colors hover:bg-page ${
         align === 'center' ? 'items-center' : 'items-start'
       } ${busy ? 'opacity-70' : ''} ${className}`}
     >
@@ -112,7 +112,7 @@ export default function ListRow({
         {overline}
         {titleNode}
         {subtitle !== undefined && subtitle !== null && (
-          <div className="mt-0.5 text-xs sm:text-sm text-gray-500 truncate">{subtitle}</div>
+          <div className="mt-0.5 text-xs sm:text-sm text-muted truncate">{subtitle}</div>
         )}
         {footer}
       </div>

@@ -537,14 +537,14 @@ export default function EpisodeReader({
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
         <Panel className="min-h-[400px]">
           {/* Tab Headers */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pr-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-hairline pr-3">
             <nav className="flex">
               <button
                 onClick={() => setTab('summary')}
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'summary'
                     ? 'border-primary-600 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                    : 'border-transparent text-muted hover:text-gray-700'
                 }`}
               >
                 Summary
@@ -554,7 +554,7 @@ export default function EpisodeReader({
                 className={`flex-1 sm:flex-none px-4 sm:px-6 py-4 sm:py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === 'transcript'
                     ? 'border-primary-600 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                    : 'border-transparent text-muted hover:text-gray-700'
                 }`}
               >
                 Transcript
@@ -573,7 +573,7 @@ export default function EpisodeReader({
                   </span>
                 )}
                 <div
-                  className="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium"
+                  className="inline-flex items-center rounded-lg border border-hairline bg-page p-0.5 text-xs font-medium"
                   aria-label="Summary language"
                 >
                   {summaryLanguageOptions.map(({ code, original }) => (
@@ -585,8 +585,8 @@ export default function EpisodeReader({
                       aria-pressed={selectedSummaryLanguage === code}
                       className={`rounded-md px-2.5 py-1.5 transition-colors disabled:cursor-wait ${
                         selectedSummaryLanguage === code
-                          ? 'bg-white text-primary-700 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
+                          ? 'bg-surface text-primary-700 shadow-sm'
+                          : 'text-muted hover:text-gray-700'
                       }`}
                     >
                       {original ? `${code.toUpperCase()} (original)` : code.toUpperCase()}
@@ -664,7 +664,7 @@ export default function EpisodeReader({
             episodes without entity extraction. */}
         {(entities.length > 0 || relatedEpisodes.length > 0 || relatedLoading) && (
           <div className="hidden lg:block">
-            <div className="sticky top-4 space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+            <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
               <EntityRail
                 entities={entities}
                 onSeek={handleSegmentSeek}

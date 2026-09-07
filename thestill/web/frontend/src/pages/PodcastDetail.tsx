@@ -98,9 +98,9 @@ export default function PodcastDetail() {
     <div className="space-y-6">
       {/* Breadcrumb */}
       <nav className="text-sm">
-        <Link to="/podcasts" className="text-gray-500 hover:text-gray-700">Podcasts</Link>
+        <Link to="/podcasts" className="text-muted hover:text-gray-700">Podcasts</Link>
         <span className="mx-2 text-gray-400">/</span>
-        <span className="text-gray-900">{podcastLoading ? '...' : podcast?.title}</span>
+        <span className="text-ink">{podcastLoading ? '...' : podcast?.title}</span>
       </nav>
 
       {/* Header — spec #76 §5 primitives: hero, action row, description. */}
@@ -214,7 +214,7 @@ export default function PodcastDetail() {
       {/* Episodes */}
       <div>
         <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <h2 className="text-section text-gray-900">
+          <h2 className="text-section text-ink">
             Episodes
             {totalEpisodes > 0 && ` (${totalEpisodes})`}
           </h2>
@@ -222,7 +222,7 @@ export default function PodcastDetail() {
               polls until it settles and the episode list is invalidated
               then. */}
           {podcast?.refresh_pending && (
-            <span className="inline-flex items-center gap-2 text-sm text-gray-500" role="status">
+            <span className="inline-flex items-center gap-2 text-sm text-muted" role="status">
               <span
                 className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-600 border-t-transparent"
                 aria-hidden="true"
@@ -247,7 +247,7 @@ export default function PodcastDetail() {
           //      real list.
           <div className="space-y-3">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="animate-pulse bg-white rounded-lg border border-gray-200 p-4">
+              <div key={i} className="animate-pulse bg-surface rounded-lg border border-hairline p-4">
                 <div className="flex gap-4">
                   <div className="w-10 h-10 bg-gray-200 rounded-full" />
                   <div className="flex-1 space-y-3">
@@ -259,8 +259,8 @@ export default function PodcastDetail() {
             ))}
           </div>
         ) : allEpisodes.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-            <p className="text-gray-500">No episodes found</p>
+          <div className="text-center py-12 bg-surface rounded-lg border border-hairline">
+            <p className="text-muted">No episodes found</p>
           </div>
         ) : (
           <div className="space-y-3">

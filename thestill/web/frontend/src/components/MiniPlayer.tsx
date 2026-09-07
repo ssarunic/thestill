@@ -109,7 +109,7 @@ export default function MiniPlayer() {
       ref={barRef}
       role="region"
       aria-label="Audio player"
-      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-50 bg-white border-t border-gray-200 shadow-lg pb-[env(safe-area-inset-bottom)]"
+      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-50 bg-surface border-t border-hairline shadow-lg pb-[env(safe-area-inset-bottom)]"
     >
       <div className="relative">
         <input
@@ -146,13 +146,13 @@ export default function MiniPlayer() {
             onClick={(e) => {
               if (alreadyOnEpisode) e.preventDefault()
             }}
-            className="block text-sm font-medium text-gray-900 truncate hover:underline"
+            className="block text-sm font-medium text-ink truncate hover:underline"
             title={track.title}
           >
             {track.title}
           </Link>
           {track.podcastTitle ? (
-            <p className="text-xs text-gray-500 truncate">{track.podcastTitle}</p>
+            <p className="text-xs text-muted truncate">{track.podcastTitle}</p>
           ) : null}
         </div>
 
@@ -169,7 +169,7 @@ export default function MiniPlayer() {
             onClick={() => setVideoPreference('shown')}
             aria-label="Show video"
             title="Show video"
-            className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 flex-shrink-0"
+            className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-ink flex-shrink-0"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
               <rect x="2" y="6" width="14" height="12" rx="2" />
@@ -178,7 +178,7 @@ export default function MiniPlayer() {
           </Link>
         )}
 
-        <div className="hidden sm:flex items-center gap-1 text-xs text-gray-500 tabular-nums min-w-[90px] justify-end">
+        <div className="hidden sm:flex items-center gap-1 text-xs text-muted tabular-nums min-w-[90px] justify-end">
           <span>{formatTime(currentTime)}</span>
           <span>/</span>
           <span>{hasDuration ? formatTime(duration) : '--:--'}</span>
@@ -192,7 +192,7 @@ export default function MiniPlayer() {
             onClick={() => skip(-15)}
             aria-label="Back 15 seconds"
             disabled={!hasDuration}
-            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
               <path d="M11 17l-5-5 5-5" />
@@ -205,7 +205,7 @@ export default function MiniPlayer() {
             type="button"
             onClick={toggle}
             aria-label={isPlaying ? 'Pause' : 'Play'}
-            className="w-11 h-11 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50"
+            className="w-11 h-11 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-accent text-accent-contrast hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50"
             disabled={isLoading && !isPlaying}
           >
             {isLoading && !isPlaying ? (
@@ -230,7 +230,7 @@ export default function MiniPlayer() {
             onClick={() => skip(15)}
             aria-label="Forward 15 seconds"
             disabled={!hasDuration}
-            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
               <path d="M13 17l5-5-5-5" />
@@ -246,7 +246,7 @@ export default function MiniPlayer() {
           type="button"
           onClick={stop}
           aria-label="Close player"
-          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 flex-shrink-0"
+          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-muted hover:bg-gray-100 hover:text-gray-700 flex-shrink-0"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

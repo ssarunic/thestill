@@ -15,7 +15,7 @@ interface PanelProps extends HTMLAttributes<HTMLElement> {
 export default function Panel({ as: Tag = 'div', className = '', children, ...rest }: PanelProps) {
   return (
     <Tag
-      className={`bg-white border-y border-gray-200 -mx-4 sm:mx-0 sm:border sm:rounded-lg ${className}`}
+      className={`bg-surface border-y border-hairline -mx-4 sm:mx-0 sm:border sm:rounded-lg ${className}`}
       {...rest}
     >
       {children}

@@ -15,7 +15,7 @@ export default function MetaEyebrow({ items, className = '' }: MetaEyebrowProps)
   const visible = items.filter((item) => item !== null && item !== undefined && item !== false && item !== '')
   if (visible.length === 0) return null
   return (
-    <p className={`text-eyebrow uppercase tracking-wide text-gray-500 ${className}`}>
+    <p className={`text-eyebrow uppercase tracking-wide text-muted ${className}`}>
       {visible.map((item, index) => (
         <Fragment key={index}>
           {index > 0 && (

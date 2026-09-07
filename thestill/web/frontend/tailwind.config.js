@@ -36,6 +36,18 @@ export default {
         success: '#48bb78',
         warning: '#ed8936',
         error: '#e53e3e',
+        // Spec #76 §5.7 — CSS-variable-backed tokens declared on :root in
+        // index.css: bg-page, bg-surface, text-ink, text-muted,
+        // border-hairline, bg-accent / text-accent-contrast.
+        page: 'var(--bg)',
+        surface: 'var(--surface)',
+        ink: 'var(--text)',
+        muted: 'var(--text-muted)',
+        hairline: 'var(--border)',
+        accent: {
+          DEFAULT: 'var(--accent)',
+          contrast: 'var(--accent-contrast)',
+        },
       },
       fontSize: {
         // List-row title scale (spec #73): 15 px on phones, one step under

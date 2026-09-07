@@ -14,12 +14,12 @@ export const variantStyles: Record<ButtonVariant, { base: string; disabled: stri
   // Navy ``primary`` ramp from tailwind.config.js — the same colour as the
   // sidebar's active item, the logo and the mini player (spec #73 §5.1).
   primary: {
-    base: 'bg-primary-900 text-white hover:bg-primary-800 active:bg-primary-700 shadow-sm hover:shadow',
+    base: 'bg-accent text-accent-contrast hover:bg-primary-800 active:bg-primary-700 shadow-sm hover:shadow',
     disabled: 'bg-gray-100 text-gray-400',
   },
   secondary: {
-    base: 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 active:bg-gray-100',
-    disabled: 'bg-gray-50 text-gray-400 border-gray-200',
+    base: 'bg-surface text-gray-700 border border-gray-300 hover:bg-page active:bg-gray-100',
+    disabled: 'bg-page text-gray-400 border-hairline',
   },
   // Quiet secondary action for list rows (Follow on a chart row).
   tonal: {
@@ -37,7 +37,7 @@ export const variantStyles: Record<ButtonVariant, { base: string; disabled: stri
     disabled: 'bg-gray-100 text-gray-400',
   },
   ghost: {
-    base: 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 active:bg-gray-200',
+    base: 'text-gray-600 hover:bg-gray-100 hover:text-ink active:bg-gray-200',
     disabled: 'text-gray-400',
   },
 }

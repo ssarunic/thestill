@@ -24,7 +24,7 @@ export default function People({ entities, segments, onSpeakerSelect }: PeoplePr
 
   return (
     <section aria-label="People">
-      <h2 className="text-section text-gray-900 mb-3">People</h2>
+      <h2 className="text-section text-ink mb-3">People</h2>
       <ul className="flex gap-4 overflow-x-auto pb-1">
         {chips.map((chip) => {
           const avatar = chip.imageUrl ? (

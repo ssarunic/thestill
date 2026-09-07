@@ -48,14 +48,14 @@ export default function PageHero({
             className="h-full w-full scale-125 object-cover opacity-20 blur-2xl"
             fallback={null}
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent to-gray-50" />
+          <div className="absolute inset-0 bg-gradient-to-b from-transparent to-page" />
         </div>
       )}
       <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
         {artwork && <div className="flex justify-center sm:block">{artwork}</div>}
         <div className="min-w-0 flex-1 space-y-2">
           {eyebrow}
-          <h1 ref={titleRef} className="text-title sm:text-title-lg text-gray-900">
+          <h1 ref={titleRef} className="text-title sm:text-title-lg text-ink">
             {title}
           </h1>
           {identity}

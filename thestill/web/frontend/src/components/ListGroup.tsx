@@ -23,7 +23,7 @@ export default function ListGroup({
 }: ListGroupProps) {
   return (
     <Tag
-      className={`bg-white divide-y divide-gray-100 border-y border-gray-200 -mx-4 sm:mx-0 sm:border sm:rounded-lg sm:overflow-hidden ${className}`}
+      className={`bg-surface divide-y divide-gray-100 border-y border-hairline -mx-4 sm:mx-0 sm:border sm:rounded-lg sm:overflow-hidden ${className}`}
       {...rest}
     >
       {children}

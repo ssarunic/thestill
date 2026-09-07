@@ -28,8 +28,8 @@ function NavItem({ to, icon, label, showLabel }: NavItemProps) {
         showLabel ? 'justify-start' : 'justify-center'
       } ${
         isActive
-          ? 'bg-primary-900 text-white'
-          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+          ? 'bg-accent text-accent-contrast'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-ink'
       }`}
       title={!showLabel ? label : undefined}
     >
@@ -98,7 +98,7 @@ function LayoutContent() {
   )
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       {/* Mobile: Fixed header + navigation drawer (hidden on sm: and up via CSS) */}
       <div className="sm:hidden">
         <MobileHeader onMenuClick={() => setIsDrawerOpen(true)} />
@@ -120,12 +120,12 @@ function LayoutContent() {
         )}
 
         <aside
-          className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
+          className={`fixed left-0 top-0 h-full bg-surface border-r border-hairline flex flex-col transition-all duration-300 ${
             isSidebarExpanded ? 'w-64 z-[55]' : 'w-16 lg:w-64 z-40'
           }`}
         >
             {/* Logo */}
-            <div className={`border-b border-gray-200 ${showLabels ? 'p-6' : 'p-3'}`}>
+            <div className={`border-b border-hairline ${showLabels ? 'p-6' : 'p-3'}`}>
               <div className={`flex items-center ${showLabels ? '' : 'justify-center'}`}>
                 {/* Logo icon - visible on collapsed tablet */}
                 {!showLabels && (
@@ -137,7 +137,7 @@ function LayoutContent() {
                 {showLabels && (
                   <div>
                     <h1 className="text-xl font-bold text-primary-900">Thestill</h1>
-                    <p className="text-sm text-gray-500 mt-1">Podcast Intelligence</p>
+                    <p className="text-sm text-muted mt-1">Podcast Intelligence</p>
                   </div>
                 )}
               </div>
@@ -180,8 +180,8 @@ function LayoutContent() {
                   showLabels ? 'justify-start' : 'justify-center'
                 } ${
                   isSearchActive
-                    ? 'bg-primary-900 text-white'
-                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    ? 'bg-accent text-accent-contrast'
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-ink'
                 }`}
                 data-testid="search-nav"
               >
@@ -189,7 +189,7 @@ function LayoutContent() {
                 {showLabels && (
                   <>
                     <span className="flex-1 text-left">Search</span>
-                    <kbd className="hidden lg:inline-flex items-center rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-500">
+                    <kbd className="hidden lg:inline-flex items-center rounded border border-hairline bg-page px-1.5 py-0.5 text-[10px] text-muted">
                       ⌘K
                     </kbd>
                   </>
@@ -215,7 +215,7 @@ function LayoutContent() {
                         Admin
                       </span>
                     ) : (
-                      <div className="mx-2 border-t border-gray-200" />
+                      <div className="mx-2 border-t border-hairline" />
                     )}
                   </div>
                   {ADMIN_NAV_ITEMS.map((item) => (
@@ -238,7 +238,7 @@ function LayoutContent() {
             </nav>
 
             {/* Footer with user menu */}
-            <div className={`border-t border-gray-200 ${showLabels ? 'p-4' : 'p-2'}`}>
+            <div className={`border-t border-hairline ${showLabels ? 'p-4' : 'p-2'}`}>
               {showLabels ? (
                 <UserMenu />
               ) : (

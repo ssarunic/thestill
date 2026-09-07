@@ -34,7 +34,7 @@ export default function BriefingDetail() {
         <div className="animate-pulse h-4 w-72 bg-gray-100 rounded" />
         <div className="animate-pulse h-8 w-48 bg-gray-100 rounded" />
         <div className="animate-pulse h-12 w-36 bg-gray-100 rounded-full" />
-        <div className="animate-pulse h-64 bg-white border border-gray-200 rounded-lg" />
+        <div className="animate-pulse h-64 bg-surface border border-hairline rounded-lg" />
       </div>
     )
   }
@@ -101,7 +101,7 @@ export default function BriefingDetail() {
                 </div>
               )}
               {scriptQuery.error && (
-                <p className="text-gray-500 italic">
+                <p className="text-muted italic">
                   Briefing script not available yet.
                 </p>
               )}

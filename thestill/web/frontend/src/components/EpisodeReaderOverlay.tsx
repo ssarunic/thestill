@@ -121,13 +121,13 @@ export default function EpisodeReaderOverlay() {
         aria-label="Episode reader"
         tabIndex={-1}
         onKeyDown={trapFocus}
-        className="absolute inset-y-0 right-0 flex w-full flex-col bg-gray-50 shadow-xl outline-none lg:max-w-4xl"
+        className="absolute inset-y-0 right-0 flex w-full flex-col bg-page shadow-xl outline-none lg:max-w-4xl"
       >
-        <header className="flex h-14 items-center gap-3 border-b border-gray-200 bg-white px-4 sm:px-6">
+        <header className="flex h-14 items-center gap-3 border-b border-hairline bg-surface px-4 sm:px-6">
           <button
             type="button"
             onClick={close}
-            className="inline-flex shrink-0 items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 transition-colors"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />

@@ -40,16 +40,16 @@ export default function EpisodeDetail() {
           instead. Hidden on error: the reader shows the error card. */}
       {!episodeError && (
         <nav className="text-sm flex flex-wrap items-center gap-1">
-          <Link to="/podcasts" className="text-gray-500 hover:text-gray-700">Podcasts</Link>
+          <Link to="/podcasts" className="text-muted hover:text-gray-700">Podcasts</Link>
           <span className="text-gray-400">/</span>
-          <Link to={`/podcasts/${podcastSlug}`} className="text-gray-500 hover:text-gray-700 truncate max-w-[120px] sm:max-w-none">{episodeLoading ? '...' : episode?.podcast_title}</Link>
+          <Link to={`/podcasts/${podcastSlug}`} className="text-muted hover:text-gray-700 truncate max-w-[120px] sm:max-w-none">{episodeLoading ? '...' : episode?.podcast_title}</Link>
           <span className="text-gray-400 hidden sm:inline">/</span>
-          <span className="text-gray-900 truncate max-w-[150px] sm:max-w-none hidden sm:inline">{episodeLoading ? '...' : episode?.title}</span>
+          <span className="text-ink truncate max-w-[150px] sm:max-w-none hidden sm:inline">{episodeLoading ? '...' : episode?.title}</span>
         </nav>
       )}
 
       {collapsedHeader && (
-        <div className="sticky top-14 z-20 -mx-4 border-b border-gray-200 bg-white px-4 sm:top-0 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
+        <div className="sticky top-14 z-20 -mx-4 border-b border-hairline bg-surface px-4 sm:top-0 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
           <CollapsedEpisodeBar state={collapsedHeader} />
         </div>
       )}

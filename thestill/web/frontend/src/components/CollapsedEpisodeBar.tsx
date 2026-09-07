@@ -29,7 +29,7 @@ export default function CollapsedEpisodeBar({ state, className = '' }: Collapsed
       data-testid="collapsed-episode-bar"
     >
       <Artwork role="bar" sources={[artworkUrl]} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900">{title}</span>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{title}</span>
       <Button
         size="iconSm"
         variant="primary"

@@ -25,12 +25,12 @@ export default function DefinitionList({ heading, rows, className = '' }: Defini
   if (visible.length === 0) return null
   return (
     <section className={className} aria-label={heading}>
-      {heading && <h2 className="text-section text-gray-900 mb-1">{heading}</h2>}
+      {heading && <h2 className="text-section text-ink mb-1">{heading}</h2>}
       <dl className="divide-y divide-gray-100">
         {visible.map((row) => (
           <div key={row.label} className="flex items-baseline justify-between gap-4 py-2.5">
-            <dt className="shrink-0 text-sm text-gray-500">{row.label}</dt>
-            <dd className={`min-w-0 text-right text-sm text-gray-900 ${row.numeric ? 'tabular-nums' : ''}`}>
+            <dt className="shrink-0 text-sm text-muted">{row.label}</dt>
+            <dd className={`min-w-0 text-right text-sm text-ink ${row.numeric ? 'tabular-nums' : ''}`}>
               {row.value}
             </dd>
           </div>
