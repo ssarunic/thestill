@@ -716,6 +716,15 @@ describe('spec #72 §5 — persisted rate preference', () => {
     expect(ctx.availableRates).toBeNull()
   })
 
+  it('clears the available-rate list when a new episode replaces a YouTube session', async () => {
+    renderPlayer()
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.availableRates).not.toBeNull()
+    act(() => ctx.play(audioTrack))
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.availableRates).toBeNull()
+  })
+
   it('clears the available-rate list on stop', async () => {
     renderPlayer()
     await enterYouTube(document.createElement('div'))

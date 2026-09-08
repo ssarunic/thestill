@@ -132,17 +132,26 @@ export default function EpisodeReader({
   useEffect(() => {
     const prev = prevTabRef.current
     prevTabRef.current = activeTab
-    // Leaving the summary by any route — a citation, a People chip, or a
-    // `?view=transcript` push from outside the reader (spec #72 "Open
-    // transcript here") — records where the summary was, so Back lands
-    // there. setTab already saved it for its own toggles; the container has
-    // not moved yet when this effect runs, so re-saving is harmless.
-    if (prev === 'summary' && activeTab === 'transcript') summaryScrollRef.current = getScrollTop()
     if (prev === 'transcript' && activeTab === 'summary') {
       const top = summaryScrollRef.current
       requestAnimationFrame(() => requestAnimationFrame(() => setScrollTop(top)))
     }
-  }, [activeTab, getScrollTop, setScrollTop])
+  }, [activeTab, setScrollTop])
+
+  // Leaving the summary by a route setTab does not own — a `?view=transcript`
+  // push from outside the reader (spec #72 "Open transcript here") — must
+  // still return to the right place on Back. Capturing at the transition is
+  // too late (the browser has already clamped the offset to the new
+  // content), so the summary's offset is tracked while it is on screen.
+  useEffect(() => {
+    if (activeTab !== 'summary') return
+    const target: HTMLElement | Window = scrollContainerRef?.current ?? window
+    const record = () => {
+      summaryScrollRef.current = getScrollTop()
+    }
+    target.addEventListener('scroll', record, { passive: true })
+    return () => target.removeEventListener('scroll', record)
+  }, [activeTab, getScrollTop, scrollContainerRef])
 
   // Spec #68 D1 — `settled` comes back from `useEpisodeLiveRefresh` below and
   // feeds back in here on the next render, stopping the 5s clock once the

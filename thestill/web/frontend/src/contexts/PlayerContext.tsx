@@ -421,6 +421,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (engineKindRef.current === 'youtube') {
       youtubeEngineRef.current?.pause()
       setEngineKind('native')
+      setAvailableRates(null)
     }
     const kind = trackMediaKind(next)
     const desired = selectSource(next, kind === 'video' ? 'video' : 'audio')
