@@ -15,6 +15,7 @@
 
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 import { loadYouTubeIframeApi, type YTNamespace, type YTPlayer } from './youtube-iframe-api'
+import { clampRateToAvailable } from '../../utils/playbackRate'
 
 const POLL_INTERVAL_MS = 250
 
@@ -59,6 +60,9 @@ export class YouTubeEngine implements PlaybackEngine {
   private sample = { t: 0, wall: 0 }
   private playing = false
   private rate = 1
+  // Last list published to PlayerContext (spec #72 §5); null until the
+  // player reports one for the current video.
+  private availableRates: number[] | null = null
 
   constructor(container: HTMLElement, events: EngineEvents) {
     this.container = container
@@ -136,9 +140,15 @@ export class YouTubeEngine implements PlaybackEngine {
       } else if (pending.seekTo != null) {
         this.player!.seekTo(pending.seekTo, true)
       }
-      if (pending.rate != null && pending.rate > 0) this.player!.setPlaybackRate(pending.rate)
+      // Spec #72 §5 — a carried/preferred rate is clamped to what this
+      // video accepts (the IFrame API silently ignores unsupported rates).
+      const available = this.readAvailableRates()
+      if (pending.rate != null && pending.rate > 0) {
+        this.player!.setPlaybackRate(clampRateToAvailable(pending.rate, available))
+      }
       if (pending.autoplay) this.player!.playVideo()
     })
+    this.publishAvailableRates()
     this.resample(pending.seekTo ?? 0)
     const duration = this.safeCall(() => this.player!.getDuration())
     if (duration && Number.isFinite(duration) && duration > 0) this.events.onDurationChange(duration)
@@ -152,6 +162,9 @@ export class YouTubeEngine implements PlaybackEngine {
     // across a state boundary (ads report BUFFERING/PAUSED — the clock
     // freezes instead of drifting).
     this.resample(this.safeCall(() => this.player?.getCurrentTime()) ?? this.sample.t)
+    // The accepted-rate list is per video and may only settle once the
+    // new video is cued or playing, so re-check on those transitions.
+    if (state === states.PLAYING || state === states.CUED) this.publishAvailableRates()
     switch (state) {
       case states.PLAYING: {
         this.playing = true
@@ -207,6 +220,22 @@ export class YouTubeEngine implements PlaybackEngine {
     this.sample = { t, wall: performance.now() }
   }
 
+  private readAvailableRates(): number[] | null {
+    const rates = this.safeCall(() => this.player?.getAvailablePlaybackRates())
+    if (!Array.isArray(rates)) return null
+    const clean = rates.filter((r) => typeof r === 'number' && Number.isFinite(r) && r > 0)
+    // An empty list means "not known yet", never "nothing allowed".
+    return clean.length > 0 ? clean : null
+  }
+
+  private publishAvailableRates(): void {
+    const next = this.readAvailableRates()
+    if (!next) return
+    if (this.availableRates && this.availableRates.join(',') === next.join(',')) return
+    this.availableRates = next
+    this.events.onAvailableRatesChange(next)
+  }
+
   // Feature-guard every IFrame API call — the player can be torn down by
   // the browser (or not yet constructed) between our checks.
   private safeCall<T>(fn: () => T): T | undefined {
@@ -248,7 +277,7 @@ export class YouTubeEngine implements PlaybackEngine {
 
   setRate(rate: number): void {
     if (this.player && this.ready) {
-      this.safeCall(() => this.player!.setPlaybackRate(rate))
+      this.safeCall(() => this.player!.setPlaybackRate(clampRateToAvailable(rate, this.readAvailableRates())))
     } else if (this.pending) {
       this.pending.rate = rate
     }
@@ -290,5 +319,6 @@ export class YouTubeEngine implements PlaybackEngine {
     this.pending = null
     this.currentVideoId = null
     this.playing = false
+    this.availableRates = null
   }
 }

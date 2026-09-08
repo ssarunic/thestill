@@ -205,6 +205,7 @@ let mediaSessionMock: ReturnType<typeof installMediaSessionMock>
 beforeEach(() => {
   installMediaStubs()
   mediaSessionMock = installMediaSessionMock()
+  localStorage.clear()
 })
 
 afterEach(() => {
@@ -656,5 +657,123 @@ describe('spec #62 — YouTube iframe engine', () => {
       delete (document as unknown as Record<string, unknown>).pictureInPictureElement
       delete (document as unknown as Record<string, unknown>).exitPictureInPicture
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('spec #72 §5 — persisted rate preference', () => {
+  beforeEach(() => {
+    resetFakePlayers()
+  })
+
+  it('starts a fresh native source at the persisted rate', () => {
+    localStorage.setItem('thestill:player:rate', '1.5')
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    expect(video.playbackRate).toBe(1.5)
+    expect(video.defaultPlaybackRate).toBe(1.5)
+    expect(ctx.availableRates).toBeNull()
+  })
+
+  it('setRate persists the choice and applies it to the engine', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => ctx.setRate(2))
+    expect(video.playbackRate).toBe(2)
+    expect(localStorage.getItem('thestill:player:rate')).toBe('2')
+    // The next track picks it up without re-setting.
+    act(() => ctx.play(videoTrack))
+    expect(video.playbackRate).toBe(2)
+  })
+
+  it('ignores a corrupt stored value', () => {
+    localStorage.setItem('thestill:player:rate', 'fast')
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    expect(video.playbackRate).toBe(1)
+  })
+
+  it('carries the preference into a fresh YouTube session, clamped to the reported rates', async () => {
+    localStorage.setItem('thestill:player:rate', '1.2')
+    renderPlayer()
+    const player = await enterYouTube(document.createElement('div'))
+    // 1.2 is not in the fake's list; the nearest accepted rate wins.
+    expect(player.setPlaybackRate).toHaveBeenCalledWith(1.25)
+    expect(ctx.availableRates).toEqual([0.5, 1, 1.25, 1.5, 2])
+    // The user's preference itself is untouched by engine-side snapping.
+    expect(localStorage.getItem('thestill:player:rate')).toBe('1.2')
+  })
+
+  it('clamps an explicit setRate on the YouTube engine and clears the list on exit', async () => {
+    renderPlayer()
+    const player = await enterYouTube(document.createElement('div'))
+    act(() => ctx.setRate(0.8))
+    expect(player.setPlaybackRate).toHaveBeenLastCalledWith(1)
+    expect(localStorage.getItem('thestill:player:rate')).toBe('0.8')
+
+    act(() => ctx.switchRendition('audio'))
+    expect(ctx.availableRates).toBeNull()
+  })
+
+  it('clears the available-rate list when a new episode replaces a YouTube session', async () => {
+    renderPlayer()
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.availableRates).not.toBeNull()
+    act(() => ctx.play(audioTrack))
+    expect(ctx.activeEngine).toBe('native')
+    expect(ctx.availableRates).toBeNull()
+  })
+
+  it('clears the available-rate list on stop', async () => {
+    renderPlayer()
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.availableRates).not.toBeNull()
+    act(() => ctx.stop())
+    expect(ctx.availableRates).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('media layer z-index follows the slot host (spec #71 ladder, #72 2c)', () => {
+  const layer = () => document.querySelector('[data-testid="player-media-layer"]') as HTMLElement
+
+  it('sits on the shell rung for a page slot, above the reader for a dialog slot, above the sheet for its marker', () => {
+    renderPlayer()
+    act(() => ctx.play(videoTrack))
+
+    const pageSlot = document.createElement('div')
+    document.body.appendChild(pageSlot)
+    let unregister!: () => void
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', pageSlot)
+    })
+    expect(ctx.presentation).toBe('theater')
+    expect(layer().style.zIndex).toBe('40')
+    act(() => unregister())
+
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const readerSlot = document.createElement('div')
+    dialog.appendChild(readerSlot)
+    document.body.appendChild(dialog)
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', readerSlot)
+    })
+    expect(layer().style.zIndex).toBe('60')
+    act(() => unregister())
+
+    const sheet = document.createElement('div')
+    sheet.setAttribute('role', 'dialog')
+    sheet.setAttribute('data-media-host', 'now-playing')
+    const sheetSlot = document.createElement('div')
+    sheet.appendChild(sheetSlot)
+    document.body.appendChild(sheet)
+    act(() => {
+      unregister = ctx.registerTheaterSlot('ep-video', sheetSlot)
+    })
+    expect(layer().style.zIndex).toBe('71')
+    act(() => unregister())
   })
 })

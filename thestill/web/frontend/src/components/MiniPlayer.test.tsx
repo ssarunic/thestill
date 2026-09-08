@@ -45,7 +45,7 @@ const track: PlayerTrack = {
 
 const episodePath = '/podcasts/pod/episodes/ep-1-slug'
 
-function renderPlayer(initialPath = '/podcasts') {
+function renderPlayer(initialPath = '/podcasts', props: { isOpen?: boolean; onExpand?: () => void } = {}) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <PlayerProvider>
@@ -54,7 +54,7 @@ function renderPlayer(initialPath = '/podcasts') {
           <Route path="*" element={<LocationProbe />} />
         </Routes>
         <input aria-label="Search box" />
-        <MiniPlayer />
+        <MiniPlayer {...props} />
       </PlayerProvider>
     </MemoryRouter>,
   )
@@ -134,24 +134,42 @@ describe('MiniPlayer (spec #71)', () => {
     expect(screen.getByRole('button', { name: 'Close player' })).toHaveClass('hidden')
   })
 
-  it('opens the episode as an overlay when clicked from the inbox', async () => {
+  it('the artwork/title block is the expand affordance (spec #72)', async () => {
+    const onExpand = vi.fn()
+    renderPlayer('/inbox', { onExpand })
+    act(() => ctx.play(track))
+    const expand = screen.getByRole('button', { name: 'Now playing: Audio Episode' })
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    expect(expand).toHaveAttribute('aria-haspopup', 'dialog')
+    expect(screen.queryByRole('link', { name: 'Audio Episode' })).not.toBeInTheDocument()
+    await userEvent.click(expand)
+    expect(onExpand).toHaveBeenCalledTimes(1)
+    // Expanding never navigates.
+    expect(screen.getByTestId('location')).toHaveTextContent('/inbox|none')
+  })
+
+  it('reflects the open state on the expand button', () => {
+    renderPlayer('/inbox', { isOpen: true })
+    act(() => ctx.play(track))
+    expect(screen.getByRole('button', { name: 'Now playing: Audio Episode' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('the Show video link keeps the inbox overlay contract', async () => {
     renderPlayer('/inbox')
-    act(() => ctx.play(track))
-    await userEvent.click(screen.getByRole('link', { name: 'Audio Episode' }))
+    act(() =>
+      ctx.play({
+        ...track,
+        playback: {
+          kind: 'audio',
+          audio: null,
+          video: null,
+          youtube: { video_id: 'validVID001', watch_url: 'https://www.youtube.com/watch?v=validVID001' },
+          poster_url: null,
+          captions_url: null,
+        },
+      }),
+    )
+    await userEvent.click(screen.getByRole('link', { name: 'Show video' }))
     expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}|/inbox`)
-  })
-
-  it('navigates plainly from any other page', async () => {
-    renderPlayer('/podcasts')
-    act(() => ctx.play(track))
-    await userEvent.click(screen.getByRole('link', { name: 'Audio Episode' }))
-    expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}|none`)
-  })
-
-  it('does not push a duplicate entry when already on the episode', async () => {
-    renderPlayer(episodePath)
-    act(() => ctx.play(track))
-    await userEvent.click(screen.getByRole('link', { name: 'Audio Episode' }))
-    expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}|none`)
   })
 })

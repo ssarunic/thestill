@@ -8,7 +8,7 @@ export type ButtonVariant = 'primary' | 'secondary' | 'tonal' | 'success' | 'dan
 // ``bg-clip-padding`` keeps the touch target at the #73 floor while the
 // painted circle stays small enough for a 56 px bar. Use it with the
 // ``primary`` or ``ghost`` variants (the ``secondary`` border would paint).
-export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon' | 'iconSm'
+export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon' | 'iconSm' | 'iconLg'
 
 export const variantStyles: Record<ButtonVariant, { base: string; disabled: string }> = {
   // Navy ``primary`` ramp from tailwind.config.js — the same colour as the
@@ -48,6 +48,9 @@ export const sizeStyles: Record<ButtonSize, string> = {
   lg: 'min-w-[48px] min-h-[48px] px-4 sm:px-5 text-base gap-2.5 rounded-lg',
   icon: 'w-11 h-11 p-0 rounded-full shrink-0',
   iconSm: 'w-11 h-11 p-0 rounded-full shrink-0 border-4 border-transparent bg-clip-padding',
+  // 56 px disc — the one dominant transport control of an expanded player
+  // (spec #72 §4). Everything else in that surface stays at ``icon``.
+  iconLg: 'w-14 h-14 p-0 rounded-full shrink-0',
 }
 
 export const iconSizes: Record<ButtonSize, string> = {
@@ -56,6 +59,7 @@ export const iconSizes: Record<ButtonSize, string> = {
   lg: 'w-6 h-6 sm:w-5 sm:h-5',
   icon: 'w-5 h-5',
   iconSm: 'w-5 h-5',
+  iconLg: 'w-7 h-7',
 }
 
 export interface ButtonClassOptions {

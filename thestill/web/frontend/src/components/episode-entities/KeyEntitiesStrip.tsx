@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { selectTopEntities } from '../../utils/mentionDensity'
 import type { EpisodeEntity, EntityType } from '../../api/types'
 import { ENTITY_STYLES, entityHref, entityStyle } from '../../utils/entityColors'
 
@@ -40,10 +41,10 @@ export default function KeyEntitiesStrip({
   onSeek,
   topN = 5,
 }: KeyEntitiesStripProps) {
-  const visible = entities
-    .filter((e) => !hiddenTypes.has(e.entity.type))
-    .sort((a, b) => b.mention_count - a.mention_count)
-    .slice(0, topN)
+  const visible = selectTopEntities(
+    entities.filter((e) => !hiddenTypes.has(e.entity.type)),
+    topN,
+  )
 
   if (entities.length === 0) {
     // Spec §5.3 empty state: episode with 0 resolved entities hides

@@ -1,6 +1,6 @@
 // Spec #76 §5.8 — one wrapper fixes size and radius per role, replacing the
 // seven size/radius combinations spec #73 §2 counted.
-export type ArtworkRole = 'inline' | 'bar' | 'rowSm' | 'row' | 'card' | 'hero'
+export type ArtworkRole = 'inline' | 'bar' | 'rowSm' | 'row' | 'sheet' | 'card' | 'hero'
 
 export const ARTWORK_ROLE: Record<ArtworkRole, { box: string; radius: string; px: number; glyph: string }> = {
   /** 28 px — the show row under a title, the collapsed bar. */
@@ -11,7 +11,9 @@ export const ARTWORK_ROLE: Record<ArtworkRole, { box: string; radius: string; px
   rowSm: { box: 'w-10 h-10', radius: 'rounded-lg', px: 40, glyph: 'w-5 h-5' },
   /** 48 px — podcast and inbox rows (``ListRowArtwork``). */
   row: { box: 'w-12 h-12', radius: 'rounded-lg', px: 48, glyph: 'w-5 h-5' },
-  /** 96 px — podcast detail. */
+  /** 64 px — the desktop Now Playing card header (spec #72). */
+  sheet: { box: 'w-16 h-16', radius: 'rounded-lg', px: 64, glyph: 'w-7 h-7' },
+  /** 96 px — podcast detail; the phone Now Playing sheet header. */
   card: { box: 'w-24 h-24', radius: 'rounded-lg', px: 96, glyph: 'w-10 h-10' },
   /**
    * Episode hero: 40 vw capped at 160 px on phones (the largest size that

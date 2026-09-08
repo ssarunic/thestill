@@ -26,6 +26,10 @@ export interface EngineEvents {
   onVolumeChange: (volume: number, muted: boolean) => void
   onError: (message: string) => void
   onEnded: () => void
+  // Spec #72 §5 — the rates this engine accepts for the current source, or
+  // null for "no restriction" (native media plays any sane rate). Only the
+  // YouTube engine emits; it re-emits per video since the list can change.
+  onAvailableRatesChange: (rates: number[] | null) => void
 }
 
 // Native: `url` (the enclosure/asset URL). YouTube: `videoId`.

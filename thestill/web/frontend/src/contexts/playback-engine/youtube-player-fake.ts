@@ -26,6 +26,9 @@ export class FakeYTPlayer {
   time = 0
   rate = 1
   duration = 3600
+  // Deliberately NOT a superset of RATE_OPTIONS (no 0.8, 1.2) so clamping
+  // is exercised: 1.2 → 1.25, 0.8 → 1 (nearest wins).
+  availableRates = [0.5, 1, 1.25, 1.5, 2]
   playVideo = vi.fn(() => this.emit(1))
   pauseVideo = vi.fn(() => this.emit(2))
   seekTo = vi.fn((s: number) => {
@@ -35,6 +38,7 @@ export class FakeYTPlayer {
     this.rate = r
   })
   getPlaybackRate = () => this.rate
+  getAvailablePlaybackRates = vi.fn(() => this.availableRates)
   getCurrentTime = vi.fn(() => this.time)
   getDuration = () => this.duration
   getPlayerState = () => this.state
