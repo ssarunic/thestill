@@ -1,8 +1,8 @@
 # Now Playing Sheet — Tap-to-Expand Player
 
-**Status**: 📝 Draft v2 (2026-09-07) — decisions resolved, ready to build on `feat/72-now-playing-sheet`
+**Status**: 🚧 Implemented on `feat/72-now-playing-sheet` (2026-09-08); pending review + merge
 **Created**: 2026-09-03
-**Updated**: 2026-09-07
+**Updated**: 2026-09-08
 **Priority**: Medium (turns "a bar that plays audio" into a podcast player; unblocked by #71)
 
 > **Related:** [#71 player-shell-layer](71-player-shell-layer.md) (prerequisite: the bar must be reachable before it can expand), [#22 floating-media-player](22-floating-media-player.md) (`PlayerContext` already exposes `playbackRate`, `setRate`, `volume`, `setVolume` with no UI), [#61 unified-av-playback-session](61-unified-av-playback-session.md) §2 ("if video is presented nowhere, an expanded mini player may host the video itself"), [#62 youtube-video-rendition](62-youtube-video-rendition.md) (rate limits on the YouTube engine; §7 presented-only rule), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) §5.2 (mention density timeline — moves here), [#38 karaoke-word-highlighting](38-karaoke-word-highlighting.md) (word wipe + 150 ms perceptual lead; follow-playback toggle), [#52 inbox-reader-overlay](52-inbox-reader-overlay.md) (overlay contract for links out of the sheet), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md) (`Button`/`ActionRow`/`Artwork` primitives, colour tokens, collapsed episode bar), [#73 mobile-list-row-density](73-mobile-list-row-density.md) (44 px touch floor), [docs/code-guidelines.md §Navigation invariants](../docs/code-guidelines.md) (contract every new link out of a page must meet)
@@ -214,7 +214,8 @@ keep each commit reviewable on its own.
 | Unit | Responsibility |
 |---|---|
 | `components/NowPlayingSheet.tsx` | Sheet/card chrome (focus trap, Esc, scroll lock mirror `EpisodeReaderOverlay`; slide transition mirrors `NavigationDrawer`), header, transport, speed, chips, Stop. Reads `usePlayer()` / `usePlayerTime()`; owns only UI state (remaining toggle, drag offset). Phase 2c: registers the header slot. |
-| `components/NowPlayingScrubber.tsx` | 44 px range + labels + tick row. Props: `currentTime, duration, onSeek, entities?, onTickSeek?`. |
+| `components/NowPlayingScrubber.tsx` | 44 px range + labels + tick row. Props: `currentTime, duration, onSeek, ticks?: ScrubberTick[]` (the sheet builds ticks from entities). |
+| `components/NowPlayingSpeedControl.tsx` | Segmented `RATE_OPTIONS` radiogroup; options outside `availableRates` disabled, not hidden. |
 | `components/NowPlayingKaraokeLine.tsx` | Current-line strip (§3 above). |
 | `hooks/usePlayerRatePreference.ts` + `utils/playbackRate.ts` | `RATE_OPTIONS`, `readPersistedRate`/`writePersistedRate`, `clampRateToAvailable`, `formatRateLabel`. The hook is called inside `PlayerProvider`. |
 | `hooks/useFollowPlayback.ts` | `useSyncExternalStore` store over `thestill:transcript:followPlayback`; module-level listener set; `__resetForTests`. |
@@ -224,12 +225,13 @@ keep each commit reviewable on its own.
 
 ### Changed
 
-- `contexts/PlayerContext.tsx` — apply `readPersistedRate()` on the
+- `contexts/PlayerContext.tsx` — apply the persisted rate on the
   new-episode `play()` branch and in `playYouTube`; `setRate` persists;
   `availableRates: number[] | null` state fed by a new engine event, reset on
   `stop()` and on leaving YouTube; media-layer z-index resolved by
   `mediaLayerZIndex(el)` from `constants/layers.ts` instead of the inline
-  `[role="dialog"]` test.
+  `[role="dialog"]` test; `hasTheaterSlot()` — a synchronous getter (see the
+  video-slot guard below).
 - `contexts/playback-engine/{types,youtube-iframe-api,youtube-engine,youtube-player-fake}.ts`
   — `getAvailablePlaybackRates()` on `YTPlayer`; the engine emits
   `onAvailableRatesChange` once ready and clamps a pending rate; the fake
@@ -262,18 +264,24 @@ reader's cache entry. Duration from `player.duration`, falling back to
 `track.durationHint`. Current line from `useEpisodeTranscript` /
 `useEpisodeTranscriptWords` keyed by the track's slugs.
 
-**Video slot guard (2c):** the sheet registers only while
-`!isSmUp && videoPresentable && videoPreference === 'shown' && presentation === 'hidden'`.
-`presentation === 'hidden'` already excludes a mounted theater slot, and a
-route change closes the sheet before a reader can mount, so two claimants
-cannot coexist; the condition is still checked explicitly rather than relying
-on effect order.
+**Video slot guard (2c):** the sheet's slot effect runs while
+`isOpen && !isSmUp && videoPresentable && videoPreference === 'shown'` and
+bails if `player.hasTheaterSlot()` is already true, so it never steals the
+reader's slot. The guard is a synchronous getter rather than reactive state
+on purpose: state would re-run the effect on the sheet's *own* registration
+and oscillate. `presentation` is not part of the gate either — on a phone
+with nothing presenting, the machine's resting value is `floating` (the tile
+is desktop-only), not `hidden`. Closing unregisters; the machine returns to
+`floating`, the media layer hides, audio continues; a YouTube session drops
+to audio through the existing #62 §7 effect.
 
 No backend or API changes.
 
 ## Implementation Sequence
 
-Seven commits on `feat/72-now-playing-sheet`, each green on its own:
+Seven commits on `feat/72-now-playing-sheet`, each green on its own
+(shipped 2026-09-07/08 as `6ddd69c`, `6517e08`, `8d3e76b`, `a51b3ca`,
+`ff12abe`, `cad59bf`, `6e90e86`):
 
 | # | Commit | Gate |
 |---|---|---|
@@ -287,15 +295,23 @@ Seven commits on `feat/72-now-playing-sheet`, each green on its own:
 
 ## Testing
 
-- Unit (vitest 5): every gate above, plus focus trap and restore on phone,
-  click-outside on desktop, route change closes, Stop clears and closes,
-  follow toggle syncs two mounted consumers in one tree, `availableRates`
-  reset on `stop()`.
-- Playwright (new `tests/now-playing-sheet.spec.ts`, first browser suite for
-  the player): phone and desktop flows; the #71 case end-to-end — reader
-  open, bar visible, expand, seek, close, reader still where it was; and the
-  navigation-contract check for "Open transcript here" (scroll origin →
-  follow link → Back → position kept).
+- Unit (vitest): `playbackRate.test.ts`, `PlayerContext.test.tsx` (rate
+  preference across native / YouTube / stop; media-layer rung per host),
+  `youtube-engine.test.ts` (publish + clamp), `layers.test.ts`,
+  `useEpisodeLinkState.test.tsx`, `useFollowPlayback.test.tsx` (two consumers
+  in step), `useDeepLinkScrollTarget.test.tsx` (once per entry, gap
+  fallback, offset, junk), `NowPlayingSpeedControl.test.tsx`,
+  `NowPlayingKaraokeLine.test.tsx` (lead, gaps, wipe),
+  `NowPlayingSheet.test.tsx` (both forms, every close path, transport,
+  speed, Stop, title link contract, ticks, deep link, follow toggle, phone
+  video slot claim / yield / release, desktop chips), `MiniPlayer.test.tsx`
+  (expand button).
+- Playwright `tests/now-playing-sheet.spec.ts` (hermetic, CI gate): phone
+  sheet open → seek → speed → Esc; desktop card above the bar, click-outside,
+  speed persists across reopen, Stop; and the navigation-contract check for
+  "Open transcript here" (scroll origin → link → transcript at `t` → Back →
+  position kept). The contract table in `navigation-contract.spec.ts`
+  points here for that link.
 
 ## Open Questions
 
@@ -322,4 +338,5 @@ Seven commits on `feat/72-now-playing-sheet`, each green on its own:
 | Date | Decision |
 |---|---|
 | 2026-09-03 | Drafted from the player/overlay design review. Sheet is transient (`z-[70]`) rather than a fourth long-lived surface. Entity timeline relocates onto the scrubber instead of being repositioned as a floating strip. Rate persistence added to the provider rather than to the sheet so it survives engine switches. |
+| 2026-09-08 | Built. `hasTheaterSlot()` getter chosen over a `presentation === 'hidden'` gate for the phone video slot (reactive gate oscillates; resting state on a phone is `floating`). Speed control extracted as its own component so engine-constrained rendering is unit-testable without YouTube. The navigation-contract check for "Open transcript here" lives in the sheet's own Playwright spec because the contract table cannot express "open a sheet first". |
 | 2026-09-07 | v2 after #73/#74/#76 and the navigation contract landed. Card over side panel (video already has theater + tile on desktop; karaoke belongs to the transcript). One global rate. Follow lifted into a shared `useSyncExternalStore` store over the existing key. All three phases plus a current-line karaoke strip on this branch. Built from #76 primitives (`Button`, `Artwork`, tokens) with two additive sizes. Deep link: `t` wins on push, reading position wins on pop; route joins the navigation-contract table. `useIsSmUp` reused rather than extracted. Pragmatic blueprint chosen over minimal (ad hoc rate handling, rewriting a component slated for deletion) and clean (refactors of the transcript tracker and key-entities strip that widen review without changing behaviour). |

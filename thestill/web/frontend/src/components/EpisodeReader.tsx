@@ -132,11 +132,17 @@ export default function EpisodeReader({
   useEffect(() => {
     const prev = prevTabRef.current
     prevTabRef.current = activeTab
+    // Leaving the summary by any route — a citation, a People chip, or a
+    // `?view=transcript` push from outside the reader (spec #72 "Open
+    // transcript here") — records where the summary was, so Back lands
+    // there. setTab already saved it for its own toggles; the container has
+    // not moved yet when this effect runs, so re-saving is harmless.
+    if (prev === 'summary' && activeTab === 'transcript') summaryScrollRef.current = getScrollTop()
     if (prev === 'transcript' && activeTab === 'summary') {
       const top = summaryScrollRef.current
       requestAnimationFrame(() => requestAnimationFrame(() => setScrollTop(top)))
     }
-  }, [activeTab, setScrollTop])
+  }, [activeTab, getScrollTop, setScrollTop])
 
   // Spec #68 D1 — `settled` comes back from `useEpisodeLiveRefresh` below and
   // feeds back in here on the next render, stopping the 5s clock once the

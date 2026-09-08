@@ -73,6 +73,9 @@ async function mockLists(page: Page) {
   await page.route('**/api/entities/**', (route) => route.fulfill({ status: 404, json: { detail: 'not found' } }))
 }
 
+// Links that need setup a table row cannot express live in their own spec but
+// still honour the contract:
+//   - Now Playing sheet → "Open transcript here" (spec #72): now-playing-sheet.spec.ts
 const ROUTES: { name: string; path: string; ready: (page: Page) => Promise<void>; link: (page: Page) => ReturnType<Page['locator']> }[] = [
   {
     name: 'Podcast detail → episode',
