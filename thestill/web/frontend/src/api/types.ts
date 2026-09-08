@@ -1392,3 +1392,18 @@ export interface ImportResponse {
   timestamp: string
   import: ImportPayload
 }
+
+// Remote MCP connector (spec #78 Phase 1). ``url`` is the capability URL
+// to paste into claude.ai's custom-connector form; present only when the
+// server has MCP_HTTP_ENABLED=true. Admin-gated server-side.
+export interface McpStatus {
+  enabled: boolean
+  url?: string
+  transport?: string
+}
+
+export interface McpStatusResponse {
+  status: string
+  timestamp: string
+  mcp: McpStatus
+}
