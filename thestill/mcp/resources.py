@@ -30,7 +30,7 @@ from structlog import get_logger
 from ..services import PodcastService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
-from .identity import McpIdentity, current_mcp_identity, require_authenticated
+from .identity import McpIdentity, current_mcp_identity, remote_call_limiter, require_authenticated
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = get_logger(__name__)
@@ -117,7 +117,9 @@ def setup_resources(server: Server, storage_path: str):
         # The SDK hands us a pydantic AnyUrl; everything below wants str.
         if identity.is_remote:
             require_authenticated(identity)
-            return await anyio.to_thread.run_sync(_read_resource_sync, str(uri), identity)
+            return await anyio.to_thread.run_sync(
+                _read_resource_sync, str(uri), identity, limiter=remote_call_limiter(server)
+            )
         return _read_resource_sync(str(uri), identity)
 
     def _read_resource_sync(uri: str, identity: McpIdentity) -> str:

@@ -282,13 +282,19 @@ Four findings from the implementation review, all fixed on the branch:
   synchronous and some (transcribe, process_episode) run for hours. Over
   HTTP they were awaited directly on uvicorn's loop, freezing health
   checks, the API and token revocation. `call_tool` and `read_resource`
-  now dispatch remote callers to a worker thread (`anyio.to_thread`);
-  stdio keeps the direct call. Routing pipeline tools through the task
-  queue remains the better long-term shape and is noted as a follow-up.
+  now dispatch remote callers to a worker thread (`anyio.to_thread`) on a
+  **dedicated per-server `CapacityLimiter`** (`REMOTE_CALL_WORKERS = 4`),
+  never AnyIO's default thread limiter — that is the pool Starlette runs
+  synchronous API routes on, so sharing it would let forty long MCP calls
+  starve token rotation and revocation. Calls beyond the limit queue; the
+  per-token HTTP limit bounds the queue. stdio keeps the direct call.
+  Routing pipeline tools through the task queue remains the better
+  long-term shape and is noted as a follow-up.
 - **Missing identity fails closed.** Only `request is None` means stdio.
   An HTTP request whose scope state lost the guard's user resolves to
   `ANONYMOUS_REMOTE`: no scopes, no tools listed, every call and every
-  resource read refused, and a warning logged.
+  resource read refused, and a warning logged (with the path redacted
+  like every other sink).
 - **Every path-logging sink redacts `/mcp/{token}`.** Beyond the two
   access loggers, the body-size middleware's 413/400 log lines and the
   generic unhandled-exception log now go through

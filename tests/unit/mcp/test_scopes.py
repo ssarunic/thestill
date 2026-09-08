@@ -121,8 +121,15 @@ class TestCurrentIdentity:
     def test_request_without_user_fails_closed_never_stdio(self):
         """Only ``request is None`` means stdio. An HTTP request whose scope
         lost the guard's identity must not inherit unscoped admin access."""
-        request = SimpleNamespace(scope={"state": {}, "path": "/mcp/x"})
-        identity = current_mcp_identity(self._server(request))
+        from structlog.testing import capture_logs
+
+        token = "t" * 64
+        request = SimpleNamespace(scope={"state": {}, "path": f"/mcp/{token}"})
+        with capture_logs() as logs:
+            identity = current_mcp_identity(self._server(request))
+        # The warning is a path-logging sink like any other: redacted.
+        assert logs and logs[0]["event"] == "mcp_request_without_identity"
+        assert logs[0]["path"] == "/mcp/<redacted>" and token not in str(logs)
         assert identity is ANONYMOUS_REMOTE
         assert identity.is_remote and identity.is_anonymous_remote
         assert identity.effective_scopes == frozenset()

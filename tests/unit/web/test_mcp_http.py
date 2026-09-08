@@ -397,6 +397,34 @@ class TestEventLoop:
         assert finished["fast"] < finished["slow"], "health check waited for the tool call: event loop was blocked"
 
 
+class TestDedicatedWorkerPool:
+    def test_remote_calls_use_their_own_bounded_limiter(self, harness, monkeypatch):
+        """Forty long MCP calls must not exhaust AnyIO's default thread pool —
+        the one Starlette runs synchronous API routes (token rotate/revoke)
+        on. Remote calls go through a per-server CapacityLimiter instead."""
+        import anyio
+
+        from thestill.mcp import tools as tools_mod
+        from thestill.mcp.identity import REMOTE_CALL_WORKERS, remote_call_limiter
+
+        seen = {}
+        real = anyio.to_thread.run_sync
+
+        async def spy(fn, *args, **kwargs):
+            seen["limiter"] = kwargs.get("limiter")
+            seen["default"] = anyio.to_thread.current_default_thread_limiter()
+            return await real(fn, *args, **kwargs)
+
+        monkeypatch.setattr(tools_mod.anyio.to_thread, "run_sync", spy)
+        token = harness.mint()
+        with harness.client() as c:
+            assert Harness.rpc(c, token, "tools/call", {"name": "list_podcasts", "arguments": {}}).status_code == 200
+        server = harness.runtime.session_manager.app
+        assert seen["limiter"] is remote_call_limiter(server)
+        assert seen["limiter"] is not seen["default"]
+        assert seen["limiter"].total_tokens == REMOTE_CALL_WORKERS
+
+
 class TestOtherLogSinks:
     """Every sink that logs a request path must redact /mcp/{token}."""
 

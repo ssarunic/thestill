@@ -42,7 +42,7 @@ from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
-from .identity import McpIdentity, ScopeError, current_mcp_identity, require_scope, visible_tools
+from .identity import McpIdentity, ScopeError, current_mcp_identity, remote_call_limiter, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
 from .search_tools import dispatch_search_tool, search_tool_definitions
 from .utils import resolve_identifier
@@ -422,7 +422,9 @@ def setup_tools(server: Server, storage_path: str):
         # legacy semantics on every branch below; a remote caller is scoped.
         identity = current_mcp_identity(server)
         if identity.is_remote:
-            return await anyio.to_thread.run_sync(_call_tool_sync, name, arguments, identity)
+            return await anyio.to_thread.run_sync(
+                _call_tool_sync, name, arguments, identity, limiter=remote_call_limiter(server)
+            )
         return _call_tool_sync(name, arguments, identity)
 
     def _call_tool_sync(name: str, arguments: Any, identity: McpIdentity) -> list[TextContent]:

@@ -24,11 +24,14 @@ ids, no scopes) rather than inheriting per-user behaviour by accident.
 
 from __future__ import annotations
 
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, FrozenSet, List, Optional
 
+import anyio
 import structlog
 
+from ..utils.log_safety import redact_capability_path
 from .scopes import effective_scopes, scope_for_tool
 
 if TYPE_CHECKING:
@@ -112,7 +115,10 @@ def current_mcp_identity(server: "Server") -> McpIdentity:
     if user is None:
         # A request exists but the guard's identity is missing: a mount or
         # middleware regression, never a local caller. Fail closed.
-        logger.warning("mcp_request_without_identity", path=request.scope.get("path"))
+        logger.warning(
+            "mcp_request_without_identity",
+            path=redact_capability_path(str(request.scope.get("path") or "")),
+        )
         return ANONYMOUS_REMOTE
     return McpIdentity(
         user=user,
@@ -153,3 +159,26 @@ def visible_tools(identity: McpIdentity, tools: List["Tool"]) -> List["Tool"]:
         return tools
     granted = identity.effective_scopes
     return [t for t in tools if scope_for_tool(t.name) in granted]
+
+
+# Remote tool calls and resource reads run on worker threads so hours-long
+# synchronous handlers cannot freeze the event loop. They must NOT share
+# AnyIO's default thread limiter — that is the pool Starlette uses for
+# synchronous API routes, so forty long MCP calls would starve token
+# rotation and revocation. Each Server gets its own small bounded limiter;
+# calls beyond it queue (the per-token HTTP limit bounds the queue).
+REMOTE_CALL_WORKERS = 4
+_limiters: "weakref.WeakKeyDictionary[Server, anyio.CapacityLimiter]" = weakref.WeakKeyDictionary()
+
+
+def remote_call_limiter(server: "Server") -> anyio.CapacityLimiter:
+    """The dedicated worker-thread limiter for this server's remote calls.
+
+    Created lazily inside the running event loop (AnyIO binds a limiter to
+    the backend at construction) and cached per Server instance.
+    """
+    limiter = _limiters.get(server)
+    if limiter is None:
+        limiter = anyio.CapacityLimiter(REMOTE_CALL_WORKERS)
+        _limiters[server] = limiter
+    return limiter
