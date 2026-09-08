@@ -35,13 +35,16 @@ from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
 from ..services import PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
+from ..services.follower_service import NotFollowingError
 from ..utils.config import load_config
 from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
+from .identity import ScopeError, current_mcp_identity, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
 from .search_tools import dispatch_search_tool, search_tool_definitions
+from .utils import resolve_identifier
 
 logger = structlog.get_logger(__name__)
 
@@ -143,7 +146,7 @@ def setup_tools(server: Server, storage_path: str):
     async def list_tools() -> list[Tool]:
         """List available tools."""
         logger.debug("listing_available_tools")
-        return [
+        tools = [
             Tool(
                 name="add_podcast",
                 description="Add a new podcast to tracking. Supports RSS URLs, Apple Podcast URLs, and YouTube channels/playlists.",
@@ -164,15 +167,29 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"}
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Podcast uuid, slug or RSS URL (the legacy numeric index is accepted on stdio only)",
+                        }
                     },
                     "required": ["podcast_id"],
                 },
             ),
             Tool(
                 name="list_podcasts",
-                description="List all tracked podcasts with their indices and statistics.",
-                inputSchema={"type": "object", "properties": {}},
+                description=(
+                    "List podcasts with their statistics. Over the remote connector this is the caller's "
+                    "followed podcasts; admins may pass all=true for every podcast on the instance."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "all": {
+                            "type": "boolean",
+                            "description": "Admins only: list every podcast, not just the caller's follows",
+                        }
+                    },
+                },
             ),
             Tool(
                 name="list_episodes",
@@ -180,7 +197,10 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Podcast uuid, slug or RSS URL (the legacy numeric index is accepted on stdio only)",
+                        },
                         "limit": {
                             "type": "integer",
                             "description": "Maximum number of episodes to return (default: 10)",
@@ -205,7 +225,10 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Podcast uuid, slug or RSS URL (the legacy numeric index is accepted on stdio only)",
+                        },
                         "episode_id": {
                             "type": "string",
                             "description": "Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID",
@@ -317,7 +340,7 @@ def setup_tools(server: Server, storage_path: str):
                     "properties": {
                         "podcast_id": {
                             "type": "string",
-                            "description": "Podcast index (1, 2, 3...) or RSS URL",
+                            "description": "Podcast uuid, slug or RSS URL (the legacy numeric index is accepted on stdio only)",
                         },
                         "episode_id": {
                             "type": "string",
@@ -352,7 +375,10 @@ def setup_tools(server: Server, storage_path: str):
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "podcast_id": {"type": "string", "description": "Podcast index (1, 2, 3...) or RSS URL"},
+                        "podcast_id": {
+                            "type": "string",
+                            "description": "Podcast uuid, slug or RSS URL (the legacy numeric index is accepted on stdio only)",
+                        },
                         "episode_id": {
                             "type": "string",
                             "description": "Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID",
@@ -368,6 +394,10 @@ def setup_tools(server: Server, storage_path: str):
             # Spec #28 §2.10 — sqlite-vec corpus search.
             *search_tool_definitions(),
         ]
+        # Spec #78 Phase 2 — over the remote connector only the tools the
+        # token's (effective) scopes grant are listed. Advisory: the
+        # call-time check below is the control.
+        return visible_tools(current_mcp_identity(server), tools)
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Any) -> list[TextContent]:
@@ -383,9 +413,22 @@ def setup_tools(server: Server, storage_path: str):
         """
         logger.info(f"Calling tool: {name} with args: {arguments}")
 
+        # Spec #78 Phase 2 — who is calling. STDIO (no request) keeps the
+        # legacy semantics on every branch below; a remote caller is scoped.
+        identity = current_mcp_identity(server)
+        try:
+            require_scope(identity, name)
+        except ScopeError as exc:
+            return [TextContent(type="text", text=json.dumps({"success": False, "error": str(exc)}))]
+
+        def _pid(raw):
+            """Podcast identifier resolver: numeric index on stdio only."""
+            return resolve_identifier(raw, allow_numeric_index=not identity.is_remote)
+
         if name in _MUTATING_TOOLS:
             try:
-                enforce_mcp_mutation_quota(name, session_key=_session_key)
+                quota_key = identity.user.id if identity.is_remote else _session_key
+                enforce_mcp_mutation_quota(name, session_key=quota_key)
             except RateLimitExceeded as exc:
                 return [
                     TextContent(
@@ -404,24 +447,34 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                from ..services.podcast_add import add_podcast_and_auto_follow
+                if identity.is_remote:
+                    # Spec #78 Phase 2 — add + auto-follow the *caller*.
+                    # ``add_podcast_and_auto_follow`` only follows in
+                    # single-user mode, so the remote branch follows directly.
+                    podcast = podcast_service.add_podcast(url)
+                    if podcast:
+                        follower_service.follow_best_effort(identity.user.id, podcast.id)
+                else:
+                    from ..services.podcast_add import add_podcast_and_auto_follow
 
-                podcast = add_podcast_and_auto_follow(podcast_service, follower_service, auth_service, config, url)
+                    podcast = add_podcast_and_auto_follow(podcast_service, follower_service, auth_service, config, url)
                 if podcast:
-                    # Get the podcast index
-                    podcasts = podcast_service.get_podcasts()
-                    podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
-
                     result = {
                         "success": True,
                         "message": f"Podcast added: {podcast.title}",
-                        "podcast_index": podcast_index,
                         "podcast": {
+                            "id": podcast.id,
+                            "slug": podcast.slug,
                             "title": podcast.title,
                             "description": podcast.description,
                             "rss_url": str(podcast.rss_url),
                         },
                     }
+                    if not identity.is_remote:
+                        podcasts = podcast_service.get_podcasts()
+                        result["podcast_index"] = next(
+                            (p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0
+                        )
                 else:
                     result = {"success": False, "error": "Failed to add podcast or podcast already exists"}
 
@@ -437,34 +490,55 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Convert to int if it's a numeric string
-                if isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
-                success = podcast_service.remove_podcast(podcast_id)
-                if success:
-                    result = {"success": True, "message": "Podcast removed successfully"}
+                if identity.is_remote:
+                    # Spec #78 Phase 2 — over the remote connector "remove"
+                    # means unfollow. Deleting a shared podcast from one
+                    # user's phone is never acceptable; delete stays local.
+                    podcast = podcast_service.get_podcast(podcast_id)
+                    if not podcast:
+                        result = {"success": False, "error": f"Podcast not found: {podcast_id}"}
+                    else:
+                        try:
+                            follower_service.unfollow(identity.user.id, podcast.id)
+                            result = {"success": True, "message": f"Unfollowed: {podcast.title}"}
+                        except NotFollowingError:
+                            result = {"success": False, "error": f"You do not follow this podcast: {podcast.title}"}
                 else:
-                    result = {"success": False, "error": f"Podcast not found: {podcast_id}"}
+                    success = podcast_service.remove_podcast(podcast_id)
+                    if success:
+                        result = {"success": True, "message": "Podcast removed successfully"}
+                    else:
+                        result = {"success": False, "error": f"Podcast not found: {podcast_id}"}
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "list_podcasts":
                 podcasts = podcast_service.get_podcasts()
+                # Spec #78 Phase 2 — remote callers see their follows (like the
+                # web Podcasts page); admins may ask for everything. Rows carry
+                # the corpus-global id + slug; the order-dependent numeric
+                # index is stdio-only.
+                if identity.is_remote and not (identity.is_admin and arguments.get("all")):
+                    followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
+                    podcasts = [p for p in podcasts if p.id in followed]
 
-                result = {
-                    "podcasts": [
-                        {
-                            "index": p.index,
-                            "title": p.title,
-                            "rss_url": p.rss_url,
-                            "episodes_count": p.episodes_count,
-                            "episodes_processed": p.episodes_processed,
-                            "last_processed": p.last_processed.isoformat() if p.last_processed else None,
-                        }
-                        for p in podcasts
-                    ]
-                }
+                def _row(p):
+                    row = {
+                        "id": p.id,
+                        "slug": p.slug,
+                        "title": p.title,
+                        "rss_url": p.rss_url,
+                        "episodes_count": p.episodes_count,
+                        "episodes_processed": p.episodes_processed,
+                        "last_processed": p.last_processed.isoformat() if p.last_processed else None,
+                    }
+                    if not identity.is_remote:
+                        row = {"index": p.index, **row}
+                    return row
+
+                result = {"podcasts": [_row(p) for p in podcasts]}
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -478,9 +552,7 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Convert to int if it's a numeric string
-                if isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 limit = arguments.get("limit", 10)
                 since_hours = arguments.get("since_hours")
@@ -516,6 +588,21 @@ def setup_tools(server: Server, storage_path: str):
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
+            elif name == "get_status" and identity.is_remote and not identity.is_admin:
+                # Spec #78 Phase 2 — the web /api/status this mirrors is
+                # admin-gated, so a plain user gets counts over their own
+                # follows and nothing system-wide (no storage path).
+                followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
+                mine = [p for p in podcast_service.get_podcasts() if p.id in followed]
+                result = {
+                    "podcasts_followed": len(mine),
+                    "episodes_total": sum(p.episodes_count for p in mine),
+                    "episodes_processed": sum(p.episodes_processed for p in mine),
+                    "last_updated": now_utc().isoformat(),
+                }
+
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
             elif name == "get_status":
                 stats = stats_service.get_stats()
 
@@ -546,11 +633,8 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Convert to int if it's a numeric string
-                if isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
-                if isinstance(episode_id, str) and episode_id.isdigit():
-                    episode_id = int(episode_id)
+                podcast_id = _pid(podcast_id)
+                episode_id = resolve_identifier(episode_id, allow_numeric_index=True)
 
                 transcript_result = podcast_service.get_transcript(podcast_id, episode_id)
 
@@ -583,9 +667,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes")
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 try:
                     result_obj = refresh_service.refresh(
@@ -623,9 +705,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes", 5)
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 # Get episodes that need downloading
                 episodes_to_download = feed_manager.get_episodes_to_download(storage_path)
@@ -698,9 +778,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes", 5)
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 # Get episodes that need downsampling
                 episodes_to_downsample = feed_manager.get_episodes_to_downsample(storage_path)
@@ -785,9 +863,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes", 1)
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 # Get episodes that need transcription (downloaded/downsampled but not transcribed)
                 episodes_to_transcribe = feed_manager.get_downloaded_episodes(storage_path)
@@ -915,9 +991,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes", 1)
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 # Find transcripts that need cleaning
                 podcasts = feed_manager.list_podcasts()
@@ -1070,11 +1144,8 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Convert to int if numeric strings
-                if isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
-                if isinstance(episode_id, str) and episode_id.isdigit():
-                    episode_id = int(episode_id)
+                podcast_id = _pid(podcast_id)
+                episode_id = resolve_identifier(episode_id, allow_numeric_index=True)
 
                 # Get the episode
                 podcast = podcast_service.get_podcast(podcast_id)
@@ -1333,9 +1404,7 @@ def setup_tools(server: Server, storage_path: str):
                 podcast_id = arguments.get("podcast_id")
                 max_episodes = arguments.get("max_episodes", 1)
 
-                # Convert to int if it's a numeric string
-                if podcast_id and isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
+                podcast_id = _pid(podcast_id)
 
                 # Find cleaned transcripts that need summarizing
                 podcasts = feed_manager.list_podcasts()
@@ -1464,11 +1533,8 @@ def setup_tools(server: Server, storage_path: str):
                         )
                     ]
 
-                # Convert to int if it's a numeric string
-                if isinstance(podcast_id, str) and podcast_id.isdigit():
-                    podcast_id = int(podcast_id)
-                if isinstance(episode_id, str) and episode_id.isdigit():
-                    episode_id = int(episode_id)
+                podcast_id = _pid(podcast_id)
+                episode_id = resolve_identifier(episode_id, allow_numeric_index=True)
 
                 summary = podcast_service.get_summary(podcast_id, episode_id)
 

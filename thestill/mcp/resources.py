@@ -29,6 +29,7 @@ from structlog import get_logger
 from ..services import PodcastService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
+from .identity import current_mcp_identity
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = get_logger(__name__)
@@ -105,11 +106,19 @@ def setup_resources(server: Server, storage_path: str):
         Returns:
             Resource content as string
         """
+        # The SDK hands us a pydantic AnyUrl; everything below wants str.
+        uri = str(uri)
         logger.info(f"Reading resource: {uri}")
+
+        # Spec #78 Phase 2 — resources follow the same identifier rule as
+        # tools: corpus-global ids over the remote connector, legacy
+        # numeric index only on stdio. Reads themselves are corpus-wide
+        # for any authenticated caller (web parity), so no scope table.
+        identity = current_mcp_identity(server)
 
         # Parse the thestill:// URI
         try:
-            parsed = parse_thestill_uri(uri)
+            parsed = parse_thestill_uri(uri, allow_numeric_ids=not identity.is_remote)
             resource_type = parsed["resource"]
             podcast_id = parsed["podcast_id"]
             episode_id = parsed.get("episode_id")
