@@ -190,15 +190,15 @@ routes do today:
 | `add_podcast` | Add + auto-follow the caller (spec #63 companion path) | Same |
 | `remove_podcast` | **Unfollow.** Never deletes; refused if the caller does not follow it | Same (delete stays CLI-only) |
 | Pipeline tools (`refresh_feeds`, `download_episodes`, `downsample_audio`, `transcribe_episodes`, `clean_transcripts`, `process_episode`, `summarize_episodes`) | Hidden from `tools/list`, refused on `tools/call` | Allowed |
-| `get_status` | Allowed | Allowed |
+| `get_status` | **Reduced payload**: counts over the caller's follows only, no `storage_path`, no provider or system-wide numbers. The web `/api/status` it mirrors is admin-gated, so the full payload is *above* a user session | Full operator payload as today |
 
 Consequences stated plainly:
 
 - **A leaked read-only URL exposes the corpus**, as a leaked session
   cookie does, but nothing else: it cannot add a podcast (a pipeline
   trigger in disguise), cannot change follows, cannot run the pipeline,
-  cannot delete, is rate-limited, expires, is revocable per user, and is
-  attributable. It is *not* a follows-only view; the earlier draft
+  cannot delete, is rate-limited, expires, is revocable per user, and its
+  use is visible on the card. It is *not* a follows-only view; the earlier draft
   claimed that and was wrong.
 - If the instance ever decides that transcripts are private to followers,
   that is a **web** decision first (spec #63 follow-up), and MCP inherits
@@ -229,31 +229,49 @@ create / rotate time. They only ever narrow the session ceiling above.
   one "read-looking" tool that spends money.
 - Scope checks live next to the existing `_MUTATING_TOOLS` quota check in
   `call_tool`; a `_SCOPE_BY_TOOL` mapping replaces the ad-hoc set.
+  **Fail closed**: a tool with no entry is omitted from `tools/list` and
+  refused on `tools/call` over HTTP, and a contract test asserts every
+  tool registered in `list_tools` has an explicit scope, so a future
+  tool cannot become remotely reachable by omission.
+- **`is_admin` is re-checked per request**, not at mint time. The guard
+  loads the user row fresh on every request; `pipeline` (and the full
+  `get_status` payload) is effective only while `user.is_admin` is true
+  *now*. Demoting an admin disables their existing `pipeline` token on
+  the next request, with no rotate needed.
 - stdio is unscoped (it is already local process access).
 - Scopes are fixed for a token's life; changing them is a rotate, so the
   URL in claude.ai always reflects what it can do.
 
-### Rate limit, expiry, attribution
+### Rate limit, expiry, last use
 
 Detective and bounding controls that apply to every token regardless of
 scope:
 
-- **Per-token read rate limit.** `MCP_TOKEN_READS_PER_MINUTE` (default
-  `120`), enforced in the guard with the existing sliding-window limiter
-  from `web/middleware/rate_limit.py`, keyed on the token hash. Over
-  the limit → JSON-RPC error with `retry_after_seconds`, mirroring the
-  mutation quota. The purpose is to make a bulk export of the corpus
-  through a leaked URL slow and visible, not to police normal chat use;
-  one Claude turn is a handful of calls.
+- **Per-token HTTP request limit.** `MCP_TOKEN_REQUESTS_PER_MINUTE`
+  (default `120`), enforced in the guard with the existing sliding-window
+  limiter from `web/middleware/rate_limit.py`, keyed on the token hash.
+  This is deliberately an *HTTP* limit, not a read-call quota: the guard
+  runs before the SDK parses JSON-RPC, so it counts `initialize`,
+  `tools/list`, notifications and calls alike and cannot see the method
+  without consuming the body. Over the limit → plain `429` with a
+  `Retry-After` header and an empty body; claude.ai's client surfaces
+  that as a transient connector error. The JSON-RPC
+  `retry_after_seconds` shape stays where it is today, on the mutation
+  quota inside `call_tool`. The purpose is to make a bulk export of the
+  corpus through a leaked URL slow and visible, not to police normal chat
+  use; one Claude turn is a handful of requests.
 - **Expiry.** `expires_at = created_at + MCP_TOKEN_TTL_DAYS` (default
   `90`, `0` disables). The guard treats an expired token like a revoked
   one (404). The card shows the date and a warning in the last 14 days;
   rotating resets it. Bounds how long a forgotten paste stays live.
-- **Attribution.** `last_used_at` and `last_used_ip` (via
+- **Last use.** `last_used_at` and `last_used_ip` (via
   `resolve_client_ip`, trusted-proxy aware) are bumped at most once per
-  minute and shown on the card, so a user can spot use they did not
-  make. The IP is stored for display only and is never logged with the
-  token.
+  minute and shown on the card. The *timestamp* is what lets a user spot
+  use they did not make. The IP is **diagnostic, not attribution**: for
+  normal connector traffic it is an Anthropic egress address, so it
+  distinguishes "claude.ai called this" from "something else called
+  this" and no more; it cannot say who held a stolen URL. Display only,
+  never logged with the token.
 
 ### Identifiers — resolve, then authorize
 
@@ -277,8 +295,20 @@ corpus-global (uuid, slug, RSS URL); there is no user-relative numbering.
 
 ### Token lifecycle
 
-One row per user in `mcp_tokens` (Alembic `0009`, SQLite + Postgres
-repository pair per the spec #44 pattern):
+One row per user in `mcp_tokens`, with a SQLite + Postgres repository
+pair per the spec #44 pattern. **The schema lands in three places**,
+because the two backends bootstrap differently and Alembic only covers
+one of them:
+
+1. `SqlitePodcastRepository` bootstrap — an inline
+   `CREATE TABLE IF NOT EXISTS mcp_tokens` next to `revoked_tokens`,
+   plus the idempotent-`ALTER` pattern used there for later columns.
+   SQLite installs never run Alembic.
+2. `postgres_schema.SCHEMA_SQL` — so a fresh Postgres database
+   initialised through `ensure_schema` has the table.
+3. Alembic `0009_mcp_tokens` — so an existing Postgres database (prod)
+   gains it on upgrade. Must be idempotent against a database that
+   already got the table from (2).
 
 | Column | Notes |
 |---|---|
@@ -315,10 +345,22 @@ session manager. Miss, revoked or expired → the same empty 404 as
 today. The SDK forwards the
 Starlette request into `server.request_context.request`, so tool and
 resource handlers read the user from `request.scope["state"]`. A
-`current_mcp_user()` helper in `mcp/tools.py` returns that user, or the
-single-user default user when there is no request (stdio). The stdio
-and HTTP servers stay two doors into one room; the per-session mutation
-quota keys on `user_id`.
+`current_mcp_user()` helper in `mcp/tools.py` returns that user over
+HTTP and **`None` on stdio** (no request). The two doors share one
+room, but the handlers branch explicitly on identity so stdio keeps its
+legacy semantics rather than inheriting per-user ones by accident:
+
+| Handler | Identity present (HTTP) | Identity `None` (stdio) |
+|---|---|---|
+| `list_podcasts` | caller's follows | whole corpus, as today |
+| `remove_podcast` | unfollow | delete, as today |
+| `add_podcast` | add + auto-follow caller | add + auto-follow default user, as today |
+| `get_status` | reduced / full by `is_admin` | full, as today |
+| numeric podcast index | refused | accepted, as today |
+| scopes, rate limit, expiry | enforced | not applicable |
+
+The per-session mutation quota keys on `user_id` over HTTP and keeps
+its process key on stdio.
 
 ### Settings surface
 
@@ -345,7 +387,7 @@ quota keys on `user_id`.
 
 - `MCP_HTTP_ENABLED` stays and still ships dark.
 - New: `MCP_TOKEN_TTL_DAYS` (default `90`, `0` = never expires) and
-  `MCP_TOKEN_READS_PER_MINUTE` (default `120`).
+  `MCP_TOKEN_REQUESTS_PER_MINUTE` (default `120`).
 - `MCP_HTTP_SECRET` is **removed**, with its boot-time validation.
   Operator migration note: Phase 1 connector URLs stop working on
   upgrade; each user mints their own. Acceptable because Phase 1 shipped
@@ -389,8 +431,11 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
 
 ### Phase 2 acceptance
 
-- [ ] `mcp_tokens` migration applies on SQLite and Postgres; rotate is
-      one transaction; the old URL 404s on the very next request.
+- [ ] `mcp_tokens` exists on all three bootstrap paths: a fresh SQLite
+      file, a fresh Postgres via `ensure_schema`, and an existing Postgres
+      via `alembic upgrade` (idempotent when the table is already there);
+      rotate is one transaction; the old URL 404s on the very next
+      request.
 - [ ] Guard resolves the user; for two users with different follows,
       `list_podcasts` over HTTP returns each caller's own follows with
       global ids/slugs.
@@ -403,14 +448,20 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
       on `add_podcast` with an error naming `follows`; a `read,follows`
       token can add and unfollow; `pipeline` is dropped from a
       non-admin's request and honoured for an admin.
-- [ ] Rate limit: the 121st read within a minute on one token returns
-      the JSON-RPC quota error with `retry_after_seconds`; another
-      user's token is unaffected.
+- [ ] Rate limit: the 121st HTTP request within a minute on one token
+      returns `429` with `Retry-After`; another user's token is
+      unaffected; the mutation quota still returns its JSON-RPC shape.
 - [ ] Expiry: a token with `expires_at` in the past 404s; rotate resets
       `expires_at`; `MCP_TOKEN_TTL_DAYS=0` yields NULL.
-- [ ] Attribution: `last_used_at` / `last_used_ip` update at most once
-      per minute and appear in `GET /api/me/mcp-token`; the IP never
-      appears in access logs alongside the path.
+- [ ] Last use: `last_used_at` / `last_used_ip` update at most once per
+      minute and appear in `GET /api/me/mcp-token`; the IP never appears
+      in access logs alongside the path.
+- [ ] `get_status` for a non-admin token omits `storage_path` and
+      system-wide counts; an admin token gets the full payload; demoting
+      that admin changes the very next response with no rotate.
+- [ ] Contract test: every tool in `list_tools` has a `_SCOPE_BY_TOOL`
+      entry; a tool registered without one is absent from `tools/list`
+      over HTTP and refused on call.
 - [ ] Bare integer podcast ids refused over HTTP; uuid, slug and RSS URL
       accepted and resolve to the same object as `list_podcasts` reports.
 - [ ] Settings card: create with scope form, one-time copy modal,
@@ -418,8 +469,11 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
       the `POST` response.
 - [ ] Access logs and `GET /api/me/mcp-token` never contain the
       plaintext.
-- [ ] stdio `thestill-mcp` behaves exactly as before (default user,
-      numeric ids still accepted).
+- [ ] stdio `thestill-mcp` takes the identity-`None` branch everywhere:
+      `list_podcasts` returns the whole corpus, `remove_podcast` deletes,
+      numeric ids are accepted, all tools are listed, no scope or rate
+      checks run. Asserted by tests that run the same handlers with no
+      request in context.
 - [ ] Manual: two claude.ai accounts, two thestill users, each sees its
       own podcast list from Claude mobile; both can read any transcript.
 
