@@ -29,6 +29,10 @@ export interface EntityRailProps {
   onFocusEntity?: (entityId: string) => void
   relatedEpisodes?: RelatedEpisode[]
   relatedLoading?: boolean
+  // True while the entity branch (extract → … → compute-related) has not
+  // finished for this episode. Switches the empty-state copy from "nothing
+  // found" to "not processed yet" so an empty rail is honest about why.
+  extractionPending?: boolean
 }
 
 function formatPubDate(iso: string | null): string | null {
@@ -107,6 +111,7 @@ export default function EntityRail({
   onFocusEntity,
   relatedEpisodes = [],
   relatedLoading = false,
+  extractionPending = false,
 }: EntityRailProps) {
   // Group by type for the section labels. The payload is already
   // sorted host/guest/recurring/unknown then count desc within each
@@ -143,13 +148,24 @@ export default function EntityRail({
       )}
 
       {/* Spec §5.2 right rail — "Related episodes pulls from vector
-          similarity; cap at 5." Rendered whenever a fetch is in flight
-          or returned hits, so the section keeps a stable slot. */}
-      <RelatedEpisodesSection episodes={relatedEpisodes} loading={relatedLoading} />
+          similarity; cap at 5." The section keeps a stable slot: it
+          renders while a fetch is in flight, when it returned hits, and
+          (with a short note) when it found nothing, so the rail reads
+          the same shape on every episode. Skipped only when the whole
+          rail is empty — the combined note below covers both. */}
+      {(hasAny || relatedEpisodes.length > 0 || relatedLoading) && (
+        <RelatedEpisodesSection
+          episodes={relatedEpisodes}
+          loading={relatedLoading}
+          extractionPending={extractionPending}
+        />
+      )}
 
       {!hasAny && relatedEpisodes.length === 0 && !relatedLoading && (
         <p className="px-2 text-xs italic text-gray-400">
-          No entities extracted for this episode yet.
+          {extractionPending
+            ? 'People, companies, topics and related episodes appear here once the transcript has been processed.'
+            : 'No entities extracted for this episode.'}
         </p>
       )}
     </aside>
@@ -159,22 +175,27 @@ export default function EntityRail({
 interface RelatedEpisodesSectionProps {
   episodes: RelatedEpisode[]
   loading: boolean
+  extractionPending: boolean
 }
 
-function RelatedEpisodesSection({ episodes, loading }: RelatedEpisodesSectionProps) {
+function RelatedEpisodesSection({ episodes, loading, extractionPending }: RelatedEpisodesSectionProps) {
   // Spec #52 — inside the reader overlay, related-episode clicks stay in
   // the overlay: preserve the background location and replace the history
   // entry so a single Esc/back still closes back to the inbox. On the
   // standalone page (no background) this is a plain navigation.
   const backgroundLocation = useBackgroundLocation()
-  // Nothing in flight and nothing found — omit the section entirely so
-  // we don't render a bare header with no body.
-  if (!loading && episodes.length === 0) return null
+  let note: string | null = null
+  if (loading) note = 'Finding related episodes…'
+  else if (episodes.length === 0) {
+    note = extractionPending
+      ? 'Related episodes appear here once the transcript has been processed.'
+      : 'No related episodes yet.'
+  }
   return (
     <section>
       <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Related episodes</h2>
-      {loading ? (
-        <p className="px-2 text-xs italic text-gray-400">Finding related episodes…</p>
+      {note ? (
+        <p className="px-2 text-xs italic text-gray-400">{note}</p>
       ) : (
         <ul className="space-y-0.5">
           {episodes.map((ep) => {

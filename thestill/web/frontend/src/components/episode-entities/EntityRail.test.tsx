@@ -40,7 +40,7 @@ function relatedEpisode(overrides: Partial<RelatedEpisode> = {}): RelatedEpisode
 function renderRail(
   entities: EpisodeEntity[],
   onSeek?: (s: number) => void,
-  opts: { relatedEpisodes?: RelatedEpisode[]; relatedLoading?: boolean } = {},
+  opts: { relatedEpisodes?: RelatedEpisode[]; relatedLoading?: boolean; extractionPending?: boolean } = {},
 ) {
   return render(
     <MemoryRouter>
@@ -49,6 +49,7 @@ function renderRail(
         onSeek={onSeek}
         relatedEpisodes={opts.relatedEpisodes}
         relatedLoading={opts.relatedLoading}
+        extractionPending={opts.extractionPending}
       />
     </MemoryRouter>,
   )
@@ -59,6 +60,14 @@ describe('EntityRail', () => {
     renderRail([])
     expect(screen.getByText(/No entities extracted/)).toBeInTheDocument()
     expect(screen.queryByText('People in this episode')).toBeNull()
+    // Nothing to list at all: one combined note, no bare section header.
+    expect(screen.queryByText('Related episodes')).toBeNull()
+  })
+
+  it('explains that the rail fills in later while extraction is still pending', () => {
+    renderRail([], undefined, { extractionPending: true })
+    expect(screen.getByText(/once the transcript has been processed/)).toBeInTheDocument()
+    expect(screen.queryByText(/No entities extracted/)).toBeNull()
   })
 
   it('groups entities into People / Companies / Topics sections', () => {
@@ -95,9 +104,15 @@ describe('EntityRail', () => {
     expect(onSeek).toHaveBeenCalledWith(12.5)
   })
 
-  it('omits the Related episodes section when none are found and not loading', () => {
+  it('keeps the Related episodes slot with a note when none are found', () => {
     renderRail([entity('person:a', 'Alice', 'person', 1)])
-    expect(screen.queryByText('Related episodes')).toBeNull()
+    expect(screen.getByText('Related episodes')).toBeInTheDocument()
+    expect(screen.getByText('No related episodes yet.')).toBeInTheDocument()
+  })
+
+  it('uses pending copy in the Related episodes slot while extraction is in flight', () => {
+    renderRail([entity('person:a', 'Alice', 'person', 1)], undefined, { extractionPending: true })
+    expect(screen.getByText(/Related episodes appear here once/)).toBeInTheDocument()
   })
 
   it('shows a loading note while related episodes are being fetched', () => {
