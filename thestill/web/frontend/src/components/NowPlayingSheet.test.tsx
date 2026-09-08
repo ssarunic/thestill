@@ -11,6 +11,9 @@ import { __resetFollowPlaybackForTests } from '../hooks/useFollowPlayback'
 // Entities for the tick row come from the reader's query hook; stub it so
 // the sheet test needs no QueryClient. Two people, three mentions.
 vi.mock('../hooks/useApi', () => ({
+  // The current-line strip has its own test; here it has no transcript.
+  useEpisodeTranscript: vi.fn(() => ({ data: undefined })),
+  useEpisodeTranscriptWords: vi.fn(() => ({ data: undefined })),
   useEpisodeEntities: vi.fn((episodeId: string | null) => ({
     data: episodeId
       ? {

@@ -14,6 +14,7 @@ import Button, { CloseIcon, PauseIcon, PlayIcon } from './Button'
 import { buttonClassName } from './buttonStyles'
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
+import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
 
 interface NowPlayingSheetProps {
   isOpen: boolean
@@ -284,6 +285,13 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         {/* Scrubber */}
         <div className="mt-4">
           <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
+        </div>
+
+        {/* Current line (spec #72 §3) — what is being said right now, with the
+            #38 wipe. Rendered only while the sheet is open (data fetch is
+            gated on `active`). */}
+        <div className="mt-1 min-h-[1.25rem]">
+          <NowPlayingKaraokeLine track={track} enabled={active} />
         </div>
 
         {/* Transport */}
