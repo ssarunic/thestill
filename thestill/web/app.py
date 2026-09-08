@@ -722,6 +722,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # shell. The runtime itself 404s everything but the exact secret path.
     if mcp_runtime is not None:
         app.mount("/mcp", mcp_runtime)
+        # uvicorn's access logger formats the raw path from the ASGI scope
+        # and bypasses structlog, so LoggingMiddleware's redaction alone
+        # still leaked the secret (observed 2026-09-08). Filter it here so
+        # every launch path inherits the rule.
+        from ..utils.log_safety import install_uvicorn_access_redaction
+
+        install_uvicorn_access_redaction()
         logger.info("mcp_http_endpoint_mounted", mount="/mcp")
 
     # Serve static frontend files

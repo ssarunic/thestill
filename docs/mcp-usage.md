@@ -120,6 +120,10 @@ shown to admins on the web UI Settings page, with a copy button.
 - **Treat the URL as a password.** Whoever holds it can use every MCP
   tool on the instance, including pipeline mutations. Rotate it by
   changing `MCP_HTTP_SECRET` and restarting (then update the connector).
+- **Logs.** thestill redacts the secret in its own request logs and in
+  uvicorn's access log (`/mcp/<redacted>`). If you front the server with
+  a reverse proxy or tunnel, check that its access logs don't record the
+  full path.
 
 ### Add the connector on claude.ai
 

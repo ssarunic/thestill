@@ -200,3 +200,60 @@ class TestLogRedaction:
 
         assert _safe_endpoint(f"/mcp/{SECRET}") == "/mcp/<redacted>"
         assert _safe_endpoint("/api/podcasts") == "/api/podcasts"
+
+    def test_uvicorn_access_filter_rewrites_path_arg(self):
+        """uvicorn's access logger bypasses structlog; the filter must
+        rewrite the path arg so the secret never reaches the formatted
+        line, while leaving other requests and record shapes untouched."""
+        import logging
+
+        from thestill.utils.log_safety import UvicornAccessRedactFilter
+
+        flt = UvicornAccessRedactFilter()
+        fmt = '%s - "%s %s HTTP/%s" %d'
+        rec = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            0,
+            fmt,
+            ("127.0.0.1:1", "POST", f"/mcp/{SECRET}", "1.1", 200),
+            None,
+        )
+        assert flt.filter(rec) is True
+        line = rec.getMessage()
+        assert SECRET not in line
+        assert '"POST /mcp/<redacted> HTTP/1.1" 200' in line
+
+        plain = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            0,
+            fmt,
+            ("127.0.0.1:1", "GET", "/api/podcasts?x=1", "1.1", 200),
+            None,
+        )
+        flt.filter(plain)
+        assert "/api/podcasts?x=1" in plain.getMessage()
+
+        odd = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 0, "no args", None, None)
+        assert flt.filter(odd) is True
+
+    def test_install_is_idempotent(self):
+        import logging
+
+        from thestill.utils.log_safety import UvicornAccessRedactFilter, install_uvicorn_access_redaction
+
+        access_logger = logging.getLogger("uvicorn.access")
+        for f in list(access_logger.filters):
+            if isinstance(f, UvicornAccessRedactFilter):
+                access_logger.removeFilter(f)
+        try:
+            install_uvicorn_access_redaction()
+            install_uvicorn_access_redaction()
+            assert len([f for f in access_logger.filters if isinstance(f, UvicornAccessRedactFilter)]) == 1
+        finally:
+            for f in list(access_logger.filters):
+                if isinstance(f, UvicornAccessRedactFilter):
+                    access_logger.removeFilter(f)

@@ -64,8 +64,12 @@ Auth is deliberately phased:
 - **Transport-level secrecy is assumed.** The capability URL must only
   travel over HTTPS. Path components appear in access logs; thestill's own
   `LoggingMiddleware` must redact the secret path segment (log
-  `/mcp/<redacted>`), and operators fronting with a reverse proxy own
-  their proxy's log hygiene.
+  `/mcp/<redacted>`), **and so must uvicorn's access logger**, which
+  formats the raw ASGI path and bypasses structlog (a live boot on
+  2026-09-08 showed the secret in every `uvicorn.access` line while the
+  middleware line was clean). `create_app` attaches a `logging.Filter`
+  to `uvicorn.access` when the endpoint is mounted. Operators fronting
+  with a reverse proxy own their proxy's log hygiene.
 - **Timing**: the secret comparison uses `secrets.compare_digest`.
 - **No CORS exposure**: claude.ai connects server-side, not from a
   browser; `/mcp` is not added to any CORS allowance.
@@ -162,6 +166,6 @@ Boundary notes so Phase 1 doesn't paint us into a corner:
 - [ ] `GET /api/status/mcp` admin-gated; returns URL derived from
       `PUBLIC_BASE_URL`.
 - [ ] Settings page shows the connector card to admins only; copy works.
-- [ ] Access logs never contain the secret.
+- [x] Access logs never contain the secret — both `LoggingMiddleware` and `uvicorn.access` (verified with a live boot + curl, 2026-09-08).
 - [ ] Manual: add as claude.ai custom connector (via HTTPS tunnel) and
       call `search_corpus` from Claude mobile.
