@@ -68,6 +68,7 @@ from .routes import (
     api_episodes,
     api_imports,
     api_inbox,
+    api_me_mcp_token,
     api_narrations,
     api_podcasts,
     api_search,
@@ -689,6 +690,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     require_operator = [Depends(require_admin)]
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(api_status.router, prefix="/api/status", tags=["status", "admin"], dependencies=require_operator)
+    # Spec #78 Phase 2 — per-user remote MCP tokens: user-authenticated,
+    # deliberately NOT on the admin router.
+    app.include_router(api_me_mcp_token.router, prefix="/api/me/mcp-token", tags=["mcp"], dependencies=require_session)
     app.include_router(
         api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
     )

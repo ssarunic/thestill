@@ -165,6 +165,9 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
 | `/api/auth/me` | PATCH | Update user region |
+| `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
+| `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
+| `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
 
 ### Webhooks
 
