@@ -53,6 +53,7 @@ from ..services.briefing_script_generator import BriefingScriptGenerator
 from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
+from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.refresh_on_open import RefreshOnOpenService
 from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
@@ -332,6 +333,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
         refresh_on_open=refresh_on_open,
+        mcp_token_service=McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -369,12 +371,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     )
     app_state.task_worker = task_worker
 
-    # Spec #78 Phase 1 — remote MCP over Streamable HTTP behind a
-    # capability URL. Ships dark: build_mcp_http returns None unless
-    # MCP_HTTP_ENABLED=true (with a validated MCP_HTTP_SECRET).
+    # Spec #78 — remote MCP over Streamable HTTP behind per-user capability
+    # URLs. Ships dark: build_mcp_http returns None unless
+    # MCP_HTTP_ENABLED=true. The guard resolves tokens against the same
+    # repository bundle the app uses.
     from .mcp_http import build_mcp_http
 
-    mcp_runtime = build_mcp_http(config)
+    mcp_runtime = build_mcp_http(config, repos)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

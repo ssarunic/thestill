@@ -18,7 +18,7 @@ System status API endpoint for Thestill web server.
 Provides detailed system status and statistics, similar to the CLI 'status' command.
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from ..dependencies import AppState, get_app_state
 from ..responses import api_response
@@ -27,30 +27,15 @@ router = APIRouter()
 
 
 @router.get("/mcp")
-def get_mcp_status(request: Request, state: AppState = Depends(get_app_state)):
-    """Remote MCP connector info (spec #78 Phase 1).
+def get_mcp_status(state: AppState = Depends(get_app_state)):
+    """Whether the remote MCP endpoint is mounted (spec #78).
 
-    Admin-gated at the router mount (this router carries ``require_admin``
-    in ``app.py``) because the returned capability URL is
-    operator-equivalent access. The Settings page renders it with a copy
-    button; when the feature is off the response says so and the UI shows
-    the env vars needed to enable it.
+    Admin-gated at the router mount. Since Phase 2 the connector URL is
+    per user and minted from ``/api/me/mcp-token``; this endpoint only
+    reports the feature flag so the Settings card can explain a disabled
+    server.
     """
-    config = state.config
-    if not config.mcp_http_enabled or not config.mcp_http_secret:
-        return api_response({"mcp": {"enabled": False}})
-
-    from ..mcp_http import connector_url
-
-    return api_response(
-        {
-            "mcp": {
-                "enabled": True,
-                "url": connector_url(config, str(request.base_url)),
-                "transport": "streamable-http",
-            }
-        }
-    )
+    return api_response({"mcp": {"enabled": bool(state.config.mcp_http_enabled)}})
 
 
 @router.get("")

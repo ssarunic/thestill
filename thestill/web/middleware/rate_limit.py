@@ -118,7 +118,7 @@ class _SlidingWindow:
 _LIMITER = _SlidingWindow()
 
 
-def resolve_client_ip(request: Request) -> str:
+def resolve_client_ip(request: Request, config=None) -> str:
     """
     Identify the real client behind any trusted reverse proxy.
 
@@ -137,10 +137,13 @@ def resolve_client_ip(request: Request) -> str:
     pollute entries that appear BEFORE the last trusted hop.
     """
     peer = request.client.host if request.client else "unknown"
-    try:
-        config = request.app.state.app_state.config
-    except AttributeError:
-        return peer
+    if config is None:
+        # FastAPI routes: read the app's config. Raw ASGI callers (the MCP
+        # guard, spec #78) pass ``config`` explicitly.
+        try:
+            config = request.app.state.app_state.config
+        except AttributeError:
+            return peer
     trusted_proxies = trusted_proxy_set(config)
 
     if not trusted_proxies or peer not in trusted_proxies:
