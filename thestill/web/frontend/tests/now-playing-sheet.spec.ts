@@ -49,9 +49,10 @@ test.describe('Now Playing sheet on a phone', () => {
     await expect(seek).toHaveAttribute('aria-valuetext', '0:00 of 58:25')
     await expect(sheet.getByText('58:25', { exact: true })).toBeVisible()
 
-    await sheet.getByRole('radio', { name: '1.5×', exact: true }).click()
-    await expect(sheet.getByRole('radio', { name: '1.5×', exact: true })).toHaveAttribute('aria-checked', 'true')
-    expect(await page.evaluate((k) => localStorage.getItem(k), RATE_KEY)).toBe('1.5')
+    // The speed chip steps 1× → 1.2× on tap and persists.
+    await sheet.getByRole('button', { name: 'Speed 1×' }).click()
+    await expect(sheet.getByRole('button', { name: 'Speed 1.2×' })).toBeVisible()
+    expect(await page.evaluate((k) => localStorage.getItem(k), RATE_KEY)).toBe('1.2')
 
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
@@ -94,14 +95,14 @@ test.describe('Now Playing card on desktop', () => {
     expect(card && bar && card.y + card.height <= bar.y + 1).toBe(true)
 
     // Speed persists across a reopen.
-    await sheet.getByRole('radio', { name: '2×', exact: true }).click()
+    await sheet.getByRole('button', { name: 'Speed 1×' }).click()
     await page.mouse.click(640, 100)
     await expect(sheet).toBeHidden()
     await openSheet(page)
-    await expect(page.getByRole('radio', { name: '2×', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('button', { name: 'Speed 1.2×' })).toBeVisible()
 
-    // Stop clears the session: bar gone, sheet gone.
-    await page.getByRole('button', { name: 'Stop playback' }).click()
+    // The bar's ✕ clears the session: sheet gone with it.
+    await page.getByRole('button', { name: 'Close player' }).click()
     await expect(page.getByRole('dialog', { name: 'Now playing' })).toBeHidden()
     await expect(page.getByRole('region', { name: 'Audio player' })).toHaveCount(0)
   })

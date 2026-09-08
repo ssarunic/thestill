@@ -4,14 +4,12 @@ import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 import { useEpisodeEntities } from '../hooks/useApi'
-import { useFollowPlayback } from '../hooks/useFollowPlayback'
 import { abovePlayer, MEDIA_HOST_ATTR } from '../constants/layers'
 import { selectTopEntities } from '../utils/mentionDensity'
 import { entityStyle } from '../utils/entityColors'
 import { formatClock } from '../utils/formatClock'
 import Artwork from './Artwork'
 import Button, { CloseIcon, PauseIcon, PlayIcon } from './Button'
-import { buttonClassName } from './buttonStyles'
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
@@ -58,6 +56,36 @@ const VolumeIcon = ({ muted }: { muted: boolean }) => (
   </svg>
 )
 
+const TranscriptIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <path d="M7 4h7l5 5v11a1 1 0 01-1 1H7a1 1 0 01-1-1V5a1 1 0 011-1z" />
+    <path d="M14 4v5h5M9 13h6M9 17h6" />
+  </svg>
+)
+
+const VideoIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <rect x="3" y="6" width="13" height="12" rx="2" />
+    <path d="M16 10l5-3v10l-5-3z" />
+  </svg>
+)
+
+const PipIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <rect x="11" y="11" width="8" height="6" rx="1" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+// One slot of the utility row (spec #72 §6): a 24 px glyph over an 11 px
+// label, 44 px+ tall, ghost at rest and tinted when the action is "on".
+function utilityClass(on = false): string {
+  return [
+    'flex min-h-[52px] min-w-[64px] flex-col items-center justify-center gap-1 rounded-lg px-2 py-1.5 transition-colors',
+    on ? 'bg-primary-50 text-primary-900' : 'text-gray-600 hover:bg-gray-100 hover:text-ink active:bg-gray-200',
+  ].join(' ')
+}
+
 /**
  * Spec #72 — the expanded Now Playing surface. One component, two forms
  * chosen by `useIsSmUp`: a bottom sheet with scrim, focus trap and swipe-down
@@ -76,7 +104,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const panelRef = useRef<HTMLDivElement>(null)
   const isPhone = !isSmUp
   const active = isOpen && track !== null
-  const [followPlayback, setFollowPlayback] = useFollowPlayback()
 
   // Spec #72 2c — on a phone there is no floating tile, so when the session
   // has a visual rendition and nothing presents it, the sheet's header hosts
@@ -215,11 +242,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const busy = isLoading && !isPlaying
 
-  const handleStop = () => {
-    player.stop()
-    onClose()
-  }
-
   const panel = (
     <div
       ref={panelRef}
@@ -251,7 +273,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-5 pb-3 pt-1 sm:pt-4">
+      <div className="flex-1 overflow-y-auto px-5 pb-4 pt-1 sm:pt-4">
         {hostVideo && (
           <div
             ref={videoSlotRef}
@@ -340,49 +362,65 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           </Button>
         </div>
 
-        {/* Speed — full width; the chips label themselves. */}
-        <div className="mt-5">
-          <NowPlayingSpeedControl rate={playbackRate} availableRates={availableRates} onChange={player.setRate} />
-        </div>
-
-        {/* Secondary actions (spec #72 §6) — an even two-column grid instead
-            of ragged wrapping chips; every cell is a 44 px target. */}
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        {/* Utility row (spec #72 §5–6) — the small stuff, evenly spaced and
+            secondary in weight: speed steps on tap; Transcript is the one
+            way out to the reader; video and PiP appear only when a visual
+            rendition exists. Stop is not here: Pause is the way to stop, the
+            desktop bar keeps its ✕, and the bar otherwise persists like any
+            player's. Follow-playback lives with the transcript, where its
+            effect is visible. */}
+        <div className="mt-4 flex items-start justify-evenly">
+          <NowPlayingSpeedControl
+            rate={playbackRate}
+            availableRates={availableRates}
+            onChange={player.setRate}
+            className={utilityClass()}
+          />
           <Link
             to={{ pathname: episodePath, search: `?view=transcript&t=${Math.floor(currentTime)}` }}
             state={linkState}
             onClick={onClose}
-            className={buttonClassName({ variant: 'secondary', size: 'md' })}
+            aria-label="Open transcript here"
+            className={utilityClass()}
           >
-            Open transcript here
+            <TranscriptIcon />
+            <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+              Transcript
+            </span>
           </Link>
-          <Button
-            size="md"
-            variant={followPlayback ? 'tonal' : 'secondary'}
-            aria-pressed={followPlayback}
-            onClick={() => setFollowPlayback(!followPlayback)}
-          >
-            {followPlayback ? 'Following playback' : 'Follow playback'}
-          </Button>
           {hasVisualRendition && (
-            <Button
-              size="md"
-              variant="secondary"
+            <button
+              type="button"
               onClick={() => player.setVideoPreference(videoPreference === 'shown' ? 'audio-only' : 'shown')}
+              aria-pressed={videoPreference === 'shown'}
+              aria-label={videoPreference === 'shown' ? 'Hide video' : 'Show video'}
+              className={utilityClass(videoPreference === 'shown')}
             >
-              {videoPreference === 'shown' ? 'Hide video' : 'Show video'}
-            </Button>
+              <VideoIcon />
+              <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+                Video
+              </span>
+            </button>
           )}
           {pipSupported && videoPresentable && (
-            <Button size="md" variant="secondary" onClick={player.requestPip}>
-              {pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
-            </Button>
+            <button
+              type="button"
+              onClick={player.requestPip}
+              aria-pressed={pipActive}
+              aria-label={pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
+              className={utilityClass(pipActive)}
+            >
+              <PipIcon />
+              <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+                Pop out
+              </span>
+            </button>
           )}
         </div>
 
         {/* Volume — pointer devices only; phones use the hardware rocker. */}
         {!isPhone && (
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2">
             <Button
               size="icon"
               variant="ghost"
@@ -405,13 +443,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             />
           </div>
         )}
-
-        {/* Stop */}
-        <div className="mt-3 flex justify-center border-t border-hairline pt-2">
-          <Button size="md" variant="danger" onClick={handleStop}>
-            Stop playback
-          </Button>
-        </div>
       </div>
     </div>
   )
