@@ -118,18 +118,23 @@ class TestCurrentIdentity:
         assert identity.user is user and identity.is_admin and identity.scopes == {"read", "pipeline"}
         assert identity.is_remote
 
-    def test_request_without_user_fails_closed_never_stdio(self):
+    def test_request_without_user_fails_closed_never_stdio(self, monkeypatch):
         """Only ``request is None`` means stdio. An HTTP request whose scope
         lost the guard's identity must not inherit unscoped admin access."""
-        from structlog.testing import capture_logs
+        from unittest.mock import MagicMock
+
+        from thestill.mcp import identity as identity_mod
 
         token = "t" * 64
+        fake_logger = MagicMock()
+        monkeypatch.setattr(identity_mod, "logger", fake_logger)
         request = SimpleNamespace(scope={"state": {}, "path": f"/mcp/{token}"})
-        with capture_logs() as logs:
-            identity = current_mcp_identity(self._server(request))
+        identity = current_mcp_identity(self._server(request))
         # The warning is a path-logging sink like any other: redacted.
-        assert logs and logs[0]["event"] == "mcp_request_without_identity"
-        assert logs[0]["path"] == "/mcp/<redacted>" and token not in str(logs)
+        fake_logger.warning.assert_called_once()
+        assert fake_logger.warning.call_args.args[0] == "mcp_request_without_identity"
+        assert fake_logger.warning.call_args.kwargs["path"] == "/mcp/<redacted>"
+        assert token not in str(fake_logger.mock_calls)
         assert identity is ANONYMOUS_REMOTE
         assert identity.is_remote and identity.is_anonymous_remote
         assert identity.effective_scopes == frozenset()

@@ -447,35 +447,47 @@ class TestDedicatedWorkerPool:
 
 
 class TestOtherLogSinks:
-    """Every sink that logs a request path must redact /mcp/{token}."""
+    """Every sink that logs a request path must redact /mcp/{token}.
 
-    def test_body_size_cap_log_redacts_the_token(self):
-        from structlog.testing import capture_logs
+    Asserted on the module logger directly rather than through
+    ``structlog.testing.capture_logs``: loggers that earlier tests already
+    used are cached with the real processor chain, so capture sees nothing
+    depending on test order (it passed locally and failed on CI).
+    """
 
-        from thestill.web.middleware.body_size import BodySizeLimitMiddleware
+    def test_body_size_cap_log_redacts_the_token(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from thestill.web.middleware import body_size
 
         token = "t" * 64
+        fake_logger = MagicMock()
+        monkeypatch.setattr(body_size, "logger", fake_logger)
         app = FastAPI()
-        app.add_middleware(BodySizeLimitMiddleware, default_limit=10)
+        app.add_middleware(body_size.BodySizeLimitMiddleware, default_limit=10)
 
         @app.post("/mcp/{token}")
         async def sink(token: str):
             return {}
 
-        with capture_logs() as logs:
-            response = TestClient(app).post(f"/mcp/{token}", content=b"x" * 100)
+        response = TestClient(app).post(f"/mcp/{token}", content=b"x" * 100)
         assert response.status_code == 413
-        events = [e for e in logs if e["event"] == "body_size_cap_exceeded"]
-        assert events and events[0]["path"] == "/mcp/<redacted>"
-        assert token not in str(logs)
+        fake_logger.warning.assert_called_once()
+        event, kwargs = fake_logger.warning.call_args.args[0], fake_logger.warning.call_args.kwargs
+        assert event == "body_size_cap_exceeded"
+        assert kwargs["path"] == "/mcp/<redacted>"
+        assert token not in str(fake_logger.mock_calls)
 
-    def test_unhandled_exception_log_redacts_the_token(self):
+    def test_unhandled_exception_log_redacts_the_token(self, monkeypatch):
+        from unittest.mock import MagicMock
+
         from starlette.requests import Request
-        from structlog.testing import capture_logs
 
-        from thestill.web.app import log_unhandled_exception
+        from thestill.web import app as app_module
 
         token = "t" * 64
+        fake_logger = MagicMock()
+        monkeypatch.setattr(app_module, "logger", fake_logger)
         scope = {
             "type": "http",
             "method": "POST",
@@ -486,7 +498,7 @@ class TestOtherLogSinks:
             "scheme": "http",
             "server": ("t", 80),
         }
-        with capture_logs() as logs:
-            log_unhandled_exception(Request(scope), RuntimeError("boom"))
-        assert logs and logs[0]["path"] == "/mcp/<redacted>"
-        assert token not in str(logs)
+        app_module.log_unhandled_exception(Request(scope), RuntimeError("boom"))
+        fake_logger.exception.assert_called_once()
+        assert fake_logger.exception.call_args.kwargs["path"] == "/mcp/<redacted>"
+        assert token not in str(fake_logger.mock_calls)
