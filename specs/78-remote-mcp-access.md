@@ -1,6 +1,6 @@
 # Remote MCP Access — Streamable HTTP on the Web Server
 
-**Status**: 🚧 Phase 1 implemented on `feat/78-remote-mcp-access` (2026-09-08); pending manual connector test + merge
+**Status**: 🚧 Phase 1 + Phase 2 implemented on `feat/78-remote-mcp-access` (2026-09-08); pending manual connector test + merge. `MCP_HTTP_SECRET` no longer exists — Phase 1's operator URL was superseded before it ever shipped
 **History**: Originally drafted as spec #71 on the unmerged branch `claude/mcp-web-server-integration-70yky4` (commit `48912ff`, 2026-08-08); revived and renumbered on 2026-09-08 after #71 was taken by player-shell-layer
 **Created**: 2026-08-08
 **Updated**: 2026-09-08 (Phase 2 designed)
@@ -148,9 +148,10 @@ boot with the one-line remediation.
 
 ## Phase 2 — per-user capability URLs
 
-**Status**: 📝 Designed 2026-09-08, revised the same day after review
-(six P1 findings resolved below). Not started; gated on the Phase 1
-manual connector test passing.
+**Status**: ✅ Implemented 2026-09-08 on `feat/78-remote-mcp-access` (clean-architecture
+variant: `McpTokenService`, `mcp/scopes.py`, `mcp/identity.py`,
+`ConfirmDialog`). Automated acceptance green on SQLite and a real
+Postgres; the two-account manual test is still open.
 
 ### Why per-user, not OAuth
 
@@ -431,45 +432,45 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
 
 ### Phase 2 acceptance
 
-- [ ] `mcp_tokens` exists on all three bootstrap paths: a fresh SQLite
+- [x] `mcp_tokens` exists on all three bootstrap paths: a fresh SQLite
       file, a fresh Postgres via `ensure_schema`, and an existing Postgres
       via `alembic upgrade` (idempotent when the table is already there);
       rotate is one transaction; the old URL 404s on the very next
       request.
-- [ ] Guard resolves the user; for two users with different follows,
+- [x] Guard resolves the user; for two users with different follows,
       `list_podcasts` over HTTP returns each caller's own follows with
       global ids/slugs.
-- [ ] `get_transcript` via `tools/call` **and**
+- [x] `get_transcript` via `tools/call` **and**
       `thestill://…/transcript` via `resources/read` succeed for an
       authenticated non-follower (web parity) and 404 without a token.
-- [ ] `remove_podcast` unfollows, never deletes, and is refused for a
+- [x] `remove_podcast` unfollows, never deletes, and is refused for a
       non-follower; the podcast remains for the other follower.
-- [ ] Scopes: a `read`-only token lists no mutating tools and is refused
+- [x] Scopes: a `read`-only token lists no mutating tools and is refused
       on `add_podcast` with an error naming `follows`; a `read,follows`
       token can add and unfollow; `pipeline` is dropped from a
       non-admin's request and honoured for an admin.
-- [ ] Rate limit: the 121st HTTP request within a minute on one token
+- [x] Rate limit: the 121st HTTP request within a minute on one token
       returns `429` with `Retry-After`; another user's token is
       unaffected; the mutation quota still returns its JSON-RPC shape.
-- [ ] Expiry: a token with `expires_at` in the past 404s; rotate resets
+- [x] Expiry: a token with `expires_at` in the past 404s; rotate resets
       `expires_at`; `MCP_TOKEN_TTL_DAYS=0` yields NULL.
-- [ ] Last use: `last_used_at` / `last_used_ip` update at most once per
+- [x] Last use: `last_used_at` / `last_used_ip` update at most once per
       minute and appear in `GET /api/me/mcp-token`; the IP never appears
       in access logs alongside the path.
-- [ ] `get_status` for a non-admin token omits `storage_path` and
+- [x] `get_status` for a non-admin token omits `storage_path` and
       system-wide counts; an admin token gets the full payload; demoting
       that admin changes the very next response with no rotate.
-- [ ] Contract test: every tool in `list_tools` has a `_SCOPE_BY_TOOL`
+- [x] Contract test: every tool in `list_tools` has a `_SCOPE_BY_TOOL`
       entry; a tool registered without one is absent from `tools/list`
       over HTTP and refused on call.
-- [ ] Bare integer podcast ids refused over HTTP; uuid, slug and RSS URL
+- [x] Bare integer podcast ids refused over HTTP; uuid, slug and RSS URL
       accepted and resolve to the same object as `list_podcasts` reports.
-- [ ] Settings card: create with scope form, one-time copy modal,
+- [x] Settings card: create with scope form, one-time copy modal,
       rotate, revoke, expiring warning; the plaintext appears only in
       the `POST` response.
-- [ ] Access logs and `GET /api/me/mcp-token` never contain the
+- [x] Access logs and `GET /api/me/mcp-token` never contain the
       plaintext.
-- [ ] stdio `thestill-mcp` takes the identity-`None` branch everywhere:
+- [x] stdio `thestill-mcp` takes the identity-`None` branch everywhere:
       `list_podcasts` returns the whole corpus, `remove_podcast` deletes,
       numeric ids are accepted, all tools are listed, no scope or rate
       checks run. Asserted by tests that run the same handlers with no
@@ -478,6 +479,11 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
       own podcast list from Claude mobile; both can read any transcript.
 
 ## Phase 1 acceptance
+
+> Superseded: Phase 2 replaced the operator secret before Phase 1 was
+> field-tested. The transport/guard items below were carried into the
+> Phase 2 tests (`tests/unit/web/test_mcp_http.py`); the secret-specific
+> ones no longer apply.
 
 - [ ] `MCP_HTTP_ENABLED=true` + valid secret: `initialize` + `tools/list`
       JSON-RPC round trip succeeds over HTTP at `/mcp/<secret>`.

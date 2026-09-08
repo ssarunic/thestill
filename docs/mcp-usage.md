@@ -97,7 +97,7 @@ In Claude Desktop, you should see a small indicator showing the MCP server is co
 Claude on mobile and claude.ai (web) cannot run local processes, so the
 stdio server above does not work there. Instead, the thestill **web
 server** can expose the same MCP tool surface over the Streamable HTTP
-transport at a capability URL (spec #78 Phase 1).
+transport at a **personal connector URL** (spec #78).
 
 ### Enable on the server
 
@@ -105,11 +105,49 @@ Add to your `.env` and restart the web server:
 
 ```bash
 MCP_HTTP_ENABLED=true
-MCP_HTTP_SECRET=<output of: openssl rand -hex 32>
+# Optional tuning (defaults shown):
+# MCP_TOKEN_TTL_DAYS=90              # 0 = tokens never expire
+# MCP_TOKEN_REQUESTS_PER_MINUTE=120  # per token; 429 above it
 ```
 
-The server then serves MCP at `/mcp/{MCP_HTTP_SECRET}`. The full URL is
-shown to admins on the web UI Settings page, with a copy button.
+The server then serves MCP at `/mcp/{token}`. There is no shared secret:
+every user mints their own token from **Settings → Claude connector
+(MCP)** on the web UI.
+
+### Get your connector URL
+
+1. Open Settings, click **Create connector URL**, and choose what the
+   connector may do:
+   - **Read** (always on): podcasts, episodes, transcripts, summaries,
+     search, entities.
+   - **Follows** (off by default): add podcasts and unfollow. Adding a
+     feed runs the pipeline, which is why it is not part of Read.
+   - **Pipeline** (admins only): refresh, download, transcribe, clean,
+     summarise.
+2. Copy the URL from the one-time dialog. It is shown **once**; the server
+   stores only a hash. If you lose it, **Rotate** to get a new one (the old
+   URL stops working immediately). **Revoke** ends it without replacement.
+3. The card shows the masked prefix, scopes, expiry and last-used time so
+   you can spot use you did not make.
+
+### What a connector URL can do
+
+A URL is equivalent to *your* web session, narrowed by its scopes — never
+more. Reads are the same as on the web: any signed-in user can read any
+transcript on the instance. Over the connector:
+
+- `list_podcasts` returns **your followed podcasts** (admins may pass
+  `all=true`). Rows carry the podcast `id` and `slug`; the numeric index
+  the stdio server prints is not used remotely.
+- `remove_podcast` **unfollows** — it never deletes a podcast.
+- `add_podcast` adds and follows it for you.
+- `get_status` returns counts over your follows only; admins get the full
+  operator payload.
+- Podcast identifiers are `uuid`, `slug` or RSS URL. A bare number is
+  refused with an error naming the accepted forms.
+- Tools your token does not grant are not listed, and calling one anyway
+  is refused with an error naming the missing scope. Demoting an admin
+  removes Pipeline on their very next request, no rotate needed.
 
 ### Requirements
 
@@ -117,24 +155,23 @@ shown to admins on the web UI Settings page, with a copy button.
   servers, not from your phone — a LAN-only or VPN-only instance won't
   work. A reverse proxy with TLS, or a tunnel (Cloudflare Tunnel, ngrok),
   in front of a home server both work.
-- **Treat the URL as a password.** Whoever holds it can use every MCP
-  tool on the instance, including pipeline mutations. Rotate it by
-  changing `MCP_HTTP_SECRET` and restarting (then update the connector).
-- **Logs.** thestill redacts the secret in its own request logs and in
+- **Treat the URL as a password.** Whoever holds it can read everything
+  you can and act within its scopes. Rotate if it leaks.
+- **Logs.** thestill redacts the token in its own request logs and in
   uvicorn's access log (`/mcp/<redacted>`). If you front the server with
   a reverse proxy or tunnel, check that its access logs don't record the
   full path.
+- **Individually managed Claude accounts.** Team/Enterprise organisation
+  connectors register one URL centrally for all members, which per-user
+  URLs cannot serve; that deployment shape needs OAuth (spec #78 Phase 3).
 
 ### Add the connector on claude.ai
 
-1. Copy the connector URL from Settings on the thestill web UI.
+1. Create and copy your connector URL from Settings on the thestill web UI.
 2. On claude.ai: **Settings → Connectors → Add custom connector**
-   (requires a Pro/Max/Team/Enterprise plan).
+   (requires a Pro/Max plan).
 3. Paste the URL, leave OAuth fields empty, and save.
 4. The connector is now available across Claude web, desktop, and mobile.
-
-Phase 2 (planned, spec #78) replaces the capability URL with OAuth 2.1
-tied to thestill user accounts.
 
 ---
 
