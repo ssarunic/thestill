@@ -220,6 +220,21 @@ def enforce_mcp_mutation_quota(tool_name: str, session_key: Optional[str] = None
         )
 
 
+def check_mcp_token_rate_limit(token_hash: str, *, requests_per_minute: int) -> bool:
+    """
+    Per-token HTTP request limit for the remote MCP endpoint (spec #78
+    Phase 2). Returns a bool rather than raising because the caller is a
+    raw ASGI guard outside FastAPI's exception handling — it writes the
+    ``429`` itself. Keyed on the token hash so one leaked URL cannot burn
+    another user's budget.
+    """
+    limit = RateLimit(max_events=requests_per_minute, window_seconds=60)
+    allowed = _LIMITER.allow(f"mcp-token:{token_hash}", limit)
+    if not allowed:
+        logger.warning("mcp_token_rate_limit_exceeded", token_prefix=token_hash[:8], max_events=requests_per_minute)
+    return allowed
+
+
 def reset_for_testing() -> None:
     """Flush all buckets — call from test fixtures, never production."""
     _LIMITER.reset()
