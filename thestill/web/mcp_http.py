@@ -22,8 +22,10 @@ the Streamable HTTP transport against that URL.
 
 Phase 1 auth model: possession of the URL is the credential, and it is
 operator-equivalent — see specs/78-remote-mcp-access.md for the threat
-model. Phase 2 replaces the path-secret guard with OAuth 2.1 while
-keeping the same mount and session manager.
+model. Phase 2 keeps the path-secret shape but makes the secret
+per-user (hashed ``mcp_tokens`` rows resolved to a user on the request
+scope); OAuth 2.1 is Phase 3, keeping the same mount and session
+manager either way.
 """
 
 from __future__ import annotations
