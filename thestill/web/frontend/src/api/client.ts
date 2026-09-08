@@ -63,7 +63,9 @@ import type {
   InboxUnreadCountResponse,
   ImportRequest,
   ImportResponse,
-  McpStatusResponse,
+  McpTokenInfoResponse,
+  McpTokenMintResponse,
+  McpTokenScope,
 } from './types'
 
 const API_BASE = '/api'
@@ -821,8 +823,33 @@ export async function importEpisode(request: ImportRequest): Promise<ImportRespo
   return response.json()
 }
 
-// Remote MCP connector info (spec #78 Phase 1). Admin-gated: non-admins
-// get a 403, which callers should treat as "hide the section".
-export async function getMcpStatus(): Promise<McpStatusResponse> {
-  return fetchApi<McpStatusResponse>('/status/mcp')
+// Remote MCP connector (spec #78 Phase 2) — the caller's own token.
+export async function getMcpToken(): Promise<McpTokenInfoResponse> {
+  return fetchApi<McpTokenInfoResponse>('/me/mcp-token')
+}
+
+// Create or rotate. The returned URL is shown once and never persisted.
+export async function createOrRotateMcpToken(scopes: McpTokenScope[]): Promise<McpTokenMintResponse> {
+  const response = await fetch(`${API_BASE}/me/mcp-token`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scopes }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.detail || `API error: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function revokeMcpToken(): Promise<void> {
+  const response = await fetch(`${API_BASE}/me/mcp-token`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.detail || `API error: ${response.status}`)
+  }
 }

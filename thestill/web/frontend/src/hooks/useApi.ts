@@ -22,6 +22,9 @@ import {
   startRefresh,
   getRefreshStatus,
   addPodcast,
+  getMcpToken,
+  createOrRotateMcpToken,
+  revokeMcpToken,
   getAddPodcastStatus,
   queuePipelineTask,
   getPipelineTaskStatus,
@@ -58,7 +61,7 @@ import {
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTasksResponse } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTasksResponse , McpTokenScope } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -184,6 +187,36 @@ export function useFollowPodcast() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['podcasts'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+// Spec #78 Phase 2 — the caller's remote MCP connector token.
+export function useMcpToken() {
+  return useQuery({
+    queryKey: ['mcp-token'],
+    queryFn: getMcpToken,
+    refetchInterval: false,
+    staleTime: 30_000,
+  })
+}
+
+export function useCreateOrRotateMcpToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (scopes: McpTokenScope[]) => createOrRotateMcpToken(scopes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-token'] })
+    },
+  })
+}
+
+export function useRevokeMcpToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => revokeMcpToken(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-token'] })
     },
   })
 }

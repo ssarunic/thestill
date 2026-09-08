@@ -1393,17 +1393,33 @@ export interface ImportResponse {
   import: ImportPayload
 }
 
-// Remote MCP connector (spec #78 Phase 1). ``url`` is the capability URL
-// to paste into claude.ai's custom-connector form; present only when the
-// server has MCP_HTTP_ENABLED=true. Admin-gated server-side.
-export interface McpStatus {
+// Remote MCP connector (spec #78 Phase 2). Per-user capability tokens:
+// GET returns the caller's token *state* (never the plaintext); POST
+// returns the full connector URL exactly once.
+export type McpTokenScope = 'read' | 'follows' | 'pipeline'
+export type McpTokenState = 'none' | 'active' | 'expiring' | 'expired' | 'revoked'
+
+export interface McpTokenInfo {
   enabled: boolean
-  url?: string
-  transport?: string
+  state: McpTokenState
+  prefix?: string
+  scopes?: McpTokenScope[]
+  created_at?: string
+  expires_at?: string | null
+  last_used_at?: string | null
+  last_used_ip?: string | null
+  revoked_at?: string | null
 }
 
-export interface McpStatusResponse {
+export interface McpTokenInfoResponse extends McpTokenInfo {
   status: string
   timestamp: string
-  mcp: McpStatus
+}
+
+export interface McpTokenMintResponse {
+  status: string
+  timestamp: string
+  url: string
+  scopes: McpTokenScope[]
+  expires_at: string | null
 }
