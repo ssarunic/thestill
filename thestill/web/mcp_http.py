@@ -44,7 +44,12 @@ from ..mcp.tools import setup_tools
 from ..services.mcp_token_service import McpTokenService
 from ..utils.datetime_utils import now_utc
 from .dependencies import is_effective_admin
-from .middleware.rate_limit import check_mcp_token_rate_limit, resolve_client_ip
+from .middleware.rate_limit import (
+    check_mcp_token_rate_limit,
+    mcp_miss_budget_exhausted,
+    record_mcp_token_miss,
+    resolve_client_ip,
+)
 
 if TYPE_CHECKING:
     from ..repositories.factory import RepositoryBundle
@@ -82,8 +87,8 @@ class McpHttpRuntime:
         # Same wiring as ThestillMCPServer, minus the stdio transport —
         # the stdio and HTTP servers are two doors into one room.
         server = Server("thestill-mcp")
-        setup_resources(server, str(config.storage_path))
-        setup_tools(server, str(config.storage_path))
+        setup_resources(server, str(config.storage_path), config=config)
+        setup_tools(server, str(config.storage_path), config=config)
 
         self.session_manager = StreamableHTTPSessionManager(
             app=server,
@@ -117,10 +122,18 @@ class McpHttpRuntime:
             return
 
         now = now_utc()
+        ip = resolve_client_ip(Request(scope, receive), config=self._config)
+        # An IP that has burned its miss budget gets the same 404 without a
+        # database round-trip, so scanners cannot make the guard do work.
+        if mcp_miss_budget_exhausted(ip):
+            await Response(status_code=404)(scope, receive, send)
+            return
+
         # Revoked and expired collapse into "no such token" inside the SQL
         # predicate, so there is exactly one place that can get expiry wrong.
         token = self._tokens.resolve_active(candidate, now=now)
         if token is None:
+            record_mcp_token_miss(ip)
             await Response(status_code=404)(scope, receive, send)
             return
 
@@ -139,7 +152,6 @@ class McpHttpRuntime:
             await Response(status_code=404)(scope, receive, send)
             return
 
-        ip = resolve_client_ip(Request(scope, receive), config=self._config)
         self._tokens.touch_last_used(user.id, ip=ip, now=now)
 
         state = scope.setdefault("state", {})

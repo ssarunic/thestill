@@ -482,11 +482,12 @@ class Config(BaseModel):
     # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
     max_webhook_body_bytes: int = 1 * 1024 * 1024
 
-    # Remote MCP over Streamable HTTP (spec #78). Ships dark. When enabled,
-    # the web server mounts the MCP tool surface at /mcp/{token} where the
-    # token is per user (Phase 2): minted from each user's Settings page,
-    # stored hashed, scoped, rate-limited and expiring.
-    mcp_http_enabled: bool = False
+    # Remote MCP over Streamable HTTP (spec #78). On by default since Phase
+    # 2: the mount is inert until a user mints a per-user token from their
+    # Settings page (stored hashed, scoped, rate-limited, expiring), and a
+    # token can never exceed that user's own web session. Opt out with
+    # MCP_HTTP_ENABLED=false.
+    mcp_http_enabled: bool = True
     # Token lifetime in days; 0 = never expires. Rotating resets it.
     mcp_token_ttl_days: int = 90
     # Per-token HTTP request limit on the /mcp endpoint (429 above it).
@@ -805,7 +806,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
         # Remote MCP (spec #78)
-        "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "false").lower() == "true",
+        "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "true").lower() == "true",
         "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
         "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
         # Entity enrichment (spec #45 Tier 0)

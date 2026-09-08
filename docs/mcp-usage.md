@@ -99,20 +99,22 @@ stdio server above does not work there. Instead, the thestill **web
 server** can expose the same MCP tool surface over the Streamable HTTP
 transport at a **personal connector URL** (spec #78).
 
-### Enable on the server
+### Server side
 
-Add to your `.env` and restart the web server:
+The endpoint is on by default and inert until someone mints a token; it
+serves MCP at `/mcp/{token}`. There is no shared secret: every user mints
+their own token from **Settings → Claude connector (MCP)** on the web UI.
+Tokens are only issued when the page is served over HTTPS (or localhost),
+so set `PUBLIC_BASE_URL=https://...` behind a reverse proxy.
+
+Optional tuning in `.env` (defaults shown):
 
 ```bash
-MCP_HTTP_ENABLED=true
-# Optional tuning (defaults shown):
+# MCP_HTTP_ENABLED=true              # false = opt out entirely
 # MCP_TOKEN_TTL_DAYS=90              # 0 = tokens never expire
 # MCP_TOKEN_REQUESTS_PER_MINUTE=120  # per token; 429 above it
+# RATE_LIMIT_MCP_MISS_MAX=120        # bad-token attempts per IP per minute
 ```
-
-The server then serves MCP at `/mcp/{token}`. There is no shared secret:
-every user mints their own token from **Settings → Claude connector
-(MCP)** on the web UI.
 
 ### Get your connector URL
 

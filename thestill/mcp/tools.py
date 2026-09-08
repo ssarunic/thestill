@@ -23,7 +23,7 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import anyio
 import structlog
@@ -37,7 +37,7 @@ from ..models.transcription import TranscribeOptions
 from ..services import PodcastService, RefreshService, StatsService
 from ..services.auth_service import AuthService
 from ..services.follower_service import NotFollowingError
-from ..utils.config import load_config
+from ..utils.config import Config, load_config
 from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
@@ -66,16 +66,18 @@ _MUTATING_TOOLS = frozenset(
 )
 
 
-def setup_tools(server: Server, storage_path: str):
+def setup_tools(server: Server, storage_path: str, config: Optional[Config] = None):
     """
     Set up all MCP tools for the server.
 
     Args:
         server: MCP server instance
         storage_path: Path to data storage
+        config: the caller's Config. The web server passes its own so the
+            HTTP mount never re-reads the environment (spec #78 Phase 2);
+            the stdio entry point leaves it None and loads it here.
     """
-    # Load full config for database path and other settings
-    config = load_config()
+    config = config or load_config()
 
     # Per-session MCP quota key.
     # stdio transport has one client per server process, so process identity
@@ -126,7 +128,16 @@ def setup_tools(server: Server, storage_path: str):
     )
     audio_preprocessor = AudioPreprocessor(logger=logger)
     user_repository = repos.user
-    auth_service = AuthService(config, user_repository)
+    # AuthService validates OAuth/JWT settings on construction, which only
+    # the stdio add path needs (auto-follow of the default user). Build it
+    # lazily so an HTTP mount with a minimal Config never trips that check.
+    _auth_cache: dict = {}
+
+    def _auth_service() -> AuthService:
+        if "svc" not in _auth_cache:
+            _auth_cache["svc"] = AuthService(config, user_repository)
+        return _auth_cache["svc"]
+
     # Spec #63 — an MCP add must auto-follow the default user in
     # single-user mode, or the universal follower gate would leave the
     # new podcast permanently unrefreshed (parity with CLI + web).
@@ -476,7 +487,9 @@ def setup_tools(server: Server, storage_path: str):
                 else:
                     from ..services.podcast_add import add_podcast_and_auto_follow
 
-                    podcast = add_podcast_and_auto_follow(podcast_service, follower_service, auth_service, config, url)
+                    podcast = add_podcast_and_auto_follow(
+                        podcast_service, follower_service, _auth_service(), config, url
+                    )
                 if podcast:
                     result = {
                         "success": True,

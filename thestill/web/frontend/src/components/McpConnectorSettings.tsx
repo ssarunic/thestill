@@ -202,9 +202,9 @@ export default function McpConnectorSettings() {
 
       {data && !data.enabled && (
         <div className="text-sm text-gray-600 space-y-2">
-          <p>Remote MCP is disabled on this server. An operator can enable it and restart:</p>
+          <p>Remote MCP is disabled on this server. An operator turned it off with:</p>
           <pre className="bg-gray-50 border border-gray-200 rounded-md p-3 text-xs overflow-x-auto">
-            {'MCP_HTTP_ENABLED=true'}
+            {'MCP_HTTP_ENABLED=false'}
           </pre>
         </div>
       )}

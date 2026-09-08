@@ -19,7 +19,7 @@ Provides MCP resources for podcasts, episodes, and transcripts.
 """
 
 import json
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import unquote
 
 import anyio
@@ -28,7 +28,7 @@ from mcp.types import Resource, TextContent
 from structlog import get_logger
 
 from ..services import PodcastService
-from ..utils.config import load_config
+from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
 from .identity import McpIdentity, current_mcp_identity, remote_call_limiter, require_authenticated
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
@@ -36,16 +36,16 @@ from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_
 logger = get_logger(__name__)
 
 
-def setup_resources(server: Server, storage_path: str):
+def setup_resources(server: Server, storage_path: str, config: Optional[Config] = None):
     """
     Set up all MCP resources for the server.
 
     Args:
         server: MCP server instance
         storage_path: Path to data storage
+        config: the caller's Config (web server); None = load it (stdio).
     """
-    # Load full config for database path
-    config = load_config()
+    config = config or load_config()
 
     # Initialize shared components
     path_manager = PathManager(storage_path)

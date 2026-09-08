@@ -191,6 +191,27 @@ class TestPerTokenRateLimit:
             assert Harness.rpc(c, b, "tools/list").status_code == 200
 
 
+class TestMissBudget:
+    def test_exhausted_ip_is_404_without_a_lookup(self, harness, monkeypatch):
+        """Scanners must not make the guard hit the database at line rate:
+        once an IP burns its miss budget the 404 comes back before lookup."""
+        from thestill.web.middleware import rate_limit
+
+        monkeypatch.setattr(rate_limit, "MCP_MISS_LIMIT", rate_limit.RateLimit(max_events=3, window_seconds=60))
+        calls = []
+        real = harness.runtime._tokens.resolve_active  # noqa: SLF001
+
+        def counting(plaintext, *, now=None):
+            calls.append(plaintext)
+            return real(plaintext, now=now)
+
+        monkeypatch.setattr(harness.runtime._tokens, "resolve_active", counting)  # noqa: SLF001
+        with harness.client() as c:
+            for _ in range(5):
+                assert c.post("/mcp/not-a-token", json={}).status_code == 404
+        assert len(calls) == 3  # budget of 3 lookups, then short-circuit
+
+
 class TestLastUse:
     def test_last_used_is_bumped(self, harness):
         token = harness.mint()
@@ -244,7 +265,7 @@ class TestBuildMcpHttp:
 class TestConfig:
     def test_defaults(self, isolated_env):
         config = load_config()
-        assert config.mcp_http_enabled is False
+        assert config.mcp_http_enabled is True  # on by default since Phase 2; inert without a token
         assert config.mcp_token_ttl_days == 90
         assert config.mcp_token_requests_per_minute == 120
 
@@ -261,11 +282,11 @@ class TestConfig:
             load_config()
 
     def test_env_overrides(self, isolated_env):
-        isolated_env.setenv("MCP_HTTP_ENABLED", "true")
+        isolated_env.setenv("MCP_HTTP_ENABLED", "false")
         isolated_env.setenv("MCP_TOKEN_TTL_DAYS", "0")
         isolated_env.setenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "7")
         config = load_config()
-        assert config.mcp_http_enabled is True
+        assert config.mcp_http_enabled is False
         assert config.mcp_token_ttl_days == 0
         assert config.mcp_token_requests_per_minute == 7
 

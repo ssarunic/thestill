@@ -39,6 +39,24 @@ class McpTokenRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
 
 
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _issuing_over_secure_origin(state: AppState, request: Request) -> bool:
+    """The token rides in the URL path, so we only hand one out when the
+    URL it will be pasted into is HTTPS (or a loopback dev address).
+
+    ``PUBLIC_BASE_URL`` wins when set — behind a reverse proxy the request
+    scheme is often plain http even though the public origin is https.
+    """
+    base = state.config.public_base_url
+    if base:
+        return base.lower().startswith("https://")
+    if request.url.scheme == "https":
+        return True
+    return (request.url.hostname or "").lower() in _LOCAL_HOSTS
+
+
 def _token_view(state: AppState, user: User) -> dict:
     service = state.mcp_token_service
     token = service.get(user.id)
@@ -76,6 +94,11 @@ def create_or_rotate_mcp_token(
     """
     if not state.config.mcp_http_enabled:
         bad_request("Remote MCP is disabled on this server (MCP_HTTP_ENABLED=false).")
+    if not _issuing_over_secure_origin(state, request):
+        bad_request(
+            "Connector URLs are only issued over HTTPS (or localhost): the token travels in the URL. "
+            "Set PUBLIC_BASE_URL=https://... on the server, or open this page over HTTPS."
+        )
     mint = state.mcp_token_service.create_or_rotate(
         user.id,
         requested_scopes=body.scopes,

@@ -62,7 +62,8 @@ Auth is deliberately phased:
     specs #25/#51 exist to kill.
   - The Settings surface that displays the URL is **admin-gated**
     (`require_admin`); in single-user mode that always passes.
-  - Ship dark: `MCP_HTTP_ENABLED` defaults to `false`. Hosted multi-user
+  - Ship dark *(Phase 1 only — Phase 2 flipped the default to `true`, see
+    §Phase 2 ▸ Configuration)*: `MCP_HTTP_ENABLED` defaults to `false`. Hosted multi-user
     deployments should leave Phase 1 off unless the operator accepts that
     the URL is an admin credential; Phase 2 is the multi-user answer.
 - **Transport-level secrecy is assumed.** The capability URL must only
@@ -84,7 +85,7 @@ Auth is deliberately phased:
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `MCP_HTTP_ENABLED` | `false` | Mount the Streamable HTTP MCP endpoint on the web server |
+| `MCP_HTTP_ENABLED` | `true` (since Phase 2; was `false` in Phase 1) | Mount the Streamable HTTP MCP endpoint on the web server; inert until a user mints a token |
 | `MCP_HTTP_SECRET` | — | Capability secret, **required when enabled**, min 32 chars. Generate with `openssl rand -hex 32` |
 
 Validation lives in `load_config()` next to the `COOKIE_SECURE` /
@@ -416,7 +417,27 @@ its process key on stdio.
 
 ### Configuration
 
-- `MCP_HTTP_ENABLED` stays and still ships dark.
+- `MCP_HTTP_ENABLED` **defaults to `true`** (decided 2026-09-08, after
+  implementation). "Ships dark" was a Phase 1 artifact: the mount was an
+  operator-level secret. In Phase 2 the endpoint is inert until a user
+  mints a token, and a token can never exceed its owner's web session, so
+  enabling the mount is no longer a security decision. The flag stays as
+  an opt-out for operators who do not want out-of-band credentials at
+  all. Two mitigations make default-on safe:
+  - **Minting requires a secure origin.** `POST /api/me/mcp-token` refuses
+    (400) unless `PUBLIC_BASE_URL` is `https://…`, or the request itself
+    is HTTPS, or the host is loopback. The token rides in the URL, so a
+    plain-http self-host must not be able to mint one that leaks in
+    transit.
+  - **Per-IP token-miss budget.** Unknown/revoked/expired tokens count
+    against `RATE_LIMIT_MCP_MISS_MAX` (120/min per client IP). Once burnt,
+    the guard answers the same empty 404 *before* the database lookup, so
+    scanners cannot make it do work. Generous on purpose: claude.ai's
+    egress IPs are shared across users, and one stale connector polling a
+    revoked URL must not lock out its neighbours.
+- The HTTP mount receives the app's `Config` (`setup_tools(..., config=)`)
+  instead of re-reading the environment, so embedders and tests that build
+  a `Config` directly get exactly the instance they configured.
 - New: `MCP_TOKEN_TTL_DAYS` (default `90`, `0` = never expires) and
   `MCP_TOKEN_REQUESTS_PER_MINUTE` (default `120`).
 - `MCP_HTTP_SECRET` is **removed**, with its boot-time validation.

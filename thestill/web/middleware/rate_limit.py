@@ -71,6 +71,14 @@ MCP_MUTATION_LIMIT = RateLimit(
     max_events=_int_env("RATE_LIMIT_MCP_MUTATION_MAX", 30),
     window_seconds=_int_env("RATE_LIMIT_MCP_MUTATION_WINDOW_SECONDS", 60),
 )
+# Spec #78 Phase 2 — unknown/revoked/expired tokens per client IP. Once
+# exhausted the guard answers 404 without touching the database. Generous
+# on purpose: claude.ai's egress IPs are shared across users, and one
+# stale connector polling a revoked URL must not lock out its neighbours.
+MCP_MISS_LIMIT = RateLimit(
+    max_events=_int_env("RATE_LIMIT_MCP_MISS_MAX", 120),
+    window_seconds=_int_env("RATE_LIMIT_MCP_MISS_WINDOW_SECONDS", 60),
+)
 
 
 # Once the bucket table grows past this size, each allow() call evicts any
@@ -102,6 +110,16 @@ class _SlidingWindow:
             if len(self._buckets) > _SWEEP_TRIGGER:
                 self._sweep(cutoff)
             return True
+
+    def exhausted(self, key: str, limit: RateLimit) -> bool:
+        """Would ``allow`` refuse right now? Never records an event."""
+        cutoff = time.monotonic() - limit.window_seconds
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if not bucket:
+                return False
+            live = sum(1 for t in bucket if t >= cutoff)
+            return live >= limit.max_events
 
     def _sweep(self, cutoff: float) -> None:
         # Caller holds self._lock.
@@ -236,6 +254,17 @@ def check_mcp_token_rate_limit(token_hash: str, *, requests_per_minute: int) -> 
     if not allowed:
         logger.warning("mcp_token_rate_limit_exceeded", token_prefix=token_hash[:8], max_events=requests_per_minute)
     return allowed
+
+
+def mcp_miss_budget_exhausted(client_ip: str) -> bool:
+    """True when ``client_ip`` has burned its token-miss budget (spec #78)."""
+    return _LIMITER.exhausted(f"mcp-miss:{client_ip}", MCP_MISS_LIMIT)
+
+
+def record_mcp_token_miss(client_ip: str) -> None:
+    """Count one unknown/revoked/expired token attempt from ``client_ip``."""
+    if not _LIMITER.allow(f"mcp-miss:{client_ip}", MCP_MISS_LIMIT):
+        logger.warning("mcp_token_miss_budget_exhausted", client_ip=client_ip, max_events=MCP_MISS_LIMIT.max_events)
 
 
 def reset_for_testing() -> None:
