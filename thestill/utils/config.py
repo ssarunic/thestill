@@ -482,6 +482,17 @@ class Config(BaseModel):
     # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
     max_webhook_body_bytes: int = 1 * 1024 * 1024
 
+    # Remote MCP over Streamable HTTP (spec #78). On by default since Phase
+    # 2: the mount is inert until a user mints a per-user token from their
+    # Settings page (stored hashed, scoped, rate-limited, expiring), and a
+    # token can never exceed that user's own web session. Opt out with
+    # MCP_HTTP_ENABLED=false.
+    mcp_http_enabled: bool = True
+    # Token lifetime in days; 0 = never expires. Rotating resets it.
+    mcp_token_ttl_days: int = 90
+    # Per-token HTTP request limit on the /mcp endpoint (429 above it).
+    mcp_token_requests_per_minute: int = 120
+
     # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
     enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
     enrichment_wikipedia_lang: str = "en"  # language edition for sitelinks + summaries
@@ -794,6 +805,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
+        # Remote MCP (spec #78)
+        "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "true").lower() == "true",
+        "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
+        "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
         # Entity enrichment (spec #45 Tier 0)
         "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
         "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
@@ -813,6 +828,18 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(
             "COOKIE_SECURE=false is not permitted when ENVIRONMENT=production. "
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
+        )
+
+    # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
+    # for exactly 0; a negative TTL would silently mean the same thing,
+    # and a non-positive request limit would refuse every request.
+    if config_data["mcp_token_ttl_days"] < 0:
+        raise ValueError(
+            f"MCP_TOKEN_TTL_DAYS must be >= 0 (0 = tokens never expire); got {config_data['mcp_token_ttl_days']}"
+        )
+    if config_data["mcp_token_requests_per_minute"] <= 0:
+        raise ValueError(
+            "MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0; got " f"{config_data['mcp_token_requests_per_minute']}"
         )
 
     # Multi-user mode runs OAuth, which must build a non-spoofable

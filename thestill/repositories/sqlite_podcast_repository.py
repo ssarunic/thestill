@@ -520,6 +520,30 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: revoked_tokens table created")
 
+        # Migration: per-user remote MCP tokens (spec #78 Phase 2,
+        # idempotent). One row per user, replaced in place on rotate; the
+        # guard looks rows up by hash, hence the unique index.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_tokens'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating mcp_tokens table")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS mcp_tokens (
+                    user_id      TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token_hash   TEXT NOT NULL,
+                    token_prefix TEXT NOT NULL,
+                    scopes       TEXT NOT NULL DEFAULT 'read',
+                    created_at   TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    expires_at   TIMESTAMP NULL,
+                    last_used_at TIMESTAMP NULL,
+                    last_used_ip TEXT NULL,
+                    revoked_at   TIMESTAMP NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
+                """
+            )
+            logger.info("Migration complete: mcp_tokens table created")
+
         # Migration: Add region columns to users table (idempotent).
         # `region` is an ISO 3166-1 alpha-2 country code (lowercase) or NULL.
         # `region_locked` is 1 once the user has explicitly chosen one — used

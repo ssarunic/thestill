@@ -23,9 +23,20 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from ...utils.log_safety import redact_mapping
+from ...utils.log_safety import redact_capability_path, redact_mapping
 
 logger = structlog.get_logger(__name__)
+
+
+def _safe_endpoint(path: str) -> str:
+    """Redact capability secrets from logged paths (spec #78).
+
+    The MCP endpoint embeds its secret in the path (``/mcp/{secret}``);
+    logging the raw path would persist the credential in every access log
+    line. Shares the rule with the uvicorn access-log filter so both
+    loggers print the same ``/mcp/<redacted>`` placeholder.
+    """
+    return redact_capability_path(path)
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
@@ -69,7 +80,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
             method=request.method,
-            endpoint=request.url.path,
+            endpoint=_safe_endpoint(request.url.path),
             client_ip=request.client.host if request.client else "unknown",
         )
 

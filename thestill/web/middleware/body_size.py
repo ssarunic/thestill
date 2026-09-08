@@ -36,6 +36,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from structlog import get_logger
 
+from ...utils.log_safety import redact_capability_path
+
 logger = get_logger(__name__)
 
 # Body reads only apply to request methods that have bodies.
@@ -64,9 +66,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         # Sort by prefix length descending so more-specific prefixes match
         # first regardless of call order.
-        self._route_limits: list = sorted(
-            route_limits, key=lambda pair: len(pair[0]), reverse=True
-        )
+        self._route_limits: list = sorted(route_limits, key=lambda pair: len(pair[0]), reverse=True)
         self._default_limit = int(default_limit)
 
     def _limit_for(self, path: str) -> int:
@@ -88,7 +88,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
                 logger.warning(
                     "body_size_content_length_not_int",
                     header=length_header,
-                    path=request.url.path,
+                    path=redact_capability_path(request.url.path),
                 )
                 # Raising HTTPException from a BaseHTTPMiddleware does NOT
                 # convert to an HTTP response (that's a FastAPI-route-only
@@ -102,13 +102,11 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
                     "body_size_cap_exceeded",
                     advertised=advertised,
                     cap=limit,
-                    path=request.url.path,
+                    path=redact_capability_path(request.url.path),
                 )
                 return JSONResponse(
                     status_code=413,
-                    content={
-                        "detail": f"Payload exceeds the {limit}-byte limit for this endpoint."
-                    },
+                    content={"detail": f"Payload exceeds the {limit}-byte limit for this endpoint."},
                 )
         # A missing Content-Length on POST/PUT/PATCH is unusual but legal
         # (chunked transfer-encoding). Enforcing a streaming cap here is

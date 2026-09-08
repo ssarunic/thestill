@@ -22,6 +22,7 @@ thestill server --workers 4        # Multiple worker processes
 | `/health` | GET | Liveness check for load balancers (`{"status": "healthy"}` envelope; no dependency checks) |
 | `/health/ready` | GET | Readiness probe (spec #66): one cheap DB round-trip; `200`/`"ready"` or `503`/`"unready"` |
 | `/api/status` | GET | Detailed system statistics (same data as the CLI `status` command) |
+| `/api/status/mcp` | GET | Whether the remote MCP endpoint is enabled (spec #78); admin-gated |
 | `/docs` | GET | OpenAPI docs — only when `ENVIRONMENT=development` or `ENABLE_DOCS=true`; disabled in production |
 
 Any path that doesn't match an API route (including bare `/status`) falls
@@ -164,6 +165,9 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
 | `/api/auth/me` | PATCH | Update user region |
+| `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
+| `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
+| `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
 
 ### Webhooks
 
@@ -284,6 +288,7 @@ operator-only surface requires an admin session (`require_admin`):
 - Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)
+- Remote MCP feature flag: `GET /api/status/mcp` (spec #78 — reports only whether the endpoint is mounted; connector URLs are per user via `/api/me/mcp-token`)
 - Stored webhook payload inspection: `GET`/`DELETE` `/webhook/elevenlabs/results*`
 
 Ordinary users never drive the pipeline manually — it runs automatically

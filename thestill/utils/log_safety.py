@@ -26,6 +26,7 @@ game.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Mapping, MutableMapping
 
@@ -44,8 +45,8 @@ _REDACT_KEY_SUBSTRINGS: tuple = (
     "api-key",
     "apikey",
     "client_secret",
-    "code",          # OAuth authorization code — short-lived but powerful
-    "state",         # OAuth CSRF token
+    "code",  # OAuth authorization code — short-lived but powerful
+    "state",  # OAuth CSRF token
     "session",
 )
 
@@ -71,9 +72,7 @@ def sanitize_control_chars(value: Any) -> Any:
     log line in downstream JSON consumers.
     """
     if isinstance(value, str):
-        return _CONTROL_RE.sub(
-            lambda m: "\\x{:02x}".format(ord(m.group(0))), value
-        )
+        return _CONTROL_RE.sub(lambda m: "\\x{:02x}".format(ord(m.group(0))), value)
     return value
 
 
@@ -121,3 +120,53 @@ __all__ = [
     "sanitize_control_chars",
     "log_safety_processor",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Capability-URL path redaction (spec #78)
+# ---------------------------------------------------------------------------
+
+# The remote MCP endpoint embeds its secret in the path (``/mcp/{secret}``).
+# Two loggers see request paths: thestill's own ``LoggingMiddleware`` and
+# uvicorn's access logger, which formats the raw path straight from the
+# ASGI scope and bypasses structlog entirely. Both must collapse the path
+# to a fixed placeholder, otherwise the credential lands in every access
+# log line.
+_CAPABILITY_PREFIX = "/mcp/"
+_CAPABILITY_PLACEHOLDER = "/mcp/<redacted>"
+
+
+def redact_capability_path(path: str) -> str:
+    """Collapse anything under ``/mcp/`` to ``/mcp/<redacted>``."""
+    if path.startswith(_CAPABILITY_PREFIX):
+        return _CAPABILITY_PLACEHOLDER
+    return path
+
+
+class UvicornAccessRedactFilter(logging.Filter):
+    """Rewrite the path arg of uvicorn access-log records in place.
+
+    uvicorn logs ``'%s - "%s %s HTTP/%s" %d'`` with the request path as
+    the third arg. Replacing that arg before formatting keeps the rest
+    of the line intact and never drops the record.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            redacted = redact_capability_path(args[2])
+            if redacted is not args[2]:
+                record.args = args[:2] + (redacted,) + args[3:]
+        return True
+
+
+def install_uvicorn_access_redaction() -> None:
+    """Attach the redaction filter to ``uvicorn.access`` (idempotent).
+
+    Called from ``create_app`` when the MCP endpoint is mounted, so every
+    launch path (``thestill server``, ``uvicorn --factory``, containers)
+    inherits it without per-entrypoint wiring.
+    """
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, UvicornAccessRedactFilter) for f in access_logger.filters):
+        access_logger.addFilter(UvicornAccessRedactFilter())

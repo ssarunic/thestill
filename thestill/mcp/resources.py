@@ -19,31 +19,33 @@ Provides MCP resources for podcasts, episodes, and transcripts.
 """
 
 import json
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import unquote
 
+import anyio
 from mcp.server import Server
 from mcp.types import Resource, TextContent
 from structlog import get_logger
 
 from ..services import PodcastService
-from ..utils.config import load_config
+from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
+from .identity import McpIdentity, current_mcp_identity, remote_call_limiter, require_authenticated
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = get_logger(__name__)
 
 
-def setup_resources(server: Server, storage_path: str):
+def setup_resources(server: Server, storage_path: str, config: Optional[Config] = None):
     """
     Set up all MCP resources for the server.
 
     Args:
         server: MCP server instance
         storage_path: Path to data storage
+        config: the caller's Config (web server); None = load it (stdio).
     """
-    # Load full config for database path
-    config = load_config()
+    config = config or load_config()
 
     # Initialize shared components
     path_manager = PathManager(storage_path)
@@ -105,11 +107,27 @@ def setup_resources(server: Server, storage_path: str):
         Returns:
             Resource content as string
         """
+        # Spec #78 Phase 2 — resources follow the same identifier rule as
+        # tools: corpus-global ids over the remote connector, legacy
+        # numeric index only on stdio. Reads themselves are corpus-wide
+        # for any *authenticated* caller (web parity), so there is no
+        # scope table, but an HTTP request that lost its identity fails
+        # closed. Remote reads (file I/O) run off the event loop.
+        identity = current_mcp_identity(server)
+        # The SDK hands us a pydantic AnyUrl; everything below wants str.
+        if identity.is_remote:
+            require_authenticated(identity)
+            return await anyio.to_thread.run_sync(
+                _read_resource_sync, str(uri), identity, limiter=remote_call_limiter(server)
+            )
+        return _read_resource_sync(str(uri), identity)
+
+    def _read_resource_sync(uri: str, identity: McpIdentity) -> str:
         logger.info(f"Reading resource: {uri}")
 
         # Parse the thestill:// URI
         try:
-            parsed = parse_thestill_uri(uri)
+            parsed = parse_thestill_uri(uri, allow_numeric_ids=not identity.is_remote)
             resource_type = parsed["resource"]
             podcast_id = parsed["podcast_id"]
             episode_id = parsed.get("episode_id")

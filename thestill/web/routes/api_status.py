@@ -26,6 +26,18 @@ from ..responses import api_response
 router = APIRouter()
 
 
+@router.get("/mcp")
+def get_mcp_status(state: AppState = Depends(get_app_state)):
+    """Whether the remote MCP endpoint is mounted (spec #78).
+
+    Admin-gated at the router mount. Since Phase 2 the connector URL is
+    per user and minted from ``/api/me/mcp-token``; this endpoint only
+    reports the feature flag so the Settings card can explain a disabled
+    server.
+    """
+    return api_response({"mcp": {"enabled": bool(state.config.mcp_http_enabled)}})
+
+
 @router.get("")
 def get_status(state: AppState = Depends(get_app_state)):
     """

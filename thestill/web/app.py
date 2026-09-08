@@ -53,9 +53,11 @@ from ..services.briefing_script_generator import BriefingScriptGenerator
 from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
+from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.refresh_on_open import RefreshOnOpenService
 from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
+from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
 from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
@@ -67,6 +69,7 @@ from .routes import (
     api_episodes,
     api_imports,
     api_inbox,
+    api_me_mcp_token,
     api_narrations,
     api_podcasts,
     api_search,
@@ -135,6 +138,20 @@ def _build_narration_runner(
         briefing_repository=briefing_repository,
         inbox_repository=inbox_repository,
         podcast_repository=podcast_repository,
+    )
+
+
+def log_unhandled_exception(request: Request, exc: Exception) -> None:
+    """Server-side record of an unhandled exception.
+
+    The path is redacted the same way the access loggers redact it: an
+    exception raised while serving ``/mcp/{token}`` must not persist the
+    capability token (spec #78).
+    """
+    logger.exception(
+        "unhandled_exception",
+        path=redact_capability_path(str(request.url.path)),
+        error_type=type(exc).__name__,
     )
 
 
@@ -332,6 +349,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
         refresh_on_open=refresh_on_open,
+        mcp_token_service=McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -368,6 +386,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         watchdog_timeout_per_stage=get_stage_watchdog_seconds(),
     )
     app_state.task_worker = task_worker
+
+    # Spec #78 — remote MCP over Streamable HTTP behind per-user capability
+    # URLs. Ships dark: build_mcp_http returns None unless
+    # MCP_HTTP_ENABLED=true. The guard resolves tokens against the same
+    # repository bundle the app uses.
+    from .mcp_http import build_mcp_http
+
+    mcp_runtime = build_mcp_http(config, repos, token_service=app_state.mcp_token_service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -533,7 +559,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         ).start()
         logger.info("embedding_model_warmup_scheduled", model=embedding_model.model_name)
 
-        yield
+        # Spec #78 — the Streamable HTTP session manager's task group must
+        # outlive every in-flight MCP request. Entering it via an exit
+        # stack around the yield means it starts last and stops first on
+        # shutdown, before the task worker teardown below.
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as mcp_stack:
+            if mcp_runtime is not None:
+                await mcp_stack.enter_async_context(mcp_runtime.lifespan())
+                logger.info("mcp_http_endpoint_active", mount="/mcp")
+
+            yield
 
         # Cleanup on shutdown
         logger.info("shutting_down_web_server")
@@ -568,11 +605,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # detail server-side.
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
-        logger.exception(
-            "unhandled_exception",
-            path=str(request.url.path),
-            error_type=type(exc).__name__,
-        )
+        log_unhandled_exception(request, exc)
         if _is_dev:
             return JSONResponse(
                 status_code=500,
@@ -668,6 +701,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     require_operator = [Depends(require_admin)]
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(api_status.router, prefix="/api/status", tags=["status", "admin"], dependencies=require_operator)
+    # Spec #78 Phase 2 — per-user remote MCP tokens: user-authenticated,
+    # deliberately NOT on the admin router.
+    app.include_router(api_me_mcp_token.router, prefix="/api/me/mcp-token", tags=["mcp"], dependencies=require_session)
     app.include_router(
         api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
     )
@@ -699,6 +735,20 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         api_commands.admin_router, prefix="/api/commands", tags=["commands", "admin"], dependencies=require_session
     )
 
+    # Spec #78 — mount the MCP capability-URL endpoint before the SPA
+    # catch-all so route matching can never hand /mcp/* to the frontend
+    # shell. The runtime itself 404s everything but the exact secret path.
+    if mcp_runtime is not None:
+        app.mount("/mcp", mcp_runtime)
+        # uvicorn's access logger formats the raw path from the ASGI scope
+        # and bypasses structlog, so LoggingMiddleware's redaction alone
+        # still leaked the secret (observed 2026-09-08). Filter it here so
+        # every launch path inherits the rule.
+        from ..utils.log_safety import install_uvicorn_access_redaction
+
+        install_uvicorn_access_redaction()
+        logger.info("mcp_http_endpoint_mounted", mount="/mcp")
+
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -720,7 +770,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             opt out for the shell.
             """
             # Skip if it's an API or known route
-            if full_path.startswith(("api/", "webhook/", "docs", "redoc", "openapi.json", "health")):
+            if full_path.startswith(("api/", "webhook/", "mcp/", "docs", "redoc", "openapi.json", "health")):
                 return None
             index_file = static_dir / "index.html"
             target = index_file if index_file.exists() else (static_dir / "index.html")
