@@ -3,7 +3,7 @@
 **Status**: 🚧 Phase 1 implemented on `feat/78-remote-mcp-access` (2026-09-08); pending manual connector test + merge
 **History**: Originally drafted as spec #71 on the unmerged branch `claude/mcp-web-server-integration-70yky4` (commit `48912ff`, 2026-08-08); revived and renumbered on 2026-09-08 after #71 was taken by player-shell-layer
 **Created**: 2026-08-08
-**Updated**: 2026-09-08
+**Updated**: 2026-09-08 (Phase 2 designed)
 **Priority**: Medium (unlocks Claude mobile / claude.ai custom connectors; today MCP is desktop-stdio only)
 **Builds on**: [30-mcp-anchors-and-entity-discovery.md](30-mcp-anchors-and-entity-discovery.md), [25-security-audit-and-hardening.md](25-security-audit-and-hardening.md), [06-authentication.md](06-authentication.md)
 
@@ -29,11 +29,12 @@ Auth is deliberately phased:
   high-entropy string. Possession of the URL is the credential. The URL is
   surfaced (admin-only) in the web Settings page for copy-paste into
   claude.ai's custom-connector form.
-- **Phase 2 (later, gated on Phase 1 field testing): OAuth 2.1.** The MCP
-  authorization spec's protected-resource-metadata + authorization-server
-  flow, bridged to the existing `AuthService` users, so claude.ai's
-  connector OAuth flow signs a real per-user session. Not designed here
-  beyond the boundary notes below.
+- **Phase 2: per-user capability URLs.** The one operator secret becomes
+  a token per user, stored hashed, shown on each user's own Settings page
+  with reveal / copy / rotate. The guard resolves the path token to a
+  user, tools inherit that identity, and reads follow the follower-scoped
+  model (spec #63). Decided 2026-09-08; replaces the earlier OAuth 2.1
+  sketch, which is kept only as a later option (see §Phase 2 ▸ Rejected).
 
 ## Customer outcomes
 
@@ -136,24 +137,151 @@ boot with the one-line remediation.
 
 ### Explicitly out of scope for Phase 1
 
-- OAuth 2.1 / protected-resource metadata (Phase 2).
-- Per-user tool scoping over HTTP (Phase 2 — requires identity).
+- Per-user tokens and per-user tool scoping over HTTP (Phase 2).
+- OAuth 2.1 / protected-resource metadata (deferred beyond Phase 2).
 - SSE legacy transport (deprecated upstream; not implemented).
 - Rotating the secret from the UI (operator rotates the env var; the
   Settings card reflects whatever is configured).
 
-## Phase 2 sketch (not now)
+## Phase 2 — per-user capability URLs
 
-Boundary notes so Phase 1 doesn't paint us into a corner:
+**Status**: 📝 Designed 2026-09-08, not started. Gated on the Phase 1
+manual connector test passing.
 
-- Phase 1's guard is a thin ASGI wrapper; Phase 2 replaces the guard with
-  a bearer-token verifier plus `/.well-known/oauth-protected-resource`
-  metadata, keeping the same mount and session manager.
-- The authorization server can be thestill itself (bridging
-  `AuthService`/JWT) or an external IdP; dynamic client registration is
-  what claude.ai's connector flow expects.
-- Once identity exists, tools gain a user context and the follower-scoped
-  read model (spec #63) applies to MCP reads.
+### Why per-user, not OAuth
+
+claude.ai's custom-connector form accepts a URL or an OAuth flow and
+nothing else, so a path token is the only non-OAuth credential. Phase 1
+proved the transport; the missing piece is *identity*, and a per-user
+token buys identity, revocation and follower-scoped reads without
+standing up an authorization server. The threat model is unchanged (the
+token still travels in the URL, over HTTPS only), but a leaked URL now
+exposes one user's follows instead of the whole instance.
+
+### Customer outcomes
+
+- **O3 — "My connector, my podcasts."** Each user opens Settings, reveals
+  their own connector URL, pastes it into claude.ai once, and every Claude
+  surface sees *their* followed podcasts, inbox and briefings.
+- **O4 — rotate without an operator.** A user who pasted the URL into the
+  wrong place rotates it themselves; the old URL 404s immediately.
+
+### Storage
+
+New table `mcp_tokens`, one row per user (Alembic `0009`, SQLite +
+Postgres repository pair per the spec #44 pattern):
+
+| Column | Notes |
+|---|---|
+| `id` | uuid |
+| `user_id` | FK → `users.id`, unique (one live token per user) |
+| `token_hash` | SHA-256 of the token; the plaintext is never stored |
+| `token_prefix` | first 6 chars, for the masked Settings display only |
+| `created_at`, `last_used_at`, `revoked_at` | timestamps, UTC |
+
+- Tokens are 32 random bytes, hex-encoded (`secrets.token_hex(32)`), the
+  same entropy as Phase 1's operator secret.
+- Rotation = revoke the old row, insert a new one. The plaintext is
+  returned exactly once, by the rotate call, and shown in the card.
+- `last_used_at` is bumped at most once per minute (one write per
+  connector session, not per tool call).
+
+### Guard resolves a user
+
+`McpHttpRuntime` stops comparing against one value. It hashes the path
+segment, looks the hash up (`revoked_at IS NULL`), and on a hit stashes
+the `User` on `scope["state"]["mcp_user"]` before handing the request to
+the session manager. Miss → the same empty 404 as today. Lookup by
+indexed hash keeps the check constant-time in the token, not linear in
+the user count.
+
+The MCP SDK already forwards the Starlette request into
+`server.request_context.request`, so tool handlers read the user from
+`request.scope["state"]`. A small `current_mcp_user()` helper in
+`mcp/tools.py` returns that user, or the single-user default user when
+there is no request (stdio transport). The stdio and HTTP servers stay
+two doors into one room.
+
+### Tools learn who is calling
+
+Services are built once at mount time; identity is threaded per call.
+
+| Tool | Phase 2 behaviour |
+|---|---|
+| `list_podcasts`, `list_episodes`, `get_status` | Follower-scoped: `FollowerService.get_followed_podcasts(user_id)` and the counts derived from it |
+| `add_podcast` | `add_podcast_and_auto_follow` for the caller (spec #63 companion path) |
+| `remove_podcast` | **Becomes unfollow.** Deleting a shared podcast from one user's phone is not acceptable; the destructive delete stays CLI/admin-only |
+| `get_transcript`, `get_summary`, `get_episode_clip` | Allowed for any episode of a followed podcast; 404-style refusal otherwise |
+| `search_corpus`, `find_mentions`, `list_quotes_by`, `get_entity`, `list_episodes_by_entity` | Corpus-wide by default, with a `followed_only` argument (default `true`) that restricts hits to the caller's follows. Corpus-wide stays available so cross-podcast discovery is not lost |
+| `refresh_feeds`, `download_episodes`, `downsample_audio`, `transcribe_episodes`, `clean_transcripts`, `process_episode`, `summarize_episodes` | **Admin-only.** Hidden from `tools/list` for non-admins and refused on `tools/call` with a clear error. Single-user mode's default user is admin, so nothing changes there |
+
+The per-session mutation quota in `mcp/tools.py` keys on `user_id`
+instead of process identity.
+
+### Settings surface
+
+- The Phase 1 admin-only card becomes a per-user **Claude connector**
+  card on the Settings page (there is no separate User page; Settings +
+  the user menu is where account-level things live). Masked URL showing
+  `…/mcp/<prefix>••••`, Reveal, Copy, Rotate (with confirm), and the
+  last-used time so a user can tell whether the connector is alive.
+- Routes move off the admin status router onto a user-authenticated
+  namespace:
+  - `GET /api/me/mcp-token` → `{ enabled, prefix, created_at,
+    last_used_at, url_template }` (never the plaintext)
+  - `POST /api/me/mcp-token/rotate` → `{ url }` (plaintext, once)
+  - `DELETE /api/me/mcp-token` → revoke without replacement
+- First visit with no row: the card offers **Create connector URL**,
+  which is the rotate call. No token is minted for users who never ask.
+- `GET /api/status/mcp` (admin) survives, reporting only whether the
+  endpoint is enabled.
+
+### Configuration
+
+- `MCP_HTTP_ENABLED` stays and still ships dark.
+- `MCP_HTTP_SECRET` is **removed**, together with its boot-time
+  validation. Migration note for operators: any connector configured with
+  the Phase 1 URL stops working on upgrade; each user re-adds their own.
+  This is acceptable because Phase 1 shipped dark and was single-admin.
+
+### Unchanged
+
+- Log redaction already collapses everything under `/mcp/` in both
+  loggers; per-user paths need nothing new.
+- Transport (stateless Streamable HTTP, JSON responses), mount order, SPA
+  skip list.
+
+### Rejected
+
+- **OAuth 2.1 with thestill as authorization server.** Correct long-term
+  answer for third-party clients, but claude.ai's connector flow needs
+  dynamic client registration, protected-resource metadata and an
+  authorization UI — a project on its own for one client. Revisit when a
+  second client (ChatGPT connectors, an IDE) needs it; the guard is still
+  a thin ASGI wrapper and a bearer verifier can replace the hash lookup.
+- **Signed stateless tokens (the spec #51 unsubscribe pattern).** No
+  revocation without a denylist, and "rotate" is the whole point.
+- **Tokens as query string instead of path.** Same secrecy properties,
+  worse: query strings are more likely to be logged by proxies.
+
+### Phase 2 acceptance
+
+- [ ] `mcp_tokens` migration applies on SQLite and Postgres; rotate
+      revokes the old row and the old URL 404s within the same request
+      cycle.
+- [ ] Guard resolves the user; `list_podcasts` over HTTP returns only the
+      caller's follows for two users with different follows.
+- [ ] `remove_podcast` unfollows and never deletes; the podcast remains
+      for the other follower.
+- [ ] Pipeline tools absent from `tools/list` for a non-admin, refused on
+      call; present for an admin.
+- [ ] Settings card: create, reveal, copy, rotate, revoke; plaintext only
+      ever appears in the rotate response.
+- [ ] Access logs and the `GET /api/me/mcp-token` response never contain
+      the plaintext.
+- [ ] stdio `thestill-mcp` behaves exactly as before (default user).
+- [ ] Manual: two claude.ai accounts, two users, each sees only their own
+      podcasts from Claude mobile.
 
 ## Phase 1 acceptance
 
