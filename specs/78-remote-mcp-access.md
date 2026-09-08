@@ -176,10 +176,11 @@ Two things this is **not**, stated so nobody mistakes it for more:
 
 ### Authorization boundary — one rule
 
-**An MCP token is equivalent to its user's web session.** Whatever a
-signed-in user can read or do on thestill.me, the same user can read or
-do through the connector, and nothing more. Concretely, matching what
-the web routes do today:
+**A user's web session is the ceiling; a token is a scoped subset of
+it.** Nothing a token can do exceeds what its owner can do signed in on
+thestill.me, and the token's *scopes* (next section) narrow that
+further — read-only by default. The ceiling, matching what the web
+routes do today:
 
 | Surface | Authenticated user | Admin |
 |---|---|---|
@@ -193,10 +194,12 @@ the web routes do today:
 
 Consequences stated plainly:
 
-- **A leaked URL exposes the corpus**, exactly as a leaked session cookie
-  does. The gain over Phase 1 is that it cannot run the pipeline, cannot
-  delete, is revocable per user, and is attributable. It is *not* a
-  follows-only view; the earlier draft claimed that and was wrong.
+- **A leaked read-only URL exposes the corpus**, as a leaked session
+  cookie does, but nothing else: it cannot add a podcast (a pipeline
+  trigger in disguise), cannot change follows, cannot run the pipeline,
+  cannot delete, is rate-limited, expires, is revocable per user, and is
+  attributable. It is *not* a follows-only view; the earlier draft
+  claimed that and was wrong.
 - If the instance ever decides that transcripts are private to followers,
   that is a **web** decision first (spec #63 follow-up), and MCP inherits
   it through the same service calls. Phase 2 does not introduce an
@@ -205,6 +208,52 @@ Consequences stated plainly:
   returns the static URI templates; `resources/read` resolves the podcast
   and applies the read row above. Acceptance tests exercise
   `resources/read` over HTTP, not only `tools/call`.
+
+### Token scopes
+
+Scopes are stored on the token row and chosen on the Settings card at
+create / rotate time. They only ever narrow the session ceiling above.
+
+| Scope | Grants | Default | Offered to |
+|---|---|---|---|
+| `read` | `list_podcasts`, `list_episodes`, `get_status`, `get_transcript`, `get_summary`, `get_episode_clip`, `search_corpus`, `find_mentions`, `list_quotes_by`, `get_entity`, `list_episodes_by_entity`, all `thestill://` resources | on, cannot be removed | everyone |
+| `follows` | `add_podcast` (add + auto-follow), `remove_podcast` (unfollow) | **off** | everyone |
+| `pipeline` | `refresh_feeds`, `download_episodes`, `downsample_audio`, `transcribe_episodes`, `clean_transcripts`, `process_episode`, `summarize_episodes` | off | admins only; silently dropped for non-admins |
+
+- `tools/list` returns only the tools the token's scopes grant, so Claude
+  never offers a tool that would be refused. `tools/call` re-checks (the
+  list is advisory; the check is the control) and refuses with an error
+  naming the missing scope.
+- `add_podcast` sits in `follows`, not `read`, deliberately: adding a
+  feed enqueues download, transcription and summarisation, so it is the
+  one "read-looking" tool that spends money.
+- Scope checks live next to the existing `_MUTATING_TOOLS` quota check in
+  `call_tool`; a `_SCOPE_BY_TOOL` mapping replaces the ad-hoc set.
+- stdio is unscoped (it is already local process access).
+- Scopes are fixed for a token's life; changing them is a rotate, so the
+  URL in claude.ai always reflects what it can do.
+
+### Rate limit, expiry, attribution
+
+Detective and bounding controls that apply to every token regardless of
+scope:
+
+- **Per-token read rate limit.** `MCP_TOKEN_READS_PER_MINUTE` (default
+  `120`), enforced in the guard with the existing sliding-window limiter
+  from `web/middleware/rate_limit.py`, keyed on the token hash. Over
+  the limit → JSON-RPC error with `retry_after_seconds`, mirroring the
+  mutation quota. The purpose is to make a bulk export of the corpus
+  through a leaked URL slow and visible, not to police normal chat use;
+  one Claude turn is a handful of calls.
+- **Expiry.** `expires_at = created_at + MCP_TOKEN_TTL_DAYS` (default
+  `90`, `0` disables). The guard treats an expired token like a revoked
+  one (404). The card shows the date and a warning in the last 14 days;
+  rotating resets it. Bounds how long a forgotten paste stays live.
+- **Attribution.** `last_used_at` and `last_used_ip` (via
+  `resolve_client_ip`, trusted-proxy aware) are bumped at most once per
+  minute and shown on the card, so a user can spot use they did not
+  make. The IP is stored for display only and is never logged with the
+  token.
 
 ### Identifiers — resolve, then authorize
 
@@ -236,11 +285,14 @@ repository pair per the spec #44 pattern):
 | `user_id` | PK, FK → `users.id`. One row per user, updated in place |
 | `token_hash` | SHA-256 of the token; the plaintext is never stored |
 | `token_prefix` | first 6 chars, for the masked Settings display only |
-| `created_at`, `last_used_at`, `revoked_at` | timestamps, UTC |
+| `scopes` | text, comma-separated subset of `read,follows,pipeline`; `read` always present |
+| `created_at`, `expires_at`, `last_used_at`, `revoked_at` | timestamps, UTC; `expires_at` NULL when TTL disabled |
+| `last_used_ip` | text NULL, display only |
 
 - Tokens are `secrets.token_hex(32)`, the same entropy as Phase 1.
 - **Create / rotate is one `UPSERT` in one transaction**: new hash, new
-  prefix, `created_at = now()`, `revoked_at = NULL`. Because the row is
+  prefix, requested scopes, `created_at = now()`, `expires_at`
+  recomputed, `revoked_at = NULL`, `last_used_* = NULL`. Because the row is
   replaced in place there is no history and no uniqueness conflict; the
   previous token is dead the moment the transaction commits.
 - **Revoke** sets `revoked_at`; the row stays so the card can say "revoked
@@ -250,14 +302,17 @@ repository pair per the spec #44 pattern):
   claude.ai now. There is no Reveal: hash-only storage makes it
   impossible, and that is the point (GitHub personal-access-token
   pattern). A user who lost it rotates.
-- `last_used_at` is bumped at most once per minute.
+- `last_used_at` / `last_used_ip` are bumped at most once per minute.
 
 ### Guard resolves a user
 
 `McpHttpRuntime` hashes the path segment, looks the hash up (indexed,
-`revoked_at IS NULL`), and on a hit stashes the `User` on
-`scope["state"]["mcp_user"]` before handing the request to the session
-manager. Miss → the same empty 404 as today. The SDK forwards the
+`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`),
+applies the per-token rate limit, and on a hit stashes the `User` and
+the token's scopes on `scope["state"]["mcp_user"]` /
+`scope["state"]["mcp_scopes"]` before handing the request to the
+session manager. Miss, revoked or expired → the same empty 404 as
+today. The SDK forwards the
 Starlette request into `server.request_context.request`, so tool and
 resource handlers read the user from `request.scope["state"]`. A
 `current_mcp_user()` helper in `mcp/tools.py` returns that user, or the
@@ -269,12 +324,19 @@ quota keys on `user_id`.
 
 - The Phase 1 admin-only card becomes a per-user **Claude connector**
   card on the Settings page. States: *none yet* (Create button), *active*
-  (masked `…/mcp/<prefix>••••`, created and last-used times, Rotate with
-  confirm, Revoke with confirm), *revoked* (date + Create again).
+  (masked `…/mcp/<prefix>••••`, scopes as chips, created, expires,
+  last-used time and IP, Rotate with confirm, Revoke with confirm),
+  *expiring* (same, with a warning inside 14 days), *expired* / *revoked*
+  (date + Create again). Create and Rotate open a small form: scope
+  checkboxes (`read` locked on, `follows` off, `pipeline` shown to admins
+  only) before the one-time URL modal.
 - Routes on a user-authenticated namespace, never the admin router:
-  - `GET /api/me/mcp-token` → `{ enabled, state, prefix, created_at,
-    last_used_at, revoked_at }` — never the plaintext.
-  - `POST /api/me/mcp-token` → create or rotate → `{ url }` once.
+  - `GET /api/me/mcp-token` → `{ enabled, state, prefix, scopes,
+    created_at, expires_at, last_used_at, last_used_ip, revoked_at }` —
+    never the plaintext.
+  - `POST /api/me/mcp-token` with `{ scopes }` → create or rotate →
+    `{ url, scopes, expires_at }` once. Non-admins requesting `pipeline`
+    get it dropped, not an error.
   - `DELETE /api/me/mcp-token` → revoke.
 - `GET /api/status/mcp` (admin) survives, reporting only whether the
   endpoint is enabled.
@@ -282,6 +344,8 @@ quota keys on `user_id`.
 ### Configuration
 
 - `MCP_HTTP_ENABLED` stays and still ships dark.
+- New: `MCP_TOKEN_TTL_DAYS` (default `90`, `0` = never expires) and
+  `MCP_TOKEN_READS_PER_MINUTE` (default `120`).
 - `MCP_HTTP_SECRET` is **removed**, with its boot-time validation.
   Operator migration note: Phase 1 connector URLs stop working on
   upgrade; each user mints their own. Acceptable because Phase 1 shipped
@@ -319,6 +383,9 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
   are more likely to be logged by proxies.
 - **Follows-only read model over MCP.** Would give MCP an authorization
   model the web does not have; see the one-rule section.
+- **IP allowlisting to Anthropic egress ranges.** Not adopted because no
+  published, stable range for connector traffic was verified; revisit
+  if Anthropic documents one.
 
 ### Phase 2 acceptance
 
@@ -332,12 +399,23 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
       authenticated non-follower (web parity) and 404 without a token.
 - [ ] `remove_podcast` unfollows, never deletes, and is refused for a
       non-follower; the podcast remains for the other follower.
-- [ ] Pipeline tools absent from `tools/list` for a non-admin and refused
-      on call; present and working for an admin.
+- [ ] Scopes: a `read`-only token lists no mutating tools and is refused
+      on `add_podcast` with an error naming `follows`; a `read,follows`
+      token can add and unfollow; `pipeline` is dropped from a
+      non-admin's request and honoured for an admin.
+- [ ] Rate limit: the 121st read within a minute on one token returns
+      the JSON-RPC quota error with `retry_after_seconds`; another
+      user's token is unaffected.
+- [ ] Expiry: a token with `expires_at` in the past 404s; rotate resets
+      `expires_at`; `MCP_TOKEN_TTL_DAYS=0` yields NULL.
+- [ ] Attribution: `last_used_at` / `last_used_ip` update at most once
+      per minute and appear in `GET /api/me/mcp-token`; the IP never
+      appears in access logs alongside the path.
 - [ ] Bare integer podcast ids refused over HTTP; uuid, slug and RSS URL
       accepted and resolve to the same object as `list_podcasts` reports.
-- [ ] Settings card: create, one-time copy modal, rotate, revoke; the
-      plaintext appears only in the `POST` response.
+- [ ] Settings card: create with scope form, one-time copy modal,
+      rotate, revoke, expiring warning; the plaintext appears only in
+      the `POST` response.
 - [ ] Access logs and `GET /api/me/mcp-token` never contain the
       plaintext.
 - [ ] stdio `thestill-mcp` behaves exactly as before (default user,
