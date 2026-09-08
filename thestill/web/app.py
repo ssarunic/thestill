@@ -378,7 +378,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # repository bundle the app uses.
     from .mcp_http import build_mcp_http
 
-    mcp_runtime = build_mcp_http(config, repos)
+    mcp_runtime = build_mcp_http(config, repos, token_service=app_state.mcp_token_service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

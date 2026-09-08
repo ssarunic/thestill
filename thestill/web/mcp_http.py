@@ -72,10 +72,12 @@ class McpHttpRuntime:
     :meth:`lifespan` from the web app's lifespan.
     """
 
-    def __init__(self, config: "Config", repos: "RepositoryBundle"):
+    def __init__(self, config: "Config", repos: "RepositoryBundle", *, token_service: Optional[McpTokenService] = None):
         self._config = config
         self._users = repos.user
-        self._tokens = McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days)
+        # The app passes its own service so there is one instance per
+        # process; tests and embedders may let the guard build one.
+        self._tokens = token_service or McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days)
 
         # Same wiring as ThestillMCPServer, minus the stdio transport —
         # the stdio and HTTP servers are two doors into one room.
@@ -148,11 +150,13 @@ class McpHttpRuntime:
         await self.session_manager.handle_request(scope, receive, send)
 
 
-def build_mcp_http(config: "Config", repos: "RepositoryBundle") -> Optional[McpHttpRuntime]:
+def build_mcp_http(
+    config: "Config", repos: "RepositoryBundle", *, token_service: Optional[McpTokenService] = None
+) -> Optional[McpHttpRuntime]:
     """Build the MCP HTTP runtime, or ``None`` when the feature is off."""
     if not config.mcp_http_enabled:
         return None
-    return McpHttpRuntime(config, repos)
+    return McpHttpRuntime(config, repos, token_service=token_service)
 
 
 def mount_base_url(config: "Config", request_base_url: str) -> str:

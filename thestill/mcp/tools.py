@@ -425,6 +425,11 @@ def setup_tools(server: Server, storage_path: str):
             """Podcast identifier resolver: numeric index on stdio only."""
             return resolve_identifier(raw, allow_numeric_index=not identity.is_remote)
 
+        def _my_podcasts():
+            """The remote caller's followed podcasts, with the list's stats."""
+            followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
+            return [p for p in podcast_service.get_podcasts() if p.id in followed]
+
         if name in _MUTATING_TOOLS:
             try:
                 quota_key = identity.user.id if identity.is_remote else _session_key
@@ -515,14 +520,14 @@ def setup_tools(server: Server, storage_path: str):
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "list_podcasts":
-                podcasts = podcast_service.get_podcasts()
                 # Spec #78 Phase 2 — remote callers see their follows (like the
                 # web Podcasts page); admins may ask for everything. Rows carry
                 # the corpus-global id + slug; the order-dependent numeric
                 # index is stdio-only.
                 if identity.is_remote and not (identity.is_admin and arguments.get("all")):
-                    followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
-                    podcasts = [p for p in podcasts if p.id in followed]
+                    podcasts = _my_podcasts()
+                else:
+                    podcasts = podcast_service.get_podcasts()
 
                 def _row(p):
                     row = {
@@ -569,9 +574,18 @@ def setup_tools(server: Server, storage_path: str):
                 # Get podcast info
                 podcast = podcast_service.get_podcast(podcast_id)
 
+                # Spec #78 Phase 2 — the order-dependent podcast index is
+                # stdio-only; remote callers get the global id + slug back.
+                if identity.is_remote:
+                    podcast_ref = {
+                        "podcast_id": podcast.id if podcast else None,
+                        "podcast_slug": podcast.slug if podcast else None,
+                    }
+                else:
+                    podcast_ref = {"podcast_index": episodes[0].podcast_index if episodes else 0}
                 result = {
                     "podcast_title": podcast.title if podcast else "Unknown",
-                    "podcast_index": episodes[0].podcast_index if episodes else 0,
+                    **podcast_ref,
                     "episodes": [
                         {
                             "index": ep.episode_index,
@@ -592,8 +606,7 @@ def setup_tools(server: Server, storage_path: str):
                 # Spec #78 Phase 2 — the web /api/status this mirrors is
                 # admin-gated, so a plain user gets counts over their own
                 # follows and nothing system-wide (no storage path).
-                followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
-                mine = [p for p in podcast_service.get_podcasts() if p.id in followed]
+                mine = _my_podcasts()
                 result = {
                     "podcasts_followed": len(mine),
                     "episodes_total": sum(p.episodes_count for p in mine),
