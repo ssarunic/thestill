@@ -57,6 +57,7 @@ from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.refresh_on_open import RefreshOnOpenService
 from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
+from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
 from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
@@ -137,6 +138,20 @@ def _build_narration_runner(
         briefing_repository=briefing_repository,
         inbox_repository=inbox_repository,
         podcast_repository=podcast_repository,
+    )
+
+
+def log_unhandled_exception(request: Request, exc: Exception) -> None:
+    """Server-side record of an unhandled exception.
+
+    The path is redacted the same way the access loggers redact it: an
+    exception raised while serving ``/mcp/{token}`` must not persist the
+    capability token (spec #78).
+    """
+    logger.exception(
+        "unhandled_exception",
+        path=redact_capability_path(str(request.url.path)),
+        error_type=type(exc).__name__,
     )
 
 
@@ -590,11 +605,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # detail server-side.
     @app.exception_handler(Exception)
     async def _generic_exception_handler(request: Request, exc: Exception):  # noqa: ANN001
-        logger.exception(
-            "unhandled_exception",
-            path=str(request.url.path),
-            error_type=type(exc).__name__,
-        )
+        log_unhandled_exception(request, exc)
         if _is_dev:
             return JSONResponse(
                 status_code=500,

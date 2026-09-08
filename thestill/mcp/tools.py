@@ -25,6 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import anyio
 import structlog
 from mcp.server import Server
 from mcp.types import TextContent, Tool
@@ -41,7 +42,7 @@ from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
-from .identity import ScopeError, current_mcp_identity, require_scope, visible_tools
+from .identity import McpIdentity, ScopeError, current_mcp_identity, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
 from .search_tools import dispatch_search_tool, search_tool_definitions
 from .utils import resolve_identifier
@@ -404,6 +405,12 @@ def setup_tools(server: Server, storage_path: str):
         """
         Call a tool with given arguments.
 
+        The dispatcher below is synchronous and some tools (transcribe,
+        process_episode) run for hours. Over the remote connector the
+        handler shares uvicorn's event loop with health checks, the API and
+        token revocation, so remote calls run on a worker thread. stdio has
+        nothing else to serve and keeps the direct call (spec #78 Phase 2).
+
         Args:
             name: Tool name
             arguments: Tool arguments
@@ -411,11 +418,16 @@ def setup_tools(server: Server, storage_path: str):
         Returns:
             List of text content results
         """
-        logger.info(f"Calling tool: {name} with args: {arguments}")
-
         # Spec #78 Phase 2 — who is calling. STDIO (no request) keeps the
         # legacy semantics on every branch below; a remote caller is scoped.
         identity = current_mcp_identity(server)
+        if identity.is_remote:
+            return await anyio.to_thread.run_sync(_call_tool_sync, name, arguments, identity)
+        return _call_tool_sync(name, arguments, identity)
+
+    def _call_tool_sync(name: str, arguments: Any, identity: McpIdentity) -> list[TextContent]:
+        logger.info(f"Calling tool: {name} with args: {arguments}")
+
         try:
             require_scope(identity, name)
         except ScopeError as exc:

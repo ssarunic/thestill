@@ -55,6 +55,8 @@ class McpTokenService:
     """Mint, resolve, revoke and describe per-user MCP tokens."""
 
     def __init__(self, repository: McpTokenRepository, *, ttl_days: int):
+        if ttl_days < 0:
+            raise ValueError(f"ttl_days must be >= 0 (0 = never expires); got {ttl_days}")
         self._repo = repository
         self._ttl_days = ttl_days
 
@@ -84,7 +86,7 @@ class McpTokenService:
         now = now or now_utc()
         plaintext = secrets.token_hex(32)
         scopes = self.normalize_scopes(requested_scopes, is_admin=is_admin)
-        expires_at = now + timedelta(days=self._ttl_days) if self._ttl_days > 0 else None
+        expires_at = now + timedelta(days=self._ttl_days) if self._ttl_days != 0 else None
         self._repo.upsert(
             McpToken(
                 user_id=user_id,

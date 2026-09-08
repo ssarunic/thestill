@@ -829,6 +829,18 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
         )
 
+    # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
+    # for exactly 0; a negative TTL would silently mean the same thing,
+    # and a non-positive request limit would refuse every request.
+    if config_data["mcp_token_ttl_days"] < 0:
+        raise ValueError(
+            f"MCP_TOKEN_TTL_DAYS must be >= 0 (0 = tokens never expire); got {config_data['mcp_token_ttl_days']}"
+        )
+    if config_data["mcp_token_requests_per_minute"] <= 0:
+        raise ValueError(
+            "MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0; got " f"{config_data['mcp_token_requests_per_minute']}"
+        )
+
     # Multi-user mode runs OAuth, which must build a non-spoofable
     # callback URL. Require PUBLIC_BASE_URL unconditionally — TRUSTED_PROXIES
     # alone is not sufficient, because a misconfigured proxy that omits

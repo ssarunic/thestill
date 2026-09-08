@@ -9,13 +9,16 @@ from mcp.types import Tool
 
 from tests.docs.helpers import extract_mcp_tool_names
 from thestill.mcp.identity import (
+    ANONYMOUS_REMOTE,
     STATE_IS_ADMIN,
     STATE_SCOPES,
     STATE_USER,
     STDIO,
     McpIdentity,
+    NotAuthenticatedError,
     ScopeError,
     current_mcp_identity,
+    require_authenticated,
     require_scope,
     visible_tools,
 )
@@ -41,7 +44,9 @@ def test_effective_scopes_strips_pipeline_for_non_admin():
 
 
 def _remote(scopes, *, is_admin=False) -> McpIdentity:
-    return McpIdentity(user=User(id="u1", email="u@example.com"), is_admin=is_admin, scopes=frozenset(scopes))
+    return McpIdentity(
+        user=User(id="u1", email="u@example.com"), is_admin=is_admin, scopes=frozenset(scopes), remote=True
+    )
 
 
 class TestRequireScope:
@@ -113,6 +118,19 @@ class TestCurrentIdentity:
         assert identity.user is user and identity.is_admin and identity.scopes == {"read", "pipeline"}
         assert identity.is_remote
 
-    def test_state_without_user_is_stdio(self):
-        request = SimpleNamespace(scope={"state": {}})
-        assert current_mcp_identity(self._server(request)) is STDIO
+    def test_request_without_user_fails_closed_never_stdio(self):
+        """Only ``request is None`` means stdio. An HTTP request whose scope
+        lost the guard's identity must not inherit unscoped admin access."""
+        request = SimpleNamespace(scope={"state": {}, "path": "/mcp/x"})
+        identity = current_mcp_identity(self._server(request))
+        assert identity is ANONYMOUS_REMOTE
+        assert identity.is_remote and identity.is_anonymous_remote
+        assert identity.effective_scopes == frozenset()
+        with pytest.raises(ScopeError, match="no connector identity"):
+            require_scope(identity, "list_podcasts")
+        assert visible_tools(identity, TestVisibleTools.TOOLS) == []
+        with pytest.raises(NotAuthenticatedError):
+            require_authenticated(identity)
+        # stdio and resolved users pass require_authenticated.
+        require_authenticated(STDIO)
+        require_authenticated(_remote({"read"}))

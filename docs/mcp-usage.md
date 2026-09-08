@@ -157,8 +157,8 @@ transcript on the instance. Over the connector:
   in front of a home server both work.
 - **Treat the URL as a password.** Whoever holds it can read everything
   you can and act within its scopes. Rotate if it leaks.
-- **Logs.** thestill redacts the token in its own request logs and in
-  uvicorn's access log (`/mcp/<redacted>`). If you front the server with
+- **Logs.** thestill redacts the token in its own request, body-size and
+  error logs and in uvicorn's access log (`/mcp/<redacted>`). If you front the server with
   a reverse proxy or tunnel, check that its access logs don't record the
   full path.
 - **Individually managed Claude accounts.** Team/Enterprise organisation

@@ -81,6 +81,7 @@ class Harness:
         app = FastAPI(lifespan=lifespan)
         app.mount(MOUNT_PATH, runtime)
         self._app = app
+        self.runtime = runtime
 
     def mint(self, user_id=USER_A, scopes=(), is_admin=False):
         return self.tokens.create_or_rotate(user_id, requested_scopes=scopes, is_admin=is_admin).token
@@ -100,6 +101,11 @@ class Harness:
 @pytest.fixture
 def harness(isolated_env, tmp_path):
     return Harness(tmp_path)
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
 class TestTokenGuard:
@@ -242,6 +248,18 @@ class TestConfig:
         assert config.mcp_token_ttl_days == 90
         assert config.mcp_token_requests_per_minute == 120
 
+    def test_negative_ttl_is_refused_at_boot(self, isolated_env):
+        """Docs reserve "never expires" for exactly 0; a stray negative
+        must not silently mint permanent credentials."""
+        isolated_env.setenv("MCP_TOKEN_TTL_DAYS", "-1")
+        with pytest.raises(ValueError, match="MCP_TOKEN_TTL_DAYS must be >= 0"):
+            load_config()
+
+    def test_non_positive_rate_limit_is_refused_at_boot(self, isolated_env):
+        isolated_env.setenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "0")
+        with pytest.raises(ValueError, match="MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0"):
+            load_config()
+
     def test_env_overrides(self, isolated_env):
         isolated_env.setenv("MCP_HTTP_ENABLED", "true")
         isolated_env.setenv("MCP_TOKEN_TTL_DAYS", "0")
@@ -319,3 +337,107 @@ class TestLogRedaction:
             for f in list(access_logger.filters):
                 if isinstance(f, UvicornAccessRedactFilter):
                     access_logger.removeFilter(f)
+
+
+class TestEventLoop:
+    @pytest.mark.anyio
+    async def test_remote_tool_call_runs_off_the_event_loop(self, isolated_env, tmp_path, monkeypatch):
+        """A slow synchronous tool (transcription can take hours) must not
+        freeze health checks, the API or token revocation: remote calls run
+        on a worker thread, so a concurrent request completes first."""
+        import asyncio
+        import time
+
+        import httpx
+
+        from thestill.services.podcast_service import PodcastService
+
+        h = Harness(tmp_path)
+        token = h.mint()
+
+        def slow_get_podcasts(self):
+            time.sleep(0.8)
+            return []
+
+        monkeypatch.setattr(PodcastService, "get_podcasts", slow_get_podcasts)
+
+        app = FastAPI()
+        app.mount(MOUNT_PATH, h.runtime)
+
+        @app.get("/health")
+        async def health():
+            return {"ok": True}
+
+        finished = {}
+        async with h.runtime.lifespan():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as ac:
+
+                async def slow_call():
+                    r = await ac.post(
+                        f"/mcp/{token}",
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "tools/call",
+                            "params": {"name": "list_podcasts", "arguments": {}},
+                        },
+                        headers=MCP_HEADERS,
+                    )
+                    finished["slow"] = time.monotonic()
+                    return r
+
+                async def fast_call():
+                    await asyncio.sleep(0.1)  # let the slow call start first
+                    r = await ac.get("/health")
+                    finished["fast"] = time.monotonic()
+                    return r
+
+                slow, fast = await asyncio.gather(slow_call(), fast_call())
+        assert slow.status_code == 200 and fast.status_code == 200
+        assert finished["fast"] < finished["slow"], "health check waited for the tool call: event loop was blocked"
+
+
+class TestOtherLogSinks:
+    """Every sink that logs a request path must redact /mcp/{token}."""
+
+    def test_body_size_cap_log_redacts_the_token(self):
+        from structlog.testing import capture_logs
+
+        from thestill.web.middleware.body_size import BodySizeLimitMiddleware
+
+        token = "t" * 64
+        app = FastAPI()
+        app.add_middleware(BodySizeLimitMiddleware, default_limit=10)
+
+        @app.post("/mcp/{token}")
+        async def sink(token: str):
+            return {}
+
+        with capture_logs() as logs:
+            response = TestClient(app).post(f"/mcp/{token}", content=b"x" * 100)
+        assert response.status_code == 413
+        events = [e for e in logs if e["event"] == "body_size_cap_exceeded"]
+        assert events and events[0]["path"] == "/mcp/<redacted>"
+        assert token not in str(logs)
+
+    def test_unhandled_exception_log_redacts_the_token(self):
+        from starlette.requests import Request
+        from structlog.testing import capture_logs
+
+        from thestill.web.app import log_unhandled_exception
+
+        token = "t" * 64
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"/mcp/{token}",
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("t", 80),
+        }
+        with capture_logs() as logs:
+            log_unhandled_exception(Request(scope), RuntimeError("boom"))
+        assert logs and logs[0]["path"] == "/mcp/<redacted>"
+        assert token not in str(logs)

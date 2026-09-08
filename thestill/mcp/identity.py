@@ -27,6 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, FrozenSet, List, Optional
 
+import structlog
+
 from .scopes import effective_scopes, scope_for_tool
 
 if TYPE_CHECKING:
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
 
     from ..models.user import User
 
+logger = structlog.get_logger(__name__)
+
 STATE_USER = "mcp_user"
 STATE_IS_ADMIN = "mcp_is_admin"
 STATE_SCOPES = "mcp_scopes"
@@ -42,35 +46,57 @@ STATE_SCOPES = "mcp_scopes"
 
 @dataclass(frozen=True)
 class McpIdentity:
-    """Resolved caller. ``user is None`` means stdio (unscoped local access)."""
+    """Resolved caller.
+
+    ``remote`` says which transport: False is stdio (unscoped local
+    access); True is the HTTP connector, where ``user`` may still be None
+    if the request lost its identity — that combination is
+    :data:`ANONYMOUS_REMOTE` and fails closed everywhere.
+    """
 
     user: Optional["User"]
     is_admin: bool
     scopes: FrozenSet[str]
+    remote: bool
 
     @property
     def is_remote(self) -> bool:
-        return self.user is not None
+        return self.remote
+
+    @property
+    def is_anonymous_remote(self) -> bool:
+        return self.remote and self.user is None
 
     @property
     def effective_scopes(self) -> FrozenSet[str]:
+        if self.user is None:
+            return frozenset()
         return effective_scopes(self.scopes, is_admin=self.is_admin)
 
 
-STDIO = McpIdentity(user=None, is_admin=True, scopes=frozenset())
+STDIO = McpIdentity(user=None, is_admin=True, scopes=frozenset(), remote=False)
+# An HTTP request whose scope state carries no user. Only ``request is
+# None`` may mean stdio; anything else must never inherit stdio's
+# unscoped, admin-equivalent semantics.
+ANONYMOUS_REMOTE = McpIdentity(user=None, is_admin=False, scopes=frozenset(), remote=True)
 
 
 class ScopeError(Exception):
     """A remote caller invoked a tool its token does not grant."""
 
-    def __init__(self, tool_name: str, required_scope: Optional[str]):
+    def __init__(self, tool_name: str, required_scope: Optional[str], *, detail: Optional[str] = None):
         self.tool_name = tool_name
         self.required_scope = required_scope
-        if required_scope is None:
-            detail = f"Tool {tool_name!r} is not available over the remote connector."
-        else:
-            detail = f"This connector token is missing the {required_scope!r} scope required by {tool_name!r}."
+        if detail is None:
+            if required_scope is None:
+                detail = f"Tool {tool_name!r} is not available over the remote connector."
+            else:
+                detail = f"This connector token is missing the {required_scope!r} scope required by {tool_name!r}."
         super().__init__(detail)
+
+
+class NotAuthenticatedError(Exception):
+    """An HTTP request reached a handler without a resolved user."""
 
 
 def current_mcp_identity(server: "Server") -> McpIdentity:
@@ -84,12 +110,22 @@ def current_mcp_identity(server: "Server") -> McpIdentity:
     state = request.scope.get("state") or {}
     user = state.get(STATE_USER)
     if user is None:
-        return STDIO
+        # A request exists but the guard's identity is missing: a mount or
+        # middleware regression, never a local caller. Fail closed.
+        logger.warning("mcp_request_without_identity", path=request.scope.get("path"))
+        return ANONYMOUS_REMOTE
     return McpIdentity(
         user=user,
         is_admin=bool(state.get(STATE_IS_ADMIN, False)),
         scopes=frozenset(state.get(STATE_SCOPES) or ()),
+        remote=True,
     )
+
+
+def require_authenticated(identity: McpIdentity) -> None:
+    """Raise unless the caller is stdio or a resolved remote user."""
+    if identity.is_anonymous_remote:
+        raise NotAuthenticatedError("This request carries no connector identity; the token was not resolved.")
 
 
 def require_scope(identity: McpIdentity, tool_name: str) -> None:
@@ -101,6 +137,10 @@ def require_scope(identity: McpIdentity, tool_name: str) -> None:
     """
     if not identity.is_remote:
         return
+    if identity.is_anonymous_remote:
+        raise ScopeError(
+            tool_name, None, detail="This request carries no connector identity; the token was not resolved."
+        )
     required = scope_for_tool(tool_name)
     if required is None or required not in identity.effective_scopes:
         raise ScopeError(tool_name, required)

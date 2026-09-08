@@ -274,6 +274,30 @@ scope:
   this" and no more; it cannot say who held a stolen URL. Display only,
   never logged with the token.
 
+### Hardening (post-implementation review, 2026-09-08)
+
+Four findings from the implementation review, all fixed on the branch:
+
+- **Remote calls run off the event loop.** The tool handlers are
+  synchronous and some (transcribe, process_episode) run for hours. Over
+  HTTP they were awaited directly on uvicorn's loop, freezing health
+  checks, the API and token revocation. `call_tool` and `read_resource`
+  now dispatch remote callers to a worker thread (`anyio.to_thread`);
+  stdio keeps the direct call. Routing pipeline tools through the task
+  queue remains the better long-term shape and is noted as a follow-up.
+- **Missing identity fails closed.** Only `request is None` means stdio.
+  An HTTP request whose scope state lost the guard's user resolves to
+  `ANONYMOUS_REMOTE`: no scopes, no tools listed, every call and every
+  resource read refused, and a warning logged.
+- **Every path-logging sink redacts `/mcp/{token}`.** Beyond the two
+  access loggers, the body-size middleware's 413/400 log lines and the
+  generic unhandled-exception log now go through
+  `redact_capability_path`.
+- **Config validation.** `MCP_TOKEN_TTL_DAYS` must be `>= 0` (only exactly
+  `0` means never expires) and `MCP_TOKEN_REQUESTS_PER_MINUTE` must be
+  `> 0`; both fail at boot with the remediation, and the service refuses a
+  negative TTL independently.
+
 ### Identifiers — resolve, then authorize
 
 Every tool and resource that takes a podcast or episode identifier
@@ -468,8 +492,8 @@ Log redaction (both loggers already collapse `/mcp/*`), transport
 - [x] Settings card: create with scope form, one-time copy modal,
       rotate, revoke, expiring warning; the plaintext appears only in
       the `POST` response.
-- [x] Access logs and `GET /api/me/mcp-token` never contain the
-      plaintext.
+- [x] Access logs, the body-size and unhandled-exception logs, and
+      `GET /api/me/mcp-token` never contain the plaintext.
 - [x] stdio `thestill-mcp` takes the identity-`None` branch everywhere:
       `list_podcasts` returns the whole corpus, `remove_podcast` deletes,
       numeric ids are accepted, all tools are listed, no scope or rate

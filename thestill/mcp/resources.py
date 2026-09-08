@@ -22,6 +22,7 @@ import json
 from typing import Any
 from urllib.parse import unquote
 
+import anyio
 from mcp.server import Server
 from mcp.types import Resource, TextContent
 from structlog import get_logger
@@ -29,7 +30,7 @@ from structlog import get_logger
 from ..services import PodcastService
 from ..utils.config import load_config
 from ..utils.path_manager import PathManager
-from .identity import current_mcp_identity
+from .identity import McpIdentity, current_mcp_identity, require_authenticated
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = get_logger(__name__)
@@ -106,15 +107,21 @@ def setup_resources(server: Server, storage_path: str):
         Returns:
             Resource content as string
         """
-        # The SDK hands us a pydantic AnyUrl; everything below wants str.
-        uri = str(uri)
-        logger.info(f"Reading resource: {uri}")
-
         # Spec #78 Phase 2 — resources follow the same identifier rule as
         # tools: corpus-global ids over the remote connector, legacy
         # numeric index only on stdio. Reads themselves are corpus-wide
-        # for any authenticated caller (web parity), so no scope table.
+        # for any *authenticated* caller (web parity), so there is no
+        # scope table, but an HTTP request that lost its identity fails
+        # closed. Remote reads (file I/O) run off the event loop.
         identity = current_mcp_identity(server)
+        # The SDK hands us a pydantic AnyUrl; everything below wants str.
+        if identity.is_remote:
+            require_authenticated(identity)
+            return await anyio.to_thread.run_sync(_read_resource_sync, str(uri), identity)
+        return _read_resource_sync(str(uri), identity)
+
+    def _read_resource_sync(uri: str, identity: McpIdentity) -> str:
+        logger.info(f"Reading resource: {uri}")
 
         # Parse the thestill:// URI
         try:

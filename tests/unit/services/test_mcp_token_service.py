@@ -57,6 +57,10 @@ class TestMint:
         assert row.scopes == ("read", "follows")
         assert row.expires_at == NOW + timedelta(days=90)
 
+    def test_negative_ttl_is_refused(self, repo):
+        with pytest.raises(ValueError, match=">= 0"):
+            McpTokenService(repo, ttl_days=-1)
+
     def test_ttl_zero_means_no_expiry(self, repo):
         service = McpTokenService(repo, ttl_days=0)
         mint = service.create_or_rotate(USER_ID, requested_scopes=[], is_admin=False, now=NOW)
