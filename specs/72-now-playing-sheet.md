@@ -99,9 +99,10 @@ Built from the #76 primitives, no hand-rolled controls:
 
 - `Button` for every action: `variant="primary" size="iconLg"` (new, 56 px
   disc / 56 px hit) for play/pause; `variant="ghost" size="icon"` (44 px) for
-  the skips and the header ✕; `variant="secondary" size="sm"` chips for
-  secondary actions; `variant="danger" size="sm"` for Stop. `iconLg` is the
-  one addition to `buttonStyles.ts`.
+  the skips (a ring glyph with "15" set inside) and the header ✕;
+  `variant="secondary" size="md"` buttons in a two-column grid for secondary
+  actions; `variant="danger" size="md"` for Stop. `iconLg` is the one
+  addition to `buttonStyles.ts`.
 - `Artwork role="card"` (96 px) in the phone header; a new `role="sheet"`
   (64 px / 8 px radius) in the desktop card header — added to
   `artworkRoles.ts` next to the existing six.
@@ -144,14 +145,16 @@ Built from the #76 primitives, no hand-rolled controls:
    the sheet is open.
 4. **Transport** — back 15 · play/pause (56 px) · forward 15. Same handlers
    as the bar.
-5. **Speed** — segmented control `0.8× · 1× · 1.2× · 1.5× · 2×`. **One global
+5. **Speed** — full-width segmented control `0.8× · 1× · 1.2× · 1.5× · 2×`,
+   equal segments, no caption (the chips label themselves). **One global
    preference** (v1 open question 2, resolved), persisted in `localStorage`
    (`thestill:player:rate`) and applied by `PlayerProvider` on every new
    track, rendition switch and YouTube entry, so it survives reloads and
    engine switches. On the YouTube engine the engine reports the rates the
    iframe accepts for the current video; unsupported chips are disabled and
    a pending rate is clamped to the nearest supported one.
-6. **Secondary actions** (chips, wrap on narrow widths):
+6. **Secondary actions** (a two-column grid of 44 px buttons, never a
+   ragged wrap):
    - **Open transcript here** → the episode with `?view=transcript&t=<s>`,
      carrying `backgroundLocation` per the #52 contract. See
      [Deep link](#deep-link-and-the-navigation-contract).
@@ -338,5 +341,6 @@ Seven commits on `feat/72-now-playing-sheet`, each green on its own
 | Date | Decision |
 |---|---|
 | 2026-09-03 | Drafted from the player/overlay design review. Sheet is transient (`z-[70]`) rather than a fourth long-lived surface. Entity timeline relocates onto the scrubber instead of being repositioned as a floating strip. Rate persistence added to the provider rather than to the sheet so it survives engine switches. |
+| 2026-09-08 | Layout cleanup after the first phone review. The title's `block` class was overriding `line-clamp-2` (Tailwind emits `.block` after `.line-clamp-2`), so long titles ran to six lines; removed. The `SPEED` caption is gone and the segmented control fills its row; secondary actions sit in a two-column grid at 44 px; the current line reserves two lines so the transport never jumps; the skip buttons use a ring glyph with the seconds inside instead of double chevrons. |
 | 2026-09-08 | Built. `hasTheaterSlot()` getter chosen over a `presentation === 'hidden'` gate for the phone video slot (reactive gate oscillates; resting state on a phone is `floating`). Speed control extracted as its own component so engine-constrained rendering is unit-testable without YouTube. The navigation-contract check for "Open transcript here" lives in the sheet's own Playwright spec because the contract table cannot express "open a sheet first". |
 | 2026-09-07 | v2 after #73/#74/#76 and the navigation contract landed. Card over side panel (video already has theater + tile on desktop; karaoke belongs to the transcript). One global rate. Follow lifted into a shared `useSyncExternalStore` store over the existing key. All three phases plus a current-line karaoke strip on this branch. Built from #76 primitives (`Button`, `Artwork`, tokens) with two additive sizes. Deep link: `t` wins on push, reading position wins on pop; route joins the navigation-contract table. `useIsSmUp` reused rather than extracted. Pragmatic blueprint chosen over minimal (ad hoc rate handling, rewriting a component slated for deletion) and clean (refactors of the transcript tracker and key-entities strip that widen review without changing behaviour). |

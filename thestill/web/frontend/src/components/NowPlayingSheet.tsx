@@ -29,17 +29,25 @@ const FOCUSABLE_SELECTOR =
 // Swipe-down on the phone sheet's drag handle closes past this travel.
 const SWIPE_CLOSE_PX = 80
 
+// Material "replay" / "forward" rings (Apache-2.0) with the skip length set
+// inside, so the buttons read as ±15 s without a caption. Rendered as button
+// children rather than through ``icon`` so the glyph can be 32 px — the
+// ``icon`` wrapper's 20 px is too small for the digits.
 const SkipBackIcon = () => (
-  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
-    <path d="M11 17l-5-5 5-5" />
-    <path d="M18 17l-5-5 5-5" />
+  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
+    <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
   </svg>
 )
 
 const SkipForwardIcon = () => (
-  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
-    <path d="M13 17l5-5-5-5" />
-    <path d="M6 17l5-5-5-5" />
+  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
+    <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
   </svg>
 )
 
@@ -243,7 +251,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2 sm:px-5 sm:pt-4">
+      <div className="flex-1 overflow-y-auto px-5 pb-3 pt-1 sm:pt-4">
         {hostVideo && (
           <div
             ref={videoSlotRef}
@@ -252,26 +260,29 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           />
         )}
 
-        {/* Header */}
-        <div className="flex items-start gap-4">
-          {!hostVideo && <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />}
-          <div className="min-w-0 flex-1">
-            <Link
-              to={episodePath}
-              state={linkState}
-              onClick={(e) => {
-                if (alreadyHere) {
-                  e.preventDefault()
-                  onClose()
-                }
-              }}
-              className="block text-base font-semibold leading-snug text-ink hover:underline line-clamp-2"
-            >
-              {track.title}
-            </Link>
-            {track.podcastTitle ? <p className="mt-0.5 truncate text-sm text-muted">{track.podcastTitle}</p> : null}
+        {/* Header. The close button top-aligns; artwork and titles centre on
+            each other so a two-line title sits level with the artwork. */}
+        <div className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            {!hostVideo && <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />}
+            <div className="min-w-0 flex-1">
+              <Link
+                to={episodePath}
+                state={linkState}
+                onClick={(e) => {
+                  if (alreadyHere) {
+                    e.preventDefault()
+                    onClose()
+                  }
+                }}
+                className="line-clamp-2 text-base font-semibold leading-snug text-ink hover:underline"
+              >
+                {track.title}
+              </Link>
+              {track.podcastTitle ? <p className="mt-1 truncate text-sm text-muted">{track.podcastTitle}</p> : null}
+            </div>
           </div>
-          <Button size="icon" variant="ghost" icon={<CloseIcon />} onClick={onClose} aria-label="Close now playing">
+          <Button size="icon" variant="ghost" icon={<CloseIcon />} onClick={onClose} aria-label="Close now playing" className="-mr-2">
             <span className="sr-only">Close</span>
           </Button>
         </div>
@@ -283,27 +294,28 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         )}
 
         {/* Scrubber */}
-        <div className="mt-4">
+        <div className="mt-5">
           <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
         </div>
 
         {/* Current line (spec #72 §3) — what is being said right now, with the
-            #38 wipe. Rendered only while the sheet is open (data fetch is
-            gated on `active`). */}
-        <div className="mt-1 min-h-[1.25rem]">
+            #38 wipe. Reserved at two lines so the transport below does not
+            jump as the segment changes length or drops out. Rendered only
+            while the sheet is open (data fetch is gated on `active`). */}
+        <div className="mt-3 min-h-[2.875rem] text-center">
           <NowPlayingKaraokeLine track={track} enabled={active} />
         </div>
 
         {/* Transport */}
-        <div className="mt-2 flex items-center justify-center gap-6">
+        <div className="mt-3 flex items-center justify-center gap-8">
           <Button
             size="icon"
             variant="ghost"
-            icon={<SkipBackIcon />}
             onClick={() => player.skip(-15)}
             disabled={!hasDuration}
             aria-label="Back 15 seconds"
           >
+            <SkipBackIcon />
             <span className="sr-only">Back 15 seconds</span>
           </Button>
           <Button
@@ -319,33 +331,33 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           <Button
             size="icon"
             variant="ghost"
-            icon={<SkipForwardIcon />}
             onClick={() => player.skip(15)}
             disabled={!hasDuration}
             aria-label="Forward 15 seconds"
           >
+            <SkipForwardIcon />
             <span className="sr-only">Forward 15 seconds</span>
           </Button>
         </div>
 
-        {/* Speed */}
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted">Speed</span>
+        {/* Speed — full width; the chips label themselves. */}
+        <div className="mt-5">
           <NowPlayingSpeedControl rate={playbackRate} availableRates={availableRates} onChange={player.setRate} />
         </div>
 
-        {/* Secondary actions (spec #72 §6) */}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        {/* Secondary actions (spec #72 §6) — an even two-column grid instead
+            of ragged wrapping chips; every cell is a 44 px target. */}
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <Link
             to={{ pathname: episodePath, search: `?view=transcript&t=${Math.floor(currentTime)}` }}
             state={linkState}
             onClick={onClose}
-            className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+            className={buttonClassName({ variant: 'secondary', size: 'md' })}
           >
             Open transcript here
           </Link>
           <Button
-            size="sm"
+            size="md"
             variant={followPlayback ? 'tonal' : 'secondary'}
             aria-pressed={followPlayback}
             onClick={() => setFollowPlayback(!followPlayback)}
@@ -354,7 +366,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           </Button>
           {hasVisualRendition && (
             <Button
-              size="sm"
+              size="md"
               variant="secondary"
               onClick={() => player.setVideoPreference(videoPreference === 'shown' ? 'audio-only' : 'shown')}
             >
@@ -362,7 +374,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             </Button>
           )}
           {pipSupported && videoPresentable && (
-            <Button size="sm" variant="secondary" onClick={player.requestPip}>
+            <Button size="md" variant="secondary" onClick={player.requestPip}>
               {pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
             </Button>
           )}
@@ -370,7 +382,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
         {/* Volume — pointer devices only; phones use the hardware rocker. */}
         {!isPhone && (
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-3 flex items-center gap-2">
             <Button
               size="icon"
               variant="ghost"
@@ -395,8 +407,8 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         )}
 
         {/* Stop */}
-        <div className="mt-5 flex justify-center border-t border-hairline pt-3">
-          <Button size="sm" variant="danger" onClick={handleStop}>
+        <div className="mt-3 flex justify-center border-t border-hairline pt-2">
+          <Button size="md" variant="danger" onClick={handleStop}>
             Stop playback
           </Button>
         </div>

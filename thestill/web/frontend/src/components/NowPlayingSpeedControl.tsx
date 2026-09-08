@@ -18,7 +18,7 @@ function nearlyEqual(a: number, b: number): boolean {
  */
 export default function NowPlayingSpeedControl({ rate, availableRates, onChange }: NowPlayingSpeedControlProps) {
   return (
-    <div role="radiogroup" aria-label="Playback speed" className="inline-flex rounded-lg border border-hairline bg-page p-0.5">
+    <div role="radiogroup" aria-label="Playback speed" className="flex w-full rounded-lg border border-hairline bg-page p-0.5">
       {RATE_OPTIONS.map((option) => {
         const selected = nearlyEqual(option, rate)
         const supported = !availableRates || availableRates.some((r) => nearlyEqual(r, option))
@@ -31,7 +31,7 @@ export default function NowPlayingSpeedControl({ rate, availableRates, onChange 
             disabled={!supported}
             title={supported ? undefined : 'Not available for this video'}
             onClick={() => onChange(option)}
-            className={`min-w-[44px] rounded-md px-2 py-2 text-sm font-medium tabular-nums transition-colors ${
+            className={`min-h-[40px] min-w-[44px] flex-1 rounded-md px-1 text-sm font-medium tabular-nums transition-colors ${
               selected
                 ? 'bg-accent text-accent-contrast shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100 hover:text-ink disabled:text-gray-300 disabled:hover:bg-transparent disabled:cursor-not-allowed'
