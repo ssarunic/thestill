@@ -180,6 +180,32 @@ describe('MiniPlayer (spec #71)', () => {
     expect(screen.queryByRole('region', { name: 'Audio player' })).toBeNull()
   })
 
+  it('phone: scrubbing the seek slider never dismisses, and an unclosed gesture does not wedge the bar (spec #72)', async () => {
+    isSmUp.current = false
+    renderPlayer()
+    act(() => ctx.play(track))
+    const bar = screen.getByRole('region', { name: 'Audio player' })
+    const seek = screen.getByLabelText('Seek')
+
+    // A scrub that drifts downward past the dismiss travel is still a scrub.
+    fireEvent.pointerDown(seek, { pointerId: 1, clientX: 100, clientY: 690 })
+    fireEvent.pointerMove(seek, { pointerId: 1, clientX: 100, clientY: 760 })
+    fireEvent.pointerUp(seek, { pointerId: 1, clientX: 100, clientY: 760 })
+    expect(ctx.track).not.toBeNull()
+    expect(bar.style.transform).toBe('')
+
+    // A mouse press that ends off the bar leaves no pointerup behind; the
+    // next press starts clean rather than finding the bar wedged.
+    fireEvent.pointerDown(bar, { pointerId: 2, clientX: 100, clientY: 700 })
+    fireEvent.pointerMove(bar, { pointerId: 2, clientX: 100, clientY: 730 })
+    expect(bar.style.transform).toBe('translateY(30px)')
+    fireEvent.pointerDown(bar, { pointerId: 3, clientX: 100, clientY: 700 })
+    expect(bar.style.transform).toBe('')
+    fireEvent.pointerMove(bar, { pointerId: 3, clientX: 100, clientY: 760 })
+    fireEvent.pointerUp(bar, { pointerId: 3, clientX: 100, clientY: 760 })
+    expect(ctx.track).toBeNull()
+  })
+
   it('desktop: dragging the bar does nothing', () => {
     renderPlayer()
     act(() => ctx.play(track))

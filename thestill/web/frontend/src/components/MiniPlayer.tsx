@@ -76,7 +76,16 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; dragged: boolean } | null>(null)
   const swallowClickRef = useRef(false)
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isPhone || dragRef.current) return
+    if (!isPhone) return
+    // The seek slider owns its own drag; a finger that drifts down while
+    // scrubbing must not stop the session.
+    if (e.target instanceof Element && e.target.closest('input[type="range"]')) return
+    // Start clean rather than bailing on a leftover gesture. A mouse pointer
+    // is not implicitly captured, so a press that ends off the bar leaves the
+    // previous gesture unclosed; without this the bar would stay translated
+    // and every later press would be ignored.
+    swallowClickRef.current = false
+    setDragY(0)
     dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, dragged: false }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {

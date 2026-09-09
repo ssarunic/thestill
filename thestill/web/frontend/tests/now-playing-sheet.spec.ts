@@ -82,18 +82,36 @@ test.describe('Now Playing sheet on a phone', () => {
 test.describe('Mini player on a phone', () => {
   test.use({ viewport: PHONE, isMobile: true, hasTouch: true })
 
+  // Playwright's mouse cannot stand in for a finger here: a mouse pointer is
+  // not implicitly captured, so a drag that leaves the bar delivers its
+  // pointerup elsewhere. Dispatch real touch points over CDP instead.
+  async function swipe(page: Page, x: number, fromY: number, toY: number) {
+    const cdp = await page.context().newCDPSession(page)
+    const at = (y: number) => [{ x, y, radiusX: 1, radiusY: 1, force: 1 }]
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(fromY) })
+    for (const y of [fromY + (toY - fromY) / 2, toY]) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(y) })
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await cdp.detach()
+  }
+
   test('a swipe down on the bar stops and dismisses the player', async ({ page }) => {
     await startPlayback(page)
     const bar = page.getByRole('region', { name: 'Audio player' })
     const box = await bar.boundingBox()
     expect(box).not.toBeNull()
     const x = box!.x + box!.width / 2
-    const y = box!.y + 8
-    await page.mouse.move(x, y)
-    await page.mouse.down()
-    await page.mouse.move(x, y + 30, { steps: 5 })
-    await page.mouse.move(x, y + 80, { steps: 5 })
-    await page.mouse.up()
+
+    // The seek slider owns its own drag: a scrub that drifts downward past
+    // the dismiss travel must scrub, not stop the session.
+    const seek = await page.getByLabel('Seek').boundingBox()
+    await swipe(page, x, seek!.y + seek!.height / 2, seek!.y + 80)
+    await expect(bar).toHaveCount(1)
+
+    // Anywhere else on the bar, the same travel dismisses.
+    const y = box!.y + box!.height / 2
+    await swipe(page, x, y, y + 80)
     await expect(bar).toHaveCount(0)
   })
 })
